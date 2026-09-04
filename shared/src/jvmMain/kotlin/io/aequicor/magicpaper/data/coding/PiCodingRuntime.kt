@@ -13,6 +13,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -210,11 +211,18 @@ class PiCodingRuntime(
             }
         }
 
+        // Ранее скачанный дистрибутив используем только если он подходит по версии
+        // (NODE_VERSION могла измениться с прошлых версий приложения).
         val bundled = File(nodeDir, "bin/node").takeIf { it.isFile }
             ?: File(nodeDir, "node.exe").takeIf { it.isFile }
         if (bundled != null) {
-            cachedNode = bundled
-            return bundled
+            val bundledVersion = runCatching { execLine(listOf(bundled.absolutePath, "--version")) }
+                .getOrNull()?.trim()
+            if (bundledVersion != null && versionSatisfies(bundledVersion)) {
+                cachedNode = bundled
+                return bundled
+            }
+            nodeDir.deleteRecursively()
         }
 
         progress("Подходящий Node не найден — скачиваю дистрибутив…")
@@ -222,16 +230,25 @@ class PiCodingRuntime(
     }
 
     private fun nodeCandidates(): List<File> {
-        val fromPath = (System.getenv("PATH") ?: "").split(File.pathSeparator)
+        val isWindows = System.getProperty("os.name").lowercase().contains("win")
+        // На Windows бинарник — node.exe; «node» без расширения ничего не найдёт.
+        val names = if (isWindows) listOf("node.exe", "node") else listOf("node")
+        val fromPath = (System.getenv("PATH") ?: "")
+            .split(File.pathSeparator)
             .filter { it.isNotBlank() }
-            .map { File(it, "node") }
-        val wellKnown = listOf(
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            "/opt/local/bin/node",
-            "/usr/bin/node",
-            File(System.getProperty("user.home"), ".local/bin/node").absolutePath,
-        ).map { File(it) }
+            .flatMap { dir -> names.map { name -> File(dir, name) } }
+        val wellKnown = if (isWindows) {
+            val programFiles = System.getenv("ProgramFiles") ?: "C:\\Program Files"
+            names.map { name -> File(File(programFiles, "nodejs"), name) }
+        } else {
+            listOf(
+                "/opt/homebrew/bin/node",
+                "/usr/local/bin/node",
+                "/opt/local/bin/node",
+                "/usr/bin/node",
+                File(System.getProperty("user.home"), ".local/bin/node").absolutePath,
+            ).map { File(it) }
+        }
         return (fromPath + wellKnown).filter { it.isFile }
     }
 
@@ -275,7 +292,14 @@ class PiCodingRuntime(
 
         progress("Распаковываю Node…")
         nodeDir.mkdirs()
-        runCommand(listOf("tar", "-xf", archive.absolutePath, "-C", root.absolutePath), root)
+        if (isWindows) {
+            // Системный tar на Windows капризен: в PATH может стоять GNU tar без
+            // поддержки zip, а bsdtar не читает 8.3-имена и нелатиницу в %TEMP%.
+            // Распаковываем штатным JVM-архиватором, без внешних бинарников.
+            unzipToDirectory(archive, root)
+        } else {
+            runCommand(listOf("tar", "-xf", archive.absolutePath, "-C", root.absolutePath), root)
+        }
         archive.delete()
         val unpacked = File(root, "node-$NODE_VERSION-$target")
         if (!unpacked.isDirectory) error("архив Node распаковался неожиданно")
@@ -307,18 +331,51 @@ class PiCodingRuntime(
         writePiHomeDefaults()
     }
 
-    /** npm рядом с Node; для скачанного дистрибутива — штатный путь через npm-cli.js. */
+    /**
+     * npm рядом с Node. Надёжнее запускать npm-cli.js тем же node-бинарником
+     * (cmd-обёртки на Windows требуют cmd.exe, shell-обёртки — sh), поэтому
+     * сначала ищем js-скрипт в обоих макетах дистрибутива:
+     * unix — `<home>/lib/node_modules/npm`, Windows — `<home>/node_modules/npm`
+     * (node.exe лежит прямо в home, в отличие от unix `bin/node`).
+     */
     private fun npmCommandFor(node: File): List<String> {
-        val nodeHome = node.parentFile?.parentFile // bin/node -> <dist>
-        val bundled = File(nodeDir, "lib/node_modules/npm/bin/npm-cli.js")
-        if (bundled.isFile) return listOf(node.absolutePath, bundled.absolutePath)
-        val viaHome = nodeHome?.let { File(it, "lib/node_modules/npm/bin/npm-cli.js") }
-        if (viaHome != null && viaHome.isFile) return listOf(node.absolutePath, viaHome.absolutePath)
-        val sibling = node.parentFile?.let { dir ->
-            listOf(File(dir, "npm"), File(dir, "npm.cmd")).firstOrNull { it.isFile }
+        val dir = node.parentFile
+        val homes = listOfNotNull(dir?.parentFile, dir)
+        for (home in homes) {
+            val npmCli = listOf(
+                File(home, "lib/node_modules/npm/bin/npm-cli.js"),
+                File(home, "node_modules/npm/bin/npm-cli.js"),
+            ).firstOrNull { it.isFile }
+            if (npmCli != null) return listOf(node.absolutePath, npmCli.absolutePath)
+        }
+        val sibling = dir?.let {
+            val names = listOf("npm.cmd", "npm") // на Windows npm без расширения — shell-скрипт
+            names.map { n -> File(it, n) }.firstOrNull { f -> f.isFile }
         }
         if (sibling != null) return listOf(sibling.absolutePath)
         error("npm не найден рядом с Node (${node.absolutePath})")
+    }
+
+    /** Распаковка zip чистым JVM с защитой от path traversal в записях архива. */
+    private fun unzipToDirectory(zip: File, destDir: File) {
+        val destRoot = destDir.canonicalFile
+        ZipFile(zip).use { archive ->
+            val entries = archive.entries().toList()
+            // Сначала каталоги: иначе файл может оказаться раньше своего каталога.
+            for (entry in entries.filter { it.isDirectory }) {
+                val out = File(destRoot, entry.name)
+                require(out.canonicalFile.startsWith(destRoot)) { "архив Node содержит опасный путь: ${entry.name}" }
+                out.mkdirs()
+            }
+            for (entry in entries.filter { !it.isDirectory }) {
+                val out = File(destRoot, entry.name)
+                require(out.canonicalFile.startsWith(destRoot)) { "архив Node содержит опасный путь: ${entry.name}" }
+                out.parentFile?.mkdirs()
+                archive.getInputStream(entry).use { input ->
+                    out.outputStream().use { output -> input.copyTo(output, 128 * 1024) }
+                }
+            }
+        }
     }
 
     private fun writePiHomeDefaults() {
