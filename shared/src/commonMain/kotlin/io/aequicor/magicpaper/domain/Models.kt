@@ -49,6 +49,8 @@ data class AppSettings(
     val queritApiKey: String = "",
     val googleApiKey: String = "",
     val googleSearchEngineId: String = "",
+    /** Завершён ли ознакомительный тур (welcome-screen). */
+    val onboardingDone: Boolean = false,
 ) {
     val llmConfigured: Boolean get() = llmBaseUrl.isNotBlank() && llmModel.isNotBlank()
 }

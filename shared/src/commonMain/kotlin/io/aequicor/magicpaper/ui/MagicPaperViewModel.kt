@@ -62,6 +62,7 @@ class MagicPaperViewModel(
                 current = sessions.firstOrNull(),
                 docsArticles = docs.articles(),
                 storageInfo = store.description,
+                showWelcome = !settings.onboardingDone,
             )
         }
     }
@@ -172,6 +173,18 @@ class MagicPaperViewModel(
     }
 
     // ---- Настройки ---------------------------------------------------------
+
+    /** Завершение ознакомительного тура: сохранить черновик и впустить в приложение. */
+    fun finishOnboarding(settings: AppSettings) {
+        scope.launch {
+            val done = settings.copy(onboardingDone = true)
+            settingsRepo.save(done)
+            _state.update { it.copy(settings = done, showWelcome = false, screen = Screen.CHAT) }
+        }
+    }
+
+    /** Вернуться к туториалу (кнопка в настройках). */
+    fun restartOnboarding() = _state.update { it.copy(showWelcome = true) }
 
     fun saveSettings(settings: AppSettings) {
         scope.launch {

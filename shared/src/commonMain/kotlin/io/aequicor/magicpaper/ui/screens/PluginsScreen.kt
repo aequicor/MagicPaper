@@ -51,7 +51,7 @@ fun PluginsScreen(
 }
 
 @Composable
-private fun PluginRow(plugin: MagicPlugin, enabled: Boolean, onToggle: () -> Unit) {
+internal fun PluginRow(plugin: MagicPlugin, enabled: Boolean, onToggle: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

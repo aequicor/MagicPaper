@@ -23,4 +23,6 @@ data class UiState(
     val busy: Boolean = false,
     val notice: String? = null,
     val storageInfo: String = "",
+    /** Показывать ознакомительный тур (первый запуск или сброшен вручную). */
+    val showWelcome: Boolean = false,
 )

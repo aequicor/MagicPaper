@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +39,7 @@ import io.aequicor.magicpaper.ui.screens.DocsScreen
 import io.aequicor.magicpaper.ui.screens.PluginsScreen
 import io.aequicor.magicpaper.ui.screens.SessionsPanel
 import io.aequicor.magicpaper.ui.screens.SettingsScreen
+import io.aequicor.magicpaper.ui.screens.WelcomeScreen
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlinx.coroutines.delay
 
@@ -49,16 +52,20 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
             color = MaterialTheme.colorScheme.background,
         ) {
             val state by deps.viewModel.state.collectAsState()
-            Column(modifier = Modifier.fillMaxSize()) {
-                TopBar(deps.viewModel, state.screen)
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Box(modifier = Modifier.weight(1f)) {
-                    MainArea(deps.viewModel, state)
-                    Notice(
-                        state.notice,
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                        onDismiss = { deps.viewModel.dismissNotice() },
-                    )
+            if (state.showWelcome) {
+                WelcomeScreen(deps.viewModel, state.settings, state.plugins, state.pluginStates)
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    TopBar(deps.viewModel, state.screen)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Box(modifier = Modifier.weight(1f)) {
+                        MainArea(deps.viewModel, state)
+                        Notice(
+                            state.notice,
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                            onDismiss = { deps.viewModel.dismissNotice() },
+                        )
+                    }
                 }
             }
         }
@@ -89,35 +96,48 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
 
 @Composable
 private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
+    // Разгруженный бар: разделы живут в настройках, здесь только панели и шестерёнка.
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { vm.toggleSessionsPanel() }) { Text("☰") }
+        TextButton(
+            onClick = { vm.toggleSessionsPanel() },
+            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
+        ) { Text("☰", style = MaterialTheme.typography.titleMedium) }
         Column(modifier = Modifier.weight(1f)) {
             Text("MagicPaper", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Шалость удалась",
+                screen.subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        NavButton("Чат", screen == Screen.CHAT) { vm.open(Screen.CHAT) }
-        NavButton("Плагины", screen == Screen.PLUGINS) { vm.open(Screen.PLUGINS) }
-        NavButton("Справка", screen == Screen.DOCS) { vm.open(Screen.DOCS) }
-        NavButton("Настройки", screen == Screen.SETTINGS) { vm.open(Screen.SETTINGS) }
+        TextButton(
+            onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
+            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
+        ) {
+            Text(
+                "⚙",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (screen == Screen.SETTINGS) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
     }
 }
 
-@Composable
-private fun NavButton(label: String, active: Boolean, onClick: () -> Unit) {
-    TextButton(onClick = onClick) {
-        Text(
-            label,
-            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+/** Подзаголовок в шапке: где мы находимся. */
+private val Screen.subtitle: String
+    get() = when (this) {
+        Screen.CHAT -> "Шалость удалась"
+        Screen.PLUGINS -> "Плагины и панели"
+        Screen.DOCS -> "Справочник"
+        Screen.SETTINGS -> "Настройки и разделы"
     }
-}
 
 /** Панели включённых плагинов: интерфейс расширяется их суммой. */
 @Composable

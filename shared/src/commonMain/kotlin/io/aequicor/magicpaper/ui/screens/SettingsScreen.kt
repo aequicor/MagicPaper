@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,7 +8,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
@@ -20,13 +23,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.Screen
 
-/** Экран настроек: модель, поиск, профиль. Черновик редактируется локально. */
+/** Экран настроек: хаб разделов + модель, поиск, профиль. Черновик редактируется локально. */
 @Composable
 fun SettingsScreen(vm: MagicPaperViewModel, settings: AppSettings, storageInfo: String) {
     var draft by remember(settings) { mutableStateOf(settings) }
@@ -39,6 +45,19 @@ fun SettingsScreen(vm: MagicPaperViewModel, settings: AppSettings, storageInfo: 
     ) {
         Text("Настройки", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(12.dp))
+
+        // ---- Разделы: сюда переехали кнопки навигации из шапки ----
+        Section("Разделы")
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            NavEntry("✦", "Чат", "Лента свитка и поле заклинаний") { vm.open(Screen.CHAT) }
+            NavEntry("∑", "Плагины", "Панели и переключатели расширений") { vm.open(Screen.PLUGINS) }
+            NavEntry("◷", "Справка", "Документация с живым поиском") { vm.open(Screen.DOCS) }
+            NavEntry("✦", "Первый запуск", "Пройти ознакомительный тур заново") { vm.restartOnboarding() }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(16.dp))
 
         Section("Магический источник (модель)")
         Field("Base URL (OpenAI-совместимый)", settings.llmBaseUrl) {
@@ -59,7 +78,10 @@ fun SettingsScreen(vm: MagicPaperViewModel, settings: AppSettings, storageInfo: 
         }
 
         Spacer(Modifier.height(16.dp))
-        TextButton(onClick = { vm.saveSettings(draft) }) { Text("Сохранить настройки") }
+        TextButton(
+            onClick = { vm.saveSettings(draft) },
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) { Text("Сохранить настройки") }
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -81,6 +103,32 @@ fun SettingsScreen(vm: MagicPaperViewModel, settings: AppSettings, storageInfo: 
     }
 }
 
+/** Строка-переход в раздел: иконка, заголовок, описание, «›» — как ListItem из M3. */
+@Composable
+private fun NavEntry(icon: String, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick)
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(icon, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @Composable
 private fun Section(title: String) {
     Text(
@@ -92,7 +140,7 @@ private fun Section(title: String) {
 }
 
 @Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit) {
+internal fun Field(label: String, value: String, onChange: (String) -> Unit) {
     var text by remember(value) { mutableStateOf(value) }
     OutlinedTextField(
         value = text,
@@ -107,7 +155,7 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit) {
 }
 
 @Composable
-private fun SearchProviderPicker(selected: SearchProvider, onSelect: (SearchProvider) -> Unit) {
+internal fun SearchProviderPicker(selected: SearchProvider, onSelect: (SearchProvider) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         SearchProvider.entries.forEach { provider ->
             val label = when (provider) {
