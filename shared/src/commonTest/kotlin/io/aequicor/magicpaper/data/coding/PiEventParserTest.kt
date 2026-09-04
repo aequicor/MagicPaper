@@ -18,6 +18,16 @@ class PiEventParserTest {
     }
 
     @Test
+    fun assistantMessageStartIsReported() {
+        val start = PiEventParser.parse(
+            """{"type":"message_start","message":{"role":"assistant","content":[]}}"""
+        )
+        assertIs<CodingEvent.MessageStarted>(start)
+        // Пользовательское message_start — не ответ модели.
+        assertNull(PiEventParser.parse("""{"type":"message_start","message":{"role":"user","content":[]}}"""))
+    }
+
+    @Test
     fun textDeltaIsExtracted() {
         val line = """{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Привет"}}"""
         val event = PiEventParser.parse(line)

@@ -13,9 +13,67 @@ data class CodingProject(
     val name: String,
     val path: String,
     val createdAt: Long,
-    /** Идентификатор сессии пи-агента (контекст проекта продолжается между запусками). */
+    /**
+     * Легаси: идентификатор сессии пи-агента единого потока проекта.
+     * Переносится в [CodingSession.piSessionId] при миграции журнала,
+     * новые запуски его не используют.
+     */
     val piSessionId: String = "",
 )
+
+/**
+ * Кодинг-сессия внутри проекта: отдельная нить диалога с агентом —
+ * свой контекст пи и свой журнал. В одном проекте может быть несколько сессий,
+ * они могут работать параллельно.
+ */
+@Serializable
+data class CodingSession(
+    val id: String,
+    val projectId: String,
+    val name: String,
+    val createdAt: Long,
+    /** Идентификатор сессии пи-агента (контекст сессии продолжается между запусками). */
+    val piSessionId: String = "",
+)
+
+/**
+ * Состояние активности кодинг-сессии для индикатора-кружка.
+ * Порядок объявления — приоритет срочности (используется для сводинки по проекту).
+ */
+enum class CodingSessionStatus {
+    /** Агент выполняет прогон — красный. */
+    WORKING,
+
+    /** Агент задал вопрос, не подтвердил действие или запрос без ответа — жёлтый. */
+    WAITING,
+
+    /** Сессия свободна, ждёт запроса — зелёный. */
+    IDLE,
+}
+
+/**
+ * Статус сессии по её журналу (когда прогон не активен):
+ * вопрос агента в конце ленты, незавершённый запрос или ошибка — WAITING,
+ * иначе IDLE.
+ */
+fun codingStatusOf(messages: List<CodingMessage>): CodingSessionStatus {
+    val last = messages.lastOrNull() ?: return CodingSessionStatus.IDLE
+    // Запрос отправлен, ответа нет (сбой или потерянный прогон) — ждём решения.
+    if (last.role == CodingRole.USER) return CodingSessionStatus.WAITING
+    if (last.failed) return CodingSessionStatus.WAITING
+    // Вопрос в конце последней строки с поправкой на markdown-обёртки и кавычки.
+    val tail = messages.last().text.lines().lastOrNull { it.isNotBlank() }.orEmpty()
+        .trim().trimEnd('"', '*', '`', '_', '\u201D', '\u201C', '\u00BB', '\u00AB')
+    return if (tail.endsWith("?") || tail.endsWith("\uFF1F")) {
+        CodingSessionStatus.WAITING
+    } else {
+        CodingSessionStatus.IDLE
+    }
+}
+
+/** Сводный статус проекта: самый срочный из статусов его сессий. */
+fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSessionStatus =
+    statuses.minByOrNull { it.ordinal } ?: CodingSessionStatus.IDLE
 
 /** Фазы состояния кодинг-рантайма (движка пи-агента). */
 enum class RuntimePhase { UNKNOWN, CHECKING, INSTALLING, READY, ERROR, UNSUPPORTED }
@@ -34,6 +92,8 @@ data class CodingDraft(
     val steps: List<CodingStep> = emptyList(),
     val failedMessage: String? = null,
     val active: Boolean = false,
+    /** Прогон запущен, но модель ещё не начала отвечать (или ждёт подтверждения). */
+    val awaitingModel: Boolean = false,
 )
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
@@ -43,12 +103,20 @@ class CodingRunRecorder {
     private val steps = mutableListOf<CodingStep>()
     private var failed: String? = null
 
+    /** Прогон ждёт первого ответа модели (или продолжения после действия). */
+    private var awaiting = true
+
     /** Применяет событие. true, если прогон завершён. */
     fun apply(event: CodingEvent): Boolean {
         when (event) {
             is CodingEvent.SessionStarted -> Unit
-            is CodingEvent.TextDelta -> text.append(event.delta)
+            is CodingEvent.MessageStarted -> awaiting = false
+            is CodingEvent.TextDelta -> {
+                awaiting = false
+                text.append(event.delta)
+            }
             is CodingEvent.FinalText -> {
+                awaiting = false
                 // message_end авторитетнее потоковых дельт текущего сообщения ассистента.
                 if (event.text.isNotBlank()) {
                     text.setLength(0)
@@ -56,6 +124,7 @@ class CodingRunRecorder {
                 }
             }
             is CodingEvent.ToolStarted -> {
+                awaiting = false
                 // Перед действием фиксируем текст: лента остаётся хронологичной.
                 flushText()
                 steps += CodingStep(
@@ -76,6 +145,8 @@ class CodingRunRecorder {
                 }
             }
             is CodingEvent.ToolFinished -> {
+                // После действия агент снова ждёт ответа модели.
+                awaiting = true
                 val index = steps.indexOfLast {
                     it.running && it.tool == event.tool &&
                         (event.callId.isBlank() || it.callId == event.callId)
@@ -97,9 +168,15 @@ class CodingRunRecorder {
                 }
             }
             is CodingEvent.Failed -> {
+                awaiting = false
                 flushText()
                 failed = event.message
                 steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false)
+            }
+            is CodingEvent.Notice -> steps += CodingStep(kind = CodingStepKind.INFO, title = event.message)
+            is CodingEvent.AgentEnd -> {
+                awaiting = false
+                flushText()
             }
             is CodingEvent.Finished -> return true
         }
@@ -120,7 +197,12 @@ class CodingRunRecorder {
     }
 
     fun draft(active: Boolean): CodingDraft =
-        CodingDraft(steps = timeline(), failedMessage = failed, active = active)
+        CodingDraft(
+            steps = timeline(),
+            failedMessage = failed,
+            active = active,
+            awaitingModel = active && awaiting,
+        )
 
     fun message(id: String, createdAt: Long): CodingMessage {
         flushText()
@@ -153,6 +235,12 @@ val CodingStep.displayLine: String
 sealed interface CodingEvent {
     /** Заголовок сессии: идентификатор сессии пи-агента (для продолжения контекста). */
     data class SessionStarted(val sessionId: String) : CodingEvent
+
+    /**
+     * Модель начала отвечать (agent_start / message_start): смена фазы
+     * «ждём ответа модели» на «работает» для индикатора сессии.
+     */
+    data object MessageStarted : CodingEvent
 
     /** Живой фрагмент текста ответа. */
     data class TextDelta(val delta: String) : CodingEvent
@@ -189,6 +277,15 @@ sealed interface CodingEvent {
         val resultPreview: String = "",
     ) : CodingEvent
 
+    /**
+     * Служебное сообщение жизненного цикла движка (уплотнение контекста, автоповтор
+     * после сбоя провайдера) — показывается в ленте, чтобы «тихие» фазы были видны.
+     */
+    data class Notice(val message: String) : CodingEvent
+
+    /** Движок сообщил, что прогон завершён (agent_end) — текста могло и не быть. */
+    data object AgentEnd : CodingEvent
+
     /** Ошибка выполнения. */
     data class Failed(val message: String) : CodingEvent
 
@@ -198,7 +295,7 @@ sealed interface CodingEvent {
 
 /** Роль строки ленты прогона: действие агента, его текст или ошибка. */
 @Serializable
-enum class CodingStepKind { TOOL, EXEC, ANSWER, ERROR }
+enum class CodingStepKind { TOOL, EXEC, ANSWER, ERROR, INFO }
 
 /** Строка ленты прогона кодинг-агента (chronological timeline). */
 @Serializable
@@ -230,13 +327,19 @@ data class CodingMessage(
     val createdAt: Long,
 )
 
-/** Хранилище проектов и их журналов. */
+/** Хранилище проектов, их сессий и журналов. */
 interface CodingProjectRepository {
     suspend fun all(): List<CodingProject>
     suspend fun save(project: CodingProject)
     suspend fun delete(id: String)
-    suspend fun messages(projectId: String): List<CodingMessage>
-    suspend fun saveMessages(projectId: String, messages: List<CodingMessage>)
+
+    /** Сессии проекта в порядке создания (первая — «основная»). */
+    suspend fun sessions(projectId: String): List<CodingSession>
+    suspend fun saveSession(session: CodingSession)
+    suspend fun deleteSession(projectId: String, sessionId: String)
+
+    suspend fun messages(projectId: String, sessionId: String): List<CodingMessage>
+    suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>)
     suspend fun wipe()
 }
 
@@ -257,11 +360,23 @@ interface CodingRuntime {
     /** Подготовка рантайма: проверка и автоустановка зависимостей. Последняя эмиссия — итог. */
     fun ensureReady(): Flow<RuntimeStatus>
 
-    /** Выполнение запроса в директории проекта. Поток событий протокола. */
-    fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent>
+    /**
+     * Выполнение запроса в директории проекта в контексте кодинг-сессии
+     * (её piSessionId продолжает историю). Несколько прогонов разных сессий
+     * могут идти параллельно. Поток событий протокола.
+     */
+    fun run(
+        project: CodingProject,
+        session: CodingSession,
+        prompt: String,
+        profile: LlmProfile?,
+    ): Flow<CodingEvent>
 
-    /** Прервать текущий прогон (остановить процесс агента). */
-    fun abort()
+    /** Прервать прогон конкретной сессии (остановить её процесс агента). */
+    fun abort(sessionId: String)
+
+    /** Прервать все прогоны (снятие зависимостей, закрытие). */
+    fun abortAll()
 
     /** Полное удаление изолированных зависимостей. */
     suspend fun uninstall()

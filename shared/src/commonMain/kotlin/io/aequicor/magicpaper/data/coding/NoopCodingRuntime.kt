@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.coding
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
+import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.RuntimePhase
@@ -22,7 +23,12 @@ object NoopCodingRuntime : CodingRuntime {
 
     override suspend fun status(): RuntimeStatus = status
     override fun ensureReady(): Flow<RuntimeStatus> = flowOf(status)
-    override fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent> =
+    override fun run(
+        project: CodingProject,
+        session: CodingSession,
+        prompt: String,
+        profile: LlmProfile?,
+    ): Flow<CodingEvent> =
         flowOf(
             CodingEvent.Failed("Кодинг-агент не поддерживается на этой платформе."),
             CodingEvent.Finished,
@@ -30,7 +36,9 @@ object NoopCodingRuntime : CodingRuntime {
 
     override suspend fun uninstall() = Unit
 
-    override fun abort() = Unit
+    override fun abort(sessionId: String) = Unit
+
+    override fun abortAll() = Unit
 }
 
 object NoopProjectDirPicker : ProjectDirPicker {

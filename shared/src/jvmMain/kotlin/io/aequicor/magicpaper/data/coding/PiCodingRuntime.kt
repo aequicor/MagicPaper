@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.coding
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
+import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderType
@@ -18,7 +19,6 @@ import java.nio.charset.CharsetDecoder
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -57,18 +57,25 @@ class PiCodingRuntime(
     private val installLock = Mutex()
     private var cachedNode: File? = null
 
-    /** Текущий процесс агента — для прерывания извне. */
-    private val runningProcess = AtomicReference<Process?>(null)
+    /**
+     * Процессы агентов по идентификаторам кодинг-сессий: прогоны разных
+     * сессий идут параллельно и прерываются независимо.
+     */
+    private val runningProcesses = java.util.concurrent.ConcurrentHashMap<String, Process>()
 
-    /** Флаг запроса прерывания: ошибка чтения после abort — не сбои движка. */
-    private val abortRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Сессии, которым пользователь запретил продолжать («ошибкой чтения» не сбой). */
+    private val abortedSessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    override fun abort() {
-        abortRequested.set(true)
-        runningProcess.getAndSet(null)?.let { process ->
+    override fun abort(sessionId: String) {
+        abortedSessions.add(sessionId)
+        runningProcesses.remove(sessionId)?.let { process ->
             process.destroy()
             if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
         }
+    }
+
+    override fun abortAll() {
+        runningProcesses.keys.forEach { abort(it) }
     }
 
     // ---- Состояние -------------------------------------------------------
@@ -114,7 +121,12 @@ class PiCodingRuntime(
 
     // ---- Запуск агента ----------------------------------------------------
 
-    override fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent> = flow {
+    override fun run(
+        project: CodingProject,
+        session: CodingSession,
+        prompt: String,
+        profile: LlmProfile?,
+    ): Flow<CodingEvent> = flow {
         val dir = File(project.path)
         if (!piCli.isFile) {
             emit(CodingEvent.Failed("Движок не установлен. Нажмите «Подготовить движок»."))
@@ -154,8 +166,9 @@ class PiCodingRuntime(
             "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--no-approve",
         )
-        if (project.piSessionId.isNotBlank()) {
-            args += listOf("--session-id", project.piSessionId)
+        // Контекст продолжает КОДИНГ-СЕССИЯ (у проекта их может быть несколько).
+        if (session.piSessionId.isNotBlank()) {
+            args += listOf("--session-id", session.piSessionId)
         }
         args += listOf("--", prompt)
 
@@ -169,8 +182,8 @@ class PiCodingRuntime(
         // Пи в неинтерактивном режиме читает stdin до EOF (сливает его в промпт) —
         // из процесса пайп stdin без данных повесил бы агента; закрываем сразу.
         runCatching { process.outputStream.close() }
-        runningProcess.set(process)
-        abortRequested.set(false)
+        runningProcesses[session.id] = process
+        abortedSessions.remove(session.id)
 
         var sawAnswer = false
         var streamBroken: String? = null
@@ -198,7 +211,7 @@ class PiCodingRuntime(
                 emit(
                     CodingEvent.Failed(
                         when {
-                            abortRequested.get() -> "Прогон прерван по команде пользователя."
+                            abortedSessions.contains(session.id) -> "Прогон прерван по команде пользователя."
                             err.isNotBlank() -> err
                             exit != 0 -> "Агент завершился с кодом $exit."
                             streamBroken != null -> "Поток агента прервался: ${streamBroken}"
@@ -213,7 +226,8 @@ class PiCodingRuntime(
             emit(CodingEvent.Failed("Сбой запуска агента: ${e.message ?: e.javaClass.simpleName}"))
         } finally {
             stderrFile.delete()
-            runningProcess.compareAndSet(process, null)
+            runningProcesses.remove(session.id, process)
+            abortedSessions.remove(session.id)
             if (process.isAlive) {
                 process.destroy()
                 if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
@@ -430,7 +444,10 @@ class PiCodingRuntime(
         val model = jsonEscape(profile.modelId)
         val baseUrl = jsonEscape(profile.baseUrl.trimEnd('/'))
         val supportsEffort = ModelDefaults.supportsEffort(profile)
-        File(pihome, "models.json").writeText(
+        // Атомарная замена (tmp+rename): параллельные прогоны сессий не должны
+        // прочитать наполовину записанный models.json.
+        writeAtomically(
+            File(pihome, "models.json"),
             """
             {"providers":{"$PROVIDER_ID":{
               "baseUrl":"$baseUrl",
@@ -441,6 +458,21 @@ class PiCodingRuntime(
             }}}
             """.trimIndent()
         )
+    }
+
+    private fun writeAtomically(target: File, content: String) {
+        val tmp = File(target.parentFile, "${target.name}.tmp-${System.nanoTime()}")
+        tmp.writeText(content)
+        runCatching {
+            java.nio.file.Files.move(
+                tmp.toPath(), target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+        }.getOrElse {
+            // rename между томам или антивирусная блокировка — обычная перезапись.
+            target.writeText(content)
+            tmp.delete()
+        }
     }
 
     private fun piEnv(node: File): Map<String, String> = mapOf(

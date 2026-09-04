@@ -1,5 +1,10 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,9 +17,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,7 +30,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -35,22 +45,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
+import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
+import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.theme.MagicFonts
 
-/** Экран «Проекты и код»: агент пи работает в выбранной директории проекта. */
+/** Экран «Проекты и код»: в проекте несколько кодинг-сессий, у каждой — кружок активности. */
 @Composable
 fun CodingScreen(vm: MagicPaperViewModel, ui: CodingUi) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -58,8 +71,7 @@ fun CodingScreen(vm: MagicPaperViewModel, ui: CodingUi) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(modifier = Modifier.weight(1f)) {
             ProjectList(
-                projects = ui.projects,
-                currentId = ui.current?.id,
+                ui = ui,
                 onAdd = vm::addCodingProject,
                 onSelect = vm::selectCodingProject,
                 onDelete = vm::deleteCodingProject,
@@ -67,18 +79,33 @@ fun CodingScreen(vm: MagicPaperViewModel, ui: CodingUi) {
             )
             VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Box(modifier = Modifier.weight(1f)) {
-                if (ui.current == null) {
+                val project = ui.current
+                val sessions = ui.sessions.filter { it.session.projectId == project?.id }
+                if (project == null || sessions.isEmpty()) {
                     ProjectsEmptyHint()
                 } else {
-                    CodingChat(
-                        project = ui.current,
-                        messages = ui.messages,
-                        draft = ui.draft,
-                        busy = ui.busy,
-                        engineReady = ui.runtime.ready,
-                        onSend = vm::sendCodingPrompt,
-                        onAbort = vm::abortCodingRun,
-                    )
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        val active = sessions.firstOrNull { it.session.id == ui.currentSessionId }
+                            ?: sessions.first()
+                        SessionTabs(
+                            sessions = sessions,
+                            currentId = active.session.id,
+                            onSelect = vm::selectCodingSession,
+                            onAdd = vm::addCodingSession,
+                            onDelete = vm::deleteCodingSession,
+                            onAbort = vm::abortCodingSession,
+                            onReply = { id, text -> vm.sendCodingPromptTo(id, text) },
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        CodingChat(
+                            project = project,
+                            session = active,
+                            busy = active.running,
+                            engineReady = ui.runtime.ready,
+                            onSend = { text -> vm.sendCodingPromptTo(active.session.id, text) },
+                            onAbort = { vm.abortCodingSession(active.session.id) },
+                        )
+                    }
                 }
             }
         }
@@ -150,10 +177,58 @@ private fun runtimeLabel(runtime: RuntimeStatus): String = when (runtime.phase) 
     RuntimePhase.UNKNOWN -> "неизвестно"
 }
 
+// ---- Кружок активности ----------------------------------------------------
+
+/**
+ * Цвета активности кодинг-сессии: вне пастельной схемы — это сигнальные
+ * цвета состояния, они должны читаться мгновенно.
+ */
+private val StatusWorking = Color(0xFFCE5B5B)   // красный: агент работает
+private val StatusWaiting = Color(0xFFE0A63C)   // жёлтый: ждёт ответа или подтверждения
+private val StatusIdle = Color(0xFF79A97C)      // зелёный: ждёт запроса
+
+private val CodingSessionStatus.label: String
+    get() = when (this) {
+        CodingSessionStatus.WORKING -> "работает"
+        CodingSessionStatus.WAITING -> "ждёт ответа или подтверждения"
+        CodingSessionStatus.IDLE -> "ждёт запроса"
+    }
+
+/** Индикатор-кружок: пульсирует при работе, иначе залипка цветом статуса. */
+@Composable
+fun ActivityDot(
+    status: CodingSessionStatus,
+    modifier: Modifier = Modifier,
+    size: Int = 10,
+) {
+    val color = when (status) {
+        CodingSessionStatus.WORKING -> StatusWorking
+        CodingSessionStatus.WAITING -> StatusWaiting
+        CodingSessionStatus.IDLE -> StatusIdle
+    }
+    val pulse by animateFloatAsState(
+        targetValue = if (status == CodingSessionStatus.WORKING) 1f else 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = 700,
+                easing = FastOutSlowInEasing,
+            ),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "activityDotPulse",
+    )
+    val scale = if (status == CodingSessionStatus.WORKING) 0.75f + 0.25f * pulse else 1f
+    Box(
+        modifier = modifier
+            .size((size * scale).dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(color),
+    )
+}
+
 @Composable
 private fun ProjectList(
-    projects: List<CodingProject>,
-    currentId: String?,
+    ui: CodingUi,
     onAdd: () -> Unit,
     onSelect: (String) -> Unit,
     onDelete: (String) -> Unit,
@@ -167,8 +242,20 @@ private fun ProjectList(
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(projects, key = { it.id }) { project ->
-                ProjectRow(project, project.id == currentId, onSelect, onDelete)
+            items(ui.projects, key = { it.id }) { project ->
+                val status = ui.statusOf(project.id)
+                val sessionCount = ui.sessions.count { it.session.projectId == project.id }
+                ProjectRow(
+                    project = project,
+                    selected = project.id == ui.current?.id,
+                    status = status,
+                    runningSessions = ui.sessions.count {
+                        it.session.projectId == project.id && it.running
+                    },
+                    sessionCount = sessionCount,
+                    onSelect = { onSelect(project.id) },
+                    onDelete = { onDelete(project.id) },
+                )
             }
         }
         TextButton(onClick = onAdd, modifier = Modifier.padding(8.dp)) {
@@ -181,19 +268,25 @@ private fun ProjectList(
 private fun ProjectRow(
     project: CodingProject,
     selected: Boolean,
-    onSelect: (String) -> Unit,
-    onDelete: (String) -> Unit,
+    status: CodingSessionStatus,
+    runningSessions: Int,
+    sessionCount: Int,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
             .clip(MaterialTheme.shapes.small)
-            .clickable(onClick = { onSelect(project.id) })
+            .clickable(onClick = onSelect)
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f).padding(horizontal = 8.dp)) {
+        Box(modifier = Modifier.padding(start = 4.dp, end = 8.dp)) {
+            StatusTooltip(status) { ActivityDot(status, size = 9) }
+        }
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 project.name,
                 style = MaterialTheme.typography.bodyLarge,
@@ -201,16 +294,159 @@ private fun ProjectRow(
                 maxLines = 1,
             )
             Text(
-                project.path,
+                buildString {
+                    append(project.path)
+                    if (sessionCount > 1) {
+                        append(" · $sessionCount сессий")
+                        if (runningSessions > 0) append(", $runningSessions работают")
+                    }
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
         }
-        TextButton(onClick = { onDelete(project.id) }) {
+        TextButton(onClick = onDelete, modifier = Modifier.heightIn(min = 40.dp)) {
             Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/** Вкладки кодинг-сессий текущего проекта: кружок, имя, живой статус. */
+@Composable
+private fun SessionTabs(
+    sessions: List<CodingSessionUi>,
+    currentId: String?,
+    onSelect: (String) -> Unit,
+    onAdd: () -> Unit,
+    onDelete: (String) -> Unit,
+    onAbort: (String) -> Unit,
+    onReply: (String, String) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth().height(44.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(sessions, key = { it.session.id }) { item ->
+            SessionTab(
+                item = item,
+                selected = item.session.id == currentId,
+                onSelect = { onSelect(item.session.id) },
+                onDelete = { onDelete(item.session.id) },
+                onAbort = { onAbort(item.session.id) },
+                onReply = { text -> onReply(item.session.id, text) },
+            )
+        }
+        item(key = "add-session") {
+            TextButton(onClick = onAdd, modifier = Modifier.heightIn(min = 36.dp)) {
+                Text("✦ сессия")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionTab(
+    item: CodingSessionUi,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
+    onAbort: () -> Unit,
+    onReply: (String) -> Unit,
+) {
+    val status = item.status
+    var menuOpen by rememberSaveable(item.session.id) { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.small)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+            .clickable(onClick = onSelect)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StatusTooltip(status) { ActivityDot(status) }
+        Spacer(Modifier.width(7.dp))
+        Text(
+            item.session.name,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+        )
+        // Жёлтый кружок прямо во вкладке: быстрый ответ агенту без перехода в сессию.
+        if (status == CodingSessionStatus.WAITING && !item.running) {
+            Spacer(Modifier.width(6.dp))
+            TextButton(onClick = { onReply("Продолжай") }, modifier = Modifier.heightIn(min = 28.dp)) {
+                Text("↩", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Spacer(Modifier.width(4.dp))
+        Box {
+            Text(
+                "⋯",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable { menuOpen = true }
+                    .padding(horizontal = 6.dp),
+            )
+            if (menuOpen) {
+                androidx.compose.material3.DropdownMenu(
+                    expanded = true,
+                    onDismissRequest = { menuOpen = false },
+                ) {
+                    if (item.running) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Прервать прогон") },
+                            onClick = {
+                                menuOpen = false
+                                onAbort()
+                            },
+                        )
+                    }
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("Удалить сессию") },
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusTooltip(status: CodingSessionStatus, content: @Composable () -> Unit) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+            androidx.compose.material3.TooltipAnchorPosition.Above,
+        ),
+        tooltip = {
+            androidx.compose.material3.Surface(
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text(
+                    status.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        },
+        state = rememberTooltipState(),
+    ) { content() }
 }
 
 @Composable
@@ -233,8 +469,7 @@ private fun ProjectsEmptyHint() {
 @Composable
 private fun CodingChat(
     project: CodingProject,
-    messages: List<CodingMessage>,
-    draft: CodingDraft,
+    session: CodingSessionUi,
     busy: Boolean,
     engineReady: Boolean,
     onSend: (String) -> Unit,
@@ -250,6 +485,8 @@ private fun CodingChat(
             last == null || last.index == info.totalItemsCount - 1
         }
     }
+    val messages = session.messages
+    val draft = session.draft
     val lastId = messages.lastOrNull()?.id
     LaunchedEffect(messages.size, lastId, draft.steps.size, atBottom) {
         if (atBottom) {
@@ -265,7 +502,7 @@ private fun CodingChat(
         ) {
             item {
                 Text(
-                    "Проект «${project.name}» · ${project.path}",
+                    "Проект «${project.name}» · сессия «${session.session.name}» · ${project.path}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -363,6 +600,12 @@ private fun CodingStepRow(step: CodingStep, live: Boolean) {
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(vertical = 3.dp),
         )
+        CodingStepKind.INFO -> Text(
+            "◷ ${step.title}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(vertical = 2.dp),
+        )
         CodingStepKind.TOOL, CodingStepKind.EXEC -> ToolStepRow(step, live)
     }
 }
@@ -419,7 +662,6 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             )
         }
         if (expanded && hasDetail) {
-            Spacer(Modifier.height(4.dp))
             Text(
                 step.result,
                 style = MaterialTheme.typography.bodySmall.copy(
@@ -454,7 +696,11 @@ private fun DraftBubble(draft: CodingDraft) {
                 Spacer(Modifier.width(8.dp))
             }
             Text(
-                if (draft.active) "Агент работает…" else "Черновик",
+                when {
+                    !draft.active -> "Черновик"
+                    draft.awaitingModel -> "Жду ответ движка…"
+                    else -> "Агент работает…"
+                },
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -462,7 +708,11 @@ private fun DraftBubble(draft: CodingDraft) {
         Spacer(Modifier.height(4.dp))
         if (draft.steps.isEmpty() && draft.active) {
             Text(
-                "Жду ответ движка…",
+                if (draft.awaitingModel) {
+                    "Запрос ушёл агенту; если он ждёт подтверждения — прервите прогон и уточните задачу."
+                } else {
+                    "Жду ответ движка…"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )

@@ -7,12 +7,15 @@ import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRepository
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
+import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingProjectRepository
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingRunRecorder
 import io.aequicor.magicpaper.domain.CodingRuntime
+import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.DocRepository
 import io.aequicor.magicpaper.domain.EffortLevel
 import io.aequicor.magicpaper.domain.LlmGateway
@@ -29,10 +32,13 @@ import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.SettingsRepository
+import io.aequicor.magicpaper.domain.aggregateCodingStatus
+import io.aequicor.magicpaper.domain.codingStatusOf
 import io.aequicor.magicpaper.plugins.PluginRegistry
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +73,9 @@ class MagicPaperViewModel(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    /** Активные прогоны по идентификаторам кодинг-сессий (параллельно в разных сессиях). */
+    private val codingJobs = mutableMapOf<String, Job>()
+
     init {
         scope.launch { bootstrap() }
     }
@@ -93,12 +102,49 @@ class MagicPaperViewModel(
                 coding = it.coding.copy(
                     projects = projects,
                     current = projects.firstOrNull(),
+                    projectStatuses = codingStatusSnapshot(projects),
                 ),
             )
         }
-        projects.firstOrNull()?.let { project -> loadCodingLog(project.id) }
+        projects.firstOrNull()?.let { project -> openCodingProject(project.id) }
         codingRuntime?.let { runtime ->
             _state.update { it.copy(coding = it.coding.copy(runtime = runtime.status())) }
+        }
+    }
+
+    /** Сводные статусы всех проектов (по первой загрузке, без активных прогонов). */
+    private suspend fun codingStatusSnapshot(projects: List<CodingProject>): Map<String, CodingSessionStatus> {
+        val repo = codingProjects ?: return emptyMap()
+        return projects.associate { project ->
+            val statuses = repo.sessions(project.id).map { session ->
+                codingStatusOf(repo.messages(project.id, session.id))
+            }
+            project.id to aggregateCodingStatus(statuses)
+        }
+    }
+
+    /**
+     * Пересчёт сводного статуса проекта: активные прогоны (WORKING/WAITING
+     * по живой фазе), остальные — по журналам из хранилища.
+     */
+    private suspend fun refreshProjectStatus(projectId: String) {
+        val repo = codingProjects ?: return
+        val statuses = repo.sessions(projectId).map { session ->
+            val active = codingJobs[session.id]
+            if (active != null && active.isActive) {
+                _state.value.coding.sessions.firstOrNull { it.session.id == session.id }?.status
+                    ?: CodingSessionStatus.WORKING
+            } else {
+                codingStatusOf(repo.messages(projectId, session.id))
+            }
+        }
+        _state.update {
+            it.copy(
+                coding = it.coding.copy(
+                    projectStatuses = it.coding.projectStatuses +
+                        (projectId to aggregateCodingStatus(statuses)),
+                ),
+            )
         }
     }
 
@@ -539,19 +585,22 @@ class MagicPaperViewModel(
         }
     }
 
-    /** Полное удаление изолированных зависимостей движка. */
+    /** Полное удаление изолированных зависимостей движка (останавливая все прогоны). */
     fun uninstallCodingRuntime() {
         val runtime = codingRuntime ?: return
         scope.launch {
-            runtime.abort()
+            runtime.abortAll()
             runtime.uninstall()
+            codingJobs.values.forEach { it.cancel() }
+            codingJobs.clear()
             _state.update {
                 it.copy(
                     coding = it.coding.copy(
                         runtime = runtime.status(),
                         installing = false,
-                        busy = false,
-                        draft = io.aequicor.magicpaper.domain.CodingDraft(),
+                        sessions = it.coding.sessions.map { s ->
+                            s.copy(running = false, draft = io.aequicor.magicpaper.domain.CodingDraft())
+                        },
                     ),
                     notice = "Зависимости движка удалены из папки данных.",
                 )
@@ -568,9 +617,7 @@ class MagicPaperViewModel(
             // Повторное добавление той же папки — просто выбираем существующий проект.
             val existing = repo.all().firstOrNull { it.path == path }
             if (existing != null) {
-                _state.update {
-                    it.copy(coding = it.coding.copy(current = existing, messages = repo.messages(existing.id)))
-                }
+                openCodingProject(existing.id)
                 return@launch
             }
             val name = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path }
@@ -581,55 +628,155 @@ class MagicPaperViewModel(
                 createdAt = Id.now(),
             )
             repo.save(project)
-            _state.update {
-                it.copy(coding = it.coding.copy(projects = repo.all(), current = project, messages = emptyList()))
-            }
+            _state.update { it.copy(coding = it.coding.copy(projects = repo.all())) }
+            openCodingProject(project.id)
         }
     }
 
+    /** Открыть проект: загрузить его кодинг-сессии с журналами. */
     fun selectCodingProject(id: String) {
+        scope.launch { openCodingProject(id) }
+    }
+
+    /** Открыть проект: список сессий с журналами; чужие активные прогоны сохраняются. */
+    private suspend fun openCodingProject(projectId: String) {
         val repo = codingProjects ?: return
-        scope.launch {
-            val project = repo.all().firstOrNull { it.id == id } ?: return@launch
-            _state.update {
-                it.copy(
-                    coding = it.coding.copy(
-                        current = project,
-                        messages = repo.messages(id),
-                        draft = io.aequicor.magicpaper.domain.CodingDraft(),
-                    )
-                )
+        val project = repo.all().firstOrNull { it.id == projectId } ?: return
+        val loaded = repo.sessions(projectId).map { session ->
+            CodingSessionUi(
+                session = session,
+                messages = repo.messages(projectId, session.id),
+                running = codingJobs[session.id]?.isActive == true,
+            )
+        }
+        _state.update { st ->
+            // Сессии других проектов с живыми прогонами не выбрасываем — они
+            // обновляют статус фоном; на экране фильтруются по current.id.
+            val loadedIds = loaded.map { it.session.id }.toSet()
+            val carried = st.coding.sessions.filter {
+                it.running && it.session.projectId != projectId && it.session.id !in loadedIds
             }
+            st.copy(
+                coding = st.coding.copy(
+                    current = project,
+                    sessions = loaded + carried,
+                    currentSessionId = st.coding.currentSessionId
+                        .takeIf { it != null && it in loadedIds }
+                        ?: loaded.firstOrNull()?.session?.id,
+                ),
+            )
         }
     }
 
     fun deleteCodingProject(id: String) {
         val repo = codingProjects ?: return
         scope.launch {
+            // Прерываем прогоны всех сессий удаляемого проекта.
+            repo.sessions(id).forEach { session ->
+                codingRuntime?.abort(session.id)
+                codingJobs.remove(session.id)?.cancel()
+            }
             repo.delete(id)
             val rest = repo.all()
             _state.update {
                 it.copy(
                     coding = it.coding.copy(
                         projects = rest,
-                        current = if (it.coding.current?.id == id) rest.firstOrNull() else it.coding.current,
-                        messages = emptyList(),
-                    )
+                        // Сессии остальных проектов остаются в состоянии (живые прогоны).
+                        sessions = it.coding.sessions.filter { s -> s.session.projectId != id },
+                        currentSessionId = null,
+                        projectStatuses = it.coding.projectStatuses - id,
+                    ),
                 )
             }
-            _state.value.coding.current?.let { project -> loadCodingLog(project.id) }
+            val current = _state.value.coding
+            if (current.current?.id == id) {
+                rest.firstOrNull()?.let { openCodingProject(it.id) }
+                    ?: _state.update {
+                        it.copy(coding = it.coding.copy(current = null, sessions = emptyList(), currentSessionId = null))
+                    }
+            }
         }
     }
 
-    /** Запрос кодинг-агенту: агент работает в папке выбранного проекта. */
+    // ---- Кодинг-сессии проекта ------------------------------------------------
+
+    /** Новая кодинг-сессия в текущем проекте: отдельный контекст и журнал. */
+    fun addCodingSession() {
+        val repo = codingProjects ?: return
+        val project = _state.value.coding.current ?: return
+        scope.launch {
+            val ordinal = repo.sessions(project.id).size + 1
+            val session = CodingSession(
+                id = Id.new(),
+                projectId = project.id,
+                name = "Сессия $ordinal",
+                createdAt = Id.now(),
+            )
+            repo.saveSession(session)
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        sessions = it.coding.sessions + CodingSessionUi(session = session),
+                        currentSessionId = session.id,
+                    ),
+                )
+            }
+            refreshProjectStatus(project.id)
+        }
+    }
+
+    fun selectCodingSession(id: String) {
+        _state.update { it.copy(coding = it.coding.copy(currentSessionId = id)) }
+    }
+
+    /** Удалить сессию с её журналом (активный прогон прерывается). */
+    fun deleteCodingSession(id: String) {
+        val repo = codingProjects ?: return
+        val coding = _state.value.coding
+        val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
+        scope.launch {
+            codingRuntime?.abort(id)
+            codingJobs.remove(id)?.cancel()
+            repo.deleteSession(target.session.projectId, id)
+            val rest = coding.sessions.filterNot { it.session.id == id }
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        sessions = rest,
+                        currentSessionId = if (it.coding.currentSessionId == id) {
+                            rest.firstOrNull { s -> s.session.projectId == target.session.projectId }?.session?.id
+                        } else {
+                            it.coding.currentSessionId
+                        },
+                    ),
+                )
+            }
+            refreshProjectStatus(target.session.projectId)
+        }
+    }
+
     fun sendCodingPrompt(text: String) {
+        val coding = _state.value.coding
+        val session = coding.currentSession ?: return
+        sendCodingPromptTo(session.session.id, text)
+    }
+
+    /**
+     * Запрос кодинг-агенту в произвольной сессии (можно ответить агенту
+     * из фоновой сессии, не переключаясь на неё).
+     * Прогоны разных сессий (в том числе разных проектов) идут параллельно.
+     */
+    fun sendCodingPromptTo(sessionId: String, text: String) {
         val runtime = codingRuntime ?: return
         val repo = codingProjects ?: return
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
-        val s = _state.value.coding
-        val project = s.current ?: return
-        if (s.busy) return
+        val coding = _state.value.coding
+        val ui = coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        val session = ui.session
+        val project = coding.projects.firstOrNull { it.id == session.projectId } ?: return
+        if (codingJobs[session.id]?.isActive == true) return
 
         val userMessage = CodingMessage(
             id = Id.new(),
@@ -638,57 +785,69 @@ class MagicPaperViewModel(
             createdAt = Id.now(),
         )
         val recorder = CodingRunRecorder()
-        var sessionId = project.piSessionId
-
-        scope.launch {
-            val history = repo.messages(project.id) + userMessage
-            repo.saveMessages(project.id, history)
-            _state.update {
-                it.copy(
-                    coding = it.coding.copy(
-                        messages = history,
-                        busy = true,
-                        draft = recorder.draft(active = true),
-                    )
-                )
+        val job = scope.launch {
+            val history = repo.messages(project.id, session.id) + userMessage
+            repo.saveMessages(project.id, session.id, history)
+            updateCodingSession(session.id) {
+                it.copy(messages = history, running = true, draft = recorder.draft(active = true))
             }
-            runtime.run(project, trimmed, resolvedProfile()).collect { event ->
-                if (event is io.aequicor.magicpaper.domain.CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
-                    sessionId = event.sessionId
+            var piSessionId = session.piSessionId
+            runtime.run(project, session, trimmed, resolvedProfile()).collect { event ->
+                if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
+                    piSessionId = event.sessionId
                 }
                 recorder.apply(event)
-                _state.update { it.copy(coding = it.coding.copy(draft = recorder.draft(active = true))) }
+                updateCodingSession(session.id) { it.copy(draft = recorder.draft(active = true)) }
             }
             val agentMessage = recorder.message(Id.new(), Id.now())
-            val finalLog = repo.messages(project.id) + agentMessage
-            repo.saveMessages(project.id, finalLog)
-            if (sessionId != project.piSessionId) {
-                repo.save(project.copy(piSessionId = sessionId))
-            }
-            _state.update {
+            // Перечитываем журнал: за время прогона его никто не должен был менять,
+            // но история берётся из хранилища, а не из снимка — источник истины один.
+            val finalLog = repo.messages(project.id, session.id) + agentMessage
+            repo.saveMessages(project.id, session.id, finalLog)
+            val updatedSession = session.copy(piSessionId = piSessionId)
+            if (piSessionId != session.piSessionId) repo.saveSession(updatedSession)
+            codingJobs.remove(session.id)
+            updateCodingSession(session.id) {
                 it.copy(
-                    coding = it.coding.copy(
-                        messages = finalLog,
-                        busy = false,
-                        draft = io.aequicor.magicpaper.domain.CodingDraft(),
-                        projects = repo.all(),
-                        current = repo.all().firstOrNull { p -> p.id == project.id } ?: it.coding.current,
-                    )
+                    session = updatedSession,
+                    messages = finalLog,
+                    running = false,
+                    draft = io.aequicor.magicpaper.domain.CodingDraft(),
                 )
             }
-        }
-    }
-
-    fun abortCodingRun() {
-        codingRuntime?.abort()
-    }
-
-    private fun loadCodingLog(projectId: String) {
-        val repo = codingProjects ?: return
-        scope.launch {
-            _state.update {
-                it.copy(coding = it.coding.copy(messages = repo.messages(projectId)))
+            // Прогон фоновой (не открытой) сессии закончился — запись больше не нужна.
+            if (project.id != _state.value.coding.current?.id) {
+                _state.update {
+                    it.copy(coding = it.coding.copy(sessions = it.coding.sessions.filterNot { s -> s.session.id == session.id }))
+                }
             }
+            refreshProjectStatus(project.id)
+        }
+        codingJobs[session.id] = job
+    }
+
+    /** Прервать прогон текущей сессии (процесс её агента). */
+    fun abortCodingRun() {
+        val id = _state.value.coding.currentSession?.session?.id ?: return
+        abortCodingSession(id)
+    }
+
+    fun abortCodingSession(sessionId: String) {
+        // Процесс убивает рантайм; поток событий сам выдаст Failed+Finished,
+        // и прогон корректно закроет журнал (статус станет жёлтым).
+        codingRuntime?.abort(sessionId)
+    }
+
+    /** Точечное обновление сессии в состоянии (по id, где бы она ни лежала). */
+    private fun updateCodingSession(sessionId: String, transform: (CodingSessionUi) -> CodingSessionUi) {
+        _state.update { st ->
+            st.copy(
+                coding = st.coding.copy(
+                    sessions = st.coding.sessions.map {
+                        if (it.session.id == sessionId) transform(it) else it
+                    },
+                ),
+            )
         }
     }
 }

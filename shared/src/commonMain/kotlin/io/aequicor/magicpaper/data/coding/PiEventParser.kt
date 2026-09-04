@@ -29,6 +29,28 @@ object PiEventParser {
         val obj = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()?.jsonObject ?: return null
         return when (obj.type()) {
             "session" -> CodingEvent.SessionStarted(sessionId = obj.primitive("id").orEmpty())
+            // Начало ответа ассистента: прогон перешёл из «ждём модель» в «работает».
+            "message_start" ->
+                if (obj["message"]?.jsonObject?.primitive("role") == "assistant") {
+                    CodingEvent.MessageStarted
+                } else {
+                    null
+                }
+            "agent_end" -> CodingEvent.AgentEnd
+            "compaction_start" -> CodingEvent.Notice("Уплотняю контекст…")
+            "compaction_end" -> if (obj["cancelled"] == JsonPrimitive(true) || obj["error"] != null) {
+                CodingEvent.Notice("Уплотнение контекста не удалось")
+            } else {
+                CodingEvent.Notice("Контекст уплотнён")
+            }
+            "auto_retry_start" -> CodingEvent.Notice(
+                "Сбой у провайдера, автоповтор №${obj.primitive("attempt") ?: "?"}…"
+            )
+            "auto_retry_end" -> if (obj["success"] == JsonPrimitive(true)) {
+                CodingEvent.Notice("Автоповтор удался")
+            } else {
+                CodingEvent.Failed(obj.primitive("error") ?: "Провайер отказал после автоповторов")
+            }
             "message_update" -> parseDelta(obj)
             "message_end" -> parseMessageEnd(obj)
             "tool_execution_start" -> {

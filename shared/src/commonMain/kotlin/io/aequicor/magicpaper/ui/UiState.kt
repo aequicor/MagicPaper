@@ -5,26 +5,64 @@ import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
+import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.DocArticle
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
+import io.aequicor.magicpaper.domain.aggregateCodingStatus
+import io.aequicor.magicpaper.domain.codingStatusOf
 import io.aequicor.magicpaper.plugins.MagicPlugin
 
 /** Экраны минималистичной навигации. */
 enum class Screen { CHAT, CODING, PLUGINS, DOCS, SETTINGS }
 
-/** Состояние раздела «Проекты и код». */
+/** Кодинг-сессия в UI: журнал плюс живой прогон и статус для индикатора. */
+data class CodingSessionUi(
+    val session: CodingSession,
+    val messages: List<CodingMessage> = emptyList(),
+    val draft: CodingDraft = CodingDraft(),
+    val running: Boolean = false,
+) {
+    /**
+     * Кружок активности: красный, когда агент реально работает; жёлтый —
+     * пока прогон запущен, но ждёт ответ модели (или журнал закончился
+     * вопросом/ошибкой); зелёный — ждёт запроса.
+     */
+    val status: CodingSessionStatus
+        get() = when {
+            running && draft.awaitingModel -> CodingSessionStatus.WAITING
+            running -> CodingSessionStatus.WORKING
+            else -> codingStatusOf(messages)
+        }
+}
+
+/** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
     val projects: List<CodingProject> = emptyList(),
     val current: CodingProject? = null,
-    val messages: List<CodingMessage> = emptyList(),
-    val draft: CodingDraft = CodingDraft(),
-    val busy: Boolean = false,
+    /** Сессии текущего проекта с журналами и живыми прогонами. */
+    val sessions: List<CodingSessionUi> = emptyList(),
+    val currentSessionId: String? = null,
+    /** Сводный кружок проекта (самый срочный статус среди его сессий). */
+    val projectStatuses: Map<String, CodingSessionStatus> = emptyMap(),
     val runtime: RuntimeStatus = RuntimeStatus(RuntimePhase.UNKNOWN),
     val installing: Boolean = false,
-)
+) {
+    val currentSession: CodingSessionUi?
+        get() = sessions.firstOrNull { it.session.id == currentSessionId } ?: sessions.firstOrNull()
+
+    fun statusOf(projectId: String, fallback: CodingSessionStatus = CodingSessionStatus.IDLE): CodingSessionStatus {
+        val own = sessions.filter { it.session.projectId == projectId }
+        return if (own.isNotEmpty()) {
+            aggregateCodingStatus(own.map { it.status })
+        } else {
+            projectStatuses[projectId] ?: fallback
+        }
+    }
+}
 
 /** Единое состояние экрана. Неизменяемый снапшот для Compose. */
 data class UiState(

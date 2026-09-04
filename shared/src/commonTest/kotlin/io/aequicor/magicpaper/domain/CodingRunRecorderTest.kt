@@ -42,6 +42,24 @@ class CodingRunRecorderTest {
     }
 
     @Test
+    fun runStartsWaitingAndWorkingAfterModelReplies() {
+        val recorder = CodingRunRecorder()
+        // Прогон запущен, модель молчит — индикатор показывает «ждёт».
+        assertTrue(recorder.draft(active = true).awaitingModel)
+
+        recorder.apply(CodingEvent.MessageStarted)
+        assertFalse(recorder.draft(active = true).awaitingModel)
+
+        // После действия агент снова ждёт ответ модели (или подтверждение).
+        recorder.apply(CodingEvent.ToolStarted("bash", "ls", callId = "b1"))
+        recorder.apply(CodingEvent.ToolFinished("bash", isError = false, callId = "b1"))
+        assertTrue(recorder.draft(active = true).awaitingModel)
+
+        // Неактивный черновик фазу «ожидание» не показывает.
+        assertFalse(recorder.draft(active = false).awaitingModel)
+    }
+
+    @Test
     fun toolProgressUpdatesRunningStep() {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.ToolStarted("bash", "ls -la", callId = "b1", isExec = true))
@@ -87,6 +105,16 @@ class CodingRunRecorderTest {
     }
 
     @Test
+    fun noticeBecomesInfoStepWithoutChangingPhase() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.Notice("Уплотняю контекст…"))
+        val timeline = recorder.timeline()
+        assertEquals(CodingStepKind.INFO, timeline.single().kind)
+        // Служебные сообщения фазу ожидания ответа модели не снимают.
+        assertTrue(recorder.draft(active = true).awaitingModel)
+    }
+
+    @Test
     fun messageWithoutAnyTextGetsPlaceholder() {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.ToolStarted("read", "x", callId = "1"))
@@ -94,5 +122,57 @@ class CodingRunRecorderTest {
         val message = recorder.message("m", 0L)
         assertEquals("Агент не оставил текста.", message.text)
         assertEquals(1, message.activity.size)
+    }
+}
+
+/** Статусы активности кодинг-сессий: кружок должен отражать реальное состояние. */
+class CodingSessionStatusTest {
+
+    private fun user(text: String) = CodingMessage(id = "u", role = CodingRole.USER, text = text, createdAt = 1L)
+    private fun agent(text: String, failed: Boolean = false) =
+        CodingMessage(id = "a", role = CodingRole.AGENT, text = text, failed = failed, createdAt = 2L)
+
+    @Test
+    fun emptyLogWaitsForRequest() {
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(emptyList()))
+    }
+
+    @Test
+    fun finishedAnswerWaitsForRequest() {
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(user("сделай"), agent("Готово."))))
+    }
+
+    @Test
+    fun agentQuestionWaitsForConfirmation() {
+        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Удалить файл?"))))
+        // Вопрос под markdown-обёрткой тоже считается.
+        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Продолжить?**"))))
+        // Вопрос в последней строке многострочного ответа.
+        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Готово.\n\nУдалить черновик?"))))
+        // А вот вопрос в середине — уже не ждущая сессия.
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(agent("Спросишь? Вот и всё, закончил."))))
+    }
+
+    @Test
+    fun unansweredPromptWaits() {
+        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(user("задача"), user("ещё одна"))))
+    }
+
+    @Test
+    fun failedRunWaits() {
+        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Упало", failed = true))))
+    }
+
+    @Test
+    fun aggregatePicksMostUrgent() {
+        assertEquals(
+            CodingSessionStatus.WORKING,
+            aggregateCodingStatus(listOf(CodingSessionStatus.IDLE, CodingSessionStatus.WORKING, CodingSessionStatus.WAITING)),
+        )
+        assertEquals(
+            CodingSessionStatus.WAITING,
+            aggregateCodingStatus(listOf(CodingSessionStatus.IDLE, CodingSessionStatus.WAITING)),
+        )
+        assertEquals(CodingSessionStatus.IDLE, aggregateCodingStatus(emptyList()))
     }
 }

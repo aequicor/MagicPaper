@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.coding
 import com.sun.net.httpserver.HttpServer
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
+import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
@@ -51,7 +52,8 @@ class PiCodingRuntimeIntegrationTest {
             assertEquals(RuntimePhase.READY, last.phase, "итог установки: ${last.detail}")
 
             val project = CodingProject(id = "p1", name = "demo", path = projectDir.absolutePath, createdAt = 1L)
-            val events = runBlocking { runtime.run(project, "Скажи одно слово", profile).toList() }
+            val session = CodingSession(id = "s1", projectId = "p1", name = "Основная", createdAt = 1L)
+            val events = runBlocking { runtime.run(project, session, "Скажи одно слово", profile).toList() }
 
             assertTrue(events.any { it is CodingEvent.SessionStarted }, "нет заголовка сессии")
             val finals = events.filterIsInstance<CodingEvent.FinalText>()
