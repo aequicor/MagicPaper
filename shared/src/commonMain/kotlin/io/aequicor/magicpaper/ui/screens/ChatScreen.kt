@@ -44,17 +44,28 @@ import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ProfileResolver
+import io.aequicor.magicpaper.domain.glyph
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
-fun ChatScreen(vm: MagicPaperViewModel, session: ChatSession?, busy: Boolean) {
+fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
     Column(modifier = Modifier.fillMaxSize()) {
-        MessagesList(session, busy, modifier = Modifier.weight(1f))
-        Composer(enabled = !busy) { vm.send(it) }
+        MessagesList(state.current, state.busy, modifier = Modifier.weight(1f))
+        Composer(
+            enabled = !state.busy,
+            session = state.current,
+            profiles = state.llmProfiles,
+            activeProfileId = state.settings.activeLlmProfileId,
+            onSend = { vm.send(it) },
+            onOpenSwitcher = { vm.toggleModelSwitcher(true) },
+        )
     }
 }
 
@@ -189,8 +200,47 @@ private fun MessageBubble(message: ChatMessage) {
     }
 }
 
+/** Чип текущей модели в композиции: тап открывает переключатель источника. */
 @Composable
-private fun Composer(enabled: Boolean, onSend: (String) -> Unit) {
+private fun ModelChip(
+    session: ChatSession?,
+    profiles: List<LlmProfile>,
+    activeProfileId: String,
+    onClick: () -> Unit,
+) {
+    val resolved = ProfileResolver.resolve(session, io.aequicor.magicpaper.domain.AppSettings(activeLlmProfileId = activeProfileId), profiles)
+    val overridden = session?.llmProfileId != null
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.heightIn(min = 48.dp),
+    ) {
+        if (resolved == null) {
+            Text(
+                "✦ Источник не подключён",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            val effortGlyph = resolved.effort.glyph
+            Text(
+                "${if (overridden) "◌ " else ""}✦ ${resolved.shortLabel} · $effortGlyph ▾",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Composer(
+    enabled: Boolean,
+    session: ChatSession?,
+    profiles: List<LlmProfile>,
+    activeProfileId: String,
+    onSend: (String) -> Unit,
+    onOpenSwitcher: () -> Unit,
+) {
     // Черновик переживает поворот экрана и потерю фокуса окна.
     var text by rememberSaveable { mutableStateOf("") }
     fun submit() {
@@ -200,8 +250,15 @@ private fun Composer(enabled: Boolean, onSend: (String) -> Unit) {
     }
     Column(modifier = Modifier.fillMaxWidth()) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        // Ряд с чипом модели: отдельная кнопка чата для переключения источника.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ModelChip(session, profiles, activeProfileId, onOpenSwitcher)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(

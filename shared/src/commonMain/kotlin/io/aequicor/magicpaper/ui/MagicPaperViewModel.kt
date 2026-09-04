@@ -14,10 +14,15 @@ import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingRunRecorder
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.DocRepository
+import io.aequicor.magicpaper.domain.EffortLevel
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.LlmProfileRepository
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.ProfileBundle
 import io.aequicor.magicpaper.domain.ProfileBridge
+import io.aequicor.magicpaper.domain.ProfileMigrator
+import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.SettingsRepository
@@ -41,6 +46,7 @@ class MagicPaperViewModel(
     private val agent: MagicAgent,
     private val chats: ChatRepository,
     private val settingsRepo: SettingsRepository,
+    private val profileRepo: LlmProfileRepository,
     private val docs: DocRepository,
     private val registry: PluginRegistry,
     private val bridge: ProfileBridge,
@@ -65,16 +71,20 @@ class MagicPaperViewModel(
         val states = settingsRepo.pluginStates().associateBy { it.id }
         val sessions = chats.sessions()
         val projects = codingProjects?.all().orEmpty()
+        // Одноразовая миграция: старая «одна модель» становится профилем подключения.
+        val migratedSettings = migrateLegacyModel(settings)
+        val profiles = profileRepo.all()
         _state.update {
             it.copy(
-                settings = settings,
+                settings = migratedSettings,
                 plugins = registry.all(),
                 pluginStates = states,
                 sessions = sessions,
                 current = sessions.firstOrNull(),
                 docsArticles = docs.articles(),
                 storageInfo = store.description,
-                showWelcome = !settings.onboardingDone,
+                showWelcome = !migratedSettings.onboardingDone,
+                llmProfiles = profiles,
                 coding = it.coding.copy(
                     projects = projects,
                     current = projects.firstOrNull(),
@@ -85,6 +95,25 @@ class MagicPaperViewModel(
         codingRuntime?.let { runtime ->
             _state.update { it.copy(coding = it.coding.copy(runtime = runtime.status())) }
         }
+    }
+
+    /**
+     * Перенос легаси-тройки (Base URL/ключ/модель) в первый профиль подключения.
+     * Срабатывает один раз: когда профилей ещё нет, а старая тройка заполнена.
+     */
+    private suspend fun migrateLegacyModel(settings: AppSettings): AppSettings {
+        if (profileRepo.all().isNotEmpty()) return settings
+        val legacy = ProfileMigrator.legacyProfile(settings) ?: return settings
+        profileRepo.save(legacy)
+        val migrated = settings.copy(activeLlmProfileId = legacy.id)
+        settingsRepo.save(migrated)
+        return migrated
+    }
+
+    /** Разрешённый профиль для текущего свитка (см. [ProfileResolver]). */
+    private fun resolvedProfile(): LlmProfile? {
+        val s = _state.value
+        return ProfileResolver.resolve(s.current, s.settings, s.llmProfiles)
     }
 
     // ---- Навигация -------------------------------------------------------
@@ -169,7 +198,8 @@ class MagicPaperViewModel(
                     busy = true,
                 )
             }
-            val answer = agent.answer(historyBefore, trimmed, settings)
+            val profile = ProfileResolver.resolve(updated, settings, _state.value.llmProfiles)
+            val answer = agent.answer(historyBefore, trimmed, settings, profile)
             val agentMessage = ChatMessage(
                 id = Id.new(),
                 role = ChatRole.AGENT,
@@ -194,12 +224,29 @@ class MagicPaperViewModel(
 
     // ---- Настройки ---------------------------------------------------------
 
-    /** Завершение ознакомительного тура: сохранить черновик и впустить в приложение. */
-    fun finishOnboarding(settings: AppSettings) {
+    /** Завершение ознакомительного тура: сохранить черновик и впустить в приложение.
+     * [onboardingProfile] — профиль, созданный на шаге «источник магии» (если настроен). */
+    fun finishOnboarding(settings: AppSettings, onboardingProfile: LlmProfile? = null) {
         scope.launch {
-            val done = settings.copy(onboardingDone = true)
+            val withProfile = onboardingProfile != null && onboardingProfile.configured
+            if (withProfile) profileRepo.save(onboardingProfile)
+            val done = settings.copy(
+                onboardingDone = true,
+                activeLlmProfileId = if (withProfile && settings.activeLlmProfileId.isBlank()) {
+                    onboardingProfile.id
+                } else {
+                    settings.activeLlmProfileId
+                },
+            )
             settingsRepo.save(done)
-            _state.update { it.copy(settings = done, showWelcome = false, screen = Screen.CHAT) }
+            _state.update {
+                it.copy(
+                    settings = done,
+                    llmProfiles = if (withProfile) profileRepo.all() else it.llmProfiles,
+                    showWelcome = false,
+                    screen = Screen.CHAT,
+                )
+            }
         }
     }
 
@@ -212,6 +259,101 @@ class MagicPaperViewModel(
             _state.update { it.copy(settings = settings, notice = "Настройки сохранены.") }
         }
     }
+
+    // ---- Магические источники (профили подключения) -----------------------
+
+    /** Сохранить профиль (создание или обновление) и обновить состояние.
+     * Первый сохранённый профиль становится активным автоматически. */
+    fun saveLlmProfile(profile: LlmProfile) {
+        scope.launch {
+            profileRepo.save(profile)
+            val profiles = profileRepo.all()
+            val settings = _state.value.settings
+            val updated = if (settings.activeLlmProfileId.isBlank()) {
+                settings.copy(activeLlmProfileId = profile.id).also { settingsRepo.save(it) }
+            } else {
+                settings
+            }
+            _state.update {
+                it.copy(
+                    settings = updated,
+                    llmProfiles = profiles,
+                    editingLlmProfileId = null,
+                    notice = "Источник «${profile.name}» сохранён.",
+                )
+            }
+        }
+    }
+
+    /** Удалить профиль; если он был активным — активным станет первый оставшийся. */
+    fun deleteLlmProfile(id: String) {
+        scope.launch {
+            profileRepo.delete(id)
+            val profiles = profileRepo.all()
+            val settings = _state.value.settings
+            val newActive = if (settings.activeLlmProfileId == id) {
+                profiles.firstOrNull()?.id.orEmpty()
+            } else {
+                settings.activeLlmProfileId
+            }
+            val updated = settings.copy(activeLlmProfileId = newActive)
+            settingsRepo.save(updated)
+            // Снимаем переопределения свитков, ссылающиеся на удалённый профиль.
+            _state.value.sessions.filter { it.llmProfileId == id }.forEach { session ->
+                val cleared = session.copy(llmProfileId = null)
+                chats.save(cleared)
+            }
+            bootstrap()
+            _state.update { it.copy(notice = "Источник удалён.") }
+        }
+    }
+
+    /** Сделать профиль глобально активным (для всех свитков без переопределения). */
+    fun setActiveProfile(id: String) {
+        scope.launch {
+            val updated = _state.value.settings.copy(activeLlmProfileId = id)
+            settingsRepo.save(updated)
+            val profile = _state.value.llmProfiles.firstOrNull { it.id == id }
+            _state.update {
+                it.copy(settings = updated, notice = profile?.let { p -> "Основной источник: ${p.shortLabel}." })
+            }
+        }
+    }
+
+    /** Переопределить профиль только для текущего свитка (или снять переопределение: id = null). */
+    fun selectChatProfile(id: String?) {
+        val session = _state.value.current ?: return
+        scope.launch {
+            val updated = session.copy(llmProfileId = id, updatedAt = Id.now())
+            chats.save(updated)
+            _state.update { st ->
+                st.copy(
+                    current = updated,
+                    sessions = st.sessions.map { if (it.id == updated.id) updated else it },
+                )
+            }
+        }
+    }
+
+    /** Быстрая смена уровня усилия профиля (из переключателя в чате). */
+    fun setProfileEffort(id: String, effort: EffortLevel) {
+        scope.launch {
+            val profile = profileRepo.all().firstOrNull { it.id == id } ?: return@launch
+            profileRepo.save(profile.copy(effort = effort))
+            _state.update { it.copy(llmProfiles = profileRepo.all()) }
+        }
+    }
+
+    /** Открыт/закрыт ли переключатель модели в чате. */
+    fun toggleModelSwitcher(open: Boolean) = _state.update { it.copy(modelSwitcherOpen = open) }
+
+    /** Перейти к редактированию профиля на экране настроек. */
+    fun editLlmProfile(id: String) {
+        _state.update { it.copy(screen = Screen.SETTINGS, editingLlmProfileId = id, modelSwitcherOpen = false) }
+    }
+
+    /** Закрыть редактор профиля без сохранения. */
+    fun closeLlmProfileEditor() = _state.update { it.copy(editingLlmProfileId = null) }
 
     // ---- Плагины ------------------------------------------------------------
 
@@ -250,6 +392,7 @@ class MagicPaperViewModel(
                 plugins = s.pluginStates.values.toList(),
                 sessions = chats.sessions(),
                 skills = skills?.all().orEmpty(),
+                llmProfiles = s.llmProfiles,
             )
             val encoded = json.encodeToString(ProfileBundle.serializer(), bundle)
             val ok = bridge.export(encoded)
@@ -274,6 +417,7 @@ class MagicPaperViewModel(
             settingsRepo.savePluginStates(bundle.plugins)
             bundle.sessions.forEach { chats.save(it) }
             bundle.skills.forEach { skill -> skills?.save(skill) }
+            bundle.llmProfiles.forEach { profile -> profileRepo.save(profile) }
             bootstrap()
             _state.update { it.copy(notice = "Профиль импортирован.") }
         }
@@ -284,12 +428,14 @@ class MagicPaperViewModel(
             chats.wipe()
             settingsRepo.wipe()
             skills?.wipe()
+            profileRepo.wipe()
             _state.update {
                 it.copy(
                     current = null,
                     sessions = emptyList(),
                     settings = AppSettings(),
                     pluginStates = emptyMap(),
+                    llmProfiles = emptyList(),
                     notice = "Все данные удалены.",
                 )
             }
@@ -431,7 +577,7 @@ class MagicPaperViewModel(
                     )
                 )
             }
-            runtime.run(project, trimmed, _state.value.settings).collect { event ->
+            runtime.run(project, trimmed, resolvedProfile()).collect { event ->
                 if (event is io.aequicor.magicpaper.domain.CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                     sessionId = event.sessionId
                 }

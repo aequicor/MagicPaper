@@ -16,20 +16,21 @@ class SkillEducator(private val gateway: LlmGateway, private val json: Json = DE
     @Serializable
     private data class ModelDraft(val name: String = "", val description: String = "", val instructions: String = "")
 
-    suspend fun propose(history: List<ChatMessage>, settings: AppSettings): SkillDraft {
+    /** [profile] — разрешённый профиль подключения; null = модели нет. */
+    suspend fun propose(history: List<ChatMessage>, profile: LlmProfile?): SkillDraft {
         val lastUser = history.lastOrNull { it.role == ChatRole.USER }?.text.orEmpty()
-        if (!settings.llmConfigured || history.isEmpty()) return heuristicDraft(lastUser)
-        return runCatching { modelDraft(history, settings) }.getOrElse { heuristicDraft(lastUser) }
+        if (profile == null || !profile.configured || history.isEmpty()) return heuristicDraft(lastUser)
+        return runCatching { modelDraft(history, profile) }.getOrElse { heuristicDraft(lastUser) }
     }
 
-    private suspend fun modelDraft(history: List<ChatMessage>, settings: AppSettings): SkillDraft {
+    private suspend fun modelDraft(history: List<ChatMessage>, profile: LlmProfile): SkillDraft {
         val messages = buildList {
             add(LlmMessage("system", PROPOSAL_PROMPT))
             history.takeLast(6).forEach { m ->
                 add(LlmMessage(if (m.role == ChatRole.USER) "user" else "assistant", m.text))
             }
         }
-        val raw = gateway.complete(settings, messages)
+        val raw = gateway.complete(profile, messages)
         val draft = parseDraft(raw)
         require(draft.name.isNotBlank() && draft.instructions.isNotBlank()) { "Модель вернула пустой черновик" }
         return draft

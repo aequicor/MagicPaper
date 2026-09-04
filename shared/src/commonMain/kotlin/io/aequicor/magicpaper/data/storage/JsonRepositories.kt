@@ -3,6 +3,8 @@ package io.aequicor.magicpaper.data.storage
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.ChatRepository
 import io.aequicor.magicpaper.domain.ChatSession
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.LlmProfileRepository
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.SettingsRepository
 import kotlinx.serialization.builtins.ListSerializer
@@ -43,6 +45,38 @@ class JsonSettingsRepository(
     private companion object {
         const val KEY_SETTINGS = "settings"
         const val KEY_PLUGINS = "plugins"
+    }
+}
+
+/** Реализация хранилища профилей подключения поверх KeyValueStore (ключ «llm_profiles»). */
+class JsonLlmProfileRepository(
+    private val store: KeyValueStore,
+    private val json: Json,
+) : LlmProfileRepository {
+
+    private val serializer = ListSerializer(LlmProfile.serializer())
+
+    override suspend fun all(): List<LlmProfile> {
+        val raw = store.read(KEY_PROFILES) ?: return emptyList()
+        return runCatching { json.decodeFromString(serializer, raw) }.getOrDefault(emptyList())
+    }
+
+    override suspend fun save(profile: LlmProfile) {
+        val current = all().filterNot { it.id == profile.id } + profile
+        store.write(KEY_PROFILES, json.encodeToString(serializer, current))
+    }
+
+    override suspend fun delete(id: String) {
+        val rest = all().filterNot { it.id == id }
+        store.write(KEY_PROFILES, json.encodeToString(serializer, rest))
+    }
+
+    override suspend fun wipe() {
+        store.delete(KEY_PROFILES)
+    }
+
+    private companion object {
+        const val KEY_PROFILES = "llm_profiles"
     }
 }
 

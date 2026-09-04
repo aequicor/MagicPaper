@@ -6,9 +6,9 @@ import kotlin.test.assertTrue
 
 class SkillEducatorTest {
 
-    /** Шлюз без модели: любой вызов падает, как нес настроенный сервер. */
+    /** Шлюз без модели: любой вызов падает, как не подключённый сервер. */
     private class FailingGateway : LlmGateway {
-        override suspend fun complete(settings: AppSettings, messages: List<LlmMessage>): String =
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String =
             throw IllegalStateException("нет модели")
     }
 
@@ -20,7 +20,7 @@ class SkillEducatorTest {
 
     @Test
     fun heuristicDraftWhenModelUnavailable() = runTest {
-        val draft = educator.propose(messages, AppSettings(llmBaseUrl = ""))
+        val draft = educator.propose(messages, profile = null)
         assertTrue(draft.name.isNotBlank())
         assertTrue(draft.instructions.isNotBlank())
         assertTrue(draft.note != null)
@@ -28,7 +28,8 @@ class SkillEducatorTest {
 
     @Test
     fun emptyHistoryStillProducesDraft() = runTest {
-        val draft = educator.propose(emptyList(), AppSettings(llmBaseUrl = ""))
+        val profile = LlmProfile(id = "p", name = "тест", baseUrl = "http://x/v1", modelId = "m")
+        val draft = educator.propose(emptyList(), profile)
         assertTrue(draft.name.isNotBlank())
     }
 }

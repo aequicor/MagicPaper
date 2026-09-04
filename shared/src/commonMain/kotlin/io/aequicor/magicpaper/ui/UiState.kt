@@ -6,6 +6,7 @@ import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.DocArticle
+import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
@@ -42,4 +43,10 @@ data class UiState(
     /** Показывать ознакомительный тур (первый запуск или сброшен вручную). */
     val showWelcome: Boolean = false,
     val coding: CodingUi = CodingUi(),
+    /** Все профили подключения ИИ-провайдеров. */
+    val llmProfiles: List<LlmProfile> = emptyList(),
+    /** Открыт ли переключатель модели в чате. */
+    val modelSwitcherOpen: Boolean = false,
+    /** Профиль, открытый в редакторе настроек (для перехода из чата). */
+    val editingLlmProfileId: String? = null,
 )

@@ -30,6 +30,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.data.skills.SkillStore
 import io.aequicor.magicpaper.domain.ChatRepository
+import io.aequicor.magicpaper.domain.LlmProfileRepository
+import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.Skill
 import io.aequicor.magicpaper.domain.SkillDraft
 import io.aequicor.magicpaper.domain.SkillEducator
@@ -52,6 +54,7 @@ class SelfEducationPlugin(
     private val store: SkillStore,
     private val chats: ChatRepository,
     private val settingsRepo: SettingsRepository,
+    private val profileRepo: LlmProfileRepository,
 ) : MagicPlugin {
     override val id = "self-education"
     override val title = "Самообучение"
@@ -79,7 +82,8 @@ class SelfEducationPlugin(
                     return@launch
                 }
                 val settings = settingsRepo.load()
-                draft = educator.propose(session.messages, settings)
+                val profile = ProfileResolver.resolve(session, settings, profileRepo.all())
+                draft = educator.propose(session.messages, profile)
                 busy = false
             }
         }

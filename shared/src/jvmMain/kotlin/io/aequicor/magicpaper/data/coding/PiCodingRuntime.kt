@@ -1,9 +1,11 @@
 package io.aequicor.magicpaper.data.coding
 
-import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ProviderCatalog
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import java.io.File
@@ -101,7 +103,7 @@ class PiCodingRuntime(
 
     // ---- Запуск агента ----------------------------------------------------
 
-    override fun run(project: CodingProject, prompt: String, settings: AppSettings): Flow<CodingEvent> = flow {
+    override fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent> = flow {
         val dir = File(project.path)
         if (!piCli.isFile) {
             emit(CodingEvent.Failed("Движок не установлен. Нажмите «Подготовить движок»."))
@@ -113,8 +115,13 @@ class PiCodingRuntime(
             emit(CodingEvent.Finished)
             return@flow
         }
-        if (!settings.llmConfigured) {
-            emit(CodingEvent.Failed("В настройках не указан источник модели (Base URL и имя модели)."))
+        if (profile == null || !profile.configured) {
+            emit(CodingEvent.Failed("Не настроен источник модели: подключите провайдера в настройках."))
+            emit(CodingEvent.Finished)
+            return@flow
+        }
+        if (profile.provider != ProviderType.OPENAI_COMPATIBLE) {
+            emit(CodingEvent.Failed("Кодинг-агент работает только с OpenAI-совместимыми серверами (сейчас выбран: ${profile.name})."))
             emit(CodingEvent.Finished)
             return@flow
         }
@@ -125,13 +132,13 @@ class PiCodingRuntime(
             return@flow
         }
 
-        writePiConfig(settings)
+        writePiConfig(profile)
 
         val args = mutableListOf(
             node.absolutePath, piCli.absolutePath,
             "--mode", "json",
             "--provider", PROVIDER_ID,
-            "--model", settings.llmModel,
+            "--model", profile.modelId,
             "--session-dir", sessionsDir.absolutePath,
             "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--no-approve",
@@ -321,21 +328,22 @@ class PiCodingRuntime(
         )
     }
 
-    /** Модель из настроек приложения мостится в конфиг пи изолированно. */
-    private fun writePiConfig(settings: AppSettings) {
+    /** Модель из профиля подключения мостится в конфиг пи изолированно. */
+    private fun writePiConfig(profile: LlmProfile) {
         pihome.mkdirs()
         writePiHomeDefaults()
         sessionsDir.mkdirs()
-        val key = settings.llmApiKey.ifBlank { "magicpaper" }
-        val model = jsonEscape(settings.llmModel)
-        val baseUrl = jsonEscape(settings.llmBaseUrl.trimEnd('/'))
+        val key = profile.apiKey.ifBlank { "magicpaper" }
+        val model = jsonEscape(profile.modelId)
+        val baseUrl = jsonEscape(profile.baseUrl.trimEnd('/'))
+        val supportsEffort = ProviderCatalog.supportsEffort(profile)
         File(pihome, "models.json").writeText(
             """
             {"providers":{"$PROVIDER_ID":{
               "baseUrl":"$baseUrl",
               "api":"openai-completions",
               "apiKey":"${jsonEscape(key)}",
-              "compat":{"supportsDeveloperRole":false,"supportsReasoningEffort":false},
+              "compat":{"supportsDeveloperRole":false,"supportsReasoningEffort":$supportsEffort},
               "models":[{"id":"$model","name":"$model","reasoning":false,"contextWindow":128000,"maxTokens":8192}]
             }}}
             """.trimIndent()

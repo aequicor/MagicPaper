@@ -41,6 +41,7 @@ import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.Screen
 import io.aequicor.magicpaper.ui.UiState
+import io.aequicor.magicpaper.ui.components.ModelSwitcherDialog
 import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
@@ -87,6 +88,15 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
                             )
                         }
                     }
+                    if (state.modelSwitcherOpen && state.screen == Screen.CHAT) {
+                        ModelSwitcherDialog(
+                            vm = deps.viewModel,
+                            profiles = state.llmProfiles,
+                            activeProfileId = state.settings.activeLlmProfileId,
+                            sessionProfileId = state.current?.llmProfileId,
+                            onDismiss = { deps.viewModel.toggleModelSwitcher(false) },
+                        )
+                    }
                 }
             }
         }
@@ -104,13 +114,13 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
         }
         Box(modifier = Modifier.weight(1f)) {
             when (state.screen) {
-                Screen.CHAT -> ChatScreen(vm, state.current, state.busy)
+                Screen.CHAT -> ChatScreen(vm, state)
                 Screen.CODING -> CodingScreen(vm, state.coding)
                 Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
                     ActivePlugins(state.plugins, state.pluginStates)
                 }
                 Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
-                Screen.SETTINGS -> SettingsScreen(vm, state.settings, state.storageInfo)
+                Screen.SETTINGS -> SettingsScreen(vm, state)
             }
         }
     }

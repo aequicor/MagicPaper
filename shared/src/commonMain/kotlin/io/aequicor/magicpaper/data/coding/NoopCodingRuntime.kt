@@ -2,8 +2,8 @@ package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
-import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.CodingRuntime
+import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
@@ -22,7 +22,7 @@ object NoopCodingRuntime : CodingRuntime {
 
     override suspend fun status(): RuntimeStatus = status
     override fun ensureReady(): Flow<RuntimeStatus> = flowOf(status)
-    override fun run(project: CodingProject, prompt: String, settings: AppSettings): Flow<CodingEvent> =
+    override fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent> =
         flowOf(CodingEvent.Failed("Кодинг-агент не поддерживается на этой платформе."))
 
     override suspend fun uninstall() = Unit

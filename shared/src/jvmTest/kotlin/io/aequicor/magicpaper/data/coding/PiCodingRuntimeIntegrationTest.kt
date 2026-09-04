@@ -1,9 +1,10 @@
 package io.aequicor.magicpaper.data.coding
 
 import com.sun.net.httpserver.HttpServer
-import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import java.io.File
 import java.net.InetSocketAddress
@@ -34,10 +35,13 @@ class PiCodingRuntimeIntegrationTest {
         val projectDir = File(workRoot, "project").apply { mkdirs() }
         val mock = startMockModelServer()
         try {
-            val settings = AppSettings(
-                llmBaseUrl = "http://127.0.0.1:${mock.address.port}/v1",
-                llmModel = "mock-model",
-                llmApiKey = "test-key",
+            val profile = LlmProfile(
+                id = "it",
+                name = "мок-сервер",
+                provider = ProviderType.OPENAI_COMPATIBLE,
+                baseUrl = "http://127.0.0.1:${mock.address.port}/v1",
+                modelId = "mock-model",
+                apiKey = "test-key",
             )
             val runtime = PiCodingRuntime(rootDir = File(workRoot, "coding"))
 
@@ -47,7 +51,7 @@ class PiCodingRuntimeIntegrationTest {
             assertEquals(RuntimePhase.READY, last.phase, "итог установки: ${last.detail}")
 
             val project = CodingProject(id = "p1", name = "demo", path = projectDir.absolutePath, createdAt = 1L)
-            val events = runBlocking { runtime.run(project, "Скажи одно слово", settings).toList() }
+            val events = runBlocking { runtime.run(project, "Скажи одно слово", profile).toList() }
 
             assertTrue(events.any { it is CodingEvent.SessionStarted }, "нет заголовка сессии")
             val finals = events.filterIsInstance<CodingEvent.FinalText>()

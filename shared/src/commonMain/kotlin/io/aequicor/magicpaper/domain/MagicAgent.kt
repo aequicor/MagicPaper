@@ -6,6 +6,9 @@ package io.aequicor.magicpaper.domain
  *  1. Вопросы о приложении -> встроенная документация.
  *  2. Похоже на поиск ("найди", "кто", "что такое" и т.п.) -> движок поиска.
  *  3. Иначе -> модель, с контекстом диалога.
+ *
+ * Модель выбирает не агент, а вызывающий слой (через [ProfileResolver]);
+ * агент получает готовый [LlmProfile] — или null, если источник не подключён.
  */
 class MagicAgent(
     private val gateway: LlmGateway,
@@ -18,7 +21,12 @@ class MagicAgent(
     /** Результат ответа: текст и источники (для отображения в чате). */
     data class Answer(val text: String, val sources: List<SearchHit> = emptyList())
 
-    suspend fun answer(history: List<ChatMessage>, userText: String, settings: AppSettings): Answer {
+    suspend fun answer(
+        history: List<ChatMessage>,
+        userText: String,
+        settings: AppSettings,
+        profile: LlmProfile?,
+    ): Answer {
         val trimmed = userText.trim()
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
         // они усиливают любую ветку (доки, поиск, свободный диалог).
@@ -29,7 +37,7 @@ class MagicAgent(
             if (matches.isNotEmpty()) {
                 val context = matches.joinToString("\n\n") { "${it.article.title}\n${it.article.body}" }
                 return tryModel(
-                    settings = settings,
+                    profile = profile,
                     system = SYSTEM_PROMPT,
                     context = "Документация приложения:\n$context",
                     skills = skills,
@@ -47,7 +55,7 @@ class MagicAgent(
                     "[${hit.provider}] ${hit.title}\n${hit.snippet}\n${hit.url}"
                 }
                 return tryModel(
-                    settings = settings,
+                    profile = profile,
                     system = SYSTEM_PROMPT,
                     context = "Результаты поиска:\n$context",
                     skills = skills,
@@ -59,7 +67,7 @@ class MagicAgent(
         }
 
         return tryModel(
-            settings = settings,
+            profile = profile,
             system = SYSTEM_PROMPT,
             context = null,
             skills = skills,
@@ -70,7 +78,7 @@ class MagicAgent(
     }
 
     private suspend fun tryModel(
-        settings: AppSettings,
+        profile: LlmProfile?,
         system: String,
         context: String?,
         skills: List<Skill>,
@@ -78,22 +86,23 @@ class MagicAgent(
         userText: String,
         sources: List<SearchHit>,
     ): Answer {
-        if (!settings.llmConfigured) {
+        if (profile == null || !profile.configured) {
             return Answer(NOT_CONFIGURED_TEXT, sources)
         }
+        val effectiveSystem = profile.advanced.systemPromptOverride.ifBlank { system }
         val messages = buildList {
-            add(LlmMessage("system", system))
+            add(LlmMessage("system", effectiveSystem))
             if (skills.isNotEmpty()) {
                 add(LlmMessage("system", skillsContext(skills)))
             }
             if (context != null) add(LlmMessage("system", context))
-            history.takeLast(HISTORY_LIMIT).forEach { m ->
+            history.takeLast(profile.advanced.contextMessages).forEach { m ->
                 add(LlmMessage(if (m.role == ChatRole.USER) "user" else "assistant", m.text))
             }
             add(LlmMessage("user", userText))
         }
         return runCatching {
-            Answer(gateway.complete(settings, messages), sources)
+            Answer(gateway.complete(profile, messages), sources)
         }.getOrElse { e ->
             Answer("Заклинание не сработало: ${e.message ?: "неизвестная ошибка"}.", sources)
         }
@@ -117,13 +126,14 @@ class MagicAgent(
     }
 
     private companion object {
-        const val HISTORY_LIMIT = 8
         val APP_KEYWORDS = listOf(
             "magicpaper", "настройки", "настройка", "плагин", "плагины", "профиль",
             "экспорт", "импорт", "поисковый движок", "как работает", "как удалить",
             "безопасность", "перенос", "горячие клавиши", "документация",
             "навык", "навыки", "скилл", "скиллы", "лавка", "самообучение",
             "кодинг", "код-агент", "пи-агент", "проект", "проекты", "движок",
+            "провайдер", "провайдеры", "источник", "магический источник",
+            "усилие", "переключить модель", "сменить модель", "модель",
         )
         val SEARCH_KEYWORDS = listOf(
             "найди", "поищи", "поиск", "кто такой", "кто такая", "что такое",
@@ -137,8 +147,8 @@ class MagicAgent(
             недостаточно — честно скажи об этом.
         """.trimIndent()
         val NOT_CONFIGURED_TEXT = """
-            Я пока не подключён к магическому источнику. Откройте настройки (иконка пера вверху),
-            укажите Base URL модели и её имя — например, локальный сервер.
+            Я пока не подключён к магическому источнику. Откройте настройки (⚙) →
+            «Магические источники» и подключите провайдера — локальный сервер или API.
         """.trimIndent()
     }
 }

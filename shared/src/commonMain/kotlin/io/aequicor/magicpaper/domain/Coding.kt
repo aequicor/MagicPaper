@@ -142,7 +142,7 @@ interface CodingRuntime {
     fun ensureReady(): Flow<RuntimeStatus>
 
     /** Выполнение запроса в директории проекта. Поток событий протокола. */
-    fun run(project: CodingProject, prompt: String, settings: AppSettings): Flow<CodingEvent>
+    fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent>
 
     /** Прервать текущий прогон (остановить процесс агента). */
     fun abort()

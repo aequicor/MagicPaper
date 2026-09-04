@@ -22,6 +22,14 @@ interface SettingsRepository {
     suspend fun wipe()
 }
 
+/** Хранилище профилей подключения ИИ-провайдеров. */
+interface LlmProfileRepository {
+    suspend fun all(): List<LlmProfile>
+    suspend fun save(profile: LlmProfile)
+    suspend fun delete(id: String)
+    suspend fun wipe()
+}
+
 data class DocArticle(val id: String, val title: String, val body: String)
 
 data class DocMatch(val article: DocArticle, val score: Double)
@@ -42,9 +50,12 @@ interface SearchEngine {
 
 data class LlmMessage(val role: String, val content: String)
 
-/** Шлюз к любой OpenAI-совместимой модели (OpenAI, Ollama, LM Studio и т.п.). */
+/**
+ * Шлюз к модели. Транспорт выбирается по типу провайдера в профиле
+ * (см. RoutingLlmGateway) — потребители не знают о формате запроса.
+ */
 interface LlmGateway {
-    suspend fun complete(settings: AppSettings, messages: List<LlmMessage>): String
+    suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String
 }
 
 /** Платформенный мост для сохранения/загрузки файла профиля. */

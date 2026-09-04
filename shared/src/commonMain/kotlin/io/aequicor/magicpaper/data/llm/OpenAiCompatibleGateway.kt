@@ -1,8 +1,9 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ProviderCatalog
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -10,61 +11,70 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
-import kotlinx.serialization.Serializable
+import io.ktor.http.isSuccess
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.add
+import kotlinx.serialization.json.contentOrNull
 
 /**
- * Шлюз к OpenAI-совместимому /chat/completions.
- * Подходит для OpenAI, Ollama (/v1), LM Studio, vLLM и т.п.
+ * Шлюзы к конкретным форматам провайдеров. Каждый реализует [LlmGateway]
+ * для своего типа провайдера; выбор транспорта — за [RoutingLlmGateway].
  */
+
+/** Общий каркас транспорта: запрос с таймаутом из профиля и проверкой статуса. */
+internal suspend fun HttpClient.postJson(
+    url: String,
+    headers: Map<String, String>,
+    body: String,
+    timeoutSeconds: Int,
+): String = withTimeout(timeoutSeconds.toLong() * 1000) {
+    val response = post(url) {
+        contentType(ContentType.Application.Json)
+        headers.forEach { (key, value) -> header(key, value) }
+        setBody(body)
+    }
+    val text = response.bodyAsText()
+    if (!response.status.isSuccess()) {
+        error("HTTP ${response.status.value}: ${text.take(300).ifBlank { "пустой ответ" }}")
+    }
+    text
+}
+
+/** OpenAI-совместимый /chat/completions (OpenAI, Ollama, LM Studio, vLLM, OpenRouter…). */
 class OpenAiCompatibleGateway(
     private val client: HttpClient,
     private val json: Json,
 ) : LlmGateway {
 
-    override suspend fun complete(settings: AppSettings, messages: List<LlmMessage>): String {
-        require(settings.llmConfigured) { "Не настроена модель: укажите Base URL и имя модели в настройках." }
-        val url = settings.llmBaseUrl.trimEnd('/') + "/chat/completions"
-        val payload = buildJsonObject {
-            put("model", settings.llmModel)
-            put("stream", false)
-            put("messages", buildJsonArray {
-                messages.forEach { m ->
-                    add(buildJsonObject {
-                        put("role", m.role)
-                        put("content", m.content)
-                    })
-                }
-            })
+    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+        require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
+        val url = profile.baseUrl.trimEnd('/') + "/chat/completions"
+        val payload = LlmPayloads.openAi(profile, messages, ProviderCatalog.supportsEffort(profile))
+        val headers = buildMap {
+            if (profile.apiKey.isNotBlank()) put("Authorization", "Bearer " + profile.apiKey)
         }
-        val response = client.post(url) {
-            contentType(ContentType.Application.Json)
-            if (settings.llmApiKey.isNotBlank()) {
-                header("Authorization", "Bearer " + settings.llmApiKey)
-            }
-            setBody(json.encodeToString(JsonObject.serializer(), payload))
-        }
-        val body = response.bodyAsText()
-        return runCatching {
-            val root = json.parseToJsonElement(body).let { it as? JsonObject }
-                ?: error("Unexpected LLM response")
-            val content = (root["choices"] as? JsonArray)
-                ?.firstOrNull()
-                ?.let { it as? JsonObject }
-                ?.get("message")
-                ?.let { it as? JsonObject }
-                ?.get("content")
-                ?.let { it as? JsonPrimitive }
-                ?.content
-            content ?: error("Empty LLM response")
-        }.getOrElse { error("Ошибка ответа модели: ${it.message}") }
+        val body = client.postJson(
+            url = url,
+            headers = headers,
+            body = json.encodeToString(JsonObject.serializer(), payload),
+            timeoutSeconds = profile.advanced.timeoutSeconds,
+        )
+        return parseResponse(body)
     }
+
+    private fun parseResponse(body: String): String = runCatching {
+        val root = json.parseToJsonElement(body) as? JsonObject ?: error("Unexpected LLM response")
+        val content = (root["choices"] as? JsonArray)
+            ?.firstOrNull()
+            ?.let { it as? JsonObject }
+            ?.get("message")
+            ?.let { it as? JsonObject }
+            ?.get("content")
+            ?.let { it as? JsonPrimitive }
+            ?.contentOrNull
+        content ?: error("Empty LLM response")
+    }.getOrElse { error("Ошибка ответа модели: ${it.message}") }
 }

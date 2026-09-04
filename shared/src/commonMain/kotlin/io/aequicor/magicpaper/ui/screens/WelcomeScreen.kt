@@ -8,6 +8,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,10 +42,13 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AppSettings
+import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.PluginState
+import io.aequicor.magicpaper.domain.ProviderCatalog
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
+import io.aequicor.magicpaper.util.Id
 
 /**
  * Ознакомительный тур при первом запуске: профиль модели → поиск → плагины.
@@ -59,6 +63,10 @@ fun WelcomeScreen(
 ) {
     var page by remember { mutableIntStateOf(0) }
     var draft by remember(settings) { mutableStateOf(settings) }
+    // Черновик профиля подключения: шаг 1 собирает его, завершение тура сохраняет.
+    var profileDraft by remember {
+        mutableStateOf(LlmProfile(id = Id.new(), name = "Мой источник", createdAt = Id.now()))
+    }
     val lastPage = 3
 
     Column(
@@ -77,7 +85,7 @@ fun WelcomeScreen(
         ) {
             PageDots(page = page, pageCount = lastPage + 1, modifier = Modifier.weight(1f))
             if (page == 0) {
-                TextButton(onClick = { vm.finishOnboarding(draft) }) { Text("Пропустить") }
+                TextButton(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Пропустить") }
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -103,7 +111,7 @@ fun WelcomeScreen(
                 ) {
                     when (p) {
                         0 -> WelcomeIntro()
-                        1 -> WelcomeModel(draft) { draft = it }
+                        1 -> WelcomeModel(profileDraft) { profileDraft = it }
                         2 -> WelcomeSearch(draft) { draft = it }
                         else -> WelcomePlugins(plugins, states) { id, on -> vm.togglePlugin(id, on) }
                     }
@@ -128,7 +136,7 @@ fun WelcomeScreen(
             if (page < lastPage) {
                 Button(onClick = { page++ }) { Text("Далее →") }
             } else {
-                Button(onClick = { vm.finishOnboarding(draft) }) { Text("Начать работу") }
+                Button(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Начать работу") }
             }
         }
     }
@@ -177,22 +185,59 @@ private fun WelcomeIntro() {
 }
 
 @Composable
-private fun WelcomeModel(draft: AppSettings, onDraft: (AppSettings) -> Unit) {
+private fun WelcomeModel(draft: LlmProfile, onDraft: (LlmProfile) -> Unit) {
+    val spec = ProviderCatalog.all.firstOrNull { it.displayName == draft.name }
     Column(modifier = Modifier.fillMaxWidth()) {
         Text("Шаг 1 — источник магии", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
         Text(
-            "Подключите OpenAI-совместимый сервер (Ollama, LM Studio, API провайдера).",
+            "Выберите провайдера: локальный сервер (Ollama, LM Studio) или облачный API. " +
+                "Позже можно подключить сколько угодно источников и переключать их в чате.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(12.dp))
-        Field("Base URL", draft.llmBaseUrl) { onDraft(draft.copy(llmBaseUrl = it)) }
-        Field("API-ключ (пусто для локальных)", draft.llmApiKey) { onDraft(draft.copy(llmApiKey = it)) }
-        Field("Имя модели", draft.llmModel) { onDraft(draft.copy(llmModel = it)) }
+        ProviderCatalog.all.forEach { candidate ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(onClick = {
+                        onDraft(
+                            draft.copy(
+                                provider = candidate.type,
+                                name = candidate.displayName,
+                                baseUrl = candidate.defaultBaseUrl.ifBlank { draft.baseUrl },
+                                modelId = candidate.models.firstOrNull()?.id.orEmpty().ifBlank { draft.modelId },
+                            ),
+                        )
+                    })
+                    .heightIn(min = 40.dp)
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (candidate.displayName == draft.name) "◉" else "○",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (candidate.displayName == draft.name) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(candidate.displayName, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Field("Base URL", draft.baseUrl) { onDraft(draft.copy(baseUrl = it)) }
+        Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
+            onDraft(draft.copy(apiKey = it))
+        }
+        Field("Имя модели", draft.modelId) { onDraft(draft.copy(modelId = it)) }
         Spacer(Modifier.height(8.dp))
-        if (draft.llmConfigured) {
-            Text("✓ Модель выбрана", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+        if (draft.configured) {
+            Text("✓ Источник готов", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
         }
     }
 }

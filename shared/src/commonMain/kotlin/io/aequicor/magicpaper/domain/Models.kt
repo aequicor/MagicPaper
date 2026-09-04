@@ -33,6 +33,11 @@ data class ChatSession(
     val createdAt: Long,
     val updatedAt: Long,
     val messages: List<ChatMessage> = emptyList(),
+    /**
+     * Профиль подключения только для этого свитка.
+     * null = глобальный активный профиль (см. [ProfileResolver]).
+     */
+    val llmProfileId: String? = null,
 )
 
 /** Доступные поисковые движки. */
@@ -42,17 +47,25 @@ enum class SearchProvider { AUTO, WIKIPEDIA, QUERIT, GOOGLE }
 /** Настройки приложения. Сериализуются при экспорте профиля. */
 @Serializable
 data class AppSettings(
-    val llmBaseUrl: String = "http://localhost:11434/v1",
-    val llmApiKey: String = "",
-    val llmModel: String = "llama3.2",
+    /** Активный по умолчанию профиль подключения (см. [LlmProfile]). */
+    val activeLlmProfileId: String = "",
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val queritApiKey: String = "",
     val googleApiKey: String = "",
     val googleSearchEngineId: String = "",
     /** Завершён ли ознакомительный тур (welcome-screen). */
     val onboardingDone: Boolean = false,
+    // ---- Легаси-поля «одной модели» -------------------------------------
+    // Сохраняются для совместимости со старыми файлами настроек; при первом
+    // запуске переносятся в профиль подключением (см. ProfileMigrator).
+    // Источник правды после миграции — профили, а не эти поля.
+    val llmBaseUrl: String = "http://localhost:11434/v1",
+    val llmApiKey: String = "",
+    val llmModel: String = "llama3.2",
 ) {
-    val llmConfigured: Boolean get() = llmBaseUrl.isNotBlank() && llmModel.isNotBlank()
+    /** Совместимо: настроен либо профиль, либо легаси-тройка. */
+    val llmConfigured: Boolean
+        get() = activeLlmProfileId.isNotBlank() || (llmBaseUrl.isNotBlank() && llmModel.isNotBlank())
 }
 
 /** Состояние плагина: включён ли и его приватные настройки. */
@@ -63,13 +76,14 @@ data class PluginState(
     val config: Map<String, String> = emptyMap(),
 )
 
-/** Полный переносимый профиль: настройки + плагины + история чатов + навыки. */
+/** Полный переносимый профиль: настройки + плагины + история чатов + навыки + подключения. */
 @Serializable
 data class ProfileBundle(
-    val version: Int = 1,
+    val version: Int = 2,
     val exportedAt: Long,
     val settings: AppSettings,
     val plugins: List<PluginState>,
     val sessions: List<ChatSession>,
     val skills: List<io.aequicor.magicpaper.domain.Skill> = emptyList(),
+    val llmProfiles: List<LlmProfile> = emptyList(),
 )

@@ -2,7 +2,10 @@ package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
+import io.aequicor.magicpaper.data.llm.AnthropicGateway
+import io.aequicor.magicpaper.data.llm.GoogleGateway
 import io.aequicor.magicpaper.data.llm.OpenAiCompatibleGateway
+import io.aequicor.magicpaper.data.llm.RoutingLlmGateway
 import io.aequicor.magicpaper.data.search.CompositeSearchEngine
 import io.aequicor.magicpaper.data.search.GoogleSearchEngine
 import io.aequicor.magicpaper.data.search.QueritSearchEngine
@@ -11,6 +14,7 @@ import io.aequicor.magicpaper.data.skills.EmbeddedSkillCatalog
 import io.aequicor.magicpaper.data.skills.JsonSkillRepository
 import io.aequicor.magicpaper.data.skills.SkillStore
 import io.aequicor.magicpaper.data.storage.JsonChatRepository
+import io.aequicor.magicpaper.data.storage.JsonLlmProfileRepository
 import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.CodingProjectRepository
@@ -18,6 +22,7 @@ import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.domain.ProjectDirPicker
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.SkillEducator
 import io.aequicor.magicpaper.domain.SkillInstaller
 import io.aequicor.magicpaper.plugins.PluginRegistry
@@ -52,6 +57,7 @@ internal fun buildDependencies(
     val client = HttpClient()
     val settingsRepo = JsonSettingsRepository(store, json)
     val chatRepo = JsonChatRepository(store, json)
+    val profileRepo = JsonLlmProfileRepository(store, json)
     val docs = EmbeddedDocRepository()
     val search = CompositeSearchEngine(
         listOf(
@@ -60,7 +66,15 @@ internal fun buildDependencies(
             GoogleSearchEngine(client, json),
         )
     )
-    val gateway = OpenAiCompatibleGateway(client, json)
+    // Шлюз-роутер: формат запроса выбирается по типу провайдера в профиле.
+    // Новый провайдер = новый транспорт + запись в карте (OCP).
+    val gateway = RoutingLlmGateway(
+        mapOf(
+            ProviderType.OPENAI_COMPATIBLE to OpenAiCompatibleGateway(client, json),
+            ProviderType.ANTHROPIC to AnthropicGateway(client, json),
+            ProviderType.GOOGLE to GoogleGateway(client, json),
+        )
+    )
     // Система навыков: библиотека (порт агента) и каталог (лавка) — одно хранилище,
     // за которым наблюдают оба плагина.
     val skillStore = SkillStore(JsonSkillRepository(store, json))
@@ -71,11 +85,12 @@ internal fun buildDependencies(
         .register(FocusPlugin)
         .register(CalcPlugin)
         .register(SkillsRepositoryPlugin(EmbeddedSkillCatalog(), installer, skillStore))
-        .register(SelfEducationPlugin(SkillEducator(gateway, json), installer, skillStore, chatRepo, settingsRepo))
+        .register(SelfEducationPlugin(SkillEducator(gateway, json), installer, skillStore, chatRepo, settingsRepo, profileRepo))
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,
         settingsRepo = settingsRepo,
+        profileRepo = profileRepo,
         docs = docs,
         registry = registry,
         bridge = bridge,
