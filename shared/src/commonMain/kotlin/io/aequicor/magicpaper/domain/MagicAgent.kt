@@ -11,6 +11,8 @@ class MagicAgent(
     private val gateway: LlmGateway,
     private val searchEngine: SearchEngine,
     private val docs: DocRepository,
+    private val skillLibrary: SkillLibrary = EmptySkillLibrary,
+    private val skillSelector: SkillSelector = SkillSelector(),
 ) {
 
     /** Результат ответа: текст и источники (для отображения в чате). */
@@ -18,6 +20,9 @@ class MagicAgent(
 
     suspend fun answer(history: List<ChatMessage>, userText: String, settings: AppSettings): Answer {
         val trimmed = userText.trim()
+        // Самонастройка: подбираем навыки под запрос до маршрутизации —
+        // они усиливают любую ветку (доки, поиск, свободный диалог).
+        val skills = skillSelector.select(trimmed, skillLibrary.relevantFor(trimmed))
 
         if (looksLikeAppQuestion(trimmed)) {
             val matches = docs.search(trimmed)
@@ -27,6 +32,7 @@ class MagicAgent(
                     settings = settings,
                     system = SYSTEM_PROMPT,
                     context = "Документация приложения:\n$context",
+                    skills = skills,
                     history = history,
                     userText = trimmed,
                     sources = emptyList(),
@@ -44,6 +50,7 @@ class MagicAgent(
                     settings = settings,
                     system = SYSTEM_PROMPT,
                     context = "Результаты поиска:\n$context",
+                    skills = skills,
                     history = history,
                     userText = trimmed,
                     sources = hits,
@@ -55,6 +62,7 @@ class MagicAgent(
             settings = settings,
             system = SYSTEM_PROMPT,
             context = null,
+            skills = skills,
             history = history,
             userText = trimmed,
             sources = emptyList(),
@@ -65,6 +73,7 @@ class MagicAgent(
         settings: AppSettings,
         system: String,
         context: String?,
+        skills: List<Skill>,
         history: List<ChatMessage>,
         userText: String,
         sources: List<SearchHit>,
@@ -74,6 +83,9 @@ class MagicAgent(
         }
         val messages = buildList {
             add(LlmMessage("system", system))
+            if (skills.isNotEmpty()) {
+                add(LlmMessage("system", skillsContext(skills)))
+            }
             if (context != null) add(LlmMessage("system", context))
             history.takeLast(HISTORY_LIMIT).forEach { m ->
                 add(LlmMessage(if (m.role == ChatRole.USER) "user" else "assistant", m.text))
@@ -93,12 +105,24 @@ class MagicAgent(
     private fun looksLikeSearchRequest(text: String): Boolean =
         SEARCH_KEYWORDS.any { text.contains(it, ignoreCase = true) }
 
+    /** Блок навыков для системного контекста: имя, назначение и инструкция каждого. */
+    private fun skillsContext(skills: List<Skill>): String = buildString {
+        appendLine("У тебя есть навыки, подходящие к этой задаче. Следуй их инструкциям:")
+        skills.forEachIndexed { i, skill ->
+            appendLine()
+            appendLine("${i + 1}. ${skill.name} — ${skill.description}")
+            append(skill.instructions.trim())
+            appendLine()
+        }
+    }
+
     private companion object {
         const val HISTORY_LIMIT = 8
         val APP_KEYWORDS = listOf(
             "magicpaper", "настройки", "настройка", "плагин", "плагины", "профиль",
             "экспорт", "импорт", "поисковый движок", "как работает", "как удалить",
             "безопасность", "перенос", "горячие клавиши", "документация",
+            "навык", "навыки", "скилл", "скиллы", "лавка", "самообучение",
         )
         val SEARCH_KEYWORDS = listOf(
             "найди", "поищи", "поиск", "кто такой", "кто такая", "что такое",

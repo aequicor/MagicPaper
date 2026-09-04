@@ -61,7 +61,7 @@ data class PluginState(
     val config: Map<String, String> = emptyMap(),
 )
 
-/** Полный переносимый профиль: настройки + плагины + история чатов. */
+/** Полный переносимый профиль: настройки + плагины + история чатов + навыки. */
 @Serializable
 data class ProfileBundle(
     val version: Int = 1,
@@ -69,4 +69,5 @@ data class ProfileBundle(
     val settings: AppSettings,
     val plugins: List<PluginState>,
     val sessions: List<ChatSession>,
+    val skills: List<io.aequicor.magicpaper.domain.Skill> = emptyList(),
 )

@@ -6,15 +6,22 @@ import io.aequicor.magicpaper.data.search.CompositeSearchEngine
 import io.aequicor.magicpaper.data.search.GoogleSearchEngine
 import io.aequicor.magicpaper.data.search.QueritSearchEngine
 import io.aequicor.magicpaper.data.search.WikipediaSearchEngine
+import io.aequicor.magicpaper.data.skills.EmbeddedSkillCatalog
+import io.aequicor.magicpaper.data.skills.JsonSkillRepository
+import io.aequicor.magicpaper.data.skills.SkillStore
 import io.aequicor.magicpaper.data.storage.JsonChatRepository
 import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.ProfileBridge
+import io.aequicor.magicpaper.domain.SkillEducator
+import io.aequicor.magicpaper.domain.SkillInstaller
 import io.aequicor.magicpaper.plugins.PluginRegistry
 import io.aequicor.magicpaper.plugins.builtin.CalcPlugin
 import io.aequicor.magicpaper.plugins.builtin.FocusPlugin
 import io.aequicor.magicpaper.plugins.builtin.NotesPlugin
+import io.aequicor.magicpaper.plugins.builtin.SelfEducationPlugin
+import io.aequicor.magicpaper.plugins.builtin.SkillsRepositoryPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
@@ -44,11 +51,17 @@ internal fun buildDependencies(store: KeyValueStore, bridge: ProfileBridge): Mag
         )
     )
     val gateway = OpenAiCompatibleGateway(client, json)
-    val agent = MagicAgent(gateway, search, docs)
+    // Система навыков: библиотека (порт агента) и каталог (лавка) — одно хранилище,
+    // за которым наблюдают оба плагина.
+    val skillStore = SkillStore(JsonSkillRepository(store, json))
+    val installer = SkillInstaller(skillStore)
+    val agent = MagicAgent(gateway, search, docs, skillLibrary = skillStore)
     val registry = PluginRegistry()
         .register(NotesPlugin)
         .register(FocusPlugin)
         .register(CalcPlugin)
+        .register(SkillsRepositoryPlugin(EmbeddedSkillCatalog(), installer, skillStore))
+        .register(SelfEducationPlugin(SkillEducator(gateway, json), installer, skillStore, chatRepo, settingsRepo))
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,
@@ -58,6 +71,7 @@ internal fun buildDependencies(store: KeyValueStore, bridge: ProfileBridge): Mag
         bridge = bridge,
         store = store,
         json = json,
+        skills = skillStore,
     )
     return MagicPaperDependencies(viewModel)
 }

@@ -38,6 +38,7 @@ class MagicPaperViewModel(
     private val bridge: ProfileBridge,
     private val store: KeyValueStore,
     private val json: Json,
+    private val skills: io.aequicor.magicpaper.domain.SkillRepository? = null,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -215,6 +216,7 @@ class MagicPaperViewModel(
                 settings = s.settings,
                 plugins = s.pluginStates.values.toList(),
                 sessions = chats.sessions(),
+                skills = skills?.all().orEmpty(),
             )
             val encoded = json.encodeToString(ProfileBundle.serializer(), bundle)
             val ok = bridge.export(encoded)
@@ -238,6 +240,7 @@ class MagicPaperViewModel(
             settingsRepo.save(bundle.settings)
             settingsRepo.savePluginStates(bundle.plugins)
             bundle.sessions.forEach { chats.save(it) }
+            bundle.skills.forEach { skill -> skills?.save(skill) }
             bootstrap()
             _state.update { it.copy(notice = "Профиль импортирован.") }
         }
@@ -247,6 +250,7 @@ class MagicPaperViewModel(
         scope.launch {
             chats.wipe()
             settingsRepo.wipe()
+            skills?.wipe()
             _state.update {
                 it.copy(
                     current = null,
