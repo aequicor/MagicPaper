@@ -17,6 +17,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -148,6 +149,14 @@ def clipped(mask_id, mask_shape, art=ART, scale=1.0):
 
 
 SVG_MASTER = clipped("rr", f'<path d="{CORNER_SVG}"/>')
+# macOS (Big Sur) сетка: контент 824/1024 (~0.805) по центру, поля прозрачные —
+# иначе иконка в Dock/Finder выглядит заметно крупнее системных.
+SVG_MAC = svg(f'<g transform="translate(54 54) scale(0.805) translate(-54 -54)">'
+              f'<g clip-path="url(#rr)">{BG_PLATES}{ART}</g></g>',
+              BG_DEFS + f'<clipPath id="rr"><path d="{CORNER_SVG}"/></clipPath>')
+SVG_MAC_SMALL = svg(f'<g transform="translate(54 54) scale(0.805) translate(-54 -54)">'
+                    f'<g clip-path="url(#rr)">{BG_PLATES}{ART_SMALL}</g></g>',
+                    BG_DEFS + f'<clipPath id="rr"><path d="{CORNER_SVG}"/></clipPath>')
 SVG_ROUND = clipped("cc", '<circle cx="54" cy="54" r="54"/>')
 # Малые растры: та же композиция, но упрощённый арт чуть крупнее (нет мелочи).
 SVG_MASTER_SMALL = clipped("rr", f'<path d="{CORNER_SVG}"/>', ART_SMALL, 0.84)
@@ -240,6 +249,8 @@ def main():
     src = os.path.join(HERE, "src")
     os.makedirs(src, exist_ok=True)
     write(os.path.join(src, "master.svg"), SVG_MASTER)
+    write(os.path.join(src, "mac.svg"), SVG_MAC)
+    write(os.path.join(src, "mac_small.svg"), SVG_MAC_SMALL)
     write(os.path.join(src, "round.svg"), SVG_ROUND)
     write(os.path.join(src, "square.svg"), SVG_SQUARE)
     write(os.path.join(src, "adaptive_background.svg"), SVG_ADAPTIVE_BG)
@@ -294,11 +305,15 @@ def main():
           '  ]\n'
           '}\n')
 
-    # ---------- Desktop: иконки окна в рантайме ----------
+    # ---------- Desktop: иконки окна/дока в рантайме ----------
+    # На macOS берём сетку с полями (0.805) — как у системных иконок,
+    # иначе приложение визуально крупнее соседей в Доке и Launchpad.
     dres = os.path.join(ROOT, "desktopApp/src/main/resources/icons")
     write(os.path.join(src, "master_small.svg"), SVG_MASTER_SMALL)
+    sys_name = "mac_small.svg" if sys.platform == "darwin" else "master_small.svg"
+    big_name = "mac.svg" if sys.platform == "darwin" else "master.svg"
     for size in (16, 32, 48, 128, 256):
-        m = "master_small.svg" if size <= 48 else "master.svg"
+        m = sys_name if size <= 48 else big_name
         resvg(os.path.join(src, m), os.path.join(dres, f"app_{size}.png"), size)
 
     # ---------- Дистрибутивы ----------
@@ -317,7 +332,8 @@ def main():
         "icon_256x256.png": 256, "icon_256x256@2x.png": 512,
         "icon_512x512.png": 512, "icon_512x512@2x.png": 1024,
     }.items():
-        resvg(os.path.join(src, "master.svg"), os.path.join(iconset, name), size)
+        m = "mac_small.svg" if size <= 48 else "mac.svg"
+        resvg(os.path.join(src, m), os.path.join(iconset, name), size)
     run(["iconutil", "-c", "icns", "-o", os.path.join(dist, "magicpaper.icns"), iconset])
 
     pngs = []
