@@ -7,11 +7,19 @@ import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRepository
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
+import io.aequicor.magicpaper.domain.CodingMessage
+import io.aequicor.magicpaper.domain.CodingProject
+import io.aequicor.magicpaper.domain.CodingProjectRepository
+import io.aequicor.magicpaper.domain.CodingRole
+import io.aequicor.magicpaper.domain.CodingRunRecorder
+import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.DocRepository
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.ProfileBundle
 import io.aequicor.magicpaper.domain.ProfileBridge
+import io.aequicor.magicpaper.domain.ProjectDirPicker
+import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.SettingsRepository
 import io.aequicor.magicpaper.plugins.PluginRegistry
 import io.aequicor.magicpaper.util.Id
@@ -39,6 +47,9 @@ class MagicPaperViewModel(
     private val store: KeyValueStore,
     private val json: Json,
     private val skills: io.aequicor.magicpaper.domain.SkillRepository? = null,
+    private val codingRuntime: CodingRuntime? = null,
+    private val codingProjects: CodingProjectRepository? = null,
+    private val dirPicker: ProjectDirPicker? = null,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -53,6 +64,7 @@ class MagicPaperViewModel(
         val settings = settingsRepo.load()
         val states = settingsRepo.pluginStates().associateBy { it.id }
         val sessions = chats.sessions()
+        val projects = codingProjects?.all().orEmpty()
         _state.update {
             it.copy(
                 settings = settings,
@@ -63,7 +75,15 @@ class MagicPaperViewModel(
                 docsArticles = docs.articles(),
                 storageInfo = store.description,
                 showWelcome = !settings.onboardingDone,
+                coding = it.coding.copy(
+                    projects = projects,
+                    current = projects.firstOrNull(),
+                ),
             )
+        }
+        projects.firstOrNull()?.let { project -> loadCodingLog(project.id) }
+        codingRuntime?.let { runtime ->
+            _state.update { it.copy(coding = it.coding.copy(runtime = runtime.status())) }
         }
     }
 
@@ -272,6 +292,181 @@ class MagicPaperViewModel(
                     pluginStates = emptyMap(),
                     notice = "Все данные удалены.",
                 )
+            }
+        }
+    }
+
+    // ---- Проекты и код ------------------------------------------------------
+
+    /** Подготовка движка: автоустановка изолированных зависимостей. */
+    fun prepareCodingRuntime() {
+        val runtime = codingRuntime ?: return
+        if (_state.value.coding.installing) return
+        _state.update { it.copy(coding = it.coding.copy(installing = true)) }
+        scope.launch {
+            runtime.ensureReady().collect { status ->
+                _state.update {
+                    it.copy(
+                        coding = it.coding.copy(
+                            runtime = status,
+                            installing = status.phase == RuntimePhase.CHECKING ||
+                                status.phase == RuntimePhase.INSTALLING,
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /** Полное удаление изолированных зависимостей движка. */
+    fun uninstallCodingRuntime() {
+        val runtime = codingRuntime ?: return
+        scope.launch {
+            runtime.abort()
+            runtime.uninstall()
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        runtime = runtime.status(),
+                        installing = false,
+                        busy = false,
+                        draft = io.aequicor.magicpaper.domain.CodingDraft(),
+                    ),
+                    notice = "Зависимости движка удалены из папки данных.",
+                )
+            }
+        }
+    }
+
+    /** Новый проект: выбор папки нативным диалогом. */
+    fun addCodingProject() {
+        val repo = codingProjects ?: return
+        val picker = dirPicker ?: return
+        scope.launch {
+            val path = picker.pickDirectory() ?: return@launch
+            // Повторное добавление той же папки — просто выбираем существующий проект.
+            val existing = repo.all().firstOrNull { it.path == path }
+            if (existing != null) {
+                _state.update {
+                    it.copy(coding = it.coding.copy(current = existing, messages = repo.messages(existing.id)))
+                }
+                return@launch
+            }
+            val name = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path }
+            val project = CodingProject(
+                id = Id.new(),
+                name = name,
+                path = path,
+                createdAt = Id.now(),
+            )
+            repo.save(project)
+            _state.update {
+                it.copy(coding = it.coding.copy(projects = repo.all(), current = project, messages = emptyList()))
+            }
+        }
+    }
+
+    fun selectCodingProject(id: String) {
+        val repo = codingProjects ?: return
+        scope.launch {
+            val project = repo.all().firstOrNull { it.id == id } ?: return@launch
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        current = project,
+                        messages = repo.messages(id),
+                        draft = io.aequicor.magicpaper.domain.CodingDraft(),
+                    )
+                )
+            }
+        }
+    }
+
+    fun deleteCodingProject(id: String) {
+        val repo = codingProjects ?: return
+        scope.launch {
+            repo.delete(id)
+            val rest = repo.all()
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        projects = rest,
+                        current = if (it.coding.current?.id == id) rest.firstOrNull() else it.coding.current,
+                        messages = emptyList(),
+                    )
+                )
+            }
+            _state.value.coding.current?.let { project -> loadCodingLog(project.id) }
+        }
+    }
+
+    /** Запрос кодинг-агенту: агент работает в папке выбранного проекта. */
+    fun sendCodingPrompt(text: String) {
+        val runtime = codingRuntime ?: return
+        val repo = codingProjects ?: return
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val s = _state.value.coding
+        val project = s.current ?: return
+        if (s.busy) return
+
+        val userMessage = CodingMessage(
+            id = Id.new(),
+            role = CodingRole.USER,
+            text = trimmed,
+            createdAt = Id.now(),
+        )
+        val recorder = CodingRunRecorder()
+        var sessionId = project.piSessionId
+
+        scope.launch {
+            val history = repo.messages(project.id) + userMessage
+            repo.saveMessages(project.id, history)
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        messages = history,
+                        busy = true,
+                        draft = recorder.draft(active = true),
+                    )
+                )
+            }
+            runtime.run(project, trimmed, _state.value.settings).collect { event ->
+                if (event is io.aequicor.magicpaper.domain.CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
+                    sessionId = event.sessionId
+                }
+                recorder.apply(event)
+                _state.update { it.copy(coding = it.coding.copy(draft = recorder.draft(active = true))) }
+            }
+            val agentMessage = recorder.message(Id.new(), Id.now())
+            val finalLog = repo.messages(project.id) + agentMessage
+            repo.saveMessages(project.id, finalLog)
+            if (sessionId != project.piSessionId) {
+                repo.save(project.copy(piSessionId = sessionId))
+            }
+            _state.update {
+                it.copy(
+                    coding = it.coding.copy(
+                        messages = finalLog,
+                        busy = false,
+                        draft = io.aequicor.magicpaper.domain.CodingDraft(),
+                        projects = repo.all(),
+                        current = repo.all().firstOrNull { p -> p.id == project.id } ?: it.coding.current,
+                    )
+                )
+            }
+        }
+    }
+
+    fun abortCodingRun() {
+        codingRuntime?.abort()
+    }
+
+    private fun loadCodingLog(projectId: String) {
+        val repo = codingProjects ?: return
+        scope.launch {
+            _state.update {
+                it.copy(coding = it.coding.copy(messages = repo.messages(projectId)))
             }
         }
     }

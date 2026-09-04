@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
 import io.aequicor.magicpaper.data.llm.OpenAiCompatibleGateway
 import io.aequicor.magicpaper.data.search.CompositeSearchEngine
@@ -12,8 +13,11 @@ import io.aequicor.magicpaper.data.skills.SkillStore
 import io.aequicor.magicpaper.data.storage.JsonChatRepository
 import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
 import io.aequicor.magicpaper.data.storage.KeyValueStore
+import io.aequicor.magicpaper.domain.CodingProjectRepository
+import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.ProfileBridge
+import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.SkillEducator
 import io.aequicor.magicpaper.domain.SkillInstaller
 import io.aequicor.magicpaper.plugins.PluginRegistry
@@ -37,7 +41,13 @@ internal val appJson: Json = Json {
     encodeDefaults = true
 }
 
-internal fun buildDependencies(store: KeyValueStore, bridge: ProfileBridge): MagicPaperDependencies {
+internal fun buildDependencies(
+    store: KeyValueStore,
+    bridge: ProfileBridge,
+    codingRuntime: CodingRuntime? = null,
+    codingProjects: CodingProjectRepository? = null,
+    dirPicker: ProjectDirPicker? = null,
+): MagicPaperDependencies {
     val json = appJson
     val client = HttpClient()
     val settingsRepo = JsonSettingsRepository(store, json)
@@ -72,6 +82,17 @@ internal fun buildDependencies(store: KeyValueStore, bridge: ProfileBridge): Mag
         store = store,
         json = json,
         skills = skillStore,
+        codingRuntime = codingRuntime,
+        codingProjects = codingProjects,
+        dirPicker = dirPicker,
     )
     return MagicPaperDependencies(viewModel)
 }
+
+/**
+ * Хранилище проектов кодинг-агента (веб/десктоп): строится поверх того же
+ * key-value хранилища, что и чаты. Платформы без кодинг-бэкенда могут не
+ * передавать его в [buildDependencies].
+ */
+fun codingProjectRepository(store: KeyValueStore, json: Json): CodingProjectRepository =
+    JsonCodingProjectRepository(store, json)

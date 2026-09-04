@@ -35,6 +35,7 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.Screen
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.screens.ChatScreen
+import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
 import io.aequicor.magicpaper.ui.screens.PluginsScreen
 import io.aequicor.magicpaper.ui.screens.SessionsPanel
@@ -84,6 +85,7 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
         Box(modifier = Modifier.weight(1f)) {
             when (state.screen) {
                 Screen.CHAT -> ChatScreen(vm, state.current, state.busy)
+                Screen.CODING -> CodingScreen(vm, state.coding)
                 Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
                     ActivePlugins(state.plugins, state.pluginStates)
                 }
@@ -134,6 +136,7 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
 private val Screen.subtitle: String
     get() = when (this) {
         Screen.CHAT -> "Шалость удалась"
+        Screen.CODING -> "Проекты и код"
         Screen.PLUGINS -> "Плагины и панели"
         Screen.DOCS -> "Справочник"
         Screen.SETTINGS -> "Настройки и разделы"

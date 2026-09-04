@@ -18,5 +18,11 @@ object Id {
 
     fun now(): Long = currentTimeMillis()
 
+    /** UUID v4 без внешних библиотек — для стабильных внешних идентификаторов. */
+    fun uuid(): String {
+        fun block(n: Int) = buildString { repeat(n) { append(HEX[Random.nextInt(HEX.length)]) } }
+        return "${block(8)}-${block(4)}-4${block(3)}-${"89ab"[Random.nextInt(4)]}${block(3)}-${block(12)}"
+    }
+
     private const val HEX = "0123456789abcdef"
 }

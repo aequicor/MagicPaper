@@ -82,3 +82,8 @@ kotlin {
 dependencies {
     androidRuntimeClasspath(libs.compose.uiTooling)
 }
+
+// Интеграционный тест пи-агента включается флагом: ./gradlew :shared:jvmTest -Pmagicpaper.pi.it=true
+tasks.withType<Test>().configureEach {
+    systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
+}

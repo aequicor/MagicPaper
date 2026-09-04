@@ -50,6 +50,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, settings: AppSettings, storageInfo: 
         Section("Разделы")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             NavEntry("✦", "Чат", "Лента свитка и поле заклинаний") { vm.open(Screen.CHAT) }
+            NavEntry("⌘", "Проекты и код", "Кодинг-агент работает в папке проекта") { vm.open(Screen.CODING) }
             NavEntry("∑", "Плагины", "Панели и переключатели расширений") { vm.open(Screen.PLUGINS) }
             NavEntry("◷", "Справка", "Документация с живым поиском") { vm.open(Screen.DOCS) }
             NavEntry("✦", "Первый запуск", "Пройти ознакомительный тур заново") { vm.restartOnboarding() }
