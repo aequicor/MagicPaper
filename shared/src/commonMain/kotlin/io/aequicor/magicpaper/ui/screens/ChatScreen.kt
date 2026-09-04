@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,16 +45,16 @@ import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.components.ChatMarkdown
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
 fun ChatScreen(vm: MagicPaperViewModel, session: ChatSession?, busy: Boolean) {
+    // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
+    // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
     Column(modifier = Modifier.fillMaxSize()) {
         MessagesList(session, busy, modifier = Modifier.weight(1f))
-        // Клавиатура не должна перекрывать поле ввода на телефоне.
-        Column(modifier = Modifier.imePadding()) {
-            Composer(enabled = !busy) { vm.send(it) }
-        }
+        Composer(enabled = !busy) { vm.send(it) }
     }
 }
 
@@ -157,11 +156,18 @@ private fun MessageBubble(message: ChatMessage) {
                 .background(bubbleColor)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
-            Text(
-                message.text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            if (isUser) {
+                // Пользователь пишет обычный текст — без разметки.
+                Text(
+                    message.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            } else {
+                // Ответ агента рендерим как markdown: заголовки, списки,
+                // блоки кода с подсветкой синтаксиса и кнопкой копирования.
+                ChatMarkdown(message.text)
+            }
             if (message.sources.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

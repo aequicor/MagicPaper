@@ -60,6 +60,8 @@ kotlin {
             implementation(libs.kotlinx.serializationJson)
             implementation(libs.kotlinx.datetime)
             implementation(libs.ktor.clientCore)
+            implementation(libs.markdownRenderer.m3)
+            implementation(libs.markdownRenderer.code)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

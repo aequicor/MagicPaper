@@ -2,16 +2,22 @@ package io.aequicor.magicpaper
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -42,6 +48,8 @@ import io.aequicor.magicpaper.ui.screens.SessionsPanel
 import io.aequicor.magicpaper.ui.screens.SettingsScreen
 import io.aequicor.magicpaper.ui.screens.WelcomeScreen
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
+import io.aequicor.magicpaper.ui.window.LocalWindowChrome
+import io.aequicor.magicpaper.ui.window.WindowDragArea
 import kotlinx.coroutines.delay
 
 /** Корневой композиционный узел: тема + каркас. */
@@ -49,7 +57,11 @@ import kotlinx.coroutines.delay
 fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies() }) {
     MagicPaperTheme {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                // Edge-to-edge на всех платформах: контент не залезает под статусбар,
+                // вырез, навбар и клавиатуру (внутри — только зона приложения).
+                .windowInsetsPadding(WindowInsets.safeDrawing),
             color = MaterialTheme.colorScheme.background,
         ) {
             val state by deps.viewModel.state.collectAsState()
@@ -99,21 +111,28 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
 @Composable
 private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
     // Разгруженный бар: разделы живут в настройках, здесь только панели и шестерёнка.
+    // На десктопе (окно без системных декораций) средняя часть бара — зона
+    // перетаскивания окна, а справа появляются кнопки свернуть/развернуть/закрыть.
+    // Интерактивные кнопки живут ВНЕ зоны перетаскивания, чтобы клик не
+    // пересекался с жестом переноса окна.
+    val chrome = LocalWindowChrome.current
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = if (chrome != null) 6.dp else 12.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(
             onClick = { vm.toggleSessionsPanel() },
             modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
         ) { Text("☰", style = MaterialTheme.typography.titleMedium) }
-        Column(modifier = Modifier.weight(1f)) {
-            Text("MagicPaper", style = MaterialTheme.typography.titleMedium)
-            Text(
-                screen.subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        WindowDragArea(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Text("MagicPaper", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    screen.subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         TextButton(
             onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
@@ -129,6 +148,32 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
                 },
             )
         }
+        if (chrome != null) WindowButtons(chrome)
+    }
+}
+
+/** Кнопки управления окном на десктопе: свернуть, развернуть, закрыть. */
+@Composable
+private fun WindowButtons(chrome: io.aequicor.magicpaper.ui.window.WindowChrome) {
+    WindowButton("─") { chrome.minimize() }
+    WindowButton("▢") { chrome.toggleMaximize() }
+    WindowButton("✕", danger = true) { chrome.close() }
+}
+
+@Composable
+private fun WindowButton(glyph: String, danger: Boolean = false, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            glyph,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
