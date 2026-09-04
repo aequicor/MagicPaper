@@ -1,7 +1,9 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,11 +12,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -22,13 +31,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
@@ -40,7 +52,10 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 fun ChatScreen(vm: MagicPaperViewModel, session: ChatSession?, busy: Boolean) {
     Column(modifier = Modifier.fillMaxSize()) {
         MessagesList(session, busy, modifier = Modifier.weight(1f))
-        Composer(enabled = !busy) { vm.send(it) }
+        // Клавиатура не должна перекрывать поле ввода на телефоне.
+        Column(modifier = Modifier.imePadding()) {
+            Composer(enabled = !busy) { vm.send(it) }
+        }
     }
 }
 
@@ -48,8 +63,16 @@ fun ChatScreen(vm: MagicPaperViewModel, session: ChatSession?, busy: Boolean) {
 private fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier) {
     val messages = session?.messages.orEmpty()
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, session?.id) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    // Перематываем только если пользователь и так внизу — иначе не мешаем читать историю.
+    val atBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            last == null || last.index == info.totalItemsCount - 1
+        }
+    }
+    LaunchedEffect(messages.size, session?.id, atBottom) {
+        if (messages.isNotEmpty() && atBottom) listState.animateScrollToItem(messages.size - 1)
     }
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isEmpty()) {
@@ -64,15 +87,26 @@ private fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifie
                 items(messages, key = { it.id }) { MessageBubble(it) }
             }
         }
-        if (busy) {
-            Text(
-                text = "Чары плетутся…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 20.dp, bottom = 6.dp),
-            )
+        AnimatedVisibility(
+            visible = busy,
+            modifier = Modifier.align(Alignment.BottomStart),
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 20.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Чары плетутся…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -100,7 +134,7 @@ private fun MessageBubble(message: ChatMessage) {
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
-        MaterialTheme.colorScheme.surface
+        MaterialTheme.colorScheme.surfaceContainerHigh
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -108,12 +142,29 @@ private fun MessageBubble(message: ChatMessage) {
     ) {
         Column(
             modifier = Modifier
-                .clip(MaterialTheme.shapes.medium)
+                // На узких экранах бабл не должна занимать всю ширину —
+                // 100% не даёт читаемой строки.
+                .widthIn(max = 560.dp)
+                .clip(
+                    // «хвост» бабла со стороны автора: верхний угол у его края — почти острый.
+                    RoundedCornerShape(
+                        topStart = if (isUser) 20.dp else 6.dp,
+                        topEnd = if (isUser) 6.dp else 20.dp,
+                        bottomStart = 20.dp,
+                        bottomEnd = 20.dp,
+                    )
+                )
                 .background(bubbleColor)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
-            Text(message.text, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                message.text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
             if (message.sources.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Источники:",
@@ -134,7 +185,13 @@ private fun MessageBubble(message: ChatMessage) {
 
 @Composable
 private fun Composer(enabled: Boolean, onSend: (String) -> Unit) {
-    var text by remember { mutableStateOf("") }
+    // Черновик переживает поворот экрана и потерю фокуса окна.
+    var text by rememberSaveable { mutableStateOf("") }
+    fun submit() {
+        if (text.isBlank()) return
+        onSend(text)
+        text = ""
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(
@@ -148,14 +205,16 @@ private fun Composer(enabled: Boolean, onSend: (String) -> Unit) {
                 placeholder = { Text("Начертать заклинание…") },
                 minLines = 1,
                 maxLines = 5,
+                shape = MaterialTheme.shapes.large,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { submit() }),
             )
             Spacer(Modifier.width(8.dp))
             TextButton(
                 enabled = enabled && text.isNotBlank(),
-                onClick = {
-                    onSend(text)
-                    text = ""
-                },
+                onClick = ::submit,
+                // M3: зона касания не меньше 48dp.
+                modifier = Modifier.heightIn(min = 48.dp),
             ) {
                 Text("Отправить")
             }
