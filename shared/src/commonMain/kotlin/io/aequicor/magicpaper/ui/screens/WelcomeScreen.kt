@@ -37,12 +37,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 
 /**
  * Ознакомительный тур при первом запуске: профиль модели → поиск → плагины.
@@ -66,8 +68,11 @@ fun WelcomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Верхняя строка: точки-прогресс и «пропустить».
+        // На macOS — отступ слева под нативный «светофор».
+        val layoutDirection = LocalLayoutDirection.current
+        val trafficLights = LocalWindowTitleBarInsets.current.calculateLeftPadding(layoutDirection)
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(start = trafficLights),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PageDots(page = page, pageCount = lastPage + 1, modifier = Modifier.weight(1f))

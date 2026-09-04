@@ -20,8 +20,10 @@ actual fun WindowDragArea(modifier: Modifier, content: @Composable () -> Unit) {
         // Вне окна (например, превью) — просто контейнер.
         Box(modifier, propagateMinConstraints = true) { content() }
     } else {
-        // Официальная реализация Compose Desktop: нативный перенос окна
-        // через JBR там, где он доступен, и AWT-фолбэк.
+        // Официальная реализация Compose Desktop: нативный перенос окна через
+        // JBR там, где он доступен (на macOS — как у системных окон), и
+        // AWT-фолбэк. Работает и на нативных декорациях с прозрачным
+        // тайтлбаром (контент нарисован поверх и перехватывает мышь).
         scope.WindowDraggableArea(modifier = modifier) { content() }
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.di.MagicPaperDependencies
 import io.aequicor.magicpaper.di.createMagicPaperDependencies
@@ -49,6 +50,7 @@ import io.aequicor.magicpaper.ui.screens.SettingsScreen
 import io.aequicor.magicpaper.ui.screens.WelcomeScreen
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
+import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 import io.aequicor.magicpaper.ui.window.WindowDragArea
 import kotlinx.coroutines.delay
 
@@ -65,19 +67,25 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
             color = MaterialTheme.colorScheme.background,
         ) {
             val state by deps.viewModel.state.collectAsState()
-            if (state.showWelcome) {
-                WelcomeScreen(deps.viewModel, state.settings, state.plugins, state.pluginStates)
-            } else {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    TopBar(deps.viewModel, state.screen)
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Box(modifier = Modifier.weight(1f)) {
-                        MainArea(deps.viewModel, state)
-                        Notice(
-                            state.notice,
-                            modifier = Modifier.align(Alignment.BottomCenter),
-                            onDismiss = { deps.viewModel.dismissNotice() },
-                        )
+            // Нативный прозрачный тайтлбар (macOS): фон дотянут до самого верха
+            // окна, а контент вытолкнут из-под высоты тайтлбара. Отступ слева
+            // под «светофор» применяется только к верхним панелям (см. их код).
+            val titleBarTop = LocalWindowTitleBarInsets.current.calculateTopPadding()
+            Column(modifier = Modifier.fillMaxSize().padding(top = titleBarTop)) {
+                if (state.showWelcome) {
+                    WelcomeScreen(deps.viewModel, state.settings, state.plugins, state.pluginStates)
+                } else {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        TopBar(deps.viewModel, state.screen)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Box(modifier = Modifier.weight(1f)) {
+                            MainArea(deps.viewModel, state)
+                            Notice(
+                                state.notice,
+                                modifier = Modifier.align(Alignment.BottomCenter),
+                                onDismiss = { deps.viewModel.dismissNotice() },
+                            )
+                        }
                     }
                 }
             }
@@ -116,8 +124,16 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
     // Интерактивные кнопки живут ВНЕ зоны перетаскивания, чтобы клик не
     // пересекался с жестом переноса окна.
     val chrome = LocalWindowChrome.current
+    // На macOS: нативный «светофор» поверх контента — сдвигаем кнопки от него.
+    val layoutDirection = LocalLayoutDirection.current
+    val trafficLights = LocalWindowTitleBarInsets.current.calculateLeftPadding(layoutDirection)
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = if (chrome != null) 6.dp else 12.dp, top = 4.dp, bottom = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(
+            start = trafficLights.coerceAtLeast(12.dp),
+            end = if (chrome != null) 6.dp else 12.dp,
+            top = 4.dp,
+            bottom = 4.dp,
+        ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(
