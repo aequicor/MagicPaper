@@ -98,13 +98,15 @@ class PiCodingRuntime(
             emit(RuntimeStatus(RuntimePhase.CHECKING, "Проверяю зависимости…"))
             try {
                 if (piCli.isFile) {
+                    // Установка старше защиты кодировки — дупатчим на месте (идемпотентно).
+                    patchBundleFuzzySafety()
                     emit(readyStatus())
                     return@flow
                 }
                 emit(RuntimeStatus(RuntimePhase.INSTALLING, "Ищу подходящий Node…"))
                 val node = findNode { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
                 emit(RuntimeStatus(RuntimePhase.INSTALLING, "Ставлю пи-агент (изолированно)…"))
-                installPi(node) { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
+                installPi(node)
                 if (onWindows()) {
                     emit(RuntimeStatus(RuntimePhase.INSTALLING, "Проверяю bash для команд агента…"))
                     ensureWindowsShell { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
@@ -123,6 +125,7 @@ class PiCodingRuntime(
     override suspend fun uninstall(): Unit = withContext(Dispatchers.IO) {
         cachedNode = null
         resetWindowsShellProbe()
+        fuzzySafetyDone = false
         root.deleteRecursively()
     }
 
@@ -163,6 +166,8 @@ class PiCodingRuntime(
         }
 
         writePiConfig(profile)
+        // Лечим и старые установки (до защиты кодировки) — без пересоздания движка.
+        ensureFuzzySafety()
         if (onWindows() && windowsBashProbe() == null) {
             emit(
                 CodingEvent.Notice(
@@ -180,6 +185,15 @@ class PiCodingRuntime(
             "--session-dir", sessionsDir.absolutePath,
             "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--no-approve",
+        )
+        // Подсказка модели про точное совпадение oldText: fuzzy-режим edit
+        // отключён патчем движка, несовпадение честно вернёт ошибку.
+        args += listOf(
+            "--append-system-prompt",
+            "Files may contain Russian typography (em dash, guillemets, yo). " +
+                "In edit tools, copy oldText/newText EXACTLY as read() returned it: never " +
+                "substitute - for the em dash, \" for guillemets, or drop characters. " +
+                "If an edit fails to match, re-read that region and retry with the exact text.",
         )
         // Контекст продолжает КОДИНГ-СЕССИЯ (у проекта их может быть несколько).
         if (session.piSessionId.isNotBlank()) {
@@ -267,6 +281,16 @@ class PiCodingRuntime(
      */
     @Volatile
     private var cachedBash: String? = null
+
+    /** Защита кодировки применена к текущей установке (не перечитывать чанки каждый прогон). */
+    @Volatile
+    private var fuzzySafetyDone = false
+
+    private fun ensureFuzzySafety() {
+        if (fuzzySafetyDone || !piCli.isFile) return
+        runCatching { patchBundleFuzzySafety() }
+        fuzzySafetyDone = true
+    }
 
     private fun resetWindowsShellProbe() {
         cachedBash = null
@@ -520,7 +544,7 @@ class PiCodingRuntime(
         return binary
     }
 
-    private suspend fun installPi(node: File, progress: suspend (String) -> Unit) {
+    private suspend fun installPi(node: File) {
         root.mkdirs()
         val npmCommand = npmCommandFor(node)
         val command = npmCommand + listOf(
@@ -532,7 +556,62 @@ class PiCodingRuntime(
         val env = if (node.parentFile != null) mapOf("PATH" to pathWith(node.parentFile)) else emptyMap()
         runCommand(command, root, extraEnv = env, timeoutSeconds = 600)
         if (!piCli.isFile) error("установка завершилась, но движок не найден в изоляции")
+        patchBundleFuzzySafety()
         writePiHomeDefaults()
+    }
+
+    /**
+     * Точечный патч бандла пи (проверено на 0.84.4 — живое repro в этой сессии).
+     *
+     * Встроенный edit при несовпадении oldText уходит в fuzzy-режим: переписывает
+     * затронутые правкой СТРОКИ из нормализованной копии файла, по пути заменяя
+     * типографику на ASCII (— → -, – ‘’“” → - ' "). Для русских текстов это
+     * тихая порча файлов («поехала кодировка»): модель правит одну строку, а
+     * тире/кавычки деградируют во всей затронутой области. После патча
+     * снисходительность fuzzy остаёт только к концевым пробелам; несовпадение
+     * символов даёт честную «Could not find the exact text» — агент перечитывает
+     * файл и повторяет правку точно, ничего не портя.
+     *
+     * Идемпотентно (маркер в теле функции); при изменении внутренностей пи
+     * просто не применяется и не мешает работе.
+     */
+    internal fun patchBundleFuzzySafety() {
+        val chunksDir = File(piCli.parentFile, "chunks")
+        // esbuild может положить в бандл несколько копий функции с суффиксами
+        // («normalizeForFuzzyMatch2» — её использует json-режим) — правим все.
+        val fn = Regex("function normalizeForFuzzyMatch\\d*\\(text\\)\\{")
+        val patchedMarker = "/*magicpaper-fuzzy-safety*/"
+        // Тело каждой копии заканчивается «}» перед следующим объявлением функции.
+        val safeBody =
+            "return $patchedMarker text.split(\"\\n\").map(line=>line.trimEnd()).join(\"\\n\")}"
+        // Повторный проход даёт updated == text (тело уже safeBody) — не пишем.
+        chunksDir.listFiles { f -> f.isFile && f.extension == "js" }?.forEach { chunk ->
+            val text = runCatching { chunk.readText(StandardCharsets.UTF_8) }.getOrNull() ?: return@forEach
+            if (!fn.containsMatchIn(text)) return@forEach
+            val updated = buildString {
+                var last = 0
+                var searchFrom = 0
+                while (true) {
+                    val match = fn.find(text, searchFrom) ?: break
+                    val bodyStart = match.range.last + 1
+                    val close = text.indexOf("}function", bodyStart)
+                    if (close < 0) {
+                        // Неизвестная структура — не рискуем, файл остаётся как есть.
+                        append(text, last, text.length)
+                        last = text.length
+                        break
+                    }
+                    append(text, last, bodyStart)
+                    append(safeBody)
+                    last = close + 1
+                    searchFrom = last
+                }
+                append(text, last, text.length)
+            }
+            if (updated != text) {
+                runCatching { chunk.writeText(updated, StandardCharsets.UTF_8) }
+            }
+        }
     }
 
     /**
