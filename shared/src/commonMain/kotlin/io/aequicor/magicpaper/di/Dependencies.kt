@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
+import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
 import io.aequicor.magicpaper.data.llm.AnthropicGateway
 import io.aequicor.magicpaper.data.llm.AnthropicModelDirectory
@@ -10,6 +11,8 @@ import io.aequicor.magicpaper.data.llm.OpenAiCompatibleGateway
 import io.aequicor.magicpaper.data.llm.OpenAiModelDirectory
 import io.aequicor.magicpaper.data.llm.RoutingLlmGateway
 import io.aequicor.magicpaper.data.llm.RoutingModelDirectory
+import io.aequicor.magicpaper.data.planning.JsonPlanningRepository
+import io.aequicor.magicpaper.data.planning.PlanningStore
 import io.aequicor.magicpaper.data.search.CompositeSearchEngine
 import io.aequicor.magicpaper.data.search.GoogleSearchEngine
 import io.aequicor.magicpaper.data.search.QueritSearchEngine
@@ -23,7 +26,11 @@ import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.CodingProjectRepository
 import io.aequicor.magicpaper.domain.CodingRuntime
+import io.aequicor.magicpaper.domain.DossierResearcher
+import io.aequicor.magicpaper.domain.LlmMilestoneVerifier
 import io.aequicor.magicpaper.domain.MagicAgent
+import io.aequicor.magicpaper.domain.PlanComposer
+import io.aequicor.magicpaper.domain.PlanRunner
 import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.ProviderType
@@ -31,6 +38,7 @@ import io.aequicor.magicpaper.domain.SkillEducator
 import io.aequicor.magicpaper.domain.SkillInstaller
 import io.aequicor.magicpaper.plugins.PluginRegistry
 import io.aequicor.magicpaper.plugins.builtin.CalcPlugin
+import io.aequicor.magicpaper.plugins.builtin.CodingPlanningPlugin
 import io.aequicor.magicpaper.plugins.builtin.FocusPlugin
 import io.aequicor.magicpaper.plugins.builtin.NotesPlugin
 import io.aequicor.magicpaper.plugins.builtin.SelfEducationPlugin
@@ -92,12 +100,26 @@ internal fun buildDependencies(
     val skillStore = SkillStore(JsonSkillRepository(store, json))
     val installer = SkillInstaller(skillStore)
     val agent = MagicAgent(gateway, search, docs, skillLibrary = skillStore)
+    // Планирование: свой стор поверх того же хранилища (как у навыков);
+    // исполнитель — поверх кодинг-рантайма, проверка — моделью через шлюз.
+    val planningStore = PlanningStore(JsonPlanningRepository(store, json))
+    val planner = CodingPlanningPlugin(
+        store = planningStore,
+        composer = PlanComposer(gateway, json),
+        researcher = DossierResearcher(gateway, search, json),
+        runner = PlanRunner(codingRuntime ?: NoopCodingRuntime, LlmMilestoneVerifier(gateway, json)),
+        runtime = codingRuntime ?: NoopCodingRuntime,
+        projectsRepo = codingProjects,
+        profileRepo = profileRepo,
+        settingsRepo = settingsRepo,
+    )
     val registry = PluginRegistry()
         .register(NotesPlugin)
         .register(FocusPlugin)
         .register(CalcPlugin)
         .register(SkillsRepositoryPlugin(EmbeddedSkillCatalog(), installer, skillStore))
         .register(SelfEducationPlugin(SkillEducator(gateway, json), installer, skillStore, chatRepo, settingsRepo, profileRepo))
+        .register(planner)
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,
@@ -109,6 +131,7 @@ internal fun buildDependencies(
         store = store,
         json = json,
         skills = skillStore,
+        planning = planningStore,
         codingRuntime = codingRuntime,
         codingProjects = codingProjects,
         dirPicker = dirPicker,

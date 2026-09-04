@@ -25,6 +25,7 @@ import io.aequicor.magicpaper.domain.LlmProfileRepository
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.ModelDirectory
 import io.aequicor.magicpaper.domain.PluginState
+import io.aequicor.magicpaper.domain.PlanningRepository
 import io.aequicor.magicpaper.domain.ProfileBundle
 import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.domain.ProfileMigrator
@@ -62,6 +63,7 @@ class MagicPaperViewModel(
     private val store: KeyValueStore,
     private val json: Json,
     private val skills: io.aequicor.magicpaper.domain.SkillRepository? = null,
+    private val planning: PlanningRepository? = null,
     private val codingRuntime: CodingRuntime? = null,
     private val codingProjects: CodingProjectRepository? = null,
     private val dirPicker: ProjectDirPicker? = null,
@@ -550,6 +552,7 @@ class MagicPaperViewModel(
             settingsRepo.wipe()
             skills?.wipe()
             profileRepo.wipe()
+            planning?.wipe()
             _state.update {
                 it.copy(
                     current = null,
