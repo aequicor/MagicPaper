@@ -21,8 +21,20 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "io.aequicor.magicpaper"
+            packageName = "MagicPaper"
             packageVersion = "1.0.0"
+            // Иконки пакетов генерирует: python3 assets/icon/gen_icons.py
+            macOS {
+                iconFile.set(project.file("../assets/icon/dist/magicpaper.icns"))
+            }
+            windows {
+                iconFile.set(project.file("../assets/icon/dist/magicpaper.ico"))
+                menu = true
+                menuGroup = "MagicPaper"
+            }
+            linux {
+                iconFile.set(project.file("../assets/icon/dist/magicpaper_512.png"))
+            }
         }
     }
 }
