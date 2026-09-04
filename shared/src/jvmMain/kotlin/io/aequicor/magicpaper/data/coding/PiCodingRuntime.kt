@@ -52,6 +52,8 @@ class PiCodingRuntime(
     private val nodeDir = File(root, "node")
     private val pihome = File(root, "pihome")
     private val sessionsDir = File(root, "sessions")
+    /** Автономный MinGit для bash-инструмента агента на Windows (см. [ensureWindowsShell]). */
+    private val shellDir = File(root, "shell")
     private val piCli = File(prefix, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
 
     private val installLock = Mutex()
@@ -103,6 +105,10 @@ class PiCodingRuntime(
                 val node = findNode { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
                 emit(RuntimeStatus(RuntimePhase.INSTALLING, "Ставлю пи-агент (изолированно)…"))
                 installPi(node) { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
+                if (onWindows()) {
+                    emit(RuntimeStatus(RuntimePhase.INSTALLING, "Проверяю bash для команд агента…"))
+                    ensureWindowsShell { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
+                }
                 emit(readyStatus())
             } catch (e: Exception) {
                 emit(
@@ -116,6 +122,7 @@ class PiCodingRuntime(
     }.flowOn(Dispatchers.IO)
     override suspend fun uninstall(): Unit = withContext(Dispatchers.IO) {
         cachedNode = null
+        resetWindowsShellProbe()
         root.deleteRecursively()
     }
 
@@ -156,6 +163,14 @@ class PiCodingRuntime(
         }
 
         writePiConfig(profile)
+        if (onWindows() && windowsBashProbe() == null) {
+            emit(
+                CodingEvent.Notice(
+                    "Рабочего bash не найдено (в WSL нет дистрибутива) — команды агент выполняет " +
+                        "через PowerShell. Для bash: установите Git for Windows или перевыполните «Подготовить движок»."
+                )
+            )
+        }
 
         val args = mutableListOf(
             node.absolutePath, piCli.absolutePath,
@@ -236,14 +251,153 @@ class PiCodingRuntime(
         emit(CodingEvent.Finished)
     }.flowOn(Dispatchers.IO)
 
+    // ---- Windows: оболочка для bash-инструмента агента ---------------------
+
+    private fun onWindows(): Boolean =
+        System.getProperty("os.name").lowercase().contains("win")
+
+    /**
+     * Pi выполняет shell-команды агента только через bash: на Windows он ищет
+     * Git Bash в Program Files, затем bash.exe в PATH, и доходит до System32\
+     * bash.exe — заглушки WSL, которая падает с «execvpe(/bin/bash) failed»,
+     * если в WSL нет дистрибутива. Здесь мы повторяем тот же порядок, но
+     * отбрасываем WSL-заглушку, а при отсутствии bash скачиваем переносимый
+     * MinGit в корень изоляции (установщик не нужен, удаляется с uninstall).
+     * Кэш: решение принимается один раз за сессию приложения.
+     */
+    @Volatile
+    private var cachedBash: String? = null
+
+    private fun resetWindowsShellProbe() {
+        cachedBash = null
+    }
+
+    /** Быстрый поиск готового bash без скачивания; null — работать через PowerShell. */
+    private fun windowsBashProbe(): String? {
+        cachedBash?.takeIf { File(it).isFile }?.let { return it }
+        // Явный override (например, нестандартная установка MSYS2/Cygwin).
+        System.getenv(WINDOWS_SHELL_ENV)?.takeIf { File(it).isFile }?.let {
+            cachedBash = it
+            return it
+        }
+        val candidates = listOfNotNull(System.getenv("ProgramFiles"), System.getenv("ProgramFiles(x86)"))
+            .map { File(it, "Git/bin/bash.exe") }
+            .plus((System.getenv("PATH") ?: "").split(File.pathSeparator)
+                .filter { it.isNotBlank() }
+                .map { File(it, "bash.exe") })
+            .filter { it.isFile }
+        val found = candidates.firstOrNull { !isLegacyWslBashStub(it) }
+        if (found != null) {
+            cachedBash = found.absolutePath
+            return cachedBash
+        }
+        bundledBash()?.let {
+            cachedBash = it.absolutePath
+            return cachedBash
+        }
+        return null
+    }
+
+    /**
+     * Оболочка для команд агента: найденный bash или скачанный MinGit.
+     * null — bash недоступен (нет сети/архив повреждён): агенту включается
+     * PowerShell-инструмент вместо bash.
+     */
+    private suspend fun ensureWindowsShell(progress: suspend (String) -> Unit): String? {
+        if (!onWindows()) return null
+        windowsBashProbe()?.let { return it }
+        return runCatching { downloadMinGit(progress) }
+            .onFailure {
+                // Не ломаем подготовку движка: без bash агент умеет PowerShell.
+                progress("MinGit скачать не удалось (${it.message?.take(120)}) — команды пойдут через PowerShell.")
+            }
+            .getOrNull()?.absolutePath
+    }
+
+    /** System32/sysnative\bash.exe — реликер WSL, а не настоящий bash. */
+    private fun isLegacyWslBashStub(file: File): Boolean {
+        val normalized = file.absolutePath.replace('/', '\\').lowercase()
+        return Regex("^[a-z]:\\\\windows\\\\(system32|sysnative)\\\\bash\\.exe$").matches(normalized)
+    }
+
+    private fun bundledBash(): File? {
+        val bash = File(shellDir, "usr/bin/bash.exe")
+        if (bash.isFile) return bash
+        // Минимальный срез: sh.exe в MinGit — это GNU bash (полный режим при
+        // имени argv[0]=bash); копия делается сразу после распаковки, но на
+        // случай полу-установки проверяем и оригинал.
+        val sh = File(shellDir, "usr/bin/sh.exe")
+        return sh.takeIf { it.isFile }
+    }
+
+    private suspend fun downloadMinGit(progress: suspend (String) -> Unit): File {
+        val arch = System.getProperty("os.arch").lowercase()
+        val archPart = when {
+            arch.contains("arm64") || arch.contains("aarch64") -> "arm64"
+            arch.contains("64") -> "64-bit"
+            else -> "32-bit"
+        }
+        val archiveName = "MinGit-$GIT_VERSION-$archPart.zip"
+        val url = URL("$GIT_RELEASE_URL/$archiveName")
+        root.mkdirs()
+        val archive = File(root, archiveName)
+        url.openConnection().let { conn ->
+            val http = conn as HttpURLConnection
+            http.instanceFollowRedirects = true
+            http.connectTimeout = 20_000
+            http.readTimeout = 60_000
+            http.connect()
+            if (http.responseCode !in 200..299) error("сервер вернул код ${http.responseCode}")
+            val total = http.contentLengthLong
+            var received = 0L
+            var lastReported = -1L
+            http.inputStream.use { input ->
+                archive.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        received += n
+                        val mb = received / (1024 * 1024)
+                        if (mb / 2 != lastReported / 2) {
+                            lastReported = mb
+                            val totalMb = if (total > 0) " из ${total / (1024 * 1024)} МБ" else ""
+                            progress("Скачиваю bash для команд агента (MinGit): $mb МБ$totalMb…")
+                        }
+                    }
+                }
+            }
+        }
+        progress("Распаковываю MinGit…")
+        shellDir.deleteRecursively()
+        shellDir.mkdirs()
+        unzipToDirectory(archive, shellDir)
+        archive.delete()
+        val sh = File(shellDir, "usr/bin/sh.exe")
+        if (!sh.isFile) error("в архиве MinGit не найден usr/bin/sh.exe")
+        // bash-совместимый вызов по имени: копируем sh.exe в bash.exe.
+        val bash = File(shellDir, "usr/bin/bash.exe")
+        runCatching { sh.copyTo(bash, overwrite = true) }
+        cachedBash = bash.absolutePath
+        return bash
+    }
+
     // ---- Установка --------------------------------------------------------
 
     private suspend fun readyStatus(): RuntimeStatus {
         val node = runCatching { findNode { } }.getOrNull()
         val version = node?.let { runCatching { execLine(listOf(it.absolutePath, piCli.absolutePath, "--version")) }.getOrNull() }.orEmpty()
+        val shellNote = when {
+            !onWindows() -> ""
+            else -> {
+                val bash = windowsBashProbe()
+                if (bash != null) " Bash для команд: $bash." else " Bash не найден — команды агент будет выполнять через PowerShell."
+            }
+        }
         return RuntimeStatus(
             phase = RuntimePhase.READY,
-            detail = "Пи-агент готов. Изоляция: $rootPath",
+            detail = "Пи-агент готов. Изоляция: $rootPath.$shellNote",
             version = version.trim(),
         )
     }
@@ -430,8 +584,17 @@ class PiCodingRuntime(
 
     private fun writePiHomeDefaults() {
         pihome.mkdirs()
+        // На Windows без bash агент не может выполнять команды вообще:
+        // переключаем набор инструментов на powershell (нативный, есть в каждой Windows).
+        val bash = windowsBashProbe()
+        val toolsField = if (onWindows() && bash == null) {
+            "\"defaultTools\":[\"read\",\"powershell\",\"edit\",\"write\",\"grep\",\"find\",\"ls\"],"
+        } else {
+            ""
+        }
+        val shellField = if (bash != null) "\"shellPath\":\"${jsonEscape(bash)}\"," else ""
         File(pihome, "settings.json").writeText(
-            """{"defaultProjectTrust":"never","telemetry":false}"""
+            """{"defaultProjectTrust":"never",${shellField}${toolsField}"telemetry":false}"""
         )
     }
 
@@ -480,12 +643,23 @@ class PiCodingRuntime(
         "PI_OFFLINE" to "1",
         "PI_SKIP_VERSION_CHECK" to "1",
         "PI_TELEMETRY" to "0",
-        "PATH" to pathWith(node.parentFile),
+        // На Windows в PATH добавляем бинарники автономного MinGit: подстраховка
+        // для «where bash.exe» и unix-утилит, если shellPath когда-то разъедется.
+        "PATH" to pathWithAll(
+            listOfNotNull(node.parentFile) +
+                if (onWindows()) listOf(File(shellDir, "usr/bin"), File(shellDir, "mingw64/bin"))
+                else emptyList()
+        ),
     )
 
-    private fun pathWith(dir: File?): String {
-        val current = System.getenv("PATH") ?: "/usr/bin:/bin"
-        return if (dir == null) current else dir.absolutePath + File.pathSeparator + current
+    private fun pathWith(dir: File?): String = pathWithAll(listOfNotNull(dir))
+
+    private fun pathWithAll(dirs: List<File>): String {
+        val current = System.getenv("PATH") ?: if (onWindows()) "" else "/usr/bin:/bin"
+        val prefix = dirs.filter { it.isDirectory }.map { it.absolutePath }
+        return (prefix + current.split(File.pathSeparator).filter { it.isNotBlank() })
+            .distinct()
+            .joinToString(File.pathSeparator)
     }
 
     // ---- Утилиты -----------------------------------------------------------
@@ -584,5 +758,16 @@ class PiCodingRuntime(
         const val PROVIDER_ID = "magicpaper"
         const val MIN_NODE_MAJOR = 22
         const val MIN_NODE_MINOR = 19
+
+        /**
+         * MinGit — переносимый срез Git for Windows: полный нативный
+         * MSYS2 bash.exe без установщика (распаковывается в корень изоляции).
+         */
+        const val GIT_VERSION = "2.55.0.5"
+        const val GIT_RELEASE_URL =
+            "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5"
+
+        /** Пользовательский escape hatch: явный путь к bash.exe для пи. */
+        const val WINDOWS_SHELL_ENV = "MAGICPAPER_SHELL_PATH"
     }
 }
