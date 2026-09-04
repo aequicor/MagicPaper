@@ -5,6 +5,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.unit.TextUnit
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeFence
@@ -14,6 +17,7 @@ import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.rememberMarkdownState
 import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.SyntaxThemes
+import io.aequicor.magicpaper.ui.theme.MagicFonts
 
 /**
  * Markdown ответа агента: заголовки, списки, таблицы, ссылки и блоки кода
@@ -56,6 +60,8 @@ fun ChatMarkdown(text: String, modifier: Modifier = Modifier) {
         markdownState = markdownState,
         modifier = modifier.fillMaxWidth(),
         // В бабле чата дисплейные заголовки ни к чему — приглушаем до типографики чата.
+        // Код — фирменный моно (иначе библиотека пинит системный моноширинный);
+        // цитаты — курсив, подтянет literata_italic из стека.
         typography = markdownTypography(
             h1 = MaterialTheme.typography.titleLarge,
             h2 = MaterialTheme.typography.titleMedium,
@@ -64,6 +70,12 @@ fun ChatMarkdown(text: String, modifier: Modifier = Modifier) {
             h5 = MaterialTheme.typography.bodyLarge,
             h6 = MaterialTheme.typography.bodyMedium,
             text = MaterialTheme.typography.bodyLarge,
+            code = MaterialTheme.typography.bodyMedium.copy(fontFamily = MagicFonts.code),
+            inlineCode = MaterialTheme.typography.bodyMedium.copy(
+                fontFamily = MagicFonts.code,
+                fontSize = TextUnit.Unspecified,
+            ),
+            quote = MaterialTheme.typography.bodyLarge.plus(SpanStyle(fontStyle = FontStyle.Italic)),
         ),
         components = components,
     )

@@ -85,6 +85,15 @@ dependencies {
     androidRuntimeClasspath(libs.compose.uiTooling)
 }
 
+// Фиксируем пакет сгенерированного класса Res: группа модуля не задана,
+// без явного пакета импорты ресурсов были бы нестабильны.
+compose {
+    resources {
+        packageOfResClass = "io.aequicor.magicpaper.resources"
+        generateResClass = always
+    }
+}
+
 // Интеграционный тест пи-агента включается флагом: ./gradlew :shared:jvmTest -Pmagicpaper.pi.it=true
 tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))

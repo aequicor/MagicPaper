@@ -8,7 +8,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,21 +50,38 @@ val MagicColors = lightColorScheme(
     error = InkError,
 )
 
-val MagicTypography = Typography(
-    titleLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp,
-    ),
-    titleMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 17.sp,
-    ),
-    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-    labelLarge = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium),
-)
+/**
+ * Типографика «магической бумаги»: все 15 ролей заданы явно, чтобы ни одна
+ * не проваливалась в дефолтный системный шрифт. Дисплейные роли (крупные
+ * заголовки, бренд) — Cormorant Garamond; чтение и подписи — Literata;
+ * код — JetBrains Mono. Кегли заголовков подняты на 1–2sp относительно
+ * системного дефолта: у гарамона компактный кегль, компенсируем.
+ *
+ * Семейства загружаются из ресурсов композиции (@Composable), поэтому
+ * типографика собирается в композиционном контексте.
+ */
+val MagicTypography: Typography
+    @Composable get() = Typography(
+        // Дисплейные роли — только для крупных размеров (Cormorant читается от ~17sp).
+        displayLarge = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 40.sp),
+        displayMedium = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 36.sp),
+        displaySmall = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 32.sp),
+        headlineLarge = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp),
+        headlineMedium = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 28.sp),
+        headlineSmall = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.Medium, fontSize = 20.sp, lineHeight = 26.sp),
+        titleLarge = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 28.sp),
+        titleMedium = TextStyle(fontFamily = MagicFonts.display, fontWeight = FontWeight.Medium, fontSize = 18.sp, lineHeight = 24.sp),
+        // titleSmall уже в «текстовой» зоне — сериф здесь мельчит, берём Literata.
+        titleSmall = TextStyle(fontFamily = MagicFonts.text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp),
+        // Текст — Literata: «книжное» чтение на пергаменте.
+        bodyLarge = TextStyle(fontFamily = MagicFonts.text, fontSize = 15.sp, lineHeight = 23.sp),
+        bodyMedium = TextStyle(fontFamily = MagicFonts.text, fontSize = 14.sp, lineHeight = 21.sp),
+        bodySmall = TextStyle(fontFamily = MagicFonts.text, fontSize = 13.sp, lineHeight = 19.sp),
+        // Подписи и кнопки — Literata средним весом: единый стиль без серифной «тяжести».
+        labelLarge = TextStyle(fontFamily = MagicFonts.text, fontWeight = FontWeight.Medium, fontSize = 14.sp),
+        labelMedium = TextStyle(fontFamily = MagicFonts.text, fontWeight = FontWeight.Medium, fontSize = 13.sp),
+        labelSmall = TextStyle(fontFamily = MagicFonts.text, fontWeight = FontWeight.Medium, fontSize = 12.sp),
+    )
 
 val MagicShapes = Shapes(
     small = RoundedCornerShape(10.dp),

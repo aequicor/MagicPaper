@@ -58,6 +58,21 @@
 (интеграционный тест пи-агента с реальной установкой:
 `./gradlew :shared:jvmTest --tests "*PiCodingRuntimeIntegrationTest" -Pmagicpaper.pi.it=true`)
 
+## Типографика
+
+Фирменный шрифтовой стек встроен через Compose Resources
+(`shared/src/commonMain/composeResources/font/`) и одинаков на десктопе,
+Android и в браузере:
+
+- **Дисплейная** — *Cormorant Garamond* (бренд, крупные заголовки);
+- **Текстовая** — *Literata* (чат, доки, подписи);
+- **Моно** — *JetBrains Mono* (блоки кода).
+
+Стек покрывает латиницу (вкл. расширенную), кириллицу (вкл. расширения),
+греческий и вьетнамский; остальные письменности дорисовывает системный
+фолбэк платформы. Все гарнитуры — SIL Open Font License 1.1, тексты лицензий
+и атрибуция — в `font/OFL_ALL.txt`. План и обоснование — `docs/PLAN-typography-i18n.md`.
+
 ## Архитектура (Clean + SOLID)
 
 ```
