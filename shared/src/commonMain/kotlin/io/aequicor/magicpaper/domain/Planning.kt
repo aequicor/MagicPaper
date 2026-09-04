@@ -74,6 +74,11 @@ data class Plan(
     val goal: String,
     val milestones: List<Milestone> = emptyList(),
     val status: PlanStatus = PlanStatus.DRAFT,
+    /**
+     * Кодинг-сессия выполнения плана: у плана своя нить диалога с агентом,
+     * чтобы шаги делили контекст проекта и журнал был отделён от ручных сессий.
+     */
+    val sessionId: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
 ) {

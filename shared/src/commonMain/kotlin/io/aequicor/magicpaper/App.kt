@@ -115,7 +115,7 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
         Box(modifier = Modifier.weight(1f)) {
             when (state.screen) {
                 Screen.CHAT -> ChatScreen(vm, state)
-                Screen.CODING -> CodingScreen(vm, state.coding)
+                Screen.CODING -> CodingScreen(vm, state.coding, state.codingPanelPlugin)
                 Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
                     ActivePlugins(state.plugins, state.pluginStates)
                 }

@@ -21,7 +21,12 @@ class PlanRunnerTest {
         override suspend fun status(): RuntimeStatus = RuntimeStatus(RuntimePhase.READY)
         override fun ensureReady(): Flow<RuntimeStatus> = flowOf(RuntimeStatus(RuntimePhase.READY))
 
-        override fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent> {
+        override fun run(
+            project: CodingProject,
+            session: CodingSession,
+            prompt: String,
+            profile: LlmProfile?,
+        ): Flow<CodingEvent> {
             prompts += prompt
             val reply = replies.entries.firstOrNull { prompt.contains(it.key) }?.value ?: default
             return flowOf(
@@ -30,7 +35,8 @@ class PlanRunnerTest {
             )
         }
 
-        override fun abort() = Unit
+        override fun abort(sessionId: String) = Unit
+        override fun abortAll() = Unit
         override suspend fun uninstall() = Unit
     }
 
@@ -50,6 +56,7 @@ class PlanRunnerTest {
     }
 
     private val project = CodingProject(id = "proj", name = "тест", path = "/tmp/proj", createdAt = 1L)
+    private val session = CodingSession(id = "sess", projectId = "proj", name = "план", createdAt = 1L)
     private val agent = LlmProfile(id = "agent", name = "Агент", baseUrl = "http://x/v1", modelId = "m")
 
     private fun plan(milestones: List<Milestone>) = Plan(
@@ -57,6 +64,7 @@ class PlanRunnerTest {
         projectId = "proj",
         goal = "цель",
         milestones = milestones,
+        sessionId = "sess",
         createdAt = 1L,
         updatedAt = 1L,
     )
@@ -74,6 +82,7 @@ class PlanRunnerTest {
                 )
             ),
             project,
+            session,
             listOf(agent),
             judge = null,
             onUpdate = { updates += it },
@@ -101,6 +110,7 @@ class PlanRunnerTest {
                 )
             ),
             project,
+            session,
             listOf(agent),
             judge = null,
             onUpdate = {},
@@ -124,7 +134,7 @@ class PlanRunnerTest {
                 Milestone(id = "m2", title = "шаг два", status = MilestoneStatus.FAILED, agentProfileId = "agent"),
             )
         )
-        val final = runner.run(initial, project, listOf(agent), judge = null, onUpdate = {})
+        val final = runner.run(initial, project, session, listOf(agent), judge = null, onUpdate = {})
         assertEquals(PlanStatus.DONE, final.status)
         // Выполнялся только проваленный шаг (он следующий в очереди).
         assertEquals(1, runtime.prompts.size)
@@ -143,6 +153,7 @@ class PlanRunnerTest {
                 )
             ),
             project,
+            session,
             listOf(agent),
             judge = null,
             onUpdate = { p -> if (p.milestones.any { it.status == MilestoneStatus.DONE }) aborted = true },

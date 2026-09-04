@@ -44,6 +44,7 @@ import io.aequicor.magicpaper.domain.AgentMatcher
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingProjectRepository
+import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.DossierResearcher
 import io.aequicor.magicpaper.domain.DossierSource
@@ -81,14 +82,26 @@ class CodingPlanningPlugin(
     private val projectsRepo: CodingProjectRepository?,
     private val profileRepo: LlmProfileRepository,
     private val settingsRepo: SettingsRepository,
-) : MagicPlugin {
+) : MagicPlugin, io.aequicor.magicpaper.plugins.CodingSessionPanel {
     override val id = "coding-planning"
     override val title = "Планирование"
     override val description = "Досье моделей, график мэилстоунов и авто-выполнение с проверкой достижимости."
     override val icon = "⚑"
 
+    /** Панель на экране плагинов: свободный выбор проекта. */
     @Composable
     override fun Content() {
+        PlanningPanel(lockedProject = null)
+    }
+
+    /** Панель внутри кодинг-сессии: проект закреплён за вкладкой «План». */
+    @Composable
+    override fun SessionPanel(project: CodingProject, modifier: Modifier) {
+        PlanningPanel(lockedProject = project, modifier = modifier)
+    }
+
+    @Composable
+    private fun PlanningPanel(lockedProject: CodingProject?, modifier: Modifier = Modifier) {
         val scope = rememberCoroutineScope()
         val plans by store.plans.collectAsState()
         val dossiers by store.dossiers.collectAsState()
@@ -110,7 +123,10 @@ class CodingPlanningPlugin(
             settings = settingsRepo.load()
         }
 
-        val project = projects.firstOrNull { it.id == selectedProjectId } ?: projects.firstOrNull()
+        // Закреплённый проект (вкладка кодинг-сессии) имеет приоритет над выбором.
+        val project = lockedProject
+            ?: projects.firstOrNull { it.id == selectedProjectId }
+            ?: projects.firstOrNull()
         val plan = project?.let { p -> plans.firstOrNull { it.projectId == p.id } }
 
         // Актуальный профиль разрешения (модель-планировщик и модель-судья).
@@ -145,12 +161,28 @@ class CodingPlanningPlugin(
                 )
             }
             scope.launch {
+                // У плана своя кодинг-сессия: свой контекст пи и свой журнал исполнения.
+                val repo = projectsRepo
+                val sessionId = if (repo != null) {
+                    val ordinal = repo.sessions(proj.id).size + 1
+                    val session = CodingSession(
+                        id = Id.new(),
+                        projectId = proj.id,
+                        name = "План: ${goal.trim().take(30).ifBlank { "без имени" }}",
+                        createdAt = now,
+                    )
+                    repo.saveSession(session)
+                    session.id
+                } else {
+                    ""
+                }
                 store.save(
                     Plan(
                         id = Id.new(),
                         projectId = proj.id,
                         goal = goal.trim(),
                         milestones = milestones,
+                        sessionId = sessionId,
                         createdAt = now,
                         updatedAt = now,
                     )
@@ -162,7 +194,7 @@ class CodingPlanningPlugin(
 
         fun runPlan() {
             val current = plan ?: return
-            val proj = project
+            val proj = project ?: return
             if (running) return
             if (!runtime.supported) {
                 notice = "Кодинг-агент недоступен на этой платформе."
@@ -173,9 +205,19 @@ class CodingPlanningPlugin(
             notice = null
             scope.launch {
                 profiles = profileRepo.all()
+                // Сессия плана: уже созданная при утверждении или на лету.
+                val repo = projectsRepo
+                val session = repo?.sessions(proj.id)?.firstOrNull { it.id == current.sessionId }
+                    ?: CodingSession(
+                        id = current.sessionId.ifBlank { Id.new() },
+                        projectId = proj.id,
+                        name = "План: ${current.goal.take(30).ifBlank { "без имени" }}",
+                        createdAt = Id.now(),
+                    ).also { repo?.saveSession(it) }
                 val finalPlan = runner.run(
                     plan = current,
                     project = proj,
+                    session = session,
                     profiles = profiles,
                     judge = judge(),
                     onUpdate = { updated -> store.save(updated.copy(updatedAt = Id.now())) },
@@ -193,7 +235,8 @@ class CodingPlanningPlugin(
 
         fun abortPlan() {
             abortFlag.value = true
-            runtime.abort()
+            // Прерываем прогон сессии плана (по идентификатору сессии).
+            plan?.sessionId?.takeIf { it.isNotBlank() }?.let { runtime.abort(it) } ?: runtime.abortAll()
         }
 
         fun research(target: LlmProfile) {
@@ -222,10 +265,10 @@ class CodingPlanningPlugin(
         }
 
         Column(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(vertical = 8.dp),
+                .padding(16.dp),
         ) {
             Text(icon + " " + title, style = MaterialTheme.typography.titleMedium)
             Text(
@@ -256,6 +299,7 @@ class CodingPlanningPlugin(
             PlanSection(
                 projects = projects,
                 project = project,
+                lockedProject = lockedProject,
                 selectedProjectId = selectedProjectId,
                 onSelectProject = { selectedProjectId = it },
                 goal = goal,
@@ -272,7 +316,15 @@ class CodingPlanningPlugin(
                 onAbort = ::abortPlan,
                 onDeletePlan = {
                     val proj = project
-                    if (proj != null) scope.launch { store.deletePlan(proj.id) }
+                    if (proj != null) scope.launch {
+                        // Журнал исполнения живёт в сессии плана — чистим и её.
+                        val sessionId = plan?.sessionId
+                        if (!sessionId.isNullOrBlank()) {
+                            runtime.abort(sessionId)
+                            projectsRepo?.deleteSession(proj.id, sessionId)
+                        }
+                        store.deletePlan(proj.id)
+                    }
                 },
                 onMilestoneUpdate = ::saveMilestoneEdit,
             )
@@ -490,6 +542,7 @@ private fun RatingPicker(rating: Int, onSelect: (Int) -> Unit) {
 private fun PlanSection(
     projects: List<CodingProject>,
     project: CodingProject?,
+    lockedProject: CodingProject?,
     selectedProjectId: String,
     onSelectProject: (String) -> Unit,
     goal: String,
@@ -518,22 +571,31 @@ private fun PlanSection(
     }
 
     var projectMenuOpen by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Проект:", style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.width(6.dp))
-        Box {
-            TextButton(onClick = { projectMenuOpen = true }) {
-                Text(project?.name ?: "выберите проект")
-            }
-            DropdownMenu(expanded = projectMenuOpen, onDismissRequest = { projectMenuOpen = false }) {
-                projects.forEach { p ->
-                    DropdownMenuItem(
-                        text = { Text(p.name) },
-                        onClick = {
-                            onSelectProject(p.id)
-                            projectMenuOpen = false
-                        },
-                    )
+    if (lockedProject != null) {
+        // Вкладка кодинг-сессии: проект закреплён, выбор не нужен.
+        Text(
+            "Проект: ${lockedProject.name}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Проект:", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(6.dp))
+            Box {
+                TextButton(onClick = { projectMenuOpen = true }) {
+                    Text(project?.name ?: "выберите проект")
+                }
+                DropdownMenu(expanded = projectMenuOpen, onDismissRequest = { projectMenuOpen = false }) {
+                    projects.forEach { p ->
+                        DropdownMenuItem(
+                            text = { Text(p.name) },
+                            onClick = {
+                                onSelectProject(p.id)
+                                projectMenuOpen = false
+                            },
+                        )
+                    }
                 }
             }
         }

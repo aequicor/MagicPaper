@@ -57,6 +57,8 @@ import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
+import io.aequicor.magicpaper.plugins.CodingSessionPanel
+import io.aequicor.magicpaper.ui.CodingSessionMode
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
@@ -65,7 +67,11 @@ import io.aequicor.magicpaper.ui.theme.MagicFonts
 
 /** Экран «Проекты и код»: в проекте несколько кодинг-сессий, у каждой — кружок активности. */
 @Composable
-fun CodingScreen(vm: MagicPaperViewModel, ui: CodingUi) {
+fun CodingScreen(
+    vm: MagicPaperViewModel,
+    ui: CodingUi,
+    panelPlugin: CodingSessionPanel? = null,
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         RuntimeBar(ui.runtime, ui.installing, vm::prepareCodingRuntime, vm::uninstallCodingRuntime)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -84,31 +90,104 @@ fun CodingScreen(vm: MagicPaperViewModel, ui: CodingUi) {
                 if (project == null || sessions.isEmpty()) {
                     ProjectsEmptyHint()
                 } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        val active = sessions.firstOrNull { it.session.id == ui.currentSessionId }
-                            ?: sessions.first()
-                        SessionTabs(
-                            sessions = sessions,
-                            currentId = active.session.id,
-                            onSelect = vm::selectCodingSession,
-                            onAdd = vm::addCodingSession,
-                            onDelete = vm::deleteCodingSession,
-                            onAbort = vm::abortCodingSession,
-                            onReply = { id, text -> vm.sendCodingPromptTo(id, text) },
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        CodingChat(
-                            project = project,
-                            session = active,
-                            busy = active.running,
-                            engineReady = ui.runtime.ready,
-                            onSend = { text -> vm.sendCodingPromptTo(active.session.id, text) },
-                            onAbort = { vm.abortCodingSession(active.session.id) },
-                        )
-                    }
+                    SessionArea(
+                        vm = vm,
+                        ui = ui,
+                        project = project,
+                        sessions = sessions,
+                        panelPlugin = panelPlugin,
+                    )
                 }
             }
         }
+    }
+}
+
+/** Вкладки сессии: диалог с агентом или панель плагина (режимы кодинг-сессии). */
+@Composable
+private fun SessionArea(
+    vm: MagicPaperViewModel,
+    ui: CodingUi,
+    project: CodingProject,
+    sessions: List<CodingSessionUi>,
+    panelPlugin: CodingSessionPanel?,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (panelPlugin != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SessionTab(
+                    label = "Диалог",
+                    selected = ui.sessionMode == CodingSessionMode.DIALOG,
+                    onClick = { vm.setCodingSessionMode(CodingSessionMode.DIALOG) },
+                )
+                Spacer(Modifier.width(8.dp))
+                SessionTab(
+                    label = "План",
+                    selected = ui.sessionMode == CodingSessionMode.PLUGIN_PANEL,
+                    onClick = { vm.setCodingSessionMode(CodingSessionMode.PLUGIN_PANEL) },
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        if (ui.sessionMode == CodingSessionMode.PLUGIN_PANEL && panelPlugin != null) {
+            panelPlugin.SessionPanel(
+                project,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        } else {
+            val active = sessions.firstOrNull { it.session.id == ui.currentSessionId }
+                ?: sessions.first()
+            SessionTabs(
+                sessions = sessions,
+                currentId = active.session.id,
+                onSelect = vm::selectCodingSession,
+                onAdd = vm::addCodingSession,
+                onDelete = vm::deleteCodingSession,
+                onAbort = vm::abortCodingSession,
+                onReply = { id, text -> vm.sendCodingPromptTo(id, text) },
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            CodingChat(
+                project = project,
+                session = active,
+                busy = active.running,
+                engineReady = ui.runtime.ready,
+                onSend = { text -> vm.sendCodingPromptTo(active.session.id, text) },
+                onAbort = { vm.abortCodingSession(active.session.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SessionTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.small)
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
     }
 }
 

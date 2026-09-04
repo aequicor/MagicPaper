@@ -107,7 +107,7 @@ internal fun buildDependencies(
         store = planningStore,
         composer = PlanComposer(gateway, json),
         researcher = DossierResearcher(gateway, search, json),
-        runner = PlanRunner(codingRuntime ?: NoopCodingRuntime, LlmMilestoneVerifier(gateway, json)),
+        runner = PlanRunner(codingRuntime ?: NoopCodingRuntime, LlmMilestoneVerifier(gateway, json), codingProjects),
         runtime = codingRuntime ?: NoopCodingRuntime,
         projectsRepo = codingProjects,
         profileRepo = profileRepo,

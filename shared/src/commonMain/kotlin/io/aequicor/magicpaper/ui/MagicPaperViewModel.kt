@@ -101,6 +101,7 @@ class MagicPaperViewModel(
                 storageInfo = store.description,
                 showWelcome = !migratedSettings.onboardingDone,
                 llmProfiles = profiles,
+                codingPanelPlugin = resolveCodingPanel(states),
                 coding = it.coding.copy(
                     projects = projects,
                     current = projects.firstOrNull(),
@@ -486,9 +487,24 @@ class MagicPaperViewModel(
             val existing = current[id]
             current[id] = existing?.copy(enabled = enabled) ?: PluginState(id, enabled)
             settingsRepo.savePluginStates(current.values.toList())
-            _state.update { it.copy(pluginStates = current) }
+            _state.update { it.copy(pluginStates = current, codingPanelPlugin = resolveCodingPanel(current)) }
         }
     }
+
+    /** Первый включённый плагин с панелью кодинг-сессии (расширяемость без знания о нём). */
+    private fun resolveCodingPanel(states: Map<String, PluginState>): io.aequicor.magicpaper.plugins.CodingSessionPanel? {
+        return registry.all()
+            .filterIsInstance<io.aequicor.magicpaper.plugins.CodingSessionPanel>()
+            .firstOrNull { panel ->
+                // Нет записи состояния = включён (как на экране плагинов).
+                val id = (panel as io.aequicor.magicpaper.plugins.MagicPlugin).id
+                states[id]?.enabled ?: true
+            }
+    }
+
+    /** Переключение вкладки кодинг-сессии: диалог с агентом или панель плагина. */
+    fun setCodingSessionMode(mode: io.aequicor.magicpaper.ui.CodingSessionMode) =
+        _state.update { it.copy(coding = it.coding.copy(sessionMode = mode)) }
 
     // ---- Документация --------------------------------------------------------
 

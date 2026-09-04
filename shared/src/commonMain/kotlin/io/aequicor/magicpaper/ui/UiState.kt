@@ -50,6 +50,8 @@ data class CodingUi(
     val projectStatuses: Map<String, CodingSessionStatus> = emptyMap(),
     val runtime: RuntimeStatus = RuntimeStatus(RuntimePhase.UNKNOWN),
     val installing: Boolean = false,
+    /** Активная вкладка проекта: диалог с агентом или панель плагина. */
+    val sessionMode: CodingSessionMode = CodingSessionMode.DIALOG,
 ) {
     val currentSession: CodingSessionUi?
         get() = sessions.firstOrNull { it.session.id == currentSessionId } ?: sessions.firstOrNull()
@@ -62,6 +64,15 @@ data class CodingUi(
             projectStatuses[projectId] ?: fallback
         }
     }
+}
+
+/** Вкладки кодинг-сессии. */
+enum class CodingSessionMode {
+    /** Диалог с агентом (журнал проекта). */
+    DIALOG,
+
+    /** Панель плагина-носителя панели сессии (например, «Планирование»). */
+    PLUGIN_PANEL,
 }
 
 /** Единое состояние экрана. Неизменяемый снапшот для Compose. */
@@ -83,6 +94,8 @@ data class UiState(
     val coding: CodingUi = CodingUi(),
     /** Все профили подключения ИИ-провайдеров. */
     val llmProfiles: List<LlmProfile> = emptyList(),
+    /** Плагин, поставляющий панель в кодинг-сессию (если включён). */
+    val codingPanelPlugin: io.aequicor.magicpaper.plugins.CodingSessionPanel? = null,
     /** Открыт ли переключатель модели в чате. */
     val modelSwitcherOpen: Boolean = false,
     /** Профиль, открытый в редакторе настроек (для перехода из чата). */
