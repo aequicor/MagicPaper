@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class PiEventParserTest {
 
@@ -60,10 +61,53 @@ class PiEventParserTest {
         assertIs<CodingEvent.ToolStarted>(start)
         assertEquals("read", start.tool)
         assertEquals("src/main.kt", start.summary)
+        assertEquals("1", start.callId)
+        assertEquals(false, start.isExec)
 
-        val end = PiEventParser.parse("""{"type":"tool_execution_end","toolCallId":"1","toolName":"read","result":{},"isError":true}""")
+        val bash = PiEventParser.parse(
+            """{"type":"tool_execution_start","toolCallId":"2","toolName":"bash","args":{"command":"ls -la"}}"""
+        )
+        assertIs<CodingEvent.ToolStarted>(bash)
+        assertEquals(true, bash.isExec)
+        assertEquals("ls -la", bash.summary)
+
+        val end = PiEventParser.parse(
+            """{"type":"tool_execution_end","toolCallId":"1","toolName":"read","result":{"content":[{"type":"text","text":"file body"}]},"isError":true}"""
+        )
         assertIs<CodingEvent.ToolFinished>(end)
         assertEquals(true, end.isError)
+        assertEquals("1", end.callId)
+        assertEquals("file body", end.resultPreview)
+    }
+
+    @Test
+    fun toolUpdateGivesCumulativePreview() {
+        val update = PiEventParser.parse(
+            """{"type":"tool_execution_update","toolCallId":"9","toolName":"bash","args":{},"partialResult":{"content":[{"type":"text","text":"line1\nline2"}]}}"""
+        )
+        assertIs<CodingEvent.ToolProgress>(update)
+        assertEquals("9", update.callId)
+        assertEquals("line1\nline2", update.resultPreview)
+    }
+
+    @Test
+    fun longResultPreviewIsTruncated() {
+        val big = "x".repeat(3000)
+        val end = PiEventParser.parse(
+            """{"type":"tool_execution_end","toolCallId":"1","toolName":"read","result":{"content":[{"type":"text","text":"$big"}]},"isError":false}"""
+        )
+        assertIs<CodingEvent.ToolFinished>(end)
+        assertTrue(end.resultPreview.length <= 2002) // 2000 + многоточие
+        assertTrue(end.resultPreview.endsWith("…"))
+    }
+
+    @Test
+    fun nonObjectResultFallsBackToJson() {
+        val end = PiEventParser.parse(
+            """{"type":"tool_execution_end","toolCallId":"1","toolName":"edit","result":{"filePath":"a.txt","replacements":2},"isError":false}"""
+        )
+        assertIs<CodingEvent.ToolFinished>(end)
+        assertTrue(end.resultPreview.contains("replacements"))
     }
 
     @Test

@@ -23,7 +23,10 @@ object NoopCodingRuntime : CodingRuntime {
     override suspend fun status(): RuntimeStatus = status
     override fun ensureReady(): Flow<RuntimeStatus> = flowOf(status)
     override fun run(project: CodingProject, prompt: String, profile: LlmProfile?): Flow<CodingEvent> =
-        flowOf(CodingEvent.Failed("Кодинг-агент не поддерживается на этой платформе."))
+        flowOf(
+            CodingEvent.Failed("Кодинг-агент не поддерживается на этой платформе."),
+            CodingEvent.Finished,
+        )
 
     override suspend fun uninstall() = Unit
 

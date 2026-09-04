@@ -2,6 +2,9 @@ package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.CodingEvent
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -28,13 +31,25 @@ object PiEventParser {
             "session" -> CodingEvent.SessionStarted(sessionId = obj.primitive("id").orEmpty())
             "message_update" -> parseDelta(obj)
             "message_end" -> parseMessageEnd(obj)
-            "tool_execution_start" -> CodingEvent.ToolStarted(
+            "tool_execution_start" -> {
+                val args = obj["args"] as? JsonObject
+                CodingEvent.ToolStarted(
+                    tool = obj.primitive("toolName") ?: "tool",
+                    summary = toolSummary(args),
+                    callId = obj.primitive("toolCallId").orEmpty(),
+                    isExec = (obj.primitive("toolName") ?: "").lowercase() in EXEC_TOOLS,
+                )
+            }
+            "tool_execution_update" -> CodingEvent.ToolProgress(
                 tool = obj.primitive("toolName") ?: "tool",
-                summary = toolSummary(obj["args"] as? JsonObject),
+                callId = obj.primitive("toolCallId").orEmpty(),
+                resultPreview = resultPreview(obj["partialResult"]),
             )
             "tool_execution_end" -> CodingEvent.ToolFinished(
                 tool = obj.primitive("toolName") ?: "tool",
                 isError = (obj["isError"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                callId = obj.primitive("toolCallId").orEmpty(),
+                resultPreview = resultPreview(obj["result"]),
             )
             else -> null
         }
@@ -73,8 +88,43 @@ object PiEventParser {
             ?: ""
     }
 
+    /**
+     * Начало вывода инструмента для показа в ленте: у пи результат — объект с
+     * content-блоками (текст) либо массив строк; всё остальное — краткая JSON-сводка.
+     */
+    private fun resultPreview(element: JsonElement?): String {
+        if (element == null || element is JsonNull) return ""
+        val text = when (element) {
+            is JsonObject -> blocksText(element["content"])
+                ?: element.primitive("text")
+                ?: element.primitive("errorMessage")
+            is JsonArray -> blocksText(element)
+            is JsonPrimitive -> if (element.isString) element.contentOrNull else null
+            else -> null
+        }
+            ?: runCatching { element.toString() }.getOrDefault("")
+        return text.trim().take(MAX_PREVIEW).let {
+            if (text.trim().length > MAX_PREVIEW) "$it…" else it
+        }
+    }
+
+    /** Склеивает text-блоки content[] (тот же формат, что у сообщения ассистента). */
+    private fun blocksText(element: JsonElement?): String? {
+        val array = element as? JsonArray ?: return null
+        val parts = array.mapNotNull { block ->
+            val obj = runCatching { block.jsonObject }.getOrNull()
+            if (obj != null && obj.type() == "text") obj.primitive("text") else null
+        }
+        val joined = parts.joinToString("\n")
+        return joined.ifBlank { null }
+    }
+
     private fun JsonObject.type(): String? = primitive("type")
 
     private fun JsonObject.primitive(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull
+
+    private val EXEC_TOOLS: Set<String> = setOf("bash", "exec", "shell", "run")
+
+    private const val MAX_PREVIEW = 2000
 }

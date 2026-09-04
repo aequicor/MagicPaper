@@ -8,9 +8,15 @@ import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
+import java.io.BufferedReader
 import java.io.File
+import java.io.IOException
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.charset.CharsetDecoder
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
@@ -54,7 +60,11 @@ class PiCodingRuntime(
     /** Текущий процесс агента — для прерывания извне. */
     private val runningProcess = AtomicReference<Process?>(null)
 
+    /** Флаг запроса прерывания: ошибка чтения после abort — не сбои движка. */
+    private val abortRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+
     override fun abort() {
+        abortRequested.set(true)
         runningProcess.getAndSet(null)?.let { process ->
             process.destroy()
             if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
@@ -160,11 +170,23 @@ class PiCodingRuntime(
         // из процесса пайп stdin без данных повесил бы агента; закрываем сразу.
         runCatching { process.outputStream.close() }
         runningProcess.set(process)
+        abortRequested.set(false)
 
         var sawAnswer = false
+        var streamBroken: String? = null
         try {
-            process.inputStream.bufferedReader().useLines { lines ->
-                for (line in lines) {
+            // Читаем строго UTF-8 с заменой битых байт: на Windows консольные
+            // кодовые страницы (cp866/cp1251) иначе роняют поток MalformedInputException.
+            readUtf8Tolerant(process.inputStream).use { reader ->
+                while (true) {
+                    val line = try {
+                        reader.readLine()
+                    } catch (e: IOException) {
+                        // На Windows destroy()/закрытие процесса активное чтение
+                        // прерывает IOException («Read error») вместо чистого EOF.
+                        streamBroken = e.message
+                        break
+                    } ?: break
                     val event = PiEventParser.parse(line) ?: continue
                     if (event is CodingEvent.FinalText || event is CodingEvent.Failed) sawAnswer = true
                     emit(event)
@@ -172,9 +194,23 @@ class PiCodingRuntime(
             }
             val exit = process.waitFor()
             if (!sawAnswer) {
-                val err = runCatching { stderrFile.readText() }.getOrDefault("").takeLast(600).trim()
-                emit(CodingEvent.Failed(err.ifEmpty { "Агент завершился без ответа (код $exit)." }))
+                val err = tailOfFile(stderrFile)
+                emit(
+                    CodingEvent.Failed(
+                        when {
+                            abortRequested.get() -> "Прогон прерван по команде пользователя."
+                            err.isNotBlank() -> err
+                            exit != 0 -> "Агент завершился с кодом $exit."
+                            streamBroken != null -> "Поток агента прервался: ${streamBroken}"
+                            else -> "Агент завершился без ответа."
+                        }
+                    )
+                )
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emit(CodingEvent.Failed("Сбой запуска агента: ${e.message ?: e.javaClass.simpleName}"))
         } finally {
             stderrFile.delete()
             runningProcess.compareAndSet(process, null)
@@ -447,13 +483,39 @@ class PiCodingRuntime(
 
     private fun execLine(command: List<String>, timeoutSeconds: Long = 20): String {
         val process = ProcessBuilder(command).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
+        // Закрытие stdin: часть инструментов ждёт EOF и иначе висит до таймаута.
+        runCatching { process.outputStream.close() }
+        val output = readUtf8Tolerant(process.inputStream).use { it.readText() }
         if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly()
             error("команда зависла: ${command.joinToString(" ")}")
         }
         return output.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
     }
+
+    /**
+     * Буферизованный читатель со строгой кодировкой UTF-8: битые последовательности
+     * (на Windows stdout может быть в кодовой странице консоли) заменяются, а не
+     * роняют чтение MalformedInputException.
+     */
+    private fun readUtf8Tolerant(source: java.io.InputStream): BufferedReader =
+        BufferedReader(InputStreamReader(source, utf8Lenient()))
+
+    private fun utf8Lenient(): CharsetDecoder = StandardCharsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPLACE)
+        .onUnmappableCharacter(CodingErrorAction.REPLACE)
+        .replaceWith("\uFFFD")
+
+    /** Хвост файла ошибок (после завершения процесса) — устойчиво к блокировкам Windows. */
+    private fun tailOfFile(file: File, limit: Int = 800): String = runCatching {
+        if (!file.isFile) return@runCatching ""
+        // Читаем байты и декодируем UTF-8 вручную с заменой: на Windows файл
+        // может содержать мусор чужой кодовой страницы, readText() на этом падает.
+        String(file.readBytes(), StandardCharsets.UTF_8)
+            .filter { it.code >= 32 || it == '\n' }
+            .takeLast(limit)
+            .trim()
+    }.getOrElse { "" }
 
     private fun runCommand(
         command: List<String>,
@@ -466,7 +528,8 @@ class PiCodingRuntime(
             .redirectErrorStream(true)
             .apply { environment().putAll(extraEnv) }
             .start()
-        val output = process.inputStream.bufferedReader().readText()
+        runCatching { process.outputStream.close() }
+        val output = readUtf8Tolerant(process.inputStream).use { it.readText() }
         val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
