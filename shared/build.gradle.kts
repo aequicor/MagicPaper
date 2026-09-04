@@ -63,16 +63,18 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.kotlinx.coroutinesTest)
         }
         jvmMain.dependencies {
             implementation(libs.ktor.clientCio)
         }
-        jsMain.dependencies {
-            implementation(libs.wrappers.browser)
+        webMain.dependencies {
+            implementation(libs.kotlinx.browser)
+            implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.ktor.clientJs)
         }
-        wasmJsMain.dependencies {
-            implementation(libs.ktor.clientJs)
+        jsMain.dependencies {
+            implementation(libs.wrappers.browser)
         }
     }
 }

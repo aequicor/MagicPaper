@@ -1,31 +1,59 @@
-This is a Kotlin Multiplatform project targeting Android, Web, Desktop (JVM).
+# MagicPaper — «Шалость удалась» ✦
 
-* [/shared](./shared/src) is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-  - [commonMain](./shared/src/commonMain/kotlin) is for code that’s common for all targets.
-  - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-    For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-    the [iosMain](./shared/src/iosMain/kotlin) folder would be the right place for such calls.
-    Similarly, if you want to edit the Desktop (JVM) specific part, the [jvmMain](./shared/src/jvmMain/kotlin)
-    folder is the appropriate location.
+Минималистичный ИИ-агент в стилистике магической бумаги (вселенная Гарри Поттера):
+мягкие пастельные тона, пергамент и чернила. Один экран, один диалог, одна цель — помочь.
 
-### Running the apps
+## Возможности
 
-Use the run configurations provided by the run widget in your IDE's toolbar. You can also use these commands and options:
+- **ИИ-чат**: любой OpenAI-совместимый бэкенд (локальный сервер, облачный провайдер).
+  Без настройки агент честно сообщает, что источник не подключён.
+- **Встроенный поиск**: движки на выбор — Wikipedia (без ключей), Querit.ai,
+  Google Programmable Search, режим AUTO (настроенный ключевой движок, иначе Wikipedia).
+- **Встроенная документация**: справочник по приложению живёт в коде, доступен офлайн;
+  агент использует его для ответов на вопросы о программе.
+- **Плагины**: интерфейс расширяется плагинами (SPI `MagicPlugin` + реестр).
+  В комплекте: Заметки, Фокус-таймер, Счёты. Включение/выключение на экране плагинов.
+- **Безопасность и изоляция**: данные живут в папке пользователя (десктоп) или
+  localStorage (браузер), приложение не требует прав администратора,
+  при удалении программы удаляются и все данные.
+- **Переносимость профиля**: экспорт/импорт файла профиля — настройки, состояние
+  плагинов и вся история чатов.
 
-- Android app: `./gradlew :androidApp:assembleDebug`
-- Desktop app:
-  - Hot reload: `./gradlew :desktopApp:hotRun --auto`
-  - Standard run: `./gradlew :desktopApp:run`
-- Web app:
-  - Wasm target (faster, modern browsers): `./gradlew :webApp:wasmJsBrowserDevelopmentRun`
-  - JS target (slower, supports older browsers): `./gradlew :webApp:jsBrowserDevelopmentRun`
+## Платформы
 
----
+- Десктоп (Windows / macOS / Linux): `:desktopApp`
+- Веб (браузер): `:webApp` — Kotlin/JS и Kotlin/Wasm
+- Android: `:androidApp`
 
-Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html),
-[Compose Multiplatform](https://kotlinlang.org/compose-multiplatform/),
-[Kotlin/Wasm](https://kotl.in/wasm/)…
+## Запуск
 
-We would appreciate your feedback on Compose/Web and Kotlin/Wasm in the public Slack channel [#compose-web](https://slack-chats.kotlinlang.org/c/compose-web).
-If you face any issues, please report them on [YouTrack](https://youtrack.jetbrains.com/newIssue?project=CMP).
+```bash
+./gradlew :desktopApp:run                      # десктоп
+./gradlew :webApp:wasmJsBrowserDevelopmentRun  # веб (wasm)
+./gradlew :webApp:jsBrowserDevelopmentRun      # веб (js)
+./gradlew :androidApp:assembleDebug            # android
+```
+
+Тесты: `./gradlew :shared:jvmTest`
+
+## Архитектура (Clean + SOLID)
+
+```
+shared/
+  domain/    — ядро: модели, порты (интерфейсы), оркестратор агента. Ноль зависимостей от фреймворков.
+  data/      — адаптеры портов: репозитории поверх хранилища, поисковые движки,
+               LLM-шлюз (OpenAI-совместимый), встроенная документация.
+  plugins/   — SPI плагинов и реестр; встроенные плагины.
+  ui/        — Compose Multiplatform: тема «магической бумаги», экраны, ViewModel.
+  di/        — корень композиции (ручная сборка графа — без тяжёлых фреймворков).
+  jvmMain/webMain/jsMain/wasmJsMain/androidMain — платформенные актуалы.
+```
+
+Принципы: домен не знает о Ktor/Compose/файлах (DIP), экраны получают состояние
+неизменяемым снапшотом, плагины подключаются без изменения ядра (OCP).
+
+### Добавление плагина
+
+1. Реализуйте `MagicPlugin` (id, title, description, icon, `Content()`).
+2. Зарегистрируйте в `di/Dependencies.kt` (`registry.register(...)`).
+Всё остальное (экран плагинов, переключатели, панели) работает автоматически.
