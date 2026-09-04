@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -20,7 +21,7 @@ class GoogleGateway(
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val encodedModel = profile.modelId.replace(" ", "")
         val url = profile.baseUrl.trimEnd('/') + "/models/$encodedModel:generateContent"
-        val payload = LlmPayloads.google(profile, messages)
+        val payload = LlmPayloads.google(profile, messages, ModelDefaults.supportsEffort(profile))
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("x-goog-api-key", profile.apiKey)
         }

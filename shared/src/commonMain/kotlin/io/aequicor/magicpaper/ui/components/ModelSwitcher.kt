@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import io.aequicor.magicpaper.domain.EffortLevel
 import io.aequicor.magicpaper.domain.LlmProfile
-import io.aequicor.magicpaper.domain.ProviderCatalog
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.glyph
 import io.aequicor.magicpaper.domain.title
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
@@ -118,7 +118,7 @@ fun ModelSwitcherContent(
             Spacer(Modifier.height(6.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(8.dp))
-            val effortSupported = ProviderCatalog.supportsEffort(resolved)
+            val effortSupported = ModelDefaults.supportsEffort(resolved)
             Text(
                 if (effortSupported) "Усилие модели" else "Усилие (температурный режим — модель без нативного усилия)",
                 style = MaterialTheme.typography.labelLarge,

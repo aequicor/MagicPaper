@@ -108,10 +108,6 @@ object ProviderCatalog {
             .flatMap { it.models.asSequence() }
             .firstOrNull { it.id == modelId }
 
-    /** Есть ли у модели профиля нативное управление усилием. */
-    fun supportsEffort(profile: LlmProfile): Boolean =
-        modelInfo(profile.provider, profile.modelId)?.supportsEffort == true
-
     /** Все описания провайдеров данного типа. */
     fun specs(type: ProviderType): List<ProviderSpec> = all.filter { it.type == type }
 }

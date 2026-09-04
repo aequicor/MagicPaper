@@ -3,9 +3,13 @@ package io.aequicor.magicpaper.di
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
 import io.aequicor.magicpaper.data.llm.AnthropicGateway
+import io.aequicor.magicpaper.data.llm.AnthropicModelDirectory
 import io.aequicor.magicpaper.data.llm.GoogleGateway
+import io.aequicor.magicpaper.data.llm.GoogleModelDirectory
 import io.aequicor.magicpaper.data.llm.OpenAiCompatibleGateway
+import io.aequicor.magicpaper.data.llm.OpenAiModelDirectory
 import io.aequicor.magicpaper.data.llm.RoutingLlmGateway
+import io.aequicor.magicpaper.data.llm.RoutingModelDirectory
 import io.aequicor.magicpaper.data.search.CompositeSearchEngine
 import io.aequicor.magicpaper.data.search.GoogleSearchEngine
 import io.aequicor.magicpaper.data.search.QueritSearchEngine
@@ -75,6 +79,14 @@ internal fun buildDependencies(
             ProviderType.GOOGLE to GoogleGateway(client, json),
         )
     )
+    // Каталог моделей у провайдеров — тем же роутером.
+    val modelDirectory = RoutingModelDirectory(
+        mapOf(
+            ProviderType.OPENAI_COMPATIBLE to OpenAiModelDirectory(client, json),
+            ProviderType.ANTHROPIC to AnthropicModelDirectory(client, json),
+            ProviderType.GOOGLE to GoogleModelDirectory(client, json),
+        )
+    )
     // Система навыков: библиотека (порт агента) и каталог (лавка) — одно хранилище,
     // за которым наблюдают оба плагина.
     val skillStore = SkillStore(JsonSkillRepository(store, json))
@@ -100,6 +112,8 @@ internal fun buildDependencies(
         codingRuntime = codingRuntime,
         codingProjects = codingProjects,
         dirPicker = dirPicker,
+        modelDirectory = modelDirectory,
+        gateway = gateway,
     )
     return MagicPaperDependencies(viewModel)
 }

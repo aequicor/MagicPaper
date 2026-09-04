@@ -3,7 +3,7 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
-import io.aequicor.magicpaper.domain.ProviderCatalog
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -52,7 +52,7 @@ class OpenAiCompatibleGateway(
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val url = profile.baseUrl.trimEnd('/') + "/chat/completions"
-        val payload = LlmPayloads.openAi(profile, messages, ProviderCatalog.supportsEffort(profile))
+        val payload = LlmPayloads.openAi(profile, messages, ModelDefaults.supportsEffort(profile))
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("Authorization", "Bearer " + profile.apiKey)
         }

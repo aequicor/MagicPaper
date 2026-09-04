@@ -21,16 +21,21 @@ class ProviderCatalogTest {
         val info = ProviderCatalog.modelInfo(ProviderType.OPENAI_COMPATIBLE, "gpt-5-mini")
         assertNotNull(info)
         assertTrue(info.supportsEffort)
-        assertTrue(ProviderCatalog.supportsEffort(
-            LlmProfile(id = "p", name = "x", provider = ProviderType.OPENAI_COMPATIBLE, baseUrl = "http://x/v1", modelId = "gpt-5-mini"),
-        ))
+        // Модель из кураторского каталога — поддерживает усилие по каталогу.
+        assertTrue(
+            ModelDefaults.supportsEffort(
+                LlmProfile(id = "p", name = "x", provider = ProviderType.OPENAI_COMPATIBLE, baseUrl = "http://x/v1", modelId = "gpt-5-mini"),
+            ),
+        )
     }
 
     @Test
     fun unknownModelHasNoEffortSupport() {
-        assertTrue(!ProviderCatalog.supportsEffort(
-            LlmProfile(id = "p", name = "x", provider = ProviderType.OPENAI_COMPATIBLE, baseUrl = "http://x/v1", modelId = "своя-модель"),
-        ))
+        assertTrue(
+            !ModelDefaults.supportsEffort(
+                LlmProfile(id = "p", name = "x", provider = ProviderType.OPENAI_COMPATIBLE, baseUrl = "http://x/v1", modelId = "своя-модель"),
+            ),
+        )
     }
 
     @Test

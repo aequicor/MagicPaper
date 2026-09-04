@@ -15,9 +15,12 @@ import io.aequicor.magicpaper.domain.CodingRunRecorder
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.DocRepository
 import io.aequicor.magicpaper.domain.EffortLevel
+import io.aequicor.magicpaper.domain.LlmGateway
+import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.LlmProfileRepository
 import io.aequicor.magicpaper.domain.MagicAgent
+import io.aequicor.magicpaper.domain.ModelDirectory
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.ProfileBundle
 import io.aequicor.magicpaper.domain.ProfileBridge
@@ -56,6 +59,8 @@ class MagicPaperViewModel(
     private val codingRuntime: CodingRuntime? = null,
     private val codingProjects: CodingProjectRepository? = null,
     private val dirPicker: ProjectDirPicker? = null,
+    private val modelDirectory: ModelDirectory? = null,
+    private val gateway: LlmGateway? = null,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -349,11 +354,81 @@ class MagicPaperViewModel(
 
     /** Перейти к редактированию профиля на экране настроек. */
     fun editLlmProfile(id: String) {
-        _state.update { it.copy(screen = Screen.SETTINGS, editingLlmProfileId = id, modelSwitcherOpen = false) }
+        _state.update {
+            it.copy(
+                screen = Screen.SETTINGS,
+                editingLlmProfileId = id,
+                modelSwitcherOpen = false,
+                editorModels = emptyList(),
+                editorModelsError = null,
+                editorModelsLoading = false,
+            )
+        }
     }
 
     /** Закрыть редактор профиля без сохранения. */
-    fun closeLlmProfileEditor() = _state.update { it.copy(editingLlmProfileId = null) }
+    fun closeLlmProfileEditor() = _state.update {
+        it.copy(editingLlmProfileId = null, editorModels = emptyList(), editorModelsError = null)
+    }
+
+    /** Загрузить список моделей, доступных у провайдера черновика профиля. */
+    fun fetchModels(draft: LlmProfile) {
+        val directory = modelDirectory
+        if (directory == null) {
+            _state.update { it.copy(editorModelsError = "Каталог моделей недоступен на этой платформе.") }
+            return
+        }
+        if (!draft.configured) {
+            _state.update { it.copy(editorModelsError = "Укажите Base URL и имя модели, затем повторите.") }
+            return
+        }
+        if (_state.value.editorModelsLoading) return
+        _state.update { it.copy(editorModelsLoading = true, editorModelsError = null) }
+        scope.launch {
+            val result = runCatching { directory.models(draft) }
+            _state.update {
+                it.copy(
+                    editorModelsLoading = false,
+                    editorModels = result.getOrDefault(emptyList()),
+                    editorModelsError = result.exceptionOrNull()?.let { e ->
+                        "Не удалось загрузить список моделей: ${e.message}"
+                    },
+                )
+            }
+        }
+    }
+
+    /** Проверка подключения: тестовый запрос к модели профиля. */
+    fun testConnection(draft: LlmProfile) {
+        val testGateway = gateway
+        if (testGateway == null) {
+            _state.update { it.copy(editorModelsError = "Проверка недоступна на этой платформе.") }
+            return
+        }
+        if (!draft.configured) {
+            _state.update { it.copy(editorModelsError = "Укажите Base URL и имя модели, затем повторите.") }
+            return
+        }
+        if (_state.value.connectionTesting) return
+        _state.update { it.copy(connectionTesting = true, editorModelsError = null) }
+        scope.launch {
+            val result = runCatching {
+                testGateway.complete(draft, listOf(LlmMessage("user", "Скажи одно слово: ✦")))
+            }
+            _state.update {
+                it.copy(
+                    connectionTesting = false,
+                    editorModelsError = result.exceptionOrNull()?.let { e ->
+                        "Проверка не удалась: ${e.message}"
+                    },
+                    notice = result.fold(
+                        onSuccess = { reply -> "Подключение работает ✓ ${reply.take(60)}" },
+                        onFailure = { null },
+                    ),
+                )
+            }
+        }
+    }
 
     // ---- Плагины ------------------------------------------------------------
 

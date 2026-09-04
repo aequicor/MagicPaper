@@ -1,10 +1,9 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.domain.AdvancedSettings
 import io.aequicor.magicpaper.domain.EffortLevel
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
-import kotlinx.serialization.json.JsonArray
+import kotlin.math.min
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -14,9 +13,12 @@ import kotlinx.serialization.json.put
 /**
  * Чистые сборщики тел запросов к провайдерам (без сети) — юнит-тестируются без моков.
  * Правила:
- *  - пустые значения [AdvancedSettings] не попадают в запрос («по умолчанию провайдера»);
- *  - если модель поддерживает нативное усилие — отправляем его родное поле;
- *    иначе усилие деградирует до температурного пресета;
+ *  - пустые значения [io.aequicor.magicpaper.domain.AdvancedSettings] не попадают
+ *    в запрос («по умолчанию провайдера»);
+ *  - усилие применяется только к моделям, которые его поддерживают
+ *    (флаг [supportsEffort] в сигнатуре): нативные поля —
+ *    reasoning_effort (OpenAI), thinking (Anthropic), thinkingConfig (Google);
+ *    для остальных — температурный пресет;
  *  - системные сообщения каждый формат несёт по-своему:
  *    OpenAI — ролью «system», Anthropic — полем «system», Google — «systemInstruction».
  */
@@ -64,12 +66,19 @@ object LlmPayloads {
         EffortLevel.HIGH -> 16000
     }
 
-    fun anthropic(profile: LlmProfile, messages: List<LlmMessage>): JsonObject {
+    fun anthropic(profile: LlmProfile, messages: List<LlmMessage>, supportsEffort: Boolean = false): JsonObject {
         val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
+        val budget = anthropicThinkingBudget(profile.effort)
+        // С включённым мышлением Anthropic требует max_tokens строго выше бюджета —
+        // при необходимости поднимаем потолок.
+        val maxTokens = if (supportsEffort) {
+            maxOf(profile.advanced.maxTokens ?: ANTHROPIC_DEFAULT_MAX_TOKENS, budget + 1024)
+        } else {
+            profile.advanced.maxTokens ?: ANTHROPIC_DEFAULT_MAX_TOKENS
+        }
         return buildJsonObject {
             put("model", profile.modelId)
-            // У Anthropic это поле обязательно.
-            put("max_tokens", profile.advanced.maxTokens ?: 4096)
+            put("max_tokens", maxTokens)
             if (system.isNotBlank()) put("system", system)
             put("messages", buildJsonArray {
                 messages.filter { it.role != "system" }.forEach { m ->
@@ -79,12 +88,16 @@ object LlmPayloads {
                     })
                 }
             })
-            // Расширенное мышление: с включённым thinking Anthropic требует
-            // температуру 1, поэтому свою температуру не отправляем вовсе.
-            put("thinking", buildJsonObject {
-                put("type", "enabled")
-                put("budget_tokens", anthropicThinkingBudget(profile.effort))
-            })
+            if (supportsEffort) {
+                // С включённым thinking Anthropic требует температуру 1,
+                // поэтому свою температуру не отправляем вовсе.
+                put("thinking", buildJsonObject {
+                    put("type", "enabled")
+                    put("budget_tokens", budget)
+                })
+            } else {
+                profile.advanced.temperature?.let { put("temperature", it) }
+            }
             profile.advanced.topP?.let { put("top_p", it) }
         }
     }
@@ -98,7 +111,7 @@ object LlmPayloads {
         EffortLevel.HIGH -> 16000
     }
 
-    fun google(profile: LlmProfile, messages: List<LlmMessage>): JsonObject {
+    fun google(profile: LlmProfile, messages: List<LlmMessage>, supportsEffort: Boolean = false): JsonObject {
         val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
         return buildJsonObject {
             if (system.isNotBlank()) {
@@ -119,10 +132,15 @@ object LlmPayloads {
                 put("temperature", a.temperature ?: temperatureForEffort(profile.effort))
                 a.maxTokens?.let { put("maxOutputTokens", it) }
                 a.topP?.let { put("topP", it) }
-                put("thinkingConfig", buildJsonObject {
-                    put("thinkingBudget", googleThinkingBudget(profile.effort))
-                })
+                if (supportsEffort) {
+                    // Бюджет мышления не должен превышать потолок вывода.
+                    val budget = googleThinkingBudget(profile.effort)
+                    val capped = a.maxTokens?.let { min(budget, it - 1).coerceAtLeast(0) } ?: budget
+                    put("thinkingConfig", buildJsonObject { put("thinkingBudget", capped) })
+                }
             })
         }
     }
+
+    private const val ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
 }

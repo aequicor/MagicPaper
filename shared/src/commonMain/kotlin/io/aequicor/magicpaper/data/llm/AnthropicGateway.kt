@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -19,7 +20,7 @@ class AnthropicGateway(
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val url = profile.baseUrl.trimEnd('/') + "/v1/messages"
-        val payload = LlmPayloads.anthropic(profile, messages)
+        val payload = LlmPayloads.anthropic(profile, messages, ModelDefaults.supportsEffort(profile))
         val headers = buildMap {
             put("x-api-key", profile.apiKey)
             put("anthropic-version", API_VERSION)

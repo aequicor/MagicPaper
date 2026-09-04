@@ -29,8 +29,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AdvancedSettings
 import io.aequicor.magicpaper.domain.AppSettings
+import io.aequicor.magicpaper.domain.DiscoveredModel
 import io.aequicor.magicpaper.domain.EffortLevel
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderCatalog
 import io.aequicor.magicpaper.domain.ProviderSpec
 import io.aequicor.magicpaper.domain.SearchProvider
@@ -51,7 +53,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
     if (editing != null) {
         val profile = state.llmProfiles.firstOrNull { it.id == editing }
             ?: LlmProfile(id = editing, name = "Новый источник", createdAt = Id.now())
-        ProfileEditor(vm, profile)
+        ProfileEditor(vm, profile, state)
         return
     }
 
@@ -188,7 +190,7 @@ private fun ProfileRowEntry(
  * Черновик живёт локально; сохранение — одним действием через [MagicPaperViewModel.saveLlmProfile].
  */
 @Composable
-fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile) {
+fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) {
     var draft by remember(profile.id) { mutableStateOf(profile) }
     // Конкретное каталожное описание: у одного типа может быть несколько записей
     // (например, несколько OpenAI-совместимых провайдеров), поэтому помним по имени.
@@ -268,13 +270,57 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile) {
             }
         }
         Field("Имя модели (или своё)", draft.modelId) { draft = draft.copy(modelId = it) }
-        val effortNative = ProviderCatalog.supportsEffort(draft)
+        val effortNative = ModelDefaults.supportsEffort(draft)
         Text(
             if (effortNative) "Модель поддерживает нативное усилие."
             else "У модели нет нативного усилия — уровень применится температурным режимом.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = { vm.fetchModels(draft) },
+                enabled = !state.editorModelsLoading,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(if (state.editorModelsLoading) "Загружаю…" else "⟳ Запросить список моделей")
+            }
+            TextButton(
+                onClick = { vm.testConnection(draft) },
+                enabled = !state.connectionTesting,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(if (state.connectionTesting) "Проверяю…" else "✓ Проверить подключение")
+            }
+        }
+        state.editorModelsError?.let { error ->
+            Text(
+                error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (state.editorModels.isNotEmpty()) {
+            Text(
+                "Доступно моделей: ${state.editorModels.size}. Тап — выбрать модель и применить её рекомендуемые параметры.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            state.editorModels.forEach { found ->
+                DiscoveredModelRow(
+                    model = found,
+                    selected = found.id == draft.modelId,
+                    onClick = {
+                        val rec = found.recommendation
+                        draft = draft.copy(modelId = found.id, effort = rec.effort, advanced = rec.advanced)
+                        temperature = rec.advanced.temperature?.toString().orEmpty()
+                        maxTokens = rec.advanced.maxTokens?.toString().orEmpty()
+                        topP = rec.advanced.topP?.toString().orEmpty()
+                    },
+                )
+            }
+        }
 
         Spacer(Modifier.height(10.dp))
         Section("Усилие")
@@ -316,6 +362,40 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile) {
                 modifier = Modifier.heightIn(min = 48.dp),
             ) { Text("Отмена") }
         }
+    }
+}
+
+/** Строка найденной у провайдера модели: поддержка усилия и рекомендуемые параметры. */
+@Composable
+private fun DiscoveredModelRow(model: DiscoveredModel, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .heightIn(min = 40.dp)
+            .padding(horizontal = 10.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (selected) "◉" else "○",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(model.id, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+            Text(
+                if (model.supportsEffort) {
+                    "нативное усилие · рекомендуется: ${model.recommendation.effort.title}"
+                } else {
+                    "без нативного усилия · рекомендуется: ${model.recommendation.effort.title} (температура)"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

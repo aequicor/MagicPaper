@@ -4,7 +4,7 @@ import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.LlmProfile
-import io.aequicor.magicpaper.domain.ProviderCatalog
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
@@ -336,7 +336,7 @@ class PiCodingRuntime(
         val key = profile.apiKey.ifBlank { "magicpaper" }
         val model = jsonEscape(profile.modelId)
         val baseUrl = jsonEscape(profile.baseUrl.trimEnd('/'))
-        val supportsEffort = ProviderCatalog.supportsEffort(profile)
+        val supportsEffort = ModelDefaults.supportsEffort(profile)
         File(pihome, "models.json").writeText(
             """
             {"providers":{"$PROVIDER_ID":{
