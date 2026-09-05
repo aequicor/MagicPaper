@@ -25,9 +25,9 @@ class SkillEducator(private val gateway: LlmGateway, private val json: Json = DE
 
     private suspend fun modelDraft(history: List<ChatMessage>, profile: LlmProfile): SkillDraft {
         val messages = buildList {
-            add(LlmMessage("system", PROPOSAL_PROMPT))
+            add(LlmMessage(LlmChatRole.SYSTEM, PROPOSAL_PROMPT))
             history.takeLast(6).forEach { m ->
-                add(LlmMessage(if (m.role == ChatRole.USER) "user" else "assistant", m.text))
+                add(LlmMessage(if (m.role == ChatRole.USER) LlmChatRole.USER else LlmChatRole.ASSISTANT, m.text))
             }
         }
         val raw = gateway.complete(profile, messages)

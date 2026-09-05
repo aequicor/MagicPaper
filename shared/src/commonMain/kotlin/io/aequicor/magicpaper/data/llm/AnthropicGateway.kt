@@ -20,7 +20,7 @@ class AnthropicGateway(
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val url = profile.baseUrl.trimEnd('/') + "/v1/messages"
-        val payload = LlmPayloads.anthropic(profile, messages, ModelDefaults.supportsEffort(profile))
+        val payload = LlmPayloads.anthropic(profile, messages, ModelDefaults.capability(profile))
         val headers = buildMap {
             put("x-api-key", profile.apiKey)
             put("anthropic-version", API_VERSION)

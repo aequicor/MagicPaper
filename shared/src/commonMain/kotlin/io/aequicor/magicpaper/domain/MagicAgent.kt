@@ -91,15 +91,15 @@ class MagicAgent(
         }
         val effectiveSystem = profile.advanced.systemPromptOverride.ifBlank { system }
         val messages = buildList {
-            add(LlmMessage("system", effectiveSystem))
+            add(LlmMessage(LlmChatRole.SYSTEM, effectiveSystem))
             if (skills.isNotEmpty()) {
-                add(LlmMessage("system", skillsContext(skills)))
+                add(LlmMessage(LlmChatRole.SYSTEM, skillsContext(skills)))
             }
-            if (context != null) add(LlmMessage("system", context))
+            if (context != null) add(LlmMessage(LlmChatRole.SYSTEM, context))
             history.takeLast(profile.advanced.contextMessages).forEach { m ->
-                add(LlmMessage(if (m.role == ChatRole.USER) "user" else "assistant", m.text))
+                add(LlmMessage(if (m.role == ChatRole.USER) LlmChatRole.USER else LlmChatRole.ASSISTANT, m.text))
             }
-            add(LlmMessage("user", userText))
+            add(LlmMessage(LlmChatRole.USER, userText))
         }
         return runCatching {
             Answer(gateway.complete(profile, messages), sources)

@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.llm
 
 import com.sun.net.httpserver.HttpServer
+import io.aequicor.magicpaper.domain.LlmChatRole
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
@@ -22,8 +23,8 @@ class GatewayRoutingIntegrationTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val client = HttpClient()
     private val messages = listOf(
-        LlmMessage("system", "ты ассистент"),
-        LlmMessage("user", "привет"),
+        LlmMessage(LlmChatRole.SYSTEM, "ты ассистент"),
+        LlmMessage(LlmChatRole.USER, "привет"),
     )
 
     /** Мок-сервер с тремя эндпоинтами: записывает заголовки запросов для проверки. */

@@ -55,6 +55,7 @@ object ProviderCatalog {
             models = listOf(
                 ModelInfo("gpt-5.2", ReasoningPresets.OPENAI_EFFORT),
                 ModelInfo("gpt-5.2-codex", ReasoningPresets.OPENAI_EFFORT),
+                ModelInfo("gpt-5-mini", ReasoningPresets.OPENAI_EFFORT),
                 ModelInfo("sora-2"),
             ),
         ),
@@ -174,6 +175,13 @@ object ProviderCatalog {
 
     /** Все id моделей из каталога — для фильтра «своя модель» в редакторе профиля. */
     val allModelIds: List<String> = all.flatMap { it.models }.map { it.id }.distinct().sorted()
+
+    /** Описание модели из каталога; null для своих (вне каталога) моделей. */
+    fun modelInfo(provider: ProviderType, modelId: String): ModelInfo? =
+        all.asSequence()
+            .filter { it.type == provider }
+            .flatMap { it.models.asSequence() }
+            .firstOrNull { it.id == modelId }
 
     /**
      * Модель по умолчанию для нового профиля: первая модель выбранного пресета,

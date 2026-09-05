@@ -56,23 +56,27 @@ class JsonLlmProfileRepository(
 
     private val serializer = ListSerializer(LlmProfile.serializer())
 
-    override suspend fun all(): List<LlmProfile> {
+    override suspend fun load(): List<LlmProfile> {
         val raw = store.read(KEY_PROFILES) ?: return emptyList()
         return runCatching { json.decodeFromString(serializer, raw) }.getOrDefault(emptyList())
     }
 
     override suspend fun save(profile: LlmProfile) {
-        val current = all().filterNot { it.id == profile.id } + profile
+        val current = load().filterNot { it.id == profile.id } + profile
         store.write(KEY_PROFILES, json.encodeToString(serializer, current))
     }
 
     override suspend fun delete(id: String) {
-        val rest = all().filterNot { it.id == id }
+        val rest = load().filterNot { it.id == id }
         store.write(KEY_PROFILES, json.encodeToString(serializer, rest))
     }
 
-    override suspend fun wipe() {
-        store.delete(KEY_PROFILES)
+    override suspend fun replaceAll(profiles: List<LlmProfile>) {
+        if (profiles.isEmpty()) {
+            store.delete(KEY_PROFILES)
+        } else {
+            store.write(KEY_PROFILES, json.encodeToString(serializer, profiles))
+        }
     }
 
     private companion object {

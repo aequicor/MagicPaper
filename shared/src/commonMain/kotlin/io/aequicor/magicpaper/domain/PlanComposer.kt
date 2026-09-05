@@ -56,9 +56,9 @@ class PlanComposer(
             }
         }
         val messages = listOf(
-            LlmMessage("system", COMPOSE_PROMPT),
-            LlmMessage("system", roster),
-            LlmMessage("user", "Цель задачи: $goal"),
+            LlmMessage(LlmChatRole.SYSTEM, COMPOSE_PROMPT),
+            LlmMessage(LlmChatRole.SYSTEM, roster),
+            LlmMessage(LlmChatRole.USER, "Цель задачи: $goal"),
         )
         val raw = gateway.complete(profile, messages)
         val steps = parseSteps(raw)

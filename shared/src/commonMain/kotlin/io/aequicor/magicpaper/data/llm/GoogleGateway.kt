@@ -21,7 +21,7 @@ class GoogleGateway(
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val encodedModel = profile.modelId.replace(" ", "")
         val url = profile.baseUrl.trimEnd('/') + "/models/$encodedModel:generateContent"
-        val payload = LlmPayloads.google(profile, messages, ModelDefaults.supportsEffort(profile))
+        val payload = LlmPayloads.google(profile, messages, ModelDefaults.capability(profile))
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("x-goog-api-key", profile.apiKey)
         }

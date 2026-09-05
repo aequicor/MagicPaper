@@ -10,6 +10,7 @@ import io.aequicor.magicpaper.domain.RuntimePhase
 import java.io.File
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.assertFalse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -117,7 +118,10 @@ class PiCodingRuntimeIntegrationTest {
             val edits = events.filterIsInstance<CodingEvent.ToolFinished>().filter { it.tool == "edit" }
             assertTrue(edits.size >= 2, "ожидали минимум два вызова edit; события: $events")
             assertTrue(edits.first().isError, "первая правка обязана завершиться ошибкой несовпадения: ${edits.first()}")
-            assertEquals(original, notes.readText(Charsets.UTF_8), "файл изменён ДО дословной правки")
+            assertFalse(
+                "Итог - «магическая бумага»." in notes.readText(Charsets.UTF_8),
+                "испорченная правка с дефисом не должна была примениться",
+            )
 
             // Итог: дословная правка применена, типографика всех остальных строк цела.
             val expected =

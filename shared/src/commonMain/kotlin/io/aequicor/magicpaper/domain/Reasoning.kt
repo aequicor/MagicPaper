@@ -144,6 +144,18 @@ data class EffortSelection private constructor(val level: ReasoningEffort?) {
 }
 
 /**
+ * Привычные имена уровней усилия. Исторический мост: код и тесты знают их как
+ * константы; значения — те же [EffortSelection], никаких чисел.
+ */
+object Effort {
+    val OFF: EffortSelection = EffortSelection.of(ReasoningEffort.NONE)
+    val LOW: EffortSelection = EffortSelection.of(ReasoningEffort.LOW)
+    val MEDIUM: EffortSelection = EffortSelection.of(ReasoningEffort.MEDIUM)
+    val HIGH: EffortSelection = EffortSelection.of(ReasoningEffort.HIGH)
+    val ULTRA: EffortSelection = EffortSelection.of(ReasoningEffort.MAX)
+}
+
+/**
  * Как усилие кодируется в запросе. Диалект — факт о поколении API вендора и
  * он независим от того, какие уровни модель объявляет: claude-opus-4.5
  * принимает `effort`, но мыслится всё ещё бюджетом токенов.

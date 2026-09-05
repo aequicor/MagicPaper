@@ -41,18 +41,26 @@ enum class ModelKind {
     EMBEDDING,
 }
 
-/** Расширенные параметры подключения: таймауты и лимиты, завязанные на конкретный эндпоинт. */
+/** Расширенные параметры подключения: таймауты, лимиты и режимы вывода. */
 @Serializable
 data class AdvancedLlmOptions(
-    val temperature: Double = 0.7,
+    /** Температура запроса; `null` — не отправлять (модель решает сама, типично для reasoning). */
+    val temperature: Double? = 0.7,
+    /** Top-p сэмплирование; `null` — не отправлять. */
+    val topP: Double? = null,
     /** Сколько секунд ждать отклик; 0 — без ограничения. */
     val timeoutSeconds: Int = 120,
     /** Верхняя граница ответа в токенах; Anthropic требует её явно. */
     val maxTokens: Int = 8192,
     /** Верхняя граница контекста модели; используется для индикатора загрузки. */
     val contextLimit: Int = 128_000,
+    /** Пусто = штатный системный промпт агента. */
+    val systemPromptOverride: String = "",
+    /** Сколько последних сообщений истории отправлять модели. */
+    val contextMessages: Int = 8,
 ) {
-    val safeTemperature: Double get() = temperature.coerceIn(0.0, 2.0)
+    val safeTemperature: Double? get() = temperature?.coerceIn(0.0, 2.0)
+    val safeTopP: Double? get() = topP?.coerceIn(0.05, 1.0)
     val safeMaxTokens: Int get() = maxTokens.coerceIn(512, 128_000)
     val safeTimeoutSeconds: Int get() = timeoutSeconds.coerceIn(0, 3600)
     val safeContextLimit: Int get() = contextLimit.coerceIn(1_024, 10_000_000)
@@ -61,7 +69,7 @@ data class AdvancedLlmOptions(
 @Serializable
 data class LlmProfile(
     val id: String,
-    val title: String,
+    val name: String,
     val baseUrl: String = "",
     val apiKey: String = "",
     val provider: ProviderType = ProviderType.OPENAI_COMPATIBLE,
@@ -81,9 +89,14 @@ data class LlmProfile(
      */
     val effortOverrides: Map<String, EffortSelection> = emptyMap(),
     val advanced: AdvancedLlmOptions = AdvancedLlmOptions(),
+    /** Когда профиль создан; 0 — наследие ранних версий. */
+    val createdAt: Long = 0,
 ) {
     val configured: Boolean get() = modelId.isNotBlank() && baseUrl.isNotBlank()
     val codingConfigured: Boolean get() = codingModelId.isNotBlank() && baseUrl.isNotBlank()
+
+    /** Короткая подпись для чипа в чате: «Ollama (локально) · llama3.2». */
+    val shortLabel: String get() = if (modelId.isBlank()) name else "$name · $modelId"
 
     /**
      * Рабочее состояние переключателя: показываем модель по умолчанию, даже если

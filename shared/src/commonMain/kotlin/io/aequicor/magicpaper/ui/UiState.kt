@@ -101,7 +101,7 @@ data class UiState(
     /** Профиль, открытый в редакторе настроек (для перехода из чата). */
     val editingLlmProfileId: String? = null,
     /** Модели, загруженные у провайдера черновика (этап 6). */
-    val editorModels: List<io.aequicor.magicpaper.domain.DiscoveredModel> = emptyList(),
+    val editorModels: List<io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel> = emptyList(),
     val editorModelsLoading: Boolean = false,
     val editorModelsError: String? = null,
     val connectionTesting: Boolean = false,

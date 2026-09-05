@@ -22,14 +22,6 @@ interface SettingsRepository {
     suspend fun wipe()
 }
 
-/** Хранилище профилей подключения ИИ-провайдеров. */
-interface LlmProfileRepository {
-    suspend fun all(): List<LlmProfile>
-    suspend fun save(profile: LlmProfile)
-    suspend fun delete(id: String)
-    suspend fun wipe()
-}
-
 data class DocArticle(val id: String, val title: String, val body: String)
 
 data class DocMatch(val article: DocArticle, val score: Double)
@@ -47,8 +39,6 @@ interface SearchEngine {
     fun isConfigured(settings: AppSettings): Boolean
     suspend fun search(query: String, settings: AppSettings, limit: Int = 5): List<SearchHit>
 }
-
-data class LlmMessage(val role: String, val content: String)
 
 /**
  * Шлюз к модели. Транспорт выбирается по типу провайдера в профиле

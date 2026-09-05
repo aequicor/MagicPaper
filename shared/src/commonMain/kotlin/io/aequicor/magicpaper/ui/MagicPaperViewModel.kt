@@ -17,6 +17,8 @@ import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.DocRepository
+import io.aequicor.magicpaper.domain.EffortSelection
+import io.aequicor.magicpaper.domain.LlmChatRole
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
@@ -88,7 +90,7 @@ class MagicPaperViewModel(
         val projects = codingProjects?.all().orEmpty()
         // Одноразовая миграция: старая «одна модель» становится профилем подключения.
         val migratedSettings = migrateLegacyModel(settings)
-        val profiles = profileRepo.all()
+        val profiles = profileRepo.load()
         _state.update {
             it.copy(
                 settings = migratedSettings,
@@ -155,7 +157,7 @@ class MagicPaperViewModel(
      * Срабатывает один раз: когда профилей ещё нет, а старая тройка заполнена.
      */
     private suspend fun migrateLegacyModel(settings: AppSettings): AppSettings {
-        if (profileRepo.all().isNotEmpty()) return settings
+        if (profileRepo.load().isNotEmpty()) return settings
         val legacy = ProfileMigrator.legacyProfile(settings) ?: return settings
         profileRepo.save(legacy)
         val migrated = settings.copy(activeLlmProfileId = legacy.id)
@@ -309,7 +311,7 @@ class MagicPaperViewModel(
             _state.update {
                 it.copy(
                     settings = done,
-                    llmProfiles = if (withProfile) profileRepo.all() else it.llmProfiles,
+                    llmProfiles = if (withProfile) profileRepo.load() else it.llmProfiles,
                     showWelcome = false,
                     screen = Screen.CHAT,
                 )
@@ -334,7 +336,7 @@ class MagicPaperViewModel(
     fun saveLlmProfile(profile: LlmProfile) {
         scope.launch {
             profileRepo.save(profile)
-            val profiles = profileRepo.all()
+            val profiles = profileRepo.load()
             val settings = _state.value.settings
             val updated = if (settings.activeLlmProfileId.isBlank()) {
                 settings.copy(activeLlmProfileId = profile.id).also { settingsRepo.save(it) }
@@ -356,7 +358,7 @@ class MagicPaperViewModel(
     fun deleteLlmProfile(id: String) {
         scope.launch {
             profileRepo.delete(id)
-            val profiles = profileRepo.all()
+            val profiles = profileRepo.load()
             val settings = _state.value.settings
             val newActive = if (settings.activeLlmProfileId == id) {
                 profiles.firstOrNull()?.id.orEmpty()
@@ -409,12 +411,18 @@ class MagicPaperViewModel(
         }
     }
 
-    /** Быстрая смена уровня усилия профиля (из переключателя в чате). */
-    fun setProfileEffort(id: String, effort: Int) {
+    /** Быстрая смена уровня усилия профиля (из переключателя в чате).
+     * С моделью — персональная настройка ([LlmProfile.withEffortFor]), без — профильная. */
+    fun setProfileEffort(id: String, effort: EffortSelection, modelId: String? = null) {
         scope.launch {
-            val profile = profileRepo.all().firstOrNull { it.id == id } ?: return@launch
-            profileRepo.save(profile.copy(effort = effort))
-            _state.update { it.copy(llmProfiles = profileRepo.all()) }
+            val profile = profileRepo.load().firstOrNull { it.id == id } ?: return@launch
+            val updated = if (modelId.isNullOrBlank()) {
+                profile.copy(effort = effort)
+            } else {
+                profile.withEffortFor(modelId, effort)
+            }
+            profileRepo.save(updated)
+            _state.update { it.copy(llmProfiles = profileRepo.load()) }
         }
     }
 
@@ -422,7 +430,7 @@ class MagicPaperViewModel(
     fun setProfileModel(id: String, modelId: String) {
         if (modelId.isBlank()) return
         scope.launch {
-            val profile = profileRepo.all().firstOrNull { it.id == id } ?: return@launch
+            val profile = profileRepo.load().firstOrNull { it.id == id } ?: return@launch
             profileRepo.save(profile.copy(modelId = modelId))
             _state.update {
                 val updated = it.llmProfiles.map { p -> if (p.id == id) p.copy(modelId = modelId) else p }
@@ -495,7 +503,7 @@ class MagicPaperViewModel(
         _state.update { it.copy(connectionTesting = true, editorModelsError = null) }
         scope.launch {
             val result = runCatching {
-                testGateway.complete(draft, listOf(LlmMessage("user", "Скажи одно слово: ✦")))
+                testGateway.complete(draft, listOf(LlmMessage(LlmChatRole.USER, "Скажи одно слово: ✦")))
             }
             _state.update {
                 it.copy(
@@ -600,7 +608,7 @@ class MagicPaperViewModel(
             chats.wipe()
             settingsRepo.wipe()
             skills?.wipe()
-            profileRepo.wipe()
+            profileRepo.replaceAll(emptyList())
             planning?.wipe()
             _state.update {
                 it.copy(

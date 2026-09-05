@@ -82,7 +82,7 @@ class SelfEducationPlugin(
                     return@launch
                 }
                 val settings = settingsRepo.load()
-                val profile = ProfileResolver.resolve(session, settings, profileRepo.all())
+                val profile = ProfileResolver.resolve(session, settings, profileRepo.load())
                 draft = educator.propose(session.messages, profile)
                 busy = false
             }

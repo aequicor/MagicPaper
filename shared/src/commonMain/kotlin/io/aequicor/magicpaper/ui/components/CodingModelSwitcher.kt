@@ -111,13 +111,17 @@ fun CodingModelSwitcherDialog(
                         onEditSource = { vm.editLlmProfile(resolved.id) },
                     )
                     Spacer(Modifier.height(8.dp))
-                    val effortSupported = ModelDefaults.supportsEffort(resolved)
+                    val codingModel = resolved.codingModelId.ifBlank { resolved.modelId }
                     Text(
-                        if (effortSupported) "Усилие модели" else "Усилие (температурный режим — модель без нативного усилия)",
+                        "Усилие модели",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    EffortControl(effort = resolved.effort, onEffort = { vm.setProfileEffort(resolved.id, it) })
+                    EffortControl(
+                        capability = ModelDefaults.capability(resolved.provider, codingModel),
+                        selection = resolved.effortSelectionFor(codingModel),
+                        onSelect = { vm.setProfileEffort(resolved.id, it, codingModel) },
+                    )
                     TextButton(onClick = { vm.editLlmProfile(resolved.id) }) {
                         Text("⚙ Тонкие настройки источника…")
                     }

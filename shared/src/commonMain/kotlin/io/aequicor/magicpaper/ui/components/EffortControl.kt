@@ -2,52 +2,71 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.domain.Effort
-import kotlin.math.roundToInt
+import io.aequicor.magicpaper.domain.EffortSelection
+import io.aequicor.magicpaper.domain.ReasoningCapability
+import io.aequicor.magicpaper.domain.selectableLevels
 
 /**
- * Единое управление усилием: слайдер по шкале 0–100 плюс быстрые пресеты.
- * Используется в редакторе источника и в переключателях чата/кодинг-сессий.
+ * Управление усилием по возможностям конкретной модели: чипы «по умолчанию»
+ * и только те уровни, которые модель объявила ([selectableLevels]).
+ * Слайдера нет: провайдеры принимают дискретные значения, а не числа.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun EffortControl(effort: Int, onEffort: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun EffortControl(
+    capability: ReasoningCapability,
+    selection: EffortSelection,
+    onSelect: (EffortSelection) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val controls = capability as? ReasoningCapability.Controls
+    if (controls == null || controls.values.isEmpty()) {
+        Column(modifier = modifier.fillMaxWidth()) {
+            Text(
+                "У модели нет нативной ручки усилия — запрос уйдёт без поля усилия.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            "Усилие: $effort из ${Effort.MAX} · ${Effort.label(effort)}",
+            "Усилие: ${selection.label}",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Slider(
-            value = Effort.coerce(effort).toFloat(),
-            onValueChange = { onEffort(it.roundToInt()) },
-            valueRange = Effort.MIN.toFloat()..Effort.MAX.toFloat(),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
+        FlowRow(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            EffortPreset("Выкл", Effort.OFF, effort, onEffort)
-            EffortPreset("Низкое", Effort.LOW, effort, onEffort)
-            EffortPreset("Среднее", Effort.MEDIUM, effort, onEffort)
-            EffortPreset("Высокое", Effort.HIGH, effort, onEffort)
-            EffortPreset("Макс.", Effort.ULTRA, effort, onEffort)
+            EffortChip("умолч", EffortSelection.Default, selection, onSelect)
+            capability.selectableLevels.forEach { level ->
+                val value = EffortSelection.of(level)
+                EffortChip(level.shortLabel, value, selection, onSelect)
+            }
         }
     }
 }
 
 @Composable
-private fun EffortPreset(title: String, value: Int, current: Int, onEffort: (Int) -> Unit) {
-    TextButton(onClick = { onEffort(value) }, modifier = Modifier.padding(0.dp)) {
+private fun EffortChip(
+    title: String,
+    value: EffortSelection,
+    current: EffortSelection,
+    onSelect: (EffortSelection) -> Unit,
+) {
+    TextButton(onClick = { onSelect(value) }, modifier = Modifier.padding(0.dp)) {
         Text(
             title,
             style = MaterialTheme.typography.labelMedium,

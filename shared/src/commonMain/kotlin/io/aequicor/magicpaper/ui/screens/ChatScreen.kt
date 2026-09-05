@@ -46,7 +46,6 @@ import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProfileResolver
-import io.aequicor.magicpaper.domain.Effort
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
@@ -221,7 +220,7 @@ private fun ModelChip(
                 color = MaterialTheme.colorScheme.error,
             )
         } else {
-            val effortGlyph = Effort.shortLabel(resolved.effort)
+            val effortGlyph = resolved.effortSelectionFor(resolved.modelId).shortLabel
             Text(
                 "${if (overridden) "◌ " else ""}✦ ${resolved.shortLabel} · $effortGlyph ▾",
                 style = MaterialTheme.typography.bodyMedium,

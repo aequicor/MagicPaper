@@ -1,6 +1,6 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.domain.DiscoveredModel
+import io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ModelDirectory

@@ -52,7 +52,7 @@ class OpenAiCompatibleGateway(
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val url = profile.baseUrl.trimEnd('/') + "/chat/completions"
-        val payload = LlmPayloads.openAi(profile, messages, ModelDefaults.supportsEffort(profile))
+        val payload = LlmPayloads.openAi(profile, messages, ModelDefaults.capability(profile))
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("Authorization", "Bearer " + profile.apiKey)
         }

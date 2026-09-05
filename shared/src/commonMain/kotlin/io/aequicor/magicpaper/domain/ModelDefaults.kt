@@ -28,19 +28,17 @@ object ModelDefaults {
         val capability = capability(provider, modelId)
         val controls = capability as? ReasoningCapability.Controls
         val effort = controls?.default?.let { EffortSelection.of(it) } ?: EffortSelection.Default
-        val maxTokens = if (controls == null) {
-            when (provider) {
-                ProviderType.ANTHROPIC -> 8192
-                ProviderType.GOOGLE -> 8192
-                else -> current.maxTokens
-            }
-        } else {
-            16384
+        val maxTokens = when {
+            provider == ProviderType.ANTHROPIC -> maxOf(current.maxTokens, 8192)
+            provider == ProviderType.GOOGLE -> maxOf(current.maxTokens, 8192)
+            controls != null -> maxOf(current.maxTokens, 16384)
+            else -> current.maxTokens
         }
         return ModelRecommendation(
             effort = effort,
             advanced = current.copy(
-                maxTokens = maxOf(current.maxTokens, maxTokens),
+                temperature = if (controls != null) null else current.temperature,
+                maxTokens = maxTokens,
                 contextLimit = current.safeContextLimit,
             ),
         )
@@ -67,9 +65,25 @@ object ModelDefaults {
 
     fun supportsEffort(profile: LlmProfile): Boolean = supportsEffort(profile.provider, profile.modelId)
 
+    /**
+     * Модель из живого каталога провайдера: что нашли + что рекомендуем.
+     * [supportsEffort] — сводное свойство рассуждения: ручка или бюджет.
+     */
+    data class DiscoveredModel(
+        val id: String,
+        val reasoning: ReasoningCapability = ReasoningCapability.None,
+        val recommendation: ModelRecommendation,
+    ) {
+        val supportsEffort: Boolean get() = reasoning.supportsEffort
+    }
+
     fun discover(provider: ProviderType, ids: List<String>): List<DiscoveredModel> =
-        ids.filter { it.isNotBlank() }.sorted().map { id ->
-            ModelInfo(id, reasoning = capability(provider, id))
+        ids.filter { it.isNotBlank() }.distinct().sorted().map { id ->
+            DiscoveredModel(
+                id = id,
+                reasoning = capability(provider, id),
+                recommendation = recommendation(provider, id),
+            )
         }
 
     // --- семейные профили -------------------------------------------------------------
@@ -78,36 +92,76 @@ object ModelDefaults {
      * OpenAI-совместимые reasoning-модели. `reasoning_effort` — общий язык
      * совместимых серверов, поэтому уровни отдаются дословно.
      */
-    private fun openAiCapability(id: String): ReasoningCapability = when {
-        id.startsWith("gpt-5") || id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") ->
-            ReasoningPresets.OPENAI_EFFORT
+    /** Сегменты-префиксы провайдеров в маршрутах каталогов-агрегаторов. */
+    private val PROVIDER_SEGMENTS = setOf(
+        "openrouter", "anthropic", "openai", "google", "mistral", "meta",
+        "deepseek", "qwen", "x-ai", "cohere", "perplexity",
+    )
 
-        id.startsWith("deepseek-reasoner") || id.startsWith("qwq") ->
+    /**
+     * «openrouter/anthropic/claude-sonnet-4.5» → «claude-sonnet-4.5»: снимаем
+     * известные префиксы провайдеров, пока они идут в начале.
+     */
+    private fun stripProviderPrefix(id: String): String {
+        var current = id
+        while (true) {
+            val slash = current.indexOf('/')
+            if (slash <= 0) break
+            if (current.substring(0, slash) !in PROVIDER_SEGMENTS) break
+            current = current.substring(slash + 1)
+        }
+        return current
+    }
+
+    private fun openAiCapability(id: String): ReasoningCapability {
+        val bare = stripProviderPrefix(id)
+        // Кураторский каталог — факты о моделях, без угадывания.
+        ProviderCatalog.modelInfo(ProviderType.OPENAI_COMPATIBLE, bare)?.reasoning?.let { return it }
+        // Префиксы имён: эпоха рассуждающих поколений.
+        if (bare.startsWith("gpt-5") || bare.startsWith("o1") || bare.startsWith("o3") || bare.startsWith("o4")) {
+            return ReasoningPresets.OPENAI_EFFORT
+        }
+        if (bare.startsWith("deepseek-reasoner") || bare.startsWith("qwq")) {
             // У legacy deepseek-reasoner своя вокабуляр, честно говорим: «режим на модели».
-            ReasoningPresets.MODE_ONLY
-
-        "deepseek-v4" in id || "glm" in id || "kimi" in id || ("qwen3" in id && "thinking" in id) ->
-            ReasoningPresets.COMPAT_EFFORT
-
-        "reasoning" in id || "thinking" in id -> ReasoningPresets.REACT_EFFORT
-
-        else -> ReasoningCapability.None
+            return ReasoningPresets.MODE_ONLY
+        }
+        if ("deepseek-v4" in bare) return ReasoningPresets.COMPAT_EFFORT
+        // Семейные ряды (включая локальные серверы с «модель:размер» и чужих
+        // вендоров через агрегаторы). Поколения без ручки усилия (gpt-4o и т.п.)
+        // сюда не попадают — семейство само по себе ручку не обещает.
+        when (ProviderCatalog.familyOf(bare)) {
+            "qwen", "glm", "kimi", "deepseek" -> return ReasoningPresets.COMPAT_EFFORT
+            "claude" -> return ReasoningPresets.ANTHROPIC_BUDGET
+        }
+        if ("reasoning" in bare || "thinking" in bare) return ReasoningPresets.REACT_EFFORT
+        return ReasoningCapability.None
     }
 
     /** Anthropic: две эпохи — «адаптивное усилие» (4.6+) и бюджет токенов. */
-    private fun anthropicCapability(id: String): ReasoningCapability = when {
-        "fable" in id || "claude-opus-4-6" in id || "claude-opus-4-7" in id ||
-            "claude-sonnet-4-6" in id || "claude-5" in id -> ReasoningPresets.ANTHROPIC_ADAPTIVE
+    private fun anthropicCapability(id: String): ReasoningCapability {
+        ProviderCatalog.modelInfo(ProviderType.ANTHROPIC, id)?.reasoning?.let { return it }
+        return when {
+            "fable" in id || "claude-opus-4-6" in id || "claude-opus-4-7" in id ||
+                "claude-sonnet-4-6" in id || "claude-5" in id -> ReasoningPresets.ANTHROPIC_ADAPTIVE
 
-        id.startsWith("claude-") -> ReasoningPresets.ANTHROPIC_BUDGET
+            id.startsWith("claude-") -> ReasoningPresets.ANTHROPIC_BUDGET
 
-        else -> ReasoningCapability.None
+            else -> ReasoningCapability.None
+        }
     }
 
     /** Google: 2.5 думает бюджетом токенов (есть «динамически»), 3 — уровнем. */
-    private fun googleCapability(id: String): ReasoningCapability = when {
-        id.startsWith("gemini-3") || "3-pro" in id || "3-flash" in id -> ReasoningPresets.GEMINI_LEVEL
-        id.startsWith("gemini-2.5") -> ReasoningPresets.GEMINI_BUDGET
-        else -> ReasoningCapability.None
+    private fun googleCapability(id: String): ReasoningCapability {
+        ProviderCatalog.modelInfo(ProviderType.GOOGLE, id)?.reasoning?.let { return it }
+        return when {
+            id.startsWith("gemini-3") || "3-pro" in id || "3-flash" in id -> ReasoningPresets.GEMINI_LEVEL
+            id.startsWith("gemini-2.5") -> ReasoningPresets.GEMINI_BUDGET
+            else -> ReasoningCapability.None
+        }
     }
+}
+
+/** Живой каталог моделей провайдера; реализации — в data/llm/ModelDirectories. */
+interface ModelDirectory {
+    suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel>
 }

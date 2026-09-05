@@ -119,7 +119,7 @@ class CodingPlanningPlugin(
 
         LaunchedEffect(Unit) {
             projects = projectsRepo?.all().orEmpty()
-            profiles = profileRepo.all()
+            profiles = profileRepo.load()
             settings = settingsRepo.load()
         }
 
@@ -130,7 +130,7 @@ class CodingPlanningPlugin(
         val plan = project?.let { p -> plans.firstOrNull { it.projectId == p.id } }
 
         // Актуальный профиль разрешения (модель-планировщик и модель-судья).
-        fun judge(): LlmProfile? = ProfileResolver.resolve(null, settings, profiles)
+        fun judge(): LlmProfile? = ProfileResolver.resolve(null as io.aequicor.magicpaper.domain.ChatSession?, settings, profiles)
 
         fun composePlan() {
             if (composing || project == null) return
@@ -138,7 +138,7 @@ class CodingPlanningPlugin(
             notice = null
             scope.launch {
                 // Источники могли появиться, пока панель открыта.
-                profiles = profileRepo.all()
+                profiles = profileRepo.load()
                 draft = composer.compose(goal.trim(), judge(), dossiers, profiles)
                 composing = false
             }
@@ -204,7 +204,7 @@ class CodingPlanningPlugin(
             abortFlag.value = false
             notice = null
             scope.launch {
-                profiles = profileRepo.all()
+                profiles = profileRepo.load()
                 // Сессия плана: уже созданная при утверждении или на лету.
                 val repo = projectsRepo
                 val session = repo?.sessions(proj.id)?.firstOrNull { it.id == current.sessionId }

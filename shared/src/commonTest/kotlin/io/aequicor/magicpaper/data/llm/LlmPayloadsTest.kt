@@ -1,10 +1,15 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.domain.AdvancedSettings
-import io.aequicor.magicpaper.domain.Effort
+import io.aequicor.magicpaper.domain.AdvancedLlmOptions
+import io.aequicor.magicpaper.domain.EffortSelection
+import io.aequicor.magicpaper.domain.LlmChatRole
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
+import io.aequicor.magicpaper.domain.ReasoningCapability
+import io.aequicor.magicpaper.domain.ReasoningEffort
+import io.aequicor.magicpaper.domain.ReasoningPresets
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -17,20 +22,21 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Поведение пейлоадов. Ключевое правило: поле усилия попадает в запрос
- * ТОЛЬКО если модель его поддерживает (supportsEffort); иначе усилие
- * деградирует в температурный пресет, чтобы сервер не вернул 400.
+ * Поведение пейлоадов. Ключевое правило: поле усилия попадает в запрос только
+ * по объявленным моделью возможностям ([ReasoningCapability]); выбор
+ * «по умолчанию провайдера» не порождает поля вовсе. Когда усилие активно,
+ * температура не подменяет его и не отправляется.
  */
 class LlmPayloadsTest {
 
     private val messages = listOf(
-        LlmMessage("system", "ты ассистент"),
-        LlmMessage("user", "привет"),
+        LlmMessage(LlmChatRole.SYSTEM, "ты ассистент"),
+        LlmMessage(LlmChatRole.USER, "привет"),
     )
 
     private fun profile(
-        effort: Int = Effort.MEDIUM,
-        advanced: AdvancedSettings = AdvancedSettings(),
+        effort: EffortSelection = EffortSelection.Default,
+        advanced: AdvancedLlmOptions = AdvancedLlmOptions(),
         provider: ProviderType = ProviderType.OPENAI_COMPATIBLE,
         modelId: String = "custom-model",
     ) = LlmProfile(
@@ -46,62 +52,60 @@ class LlmPayloadsTest {
     private fun JsonObject.str(key: String): String? = (get(key) as? JsonPrimitive)?.contentOrNull
     private fun JsonObject.int(key: String): Int? = (get(key) as? JsonPrimitive)?.intOrNull
     private fun JsonObject.num(key: String): Double? = (get(key) as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+    private fun JsonObject.obj(key: String): JsonObject? = get(key) as? JsonObject
 
     // ---- OpenAI-совместимый -------------------------------------------------
 
     @Test
     fun openAiNativeEffortSendsReasoningEffort() {
-        val p = profile(effort = Effort.HIGH, modelId = "gpt-5-mini")
-        val payload = LlmPayloads.openAi(p, messages, supportsEffort = true)
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH), modelId = "gpt-5-mini")
+        val payload = LlmPayloads.openAi(p, messages, ReasoningPresets.OPENAI_EFFORT)
         assertEquals("high", payload.str("reasoning_effort"))
-        assertNull(payload.num("temperature"), "явной температуры нет — модель сама управляет усилием")
+        assertNull(payload.num("temperature"), "при активном усилии температура не подменяет его")
         assertEquals("gpt-5-mini", payload.str("model"))
     }
 
     @Test
-    fun openAiReasoningEffortCoversWholeScale() {
-        // Нативная шкала OpenAI шире трёх уровней: есть и минимальный уровень.
-        assertEquals("minimal", LlmPayloads.openAiReasoningEffort(Effort.OFF))
-        assertEquals("low", LlmPayloads.openAiReasoningEffort(Effort.LOW))
-        assertEquals("medium", LlmPayloads.openAiReasoningEffort(Effort.MEDIUM))
-        assertEquals("high", LlmPayloads.openAiReasoningEffort(Effort.HIGH))
-        assertEquals("high", LlmPayloads.openAiReasoningEffort(Effort.ULTRA))
+    fun openAiDefaultSelectionSendsNoEffortField() {
+        val payload = LlmPayloads.openAi(profile(), messages, ReasoningPresets.OPENAI_EFFORT)
+        assertNull(payload.str("reasoning_effort"), "«по умолчанию» не выдумывает поле")
+        assertNotNull(payload.num("temperature"), "без усилия температура отправляется")
     }
 
     @Test
-    fun openAiWithoutNativeEffortSendsTemperaturePresetInstead() {
-        val p = profile(effort = Effort.OFF)
-        val payload = LlmPayloads.openAi(p, messages, supportsEffort = false)
-        assertNull(payload.str("reasoning_effort"), "без поддержки усилия поле не отправляется")
-        assertEquals(0.2, payload.num("temperature"))
+    fun openAiUnknownLevelClampedToDeclared() {
+        // Просим максимум, а модель объявила только до высокого — берём ближайший.
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.MAX))
+        val payload = LlmPayloads.openAi(p, messages, ReasoningPresets.COMPAT_EFFORT)
+        assertEquals("high", payload.str("reasoning_effort"))
     }
 
     @Test
-    fun openAiTemperaturePresetScalesWithEffort() {
-        assertEquals(0.2, LlmPayloads.temperatureForEffort(Effort.OFF))
-        assertEquals(1.1, LlmPayloads.temperatureForEffort(Effort.ULTRA))
-        val mid = LlmPayloads.temperatureForEffort(Effort.MEDIUM)
-        assertTrue(mid > 0.2 && mid < 1.1, "середина шкалы — между краями")
+    fun openAiWithoutCapabilitySendsNoEffort() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH))
+        val payload = LlmPayloads.openAi(p, messages, ReasoningCapability.None)
+        assertNull(payload.str("reasoning_effort"), "ручки нет — поле не отправляется")
+        assertNotNull(payload.num("temperature"))
     }
 
     @Test
-    fun openAiExplicitTemperatureWins() {
-        val p = profile(advanced = AdvancedSettings(temperature = 1.7))
-        val payload = LlmPayloads.openAi(p, messages, supportsEffort = false)
+    fun openAiExplicitTemperatureWinsWhenEffortOff() {
+        val p = profile(advanced = AdvancedLlmOptions(temperature = 1.7))
+        val payload = LlmPayloads.openAi(p, messages, ReasoningCapability.None)
         assertEquals(1.7, payload.num("temperature"))
     }
 
     @Test
-    fun openAiEmptyAdvancedNotSent() {
-        val payload = LlmPayloads.openAi(profile(), messages, supportsEffort = false)
-        assertNull(payload.int("max_tokens"))
-        assertNull(payload.num("top_p"))
+    fun openAiNullTemperatureNotSent() {
+        val p = profile(advanced = AdvancedLlmOptions(temperature = null))
+        val payload = LlmPayloads.openAi(p, messages, ReasoningCapability.None)
+        assertNull(payload.num("temperature"), "null — «по умолчанию провайдера»")
     }
 
     @Test
-    fun openAiMaxTokensAndTopPSentWhenSet() {
-        val p = profile(advanced = AdvancedSettings(maxTokens = 512, topP = 0.9))
-        val payload = LlmPayloads.openAi(p, messages, supportsEffort = false)
+    fun openAiMaxTokensAlwaysSentTopPWhenSet() {
+        val p = profile(advanced = AdvancedLlmOptions(maxTokens = 512, topP = 0.9))
+        val payload = LlmPayloads.openAi(p, messages, ReasoningCapability.None)
         assertEquals(512, payload.int("max_tokens"))
         assertEquals(0.9, payload.num("top_p"))
     }
@@ -110,112 +114,128 @@ class LlmPayloadsTest {
 
     @Test
     fun anthropicSystemExtractedAndMaxTokensAlwaysPresent() {
-        val payload = LlmPayloads.anthropic(profile(), messages, supportsEffort = false)
+        val payload = LlmPayloads.anthropic(profile(), messages, ReasoningCapability.None)
         assertEquals("ты ассистент", payload.str("system"))
         assertNotNull(payload.int("max_tokens"), "Anthropic требует max_tokens")
     }
 
     @Test
-    fun anthropicThinkingOnlyForSupportingModels() {
-        val payload = LlmPayloads.anthropic(profile(effort = Effort.MEDIUM), messages, supportsEffort = true)
-        val thinking = payload["thinking"] as JsonObject
-        assertEquals("enabled", thinking.str("type"))
-        assertEquals(LlmPayloads.anthropicThinkingBudget(Effort.MEDIUM), thinking.int("budget_tokens"))
-        // max_tokens обязан превышать бюджет мышления — автоматически поднимаем.
-        assertTrue(payload.int("max_tokens")!! > thinking.int("budget_tokens")!!)
+    fun anthropicBudgetThinkingForExplicitLevel() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.MEDIUM), provider = ProviderType.ANTHROPIC)
+        val payload = LlmPayloads.anthropic(p, messages, ReasoningPresets.ANTHROPIC_BUDGET)
+        val thinking = payload.obj("thinking")
+        assertEquals("enabled", thinking?.str("type"))
+        val budget = thinking?.int("budget_tokens")
+        assertNotNull(budget)
+        assertTrue(budget > 0, "бюджет мышления положительный")
+        assertTrue(payload.int("max_tokens")!! > budget, "max_tokens обязан превышать бюджет")
+        assertNull(payload.num("temperature"), "с включённым мышлением температура не отправляется")
     }
 
     @Test
     fun anthropicBudgetScalesWithEffort() {
-        assertEquals(0, LlmPayloads.anthropicThinkingBudget(Effort.OFF), "ноль — мышление выключено")
-        val low = LlmPayloads.anthropicThinkingBudget(Effort.LOW)
-        val medium = LlmPayloads.anthropicThinkingBudget(Effort.MEDIUM)
-        val high = LlmPayloads.anthropicThinkingBudget(Effort.HIGH)
-        val ultra = LlmPayloads.anthropicThinkingBudget(Effort.ULTRA)
-        assertTrue(low < medium && medium < high && high < ultra, "бюджет растёт с усилием")
+        fun budget(level: ReasoningEffort): Int {
+            val p = profile(effort = EffortSelection.of(level), provider = ProviderType.ANTHROPIC)
+            val thinking = LlmPayloads.anthropic(p, messages, ReasoningPresets.ANTHROPIC_BUDGET).obj("thinking")
+            return thinking!!.int("budget_tokens")!!
+        }
+        val low = budget(ReasoningEffort.LOW)
+        val medium = budget(ReasoningEffort.MEDIUM)
+        val high = budget(ReasoningEffort.HIGH)
+        assertTrue(low < medium && medium < high, "бюджет растёт с усилием")
         assertTrue(low >= 1024, "нижняя граница бюджета")
     }
 
     @Test
-    fun anthropicZeroEffortOmitsThinking() {
-        val p = profile(effort = Effort.OFF, advanced = AdvancedSettings(temperature = 0.3))
-        val payload = LlmPayloads.anthropic(p, messages, supportsEffort = true)
-        assertNull(payload["thinking"], "нулевое усилие — блок thinking не отправляется")
-        assertEquals(0.3, payload.num("temperature"))
+    fun anthropicDefaultSelectionOmitsThinking() {
+        val p = profile(provider = ProviderType.ANTHROPIC)
+        val payload = LlmPayloads.anthropic(p, messages, ReasoningPresets.ANTHROPIC_BUDGET)
+        assertNull(payload["thinking"], "«по умолчанию» не включает блок thinking")
+        assertNotNull(payload.num("temperature"))
     }
 
     @Test
-    fun anthropicHighEffortBumpsMaxTokens() {
-        val p = profile(effort = Effort.HIGH, advanced = AdvancedSettings(maxTokens = 2000))
-        val payload = LlmPayloads.anthropic(p, messages, supportsEffort = true)
-        val budget = (payload["thinking"] as JsonObject).int("budget_tokens")!!
-        assertTrue(payload.int("max_tokens")!! > budget, "max_tokens должен превышать бюджет")
+    fun anthropicNoneLevelOmitsThinking() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.NONE), provider = ProviderType.ANTHROPIC)
+        val payload = LlmPayloads.anthropic(p, messages, ReasoningPresets.ANTHROPIC_BUDGET)
+        assertNull(payload["thinking"], "выключенное усилие — без блока thinking")
     }
 
     @Test
-    fun anthropicWithoutEffortSupportHasNoThinking() {
-        val p = profile(advanced = AdvancedSettings(temperature = 0.5, maxTokens = 2000))
-        val payload = LlmPayloads.anthropic(p, messages, supportsEffort = false)
-        assertNull(payload["thinking"], "модель без нативного усилия — без блока thinking")
-        assertEquals(0.5, payload.num("temperature"))
-        assertEquals(2000, payload.int("max_tokens"))
+    fun anthropicAdaptiveSendsEffortLevel() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH), provider = ProviderType.ANTHROPIC)
+        val payload = LlmPayloads.anthropic(p, messages, ReasoningPresets.ANTHROPIC_ADAPTIVE)
+        assertEquals("adaptive", payload.obj("thinking")?.str("type"))
+        assertEquals("high", payload.obj("output_config")?.str("effort"))
+        assertNull(payload.num("temperature"))
     }
 
     @Test
     fun anthropicSystemMessagesNotInMessages() {
-        val payload = LlmPayloads.anthropic(profile(), messages, supportsEffort = false)
-        val roles = (payload["messages"] as? kotlinx.serialization.json.JsonArray)
+        val payload = LlmPayloads.anthropic(profile(), messages, ReasoningCapability.None)
+        val roles = (payload["messages"] as? JsonArray)
             ?.mapNotNull { ((it as? JsonObject)?.get("role") as? JsonPrimitive)?.contentOrNull }
         assertTrue(roles != null && "system" !in roles, "системные сообщения уходят в поле system")
     }
 
     @Test
-    fun anthropicNoTemperatureWithThinking() {
-        // С включённым thinking Anthropic требует температуру 1 — не отправляем вовсе.
-        val p = profile(advanced = AdvancedSettings(temperature = 0.5))
-        val payload = LlmPayloads.anthropic(p, messages, supportsEffort = true)
-        assertNull(payload.num("temperature"))
+    fun anthropicWithoutCapabilityHasNoThinking() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH))
+        val payload = LlmPayloads.anthropic(p, messages, ReasoningCapability.None)
+        assertNull(payload["thinking"], "модель без возможностей — без блока thinking")
+        assertNotNull(payload.num("temperature"))
     }
 
     // ---- Google ---------------------------------------------------------------
 
     @Test
     fun googleSystemInstructionAndContentsRoles() {
-        val payload = LlmPayloads.google(profile(), messages, supportsEffort = false)
-        val systemInstruction = payload["systemInstruction"] as JsonObject
-        assertNotNull(systemInstruction)
-        val contents = payload["contents"] as kotlinx.serialization.json.JsonArray
+        val payload = LlmPayloads.google(profile(), messages, ReasoningCapability.None)
+        assertNotNull(payload["systemInstruction"])
+        val contents = payload["contents"] as JsonArray
         val roles = contents.mapNotNull { ((it as? JsonObject)?.get("role") as? JsonPrimitive)?.contentOrNull }
         assertEquals(listOf("user"), roles)
         assertFalse(roles.contains("system"))
     }
 
     @Test
-    fun googleThinkingConfigOnlyForSupportingModels() {
-        val payload = LlmPayloads.google(profile(effort = Effort.HIGH), messages, supportsEffort = true)
-        val config = (payload["generationConfig"] as JsonObject)["thinkingConfig"] as JsonObject
-        assertEquals(LlmPayloads.googleThinkingBudget(Effort.HIGH), config.int("thinkingBudget"))
+    fun googleBudgetThinkingForExplicitLevel() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH), provider = ProviderType.GOOGLE)
+        val payload = LlmPayloads.google(p, messages, ReasoningPresets.GEMINI_BUDGET)
+        val config = payload.obj("generationConfig")?.obj("thinkingConfig")
+        val budget = config?.int("thinkingBudget")
+        assertNotNull(budget)
+        assertTrue(budget > 0)
+        assertNull(payload.obj("generationConfig")?.num("temperature"), "с мышлением температура не отправляется")
     }
 
     @Test
-    fun googleBudgetScalesWithEffort() {
-        assertEquals(0, LlmPayloads.googleThinkingBudget(Effort.OFF), "ноль — мышление выключено")
-        assertEquals(24576, LlmPayloads.googleThinkingBudget(Effort.ULTRA), "максимум — полный бюджет")
-        val mid = LlmPayloads.googleThinkingBudget(Effort.MEDIUM)
-        assertTrue(mid > 0 && mid < 24576)
+    fun googleAutoMapsToDynamicBudget() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.AUTO), provider = ProviderType.GOOGLE)
+        val payload = LlmPayloads.google(p, messages, ReasoningPresets.GEMINI_BUDGET)
+        val config = payload.obj("generationConfig")?.obj("thinkingConfig")
+        assertEquals(-1, config?.int("thinkingBudget"), "«авто» — динамический бюджет")
     }
 
     @Test
-    fun googleWithoutEffortSupportHasNoThinkingConfig() {
-        val payload = LlmPayloads.google(profile(), messages, supportsEffort = false)
-        val config = payload["generationConfig"] as JsonObject
-        assertNull(config["thinkingConfig"])
+    fun googleLevelDialectSendsThinkingLevel() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.MEDIUM), provider = ProviderType.GOOGLE)
+        val payload = LlmPayloads.google(p, messages, ReasoningPresets.GEMINI_LEVEL)
+        val config = payload.obj("generationConfig")?.obj("thinkingConfig")
+        assertEquals("medium", config?.str("thinkingLevel"))
     }
 
     @Test
-    fun googleTemperaturePresetWhenNoExplicit() {
-        val payload = LlmPayloads.google(profile(effort = Effort.LOW), messages, supportsEffort = false)
-        val config = payload["generationConfig"] as JsonObject
-        assertEquals(LlmPayloads.temperatureForEffort(Effort.LOW), config.num("temperature"))
+    fun googleDefaultSelectionOmitsThinkingConfig() {
+        val payload = LlmPayloads.google(profile(provider = ProviderType.GOOGLE), messages, ReasoningPresets.GEMINI_BUDGET)
+        assertNull(payload.obj("generationConfig")?.get("thinkingConfig"))
+        assertNotNull(payload.obj("generationConfig")?.num("temperature"))
+    }
+
+    @Test
+    fun googleWithoutCapabilityHasNoThinkingConfig() {
+        val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH), provider = ProviderType.GOOGLE)
+        val payload = LlmPayloads.google(p, messages, ReasoningCapability.None)
+        assertNull(payload.obj("generationConfig")?.get("thinkingConfig"))
     }
 }

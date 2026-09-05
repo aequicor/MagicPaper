@@ -26,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import io.aequicor.magicpaper.domain.Effort
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
@@ -130,13 +129,16 @@ fun ModelSwitcherContent(
                 onEditSource = { vm.editLlmProfile(resolved.id) },
             )
             Spacer(Modifier.height(8.dp))
-            val effortSupported = ModelDefaults.supportsEffort(resolved)
             Text(
-                if (effortSupported) "Усилие модели" else "Усилие (температурный режим — модель без нативного усилия)",
+                "Усилие модели",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            EffortControl(effort = resolved.effort, onEffort = { vm.setProfileEffort(resolved.id, it) })
+            EffortControl(
+                capability = ModelDefaults.capability(resolved),
+                selection = resolved.effortSelectionFor(resolved.modelId),
+                onSelect = { vm.setProfileEffort(resolved.id, it, resolved.modelId) },
+            )
             TextButton(onClick = { vm.editLlmProfile(resolved.id) }) {
                 Text("⚙ Тонкие настройки источника…")
             }
@@ -189,7 +191,7 @@ internal fun ProfileRow(
             )
         }
         Text(
-            Effort.shortLabel(profile.effort),
+            profile.effort.shortLabel,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -28,12 +28,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.domain.AdvancedSettings
+import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import io.aequicor.magicpaper.domain.AppSettings
-import io.aequicor.magicpaper.domain.DiscoveredModel
-import io.aequicor.magicpaper.domain.Effort
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
+import io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel
 import io.aequicor.magicpaper.domain.ProviderCatalog
 import io.aequicor.magicpaper.domain.ProviderSpec
 import io.aequicor.magicpaper.domain.SearchProvider
@@ -179,7 +178,7 @@ private fun ProfileRowEntry(
                 buildString {
                     append(profile.provider.name.lowercase())
                     append(" · усилие: ")
-                    append(Effort.label(profile.effort).lowercase())
+                    append(profile.effort.label.lowercase())
                     if (profile.favoriteModels.isNotEmpty()) append(" · избранное: ${profile.favoriteModels.size}")
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -210,7 +209,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
     // Тонкие настройки редактируются строками: пустое = «по умолчанию провайдера».
     val adv = draft.advanced
     var temperature by remember(profile.id) { mutableStateOf(adv.temperature?.toString().orEmpty()) }
-    var maxTokens by remember(profile.id) { mutableStateOf(adv.maxTokens?.toString().orEmpty()) }
+    var maxTokens by remember(profile.id) { mutableStateOf(adv.maxTokens.toString()) }
     var topP by remember(profile.id) { mutableStateOf(adv.topP?.toString().orEmpty()) }
     var timeout by remember(profile.id) { mutableStateOf(adv.timeoutSeconds.toString()) }
     var contextMessages by remember(profile.id) { mutableStateOf(adv.contextMessages.toString()) }
@@ -350,7 +349,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                         val rec = found.recommendation
                         draft = draft.copy(modelId = found.id, effort = rec.effort, advanced = rec.advanced)
                         temperature = rec.advanced.temperature?.toString().orEmpty()
-                        maxTokens = rec.advanced.maxTokens?.toString().orEmpty()
+                        maxTokens = rec.advanced.maxTokens.toString()
                         topP = rec.advanced.topP?.toString().orEmpty()
                     },
                     onToggleFavorite = {
@@ -366,7 +365,11 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
 
         Spacer(Modifier.height(10.dp))
         Section("Усилие")
-        EffortControl(effort = draft.effort, onEffort = { draft = draft.copy(effort = it) })
+        EffortControl(
+            capability = ModelDefaults.capability(draft),
+            selection = draft.effort,
+            onSelect = { draft = draft.copy(effort = it) },
+        )
 
         Spacer(Modifier.height(10.dp))
         Section("Тонкие настройки (пусто = по умолчанию провайдера)")
@@ -390,13 +393,14 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                             favoriteModels = (draft.favoriteModels + draft.modelId)
                                 .filter { it.isNotBlank() }
                                 .distinct(),
-                            advanced = AdvancedSettings(
+                            advanced = AdvancedLlmOptions(
                                 temperature = temperature.toDoubleOrNull(),
-                                maxTokens = maxTokens.toIntOrNull(),
+                                maxTokens = maxTokens.toIntOrNull() ?: draft.advanced.maxTokens,
                                 topP = topP.toDoubleOrNull(),
-                                timeoutSeconds = timeout.toIntOrNull() ?: 60,
+                                timeoutSeconds = timeout.toIntOrNull() ?: draft.advanced.timeoutSeconds,
+                                contextLimit = draft.advanced.contextLimit,
                                 systemPromptOverride = draft.advanced.systemPromptOverride,
-                                contextMessages = contextMessages.toIntOrNull() ?: 8,
+                                contextMessages = contextMessages.toIntOrNull() ?: draft.advanced.contextMessages,
                             ),
                         ),
                     )
@@ -440,9 +444,9 @@ private fun DiscoveredModelRow(
             Text(model.id, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
                 if (model.supportsEffort) {
-                    "нативное усилие · рекомендуется: ${Effort.label(model.recommendation.effort)}"
+                    "нативное усилие · рекомендуется: ${model.recommendation.effort.label}"
                 } else {
-                    "без нативного усилия · рекомендуется: ${Effort.label(model.recommendation.effort)} (температура)"
+                    "без нативного усилия · рекомендуется: ${model.recommendation.effort.label}"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

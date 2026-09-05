@@ -50,9 +50,9 @@ class DossierResearcher(
             }
         }
         val messages = buildList {
-            add(LlmMessage("system", RESEARCH_PROMPT))
-            if (context.isNotBlank()) add(LlmMessage("system", context))
-            add(LlmMessage("user", "Модель: ${target.modelId}, провайдер: ${providerName(target)}"))
+            add(LlmMessage(LlmChatRole.SYSTEM, RESEARCH_PROMPT))
+            if (context.isNotBlank()) add(LlmMessage(LlmChatRole.SYSTEM, context))
+            add(LlmMessage(LlmChatRole.USER, "Модель: ${target.modelId}, провайдер: ${providerName(target)}"))
         }
         val raw = gateway.complete(profile, messages)
         val dossier = parse(raw)
@@ -100,6 +100,7 @@ class DossierResearcher(
 
     private fun providerName(profile: LlmProfile): String = when (profile.provider) {
         ProviderType.OPENAI_COMPATIBLE -> "OpenAI-совместимый сервер (${profile.name})"
+        ProviderType.OPENROUTER -> "OpenRouter"
         ProviderType.ANTHROPIC -> "Anthropic"
         ProviderType.GOOGLE -> "Google"
     }

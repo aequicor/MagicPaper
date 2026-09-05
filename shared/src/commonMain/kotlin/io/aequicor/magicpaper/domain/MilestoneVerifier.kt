@@ -50,9 +50,9 @@ class LlmMilestoneVerifier(
         profile: LlmProfile,
     ): Verdict {
         val messages = listOf(
-            LlmMessage("system", VERIFY_PROMPT),
+            LlmMessage(LlmChatRole.SYSTEM, VERIFY_PROMPT),
             LlmMessage(
-                "user",
+                LlmChatRole.USER,
                 buildString {
                     appendLine("Общая цель задачи: $goal")
                     appendLine("Мэилстоун: ${milestone.title}")
