@@ -40,7 +40,7 @@ class ModelDefaultsTest {
         assertEquals(2, found.size, "дубли и пустые отбрасываются")
         val gpt = found.first { it.id == "gpt-5-mini" }
         assertTrue(gpt.supportsEffort)
-        assertEquals(EffortLevel.MEDIUM, gpt.recommendation.effort)
+        assertEquals(Effort.MEDIUM, gpt.recommendation.effort)
         val llama = found.first { it.id == "llama3.2" }
         assertFalse(llama.supportsEffort)
         assertEquals(0.7, llama.recommendation.advanced.temperature)

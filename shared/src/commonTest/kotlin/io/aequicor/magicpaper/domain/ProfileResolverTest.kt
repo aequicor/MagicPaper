@@ -44,8 +44,23 @@ class ProfileResolverTest {
 
     @Test
     fun nullWhenNothingConfigured() {
-        val resolved = ProfileResolver.resolve(null, AppSettings(), listOf(unconfigured))
+        val resolved = ProfileResolver.resolve(null as ChatSession?, AppSettings(), listOf(unconfigured))
         assertNull(resolved)
+    }
+
+    @Test
+    fun profileIdOverrideWinsOverGlobal() {
+        // Порядок для кодинг-сессии тот же, что для свитка: переопределение важнее глобального.
+        val settings = AppSettings(activeLlmProfileId = "a")
+        val resolved = ProfileResolver.resolve("b", settings, profiles)
+        assertEquals("b", resolved?.id)
+    }
+
+    @Test
+    fun profileIdFallsBackToFirstConfigured() {
+        val settings = AppSettings(activeLlmProfileId = "нет-такого")
+        val resolved = ProfileResolver.resolve(null as String?, settings, profiles)
+        assertEquals("a", resolved?.id)
     }
 
     @Test

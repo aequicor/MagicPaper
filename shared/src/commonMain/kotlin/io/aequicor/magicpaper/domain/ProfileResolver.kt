@@ -7,16 +7,20 @@ package io.aequicor.magicpaper.domain
 object ProfileResolver {
     /**
      * Профиль для запроса. Приоритет:
-     *  1. переопределение свитка (session.llmProfileId),
+     *  1. переопределение свитка/сессии (profileId),
      *  2. глобальный активный профиль (settings.activeLlmProfileId),
      *  3. первый настроенный профиль.
      * Ненастроенные профили пропускаются; если ни одного нет — null.
      */
-    fun resolve(session: ChatSession?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
-        val wanted = session?.llmProfileId ?: settings.activeLlmProfileId
+    fun resolve(profileId: String?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
+        val wanted = profileId ?: settings.activeLlmProfileId
         return profiles.firstOrNull { it.id == wanted && it.configured }
             ?: profiles.firstOrNull { it.configured }
     }
+
+    /** Профиль для чат-свитка (переопределение свитка важнее глобального). */
+    fun resolve(session: ChatSession?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? =
+        resolve(session?.llmProfileId, settings, profiles)
 }
 
 /**

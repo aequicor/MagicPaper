@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,14 +31,14 @@ import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AdvancedSettings
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.DiscoveredModel
-import io.aequicor.magicpaper.domain.EffortLevel
+import io.aequicor.magicpaper.domain.Effort
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderCatalog
 import io.aequicor.magicpaper.domain.ProviderSpec
 import io.aequicor.magicpaper.domain.SearchProvider
-import io.aequicor.magicpaper.domain.title
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.components.EffortControl
 import io.aequicor.magicpaper.ui.Screen
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.util.Id
@@ -175,7 +176,12 @@ private fun ProfileRowEntry(
                 maxLines = 1,
             )
             Text(
-                "${profile.provider.name.lowercase()} · усилие: ${profile.effort.name.lowercase()}",
+                buildString {
+                    append(profile.provider.name.lowercase())
+                    append(" · усилие: ")
+                    append(Effort.label(profile.effort).lowercase())
+                    if (profile.favoriteModels.isNotEmpty()) append(" · избранное: ${profile.favoriteModels.size}")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -270,6 +276,34 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             }
         }
         Field("Имя модели (или своё)", draft.modelId) { draft = draft.copy(modelId = it) }
+        // Избранные модели: именно этот список показывается при выборе модели в чате и кодинг-сессиях.
+        val currentIsFavorite = draft.modelId.isNotBlank() && draft.modelId in draft.favoriteModels
+        TextButton(
+            onClick = {
+                draft = if (currentIsFavorite) {
+                    draft.copy(favoriteModels = draft.favoriteModels - draft.modelId)
+                } else {
+                    draft.copy(favoriteModels = draft.favoriteModels + draft.modelId)
+                }
+            },
+            enabled = draft.modelId.isNotBlank(),
+        ) {
+            Text(if (currentIsFavorite) "★ Модель в избранном — убрать" else "☆ В избранные модели (для чата и кодинга)")
+        }
+        if (draft.favoriteModels.isNotEmpty()) {
+            Text(
+                "Эти модели появятся в переключателе чата и кодинг-сессий:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                draft.favoriteModels.forEach { favorite ->
+                    TextButton(onClick = { draft = draft.copy(favoriteModels = draft.favoriteModels - favorite) }) {
+                        Text("★ $favorite ✕")
+                    }
+                }
+            }
+        }
         val effortNative = ModelDefaults.supportsEffort(draft)
         Text(
             if (effortNative) "Модель поддерживает нативное усилие."
@@ -303,7 +337,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         }
         if (state.editorModels.isNotEmpty()) {
             Text(
-                "Доступно моделей: ${state.editorModels.size}. Тап — выбрать модель и применить её рекомендуемые параметры.",
+                "Доступно моделей: ${state.editorModels.size}. Тап — выбрать модель и применить её рекомендуемые параметры; ★ — в избранное.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -311,6 +345,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                 DiscoveredModelRow(
                     model = found,
                     selected = found.id == draft.modelId,
+                    favorite = found.id in draft.favoriteModels,
                     onClick = {
                         val rec = found.recommendation
                         draft = draft.copy(modelId = found.id, effort = rec.effort, advanced = rec.advanced)
@@ -318,13 +353,20 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                         maxTokens = rec.advanced.maxTokens?.toString().orEmpty()
                         topP = rec.advanced.topP?.toString().orEmpty()
                     },
+                    onToggleFavorite = {
+                        draft = if (found.id in draft.favoriteModels) {
+                            draft.copy(favoriteModels = draft.favoriteModels - found.id)
+                        } else {
+                            draft.copy(favoriteModels = draft.favoriteModels + found.id)
+                        }
+                    },
                 )
             }
         }
 
         Spacer(Modifier.height(10.dp))
         Section("Усилие")
-        EffortPicker(draft.effort) { draft = draft.copy(effort = it) }
+        EffortControl(effort = draft.effort, onEffort = { draft = draft.copy(effort = it) })
 
         Spacer(Modifier.height(10.dp))
         Section("Тонкие настройки (пусто = по умолчанию провайдера)")
@@ -343,6 +385,11 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                 onClick = {
                     vm.saveLlmProfile(
                         draft.copy(
+                            // Текущая модель автоматически попадает в избранное,
+                            // чтобы переключатель в чате не остался пустым.
+                            favoriteModels = (draft.favoriteModels + draft.modelId)
+                                .filter { it.isNotBlank() }
+                                .distinct(),
                             advanced = AdvancedSettings(
                                 temperature = temperature.toDoubleOrNull(),
                                 maxTokens = maxTokens.toIntOrNull(),
@@ -365,9 +412,15 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
     }
 }
 
-/** Строка найденной у провайдера модели: поддержка усилия и рекомендуемые параметры. */
+/** Строка найденной у провайдера модели: поддержка усилия, рекомендации, звезда избранного. */
 @Composable
-private fun DiscoveredModelRow(model: DiscoveredModel, selected: Boolean, onClick: () -> Unit) {
+private fun DiscoveredModelRow(
+    model: DiscoveredModel,
+    selected: Boolean,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -387,12 +440,22 @@ private fun DiscoveredModelRow(model: DiscoveredModel, selected: Boolean, onClic
             Text(model.id, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
                 if (model.supportsEffort) {
-                    "нативное усилие · рекомендуется: ${model.recommendation.effort.title}"
+                    "нативное усилие · рекомендуется: ${Effort.label(model.recommendation.effort)}"
                 } else {
-                    "без нативного усилия · рекомендуется: ${model.recommendation.effort.title} (температура)"
+                    "без нативного усилия · рекомендуется: ${Effort.label(model.recommendation.effort)} (температура)"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = onToggleFavorite) {
+            Text(
+                if (favorite) "★" else "☆",
+                color = if (favorite) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
         }
         Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -425,25 +488,6 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, onClick: () -> Un
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
-        }
-    }
-}
-
-/** Сегментированный выбор уровня усилия. */
-@Composable
-internal fun EffortPicker(selected: EffortLevel, onSelect: (EffortLevel) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-        EffortLevel.entries.forEach { level ->
-            TextButton(onClick = { onSelect(level) }) {
-                Text(
-                    level.title,
-                    color = if (level == selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
         }
     }
 }

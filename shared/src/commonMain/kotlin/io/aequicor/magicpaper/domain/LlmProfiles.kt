@@ -2,7 +2,7 @@ package io.aequicor.magicpaper.domain
 
 import kotlinx.serialization.Serializable
 
-/** Тип провайдера: определяет транспорт и формат запроса. */
+/** Тип провайдера: определяет, какой транспорт и какой формат запроса использовать. */
 @Serializable
 enum class ProviderType {
     /** Любой сервер с /chat/completions: OpenAI, Ollama, LM Studio, vLLM, OpenRouter… */
@@ -13,63 +13,164 @@ enum class ProviderType {
 
     /** Google AI (Generative Language API, generateContent). */
     GOOGLE,
+
+    /** OpenRouter: OpenAI-совместимый транспорт + поле reasoning для effort-моделей. */
+    OPENROUTER,
 }
 
-/** Уровень усилия модели: единая шкала, каждый транспорт мапит её в свой формат. */
+/** Как транспорт подставляет секрет в запрос. Значение по умолчанию сохраняет прежнее поведение. */
 @Serializable
-enum class EffortLevel { LOW, MEDIUM, HIGH }
+enum class LlmAuthType {
+    /** Заголовок Authorization: Bearer … (OpenAI, OpenRouter, Google). */
+    BEARER,
 
-/** Однобуквенная подпись уровня для чипов и списков. */
-val EffortLevel.glyph: String
-    get() = when (this) {
-        EffortLevel.LOW -> "Н"
-        EffortLevel.MEDIUM -> "С"
-        EffortLevel.HIGH -> "В"
-    }
+    /** Заголовок x-api-key (прямой доступ к Anthropic). */
+    X_API_KEY,
 
-/** Человекочитаемое название уровня. */
-val EffortLevel.title: String
-    get() = when (this) {
-        EffortLevel.LOW -> "Низкое"
-        EffortLevel.MEDIUM -> "Среднее"
-        EffortLevel.HIGH -> "Высокое"
-    }
+    /** Параметр запроса ?key=… (Ollama Cloud и совместимые шлюзы). */
+    QUERY_KEY,
+}
 
-/**
- * Тонкие параметры подключения. Пустое значение = «по умолчанию провайдера»:
- * транспорт просто не добавляет соответствующее поле в запрос.
- */
+/** Для каких задач подходит модель. В UI используется как метка, в домене — как фильтр. */
 @Serializable
-data class AdvancedSettings(
-    val temperature: Double? = null,
-    val maxTokens: Int? = null,
-    val topP: Double? = null,
-    val timeoutSeconds: Int = 60,
-    /** Пусто = штатный системный промпт агента. */
-    val systemPromptOverride: String = "",
-    /** Сколько последних сообщений истории отправлять модели. */
-    val contextMessages: Int = 8,
-)
+enum class ModelKind {
+    GENERAL,
+    CODING,
+    REASONING,
+    VISION,
+    EMBEDDING,
+}
 
-/**
- * Профиль подключения: провайдер + доступ + модель + режимы.
- * Единица переключения в чате и настройках.
- */
+/** Расширенные параметры подключения: таймауты и лимиты, завязанные на конкретный эндпоинт. */
+@Serializable
+data class AdvancedLlmOptions(
+    val temperature: Double = 0.7,
+    /** Сколько секунд ждать отклик; 0 — без ограничения. */
+    val timeoutSeconds: Int = 120,
+    /** Верхняя граница ответа в токенах; Anthropic требует её явно. */
+    val maxTokens: Int = 8192,
+    /** Верхняя граница контекста модели; используется для индикатора загрузки. */
+    val contextLimit: Int = 128_000,
+) {
+    val safeTemperature: Double get() = temperature.coerceIn(0.0, 2.0)
+    val safeMaxTokens: Int get() = maxTokens.coerceIn(512, 128_000)
+    val safeTimeoutSeconds: Int get() = timeoutSeconds.coerceIn(0, 3600)
+    val safeContextLimit: Int get() = contextLimit.coerceIn(1_024, 10_000_000)
+}
+
 @Serializable
 data class LlmProfile(
     val id: String,
-    val name: String,
-    val provider: ProviderType = ProviderType.OPENAI_COMPATIBLE,
+    val title: String,
     val baseUrl: String = "",
     val apiKey: String = "",
+    val provider: ProviderType = ProviderType.OPENAI_COMPATIBLE,
+    /** Как подставлять ключ; null при пустом ключе означает «без авторизации». */
+    val authType: LlmAuthType? = LlmAuthType.BEARER,
+    /** Модель по умолчанию: выбирается при старте чата и в переключателе моделей. */
     val modelId: String = "",
-    val effort: EffortLevel = EffortLevel.MEDIUM,
-    val advanced: AdvancedSettings = AdvancedSettings(),
-    val createdAt: Long = 0,
+    /** Усилие по умолчанию для профиля; см. [EffortSelection]. */
+    val effort: EffortSelection = EffortSelection.Default,
+    /** Модель по умолчанию для coding-сессий (отдельный контур, см. domain/CodingSession.kt). */
+    val codingModelId: String = "",
+    /** Избранные модели: быстрые кнопки переключения в чате, порядок = порядок добавления. */
+    val favoriteModels: List<String> = emptyList(),
+    /**
+     * Усилие по конкретным моделям. Наследуется от [effort], когда ключа нет,
+     * поэтому профиль, где ничего не меняли, остаётся одним значением.
+     */
+    val effortOverrides: Map<String, EffortSelection> = emptyMap(),
+    val advanced: AdvancedLlmOptions = AdvancedLlmOptions(),
 ) {
-    /** Достаточен ли профиль для вызова модели. */
-    val configured: Boolean get() = baseUrl.isNotBlank() && modelId.isNotBlank()
+    val configured: Boolean get() = modelId.isNotBlank() && baseUrl.isNotBlank()
+    val codingConfigured: Boolean get() = codingModelId.isNotBlank() && baseUrl.isNotBlank()
 
-    /** Короткая подпись для чипа в чате: «Ollama (локально) · llama3.2». */
-    val shortLabel: String get() = if (modelId.isBlank()) name else "$name · $modelId"
+    /**
+     * Рабочее состояние переключателя: показываем модель по умолчанию, даже если
+     * последняя активная сессия была из другого профиля.
+     */
+    fun resolvedModel(activeModel: String?): String? =
+        activeModel?.takeIf { it.isNotBlank() }?.takeIf { isFavoriteModel(it) || it == modelId || it == codingModelId }
+            ?: modelId.takeIf { it.isNotBlank() }
+
+    /** Все модели, показываемые в переключателях: избранные, затем модель по умолчанию и coding-модель. */
+    val displayModels: List<String>
+        get() = buildList {
+            favoriteModels.forEach { add(it) }
+            listOf(modelId, codingModelId).forEach {
+                if (it.isNotBlank() && it !in this) add(it)
+            }
+        }
+
+    fun isFavoriteModel(model: String): Boolean = favoriteModels.contains(model)
+
+    /**
+     * Переключение модели: если модель уже в списке — снимаем избранное, иначе добавляем.
+     * При удалении активной модели следующей становится следующая по списку.
+     */
+    fun withFavoriteModel(model: String): LlmProfile {
+        val trimmed = model.trim()
+        if (trimmed.isEmpty()) return this
+        return if (isFavoriteModel(trimmed)) {
+            copy(favoriteModels = favoriteModels - trimmed)
+        } else {
+            copy(favoriteModels = favoriteModels + trimmed)
+        }
+    }
+
+    /** Выбор усилия для модели: персональная настройка, иначе профильная по умолчанию. */
+    fun effortSelectionFor(modelId: String = this.modelId): EffortSelection =
+        effortOverrides[modelId.trim()] ?: effort
+
+    /** Что реально уйдёт в запрос по модели, с учётом её возможностей. */
+    fun resolveEffort(
+        capability: ReasoningCapability,
+        modelId: String = this.modelId,
+    ): ResolvedEffort = capability.resolveEffort(effortSelectionFor(modelId))
+
+    /** Подпись для UI: «умолч», «ср», а при подмене уровня — «х-выс→выс». */
+    fun effortLabel(
+        capability: ReasoningCapability,
+        modelId: String = this.modelId,
+    ): String {
+        val resolved = resolveEffort(capability, modelId)
+        val shown = resolved.level?.shortLabel ?: "умолч"
+        return if (resolved.clamped) "${resolved.requested?.shortLabel ?: shown}→$shown" else shown
+    }
+
+    /**
+     * Запомнить усилие для модели. Выбор, совпадающий с профилем по умолчанию,
+     * ключом не засоряется — модель наследует [effort].
+     */
+    fun withEffortFor(modelId: String, selection: EffortSelection): LlmProfile {
+        val key = modelId.trim()
+        if (key.isEmpty()) return copy(effort = selection)
+        val overrides = effortOverrides.toMutableMap().apply {
+            if (selection == effort) remove(key) else put(key, selection)
+        }
+        return copy(effortOverrides = overrides)
+    }
+}
+
+@Serializable
+enum class LlmChatRole {
+    SYSTEM,
+    USER,
+    ASSISTANT,
+}
+
+@Serializable
+data class LlmMessage(val role: LlmChatRole, val content: String)
+
+@Serializable
+data class LlmProfileSummary(
+    val version: Int = 1,
+    val profiles: List<LlmProfile> = emptyList(),
+)
+
+interface LlmProfileRepository {
+    suspend fun load(): List<LlmProfile>
+    suspend fun save(profile: LlmProfile)
+    suspend fun delete(id: String)
+    suspend fun replaceAll(profiles: List<LlmProfile>)
 }

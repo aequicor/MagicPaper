@@ -26,11 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import io.aequicor.magicpaper.domain.EffortLevel
+import io.aequicor.magicpaper.domain.Effort
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
-import io.aequicor.magicpaper.domain.glyph
-import io.aequicor.magicpaper.domain.title
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 
 /**
@@ -112,11 +110,25 @@ fun ModelSwitcherContent(
             }
         }
 
-        // Усилие выбранного профиля — быстрая крутилка.
+        // Избранные модели и усилие выбранного профиля.
         val resolved = profiles.firstOrNull { it.id == resolvedId }
         if (resolved != null) {
             Spacer(Modifier.height(6.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Модель",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FavoriteModelsSection(
+                profile = resolved,
+                onPick = { modelId ->
+                    if (resolved.id != resolvedId) vm.selectChatProfile(resolved.id)
+                    vm.setProfileModel(resolved.id, modelId)
+                },
+                onEditSource = { vm.editLlmProfile(resolved.id) },
+            )
             Spacer(Modifier.height(8.dp))
             val effortSupported = ModelDefaults.supportsEffort(resolved)
             Text(
@@ -124,20 +136,7 @@ fun ModelSwitcherContent(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                EffortLevel.entries.forEach { level ->
-                    TextButton(onClick = { vm.setProfileEffort(resolved.id, level) }) {
-                        Text(
-                            level.title,
-                            color = if (resolved.effort == level) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                }
-            }
+            EffortControl(effort = resolved.effort, onEffort = { vm.setProfileEffort(resolved.id, it) })
             TextButton(onClick = { vm.editLlmProfile(resolved.id) }) {
                 Text("⚙ Тонкие настройки источника…")
             }
@@ -150,14 +149,16 @@ fun ModelSwitcherContent(
     }
 }
 
-/** Строка профиля: маркер выбора, имя·модель, усилие, кнопка «основной». */
+/** Строка профиля: маркер выбора, имя·модель, усилие, кнопка «основной».
+ * [note] — доп. подпись вместо статусной строки (например, предупреждение о совместимости). */
 @Composable
-private fun ProfileRow(
+internal fun ProfileRow(
     profile: LlmProfile,
     selected: Boolean,
     isMain: Boolean,
     onClick: () -> Unit,
     onMakeMain: () -> Unit,
+    note: String? = null,
 ) {
     Row(
         modifier = Modifier
@@ -179,7 +180,7 @@ private fun ProfileRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(profile.shortLabel, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
-                buildString {
+                note ?: buildString {
                     if (isMain) append("основной")
                     if (!profile.configured) append(if (isNotEmpty()) " · не настроен" else "не настроен")
                 }.ifBlank { " " },
@@ -188,11 +189,74 @@ private fun ProfileRow(
             )
         }
         Text(
-            profile.effort.glyph,
+            Effort.shortLabel(profile.effort),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.width(6.dp))
         TextButton(onClick = onMakeMain, enabled = !isMain) { Text("основной") }
+    }
+}
+
+/**
+ * Избранные модели выбранного профиля: именно этот список показывается при выборе модели.
+ * Тап — выбрать модель (и сам профиль, если выбран другой).
+ */
+@Composable
+internal fun FavoriteModelsSection(
+    profile: LlmProfile,
+    onPick: (String) -> Unit,
+    onEditSource: () -> Unit,
+) {
+    // Текущая модель всегда видна, даже если её забыли добавить в избранное.
+    val models = if (profile.modelId.isBlank()) {
+        profile.favoriteModels
+    } else if (profile.modelId in profile.favoriteModels) {
+        profile.favoriteModels
+    } else {
+        listOf(profile.modelId) + profile.favoriteModels
+    }
+    if (models.isEmpty()) {
+        Text(
+            "Модель не выбрана. Отметьте избранные модели в настройках источника — они появятся здесь.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = onEditSource) { Text("⚙ Открыть настройки источника…") }
+        return
+    }
+    models.forEach { modelId ->
+        FavoriteModelRow(modelId = modelId, selected = modelId == profile.modelId, onClick = { onPick(modelId) })
+    }
+    if (profile.favoriteModels.isEmpty()) {
+        Text(
+            "Отметьте избранные модели в настройках источника — они появятся в этом списке.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Строка избранной модели: маркер выбора и имя. */
+@Composable
+internal fun FavoriteModelRow(modelId: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick)
+            .heightIn(min = 40.dp)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (selected) "◉" else "○",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(modelId, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
     }
 }

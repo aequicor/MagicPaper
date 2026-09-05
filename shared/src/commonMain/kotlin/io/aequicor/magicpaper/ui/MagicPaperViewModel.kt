@@ -17,7 +17,6 @@ import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.DocRepository
-import io.aequicor.magicpaper.domain.EffortLevel
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
@@ -164,10 +163,24 @@ class MagicPaperViewModel(
         return migrated
     }
 
-    /** Разрешённый профиль для текущего свитка (см. [ProfileResolver]). */
-    private fun resolvedProfile(): LlmProfile? {
+    /**
+     * Разрешённый профиль кодинг-сессии: переопределение сессии важнее глобального;
+     * порядок тот же, что у чата (см. [ProfileResolver]).
+     */
+    fun codingProfileOf(session: CodingSession): LlmProfile? {
         val s = _state.value
-        return ProfileResolver.resolve(s.current, s.settings, s.llmProfiles)
+        return ProfileResolver.resolve(session.llmProfileId, s.settings, s.llmProfiles)
+    }
+
+    /** Переопределить профиль кодинг-сессии (или снять переопределение: profileId = null). */
+    fun selectCodingProfile(sessionId: String, profileId: String?) {
+        val repo = codingProjects ?: return
+        val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        val updated = ui.session.copy(llmProfileId = profileId)
+        scope.launch {
+            repo.saveSession(updated)
+            updateCodingSession(sessionId) { it.copy(session = updated) }
+        }
     }
 
     // ---- Навигация -------------------------------------------------------
@@ -357,6 +370,13 @@ class MagicPaperViewModel(
                 val cleared = session.copy(llmProfileId = null)
                 chats.save(cleared)
             }
+            // То же для кодинг-сессий (переопределение источника агента).
+            val codingRepo = codingProjects
+            _state.value.coding.sessions.filter { it.session.llmProfileId == id }.forEach { item ->
+                val cleared = item.session.copy(llmProfileId = null)
+                codingRepo?.saveSession(cleared)
+                updateCodingSession(item.session.id) { it.copy(session = cleared) }
+            }
             bootstrap()
             _state.update { it.copy(notice = "Источник удалён.") }
         }
@@ -390,11 +410,24 @@ class MagicPaperViewModel(
     }
 
     /** Быстрая смена уровня усилия профиля (из переключателя в чате). */
-    fun setProfileEffort(id: String, effort: EffortLevel) {
+    fun setProfileEffort(id: String, effort: Int) {
         scope.launch {
             val profile = profileRepo.all().firstOrNull { it.id == id } ?: return@launch
             profileRepo.save(profile.copy(effort = effort))
             _state.update { it.copy(llmProfiles = profileRepo.all()) }
+        }
+    }
+
+    /** Быстрая смена модели профиля — выбор из избранных в переключателе. */
+    fun setProfileModel(id: String, modelId: String) {
+        if (modelId.isBlank()) return
+        scope.launch {
+            val profile = profileRepo.all().firstOrNull { it.id == id } ?: return@launch
+            profileRepo.save(profile.copy(modelId = modelId))
+            _state.update {
+                val updated = it.llmProfiles.map { p -> if (p.id == id) p.copy(modelId = modelId) else p }
+                it.copy(llmProfiles = updated, notice = "Модель: $modelId.")
+            }
         }
     }
 
@@ -811,7 +844,7 @@ class MagicPaperViewModel(
                 it.copy(messages = history, running = true, draft = recorder.draft(active = true))
             }
             var piSessionId = session.piSessionId
-            runtime.run(project, session, trimmed, resolvedProfile()).collect { event ->
+            runtime.run(project, session, trimmed, codingProfileOf(session)).collect { event ->
                 if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                     piSessionId = event.sessionId
                 }

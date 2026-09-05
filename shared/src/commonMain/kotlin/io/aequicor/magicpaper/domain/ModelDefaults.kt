@@ -1,79 +1,113 @@
 package io.aequicor.magicpaper.domain
 
-/** Рекомендуемые параметры для модели: усилие и тонкие настройки. */
-data class ModelRecommendation(
-    val effort: EffortLevel,
-    val advanced: AdvancedSettings,
-)
-
-/** Найденная у провайдера модель с её возможностями и рекомендациями. */
-data class DiscoveredModel(
-    val id: String,
-    val supportsEffort: Boolean,
-    val recommendation: ModelRecommendation,
-)
-
-/** Каталог моделей, доступных у провайдера (запрашивается по сети). */
-interface ModelDirectory {
-    suspend fun models(profile: LlmProfile): List<DiscoveredModel>
-}
-
 /**
- * Дефолты моделей: определение поддержки усилия и рекомендуемые параметры.
- * Кураторский каталог ([ProviderCatalog]) имеет приоритет; для моделей вне
- * каталога применяется эвристика по семействам имён.
+ * Эвристические возможности моделей по управлению усилием.
+ *
+ * Порядок такой же, как в каталоге провайдера: сначала ручной пресет, затем
+ * разбор идентификатора. Эвристика — это единственное место, где допустимо
+ * «угадывать по имени»; она применяется один раз при импорте модели и всегда
+ * возвращает конкретный набор уровней, а не булево «похоже на reasoning».
  */
 object ModelDefaults {
 
-    fun supportsEffort(profile: LlmProfile): Boolean = supportsEffort(profile.provider, profile.modelId)
-
-    fun supportsEffort(provider: ProviderType, modelId: String): Boolean =
-        ProviderCatalog.modelInfo(provider, modelId)?.supportsEffort ?: heuristicEffort(modelId)
+    data class ModelRecommendation(
+        val effort: EffortSelection,
+        val advanced: AdvancedLlmOptions,
+    )
 
     /**
-     * Эвристика по семействам моделей с нативным управлением усилием.
-     * Префикс после последнего «/» — провайдерские списки часто идут с префиксами
-     * вида «openrouter/…», «vertex/…».
+     * Настройки по умолчанию для новой модели.
+     * Дефолт усилия — «по умолчанию провайдера», если модель сама не объявила
+     * штатный уровень; max_tokens приподнимаем, чтобы рассуждения влезли в ответ.
      */
-    fun heuristicEffort(modelId: String): Boolean {
-        val id = modelId.substringAfterLast('/').lowercase()
-        return when {
-            id.startsWith("gpt-5") || id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> true
-            id.startsWith("claude-sonnet-4") || id.startsWith("claude-opus-4") ||
-                id.startsWith("claude-haiku-4") || id.startsWith("claude-3-7") || id.startsWith("claude-3.7") -> true
-            id.startsWith("gemini-2.5") || id.startsWith("gemini-3") -> true
-            id.startsWith("qwq") || id.startsWith("deepseek-r1") -> true
-            "reasoning" in id || "thinking" in id -> true
-            else -> false
-        }
-    }
-
-    /** Рекомендуемые параметры для связки провайдер + модель. */
-    fun recommendation(provider: ProviderType, modelId: String): ModelRecommendation {
-        val effortModel = supportsEffort(provider, modelId)
-        return when (provider) {
-            ProviderType.ANTHROPIC -> ModelRecommendation(
-                effort = EffortLevel.MEDIUM,
-                // max_tokens обязан превышать бюджет мышления —
-                // пейлоад при необходимости поднимает его автоматически.
-                advanced = AdvancedSettings(maxTokens = 8192),
-            )
-            ProviderType.GOOGLE -> ModelRecommendation(
-                effort = EffortLevel.MEDIUM,
-                advanced = AdvancedSettings(),
-            )
-            ProviderType.OPENAI_COMPATIBLE -> if (effortModel) {
-                // Рассуждающие модели не принимают температуру — оставляем провайдеру.
-                ModelRecommendation(EffortLevel.MEDIUM, AdvancedSettings())
-            } else {
-                ModelRecommendation(EffortLevel.MEDIUM, AdvancedSettings(temperature = 0.7))
+    fun recommendation(
+        provider: ProviderType,
+        modelId: String,
+        current: AdvancedLlmOptions = AdvancedLlmOptions(),
+    ): ModelRecommendation {
+        val capability = capability(provider, modelId)
+        val controls = capability as? ReasoningCapability.Controls
+        val effort = controls?.default?.let { EffortSelection.of(it) } ?: EffortSelection.Default
+        val maxTokens = if (controls == null) {
+            when (provider) {
+                ProviderType.ANTHROPIC -> 8192
+                ProviderType.GOOGLE -> 8192
+                else -> current.maxTokens
             }
+        } else {
+            16384
+        }
+        return ModelRecommendation(
+            effort = effort,
+            advanced = current.copy(
+                maxTokens = maxOf(current.maxTokens, maxTokens),
+                contextLimit = current.safeContextLimit,
+            ),
+        )
+    }
+
+    /** Возможность модели по профилю (провайдер + активная модель). */
+    fun capability(profile: LlmProfile): ReasoningCapability =
+        capability(profile.provider, profile.modelId)
+
+    /** Возможность модели по провайдеру и её идентификатору. */
+    fun capability(provider: ProviderType, modelId: String): ReasoningCapability {
+        val id = modelId.trim().lowercase()
+        if (id.isEmpty()) return ReasoningCapability.None
+        return when (provider) {
+            ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER -> openAiCapability(id)
+            ProviderType.ANTHROPIC -> anthropicCapability(id)
+            ProviderType.GOOGLE -> googleCapability(id)
         }
     }
 
-    /** Собирает найденные модели из сырых идентификаторов (дедупликация, пометки). */
+    /** Есть ли у модели нативная ручка усилия — спрашивают транспорты и UI. */
+    fun supportsEffort(provider: ProviderType, modelId: String): Boolean =
+        capability(provider, modelId).supportsEffort
+
+    fun supportsEffort(profile: LlmProfile): Boolean = supportsEffort(profile.provider, profile.modelId)
+
     fun discover(provider: ProviderType, ids: List<String>): List<DiscoveredModel> =
-        ids.distinct()
-            .filter { it.isNotBlank() }
-            .map { id -> DiscoveredModel(id, supportsEffort(provider, id), recommendation(provider, id)) }
+        ids.filter { it.isNotBlank() }.sorted().map { id ->
+            ModelInfo(id, reasoning = capability(provider, id))
+        }
+
+    // --- семейные профили -------------------------------------------------------------
+
+    /**
+     * OpenAI-совместимые reasoning-модели. `reasoning_effort` — общий язык
+     * совместимых серверов, поэтому уровни отдаются дословно.
+     */
+    private fun openAiCapability(id: String): ReasoningCapability = when {
+        id.startsWith("gpt-5") || id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") ->
+            ReasoningPresets.OPENAI_EFFORT
+
+        id.startsWith("deepseek-reasoner") || id.startsWith("qwq") ->
+            // У legacy deepseek-reasoner своя вокабуляр, честно говорим: «режим на модели».
+            ReasoningPresets.MODE_ONLY
+
+        "deepseek-v4" in id || "glm" in id || "kimi" in id || ("qwen3" in id && "thinking" in id) ->
+            ReasoningPresets.COMPAT_EFFORT
+
+        "reasoning" in id || "thinking" in id -> ReasoningPresets.REACT_EFFORT
+
+        else -> ReasoningCapability.None
+    }
+
+    /** Anthropic: две эпохи — «адаптивное усилие» (4.6+) и бюджет токенов. */
+    private fun anthropicCapability(id: String): ReasoningCapability = when {
+        "fable" in id || "claude-opus-4-6" in id || "claude-opus-4-7" in id ||
+            "claude-sonnet-4-6" in id || "claude-5" in id -> ReasoningPresets.ANTHROPIC_ADAPTIVE
+
+        id.startsWith("claude-") -> ReasoningPresets.ANTHROPIC_BUDGET
+
+        else -> ReasoningCapability.None
+    }
+
+    /** Google: 2.5 думает бюджетом токенов (есть «динамически»), 3 — уровнем. */
+    private fun googleCapability(id: String): ReasoningCapability = when {
+        id.startsWith("gemini-3") || "3-pro" in id || "3-flash" in id -> ReasoningPresets.GEMINI_LEVEL
+        id.startsWith("gemini-2.5") -> ReasoningPresets.GEMINI_BUDGET
+        else -> ReasoningCapability.None
+    }
 }

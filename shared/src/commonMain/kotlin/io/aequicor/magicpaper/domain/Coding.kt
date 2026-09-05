@@ -34,6 +34,11 @@ data class CodingSession(
     val createdAt: Long,
     /** Идентификатор сессии пи-агента (контекст сессии продолжается между запусками). */
     val piSessionId: String = "",
+    /**
+     * Профиль подключения только для этой кодинг-сессии.
+     * null = глобальный активный профиль из настроек.
+     */
+    val llmProfileId: String? = null,
 )
 
 /**
