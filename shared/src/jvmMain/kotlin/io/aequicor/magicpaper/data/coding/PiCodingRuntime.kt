@@ -186,20 +186,16 @@ class PiCodingRuntime(
             "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
             "--no-approve",
         )
-        // Подсказка модели про точное совпадение oldText: fuzzy-режим edit
-        // отключён патчем движка, несовпадение честно вернёт ошибку.
-        args += listOf(
-            "--append-system-prompt",
-            "Files may contain Russian typography (em dash, guillemets, yo). " +
-                "In edit tools, copy oldText/newText EXACTLY as read() returned it: never " +
-                "substitute - for the em dash, \" for guillemets, or drop characters. " +
-                "If an edit fails to match, re-read that region and retry with the exact text.",
-        )
+        // Подсказка модели — ФАЙЛОМ: пи сам читает путь к существующему файлу
+        // (см. resolvePromptInput). Свободный текст с кавычками в аргументах на
+        // Windows ломается при сборке командной строки ProcessBuilder: аргумент
+        // распадается на части, и обрывки уходят в «сообщения» — агент видит
+        // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
+        args += listOf("--append-system-prompt", File(pihome, HINTS_FILE).absolutePath)
         // Контекст продолжает КОДИНГ-СЕССИЯ (у проекта их может быть несколько).
         if (session.piSessionId.isNotBlank()) {
             args += listOf("--session-id", session.piSessionId)
         }
-        args += listOf("--", prompt)
 
         val stderrFile = File.createTempFile("magicpaper-pi-stderr", ".log")
         stderrFile.deleteOnExit()
@@ -208,9 +204,16 @@ class PiCodingRuntime(
             .redirectError(stderrFile)
             .apply { environment().putAll(piEnv(node)) }
             .start()
-        // Пи в неинтерактивном режиме читает stdin до EOF (сливает его в промпт) —
-        // из процесса пайп stdin без данных повесил бы агента; закрываем сразу.
-        runCatching { process.outputStream.close() }
+        // Запрос пользователя передаём пайп-стандарт-вводом (пи читает пайп как
+        // UTF-8 и берёт его первоначальным промптом, --mode json неинтерактивен).
+        // Байтовый канал immune к кавычкам/пробелам/переводам строк, в отличие от
+        // аргументов командной строки. Пи читает до EOF — пишем и закрываем.
+        runCatching {
+            process.outputStream.use { out ->
+                out.write(prompt.toByteArray(StandardCharsets.UTF_8))
+                out.flush()
+            }
+        }
         runningProcesses[session.id] = process
         abortedSessions.remove(session.id)
 
@@ -675,6 +678,17 @@ class PiCodingRuntime(
         File(pihome, "settings.json").writeText(
             """{"defaultProjectTrust":"never",${shellField}${toolsField}"telemetry":false}"""
         )
+        // Подсказка модели про точное совпадение текста правок: путь к этому
+        // файлу уходит в --append-system-prompt (файл читает сам пи, см. run).
+        File(pihome, HINTS_FILE).writeText(
+            """
+            Files may contain Russian typography: em dashes (—), guillemets («»…«»), the letter ё.
+            In edit tools, copy oldText/newText EXACTLY as read() returned them: do not replace
+            an em dash with a hyphen or guillemets with straight quotes, do not drop characters.
+            If an edit fails to match, re-read that region and retry with the exact text.
+            """.trimIndent(),
+            StandardCharsets.UTF_8
+        )
     }
 
     /** Модель из профиля подключения мостится в конфиг пи изолированно. */
@@ -848,5 +862,8 @@ class PiCodingRuntime(
 
         /** Пользовательский escape hatch: явный путь к bash.exe для пи. */
         const val WINDOWS_SHELL_ENV = "MAGICPAPER_SHELL_PATH"
+
+        /** Подсказка модели в пи-доме (уходит в --append-system-prompt как файл). */
+        const val HINTS_FILE = "agent-hints.md"
     }
 }
