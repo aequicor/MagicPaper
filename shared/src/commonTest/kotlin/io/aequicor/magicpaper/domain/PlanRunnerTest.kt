@@ -26,6 +26,7 @@ class PlanRunnerTest {
             session: CodingSession,
             prompt: String,
             profile: LlmProfile?,
+            attachments: List<Attachment>,
         ): Flow<CodingEvent> {
             prompts += prompt
             val reply = replies.entries.firstOrNull { prompt.contains(it.key) }?.value ?: default

@@ -48,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
@@ -63,6 +64,8 @@ import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.CodingAttachments
+import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.theme.MagicFonts
 
 /** Экран «Проекты и код»: в проекте несколько кодинг-сессий, у каждой — кружок активности. */
@@ -157,8 +160,9 @@ private fun SessionArea(
                 session = active,
                 busy = active.running,
                 engineReady = ui.runtime.ready,
-                onSend = { text -> vm.sendCodingPromptTo(active.session.id, text) },
+                onSend = { text, attachments -> vm.sendCodingPromptTo(active.session.id, text, attachments) },
                 onAbort = { vm.abortCodingSession(active.session.id) },
+                onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
             )
         }
     }
@@ -551,8 +555,9 @@ private fun CodingChat(
     session: CodingSessionUi,
     busy: Boolean,
     engineReady: Boolean,
-    onSend: (String) -> Unit,
+    onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
+    onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
 ) {
     val listState = rememberLazyListState()
     // Перематываем только если пользователь и так внизу — иначе живая лента
@@ -596,6 +601,7 @@ private fun CodingChat(
             busy = busy,
             onSend = onSend,
             onAbort = onAbort,
+            onPickAttachments = onPickAttachments,
         )
     }
 }
@@ -629,6 +635,8 @@ private fun CodingMessageBubble(message: CodingMessage) {
         ) {
             if (isUser) {
                 Text(message.text, style = MaterialTheme.typography.bodyLarge)
+                // Прикреплённые к запросу файлы (лежат в изолированной папке рантайма).
+                CodingAttachments(message.attachments)
             } else if (message.steps.isNotEmpty()) {
                 // Лента: текст и действия идут как приходили — в хронологическом порядке.
                 message.steps.forEach { step -> CodingStepRow(step, live = false) }
@@ -804,21 +812,36 @@ private fun DraftBubble(draft: CodingDraft) {
 private fun CodingComposer(
     enabled: Boolean,
     busy: Boolean,
-    onSend: (String) -> Unit,
+    onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
+    onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
+    var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     fun submit() {
-        if (text.isBlank()) return
-        onSend(text)
+        if (text.isBlank() && attachments.isEmpty()) return
+        onSend(text, attachments)
         text = ""
+        attachments = emptyList()
     }
     Column(modifier = Modifier.fillMaxWidth()) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        PendingAttachmentsRow(
+            attachments = attachments,
+            onRemove = { target -> attachments = attachments.filterNot { it.id == target.id } },
+            modifier = Modifier.padding(top = 8.dp),
+        )
         Row(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            TextButton(
+                onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("📎", style = MaterialTheme.typography.titleMedium)
+            }
+            Spacer(Modifier.width(4.dp))
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
@@ -835,7 +858,7 @@ private fun CodingComposer(
                 }
             } else {
                 TextButton(
-                    enabled = enabled && text.isNotBlank(),
+                    enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()),
                     onClick = ::submit,
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) {

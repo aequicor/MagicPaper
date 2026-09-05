@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
@@ -52,6 +53,8 @@ class PiCodingRuntime(
     private val nodeDir = File(root, "node")
     private val pihome = File(root, "pihome")
     private val sessionsDir = File(root, "sessions")
+    /** Вложения кодинг-сессий: файлы лежат вне папки проекта и удаляются с зависимостями. */
+    private val uploadsDir = File(root, "uploads")
     /** Автономный MinGit для bash-инструмента агента на Windows (см. [ensureWindowsShell]). */
     private val shellDir = File(root, "shell")
     private val piCli = File(prefix, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
@@ -136,6 +139,7 @@ class PiCodingRuntime(
         session: CodingSession,
         prompt: String,
         profile: LlmProfile?,
+        attachments: List<Attachment>,
     ): Flow<CodingEvent> = flow {
         val dir = File(project.path)
         if (!piCli.isFile) {
@@ -166,6 +170,10 @@ class PiCodingRuntime(
         }
 
         writePiConfig(profile)
+        // Вложения раскладываем в изолированную папку; пути уходят в промпт —
+        // агент читает их своими инструментами (текст и изображения).
+        val attachedPaths = materializeAttachments(session.id, attachments)
+        val effectivePrompt = promptWithAttachments(prompt, attachedPaths)
         // Лечим и старые установки (до защиты кодировки) — без пересоздания движка.
         ensureFuzzySafety()
         if (onWindows() && windowsBashProbe() == null) {
@@ -210,7 +218,7 @@ class PiCodingRuntime(
         // аргументов командной строки. Пи читает до EOF — пишем и закрываем.
         runCatching {
             process.outputStream.use { out ->
-                out.write(prompt.toByteArray(StandardCharsets.UTF_8))
+                out.write(effectivePrompt.toByteArray(StandardCharsets.UTF_8))
                 out.flush()
             }
         }
@@ -843,6 +851,47 @@ class PiCodingRuntime(
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
         .replace("\n", "\\n")
+
+    // ---- Вложения кодинг-сессии -------------------------------------------
+
+    /**
+     * Раскладывает вложения сессии в изолированную папку [uploadsDir]
+     * (вне папки проекта — журнал и рабочая директория не засоряются).
+     * Возвращает абсолютные пути в порядке вложений.
+     */
+    private fun materializeAttachments(sessionId: String, attachments: List<Attachment>): List<File> {
+        if (attachments.isEmpty()) return emptyList()
+        val dir = File(uploadsDir, sessionId)
+        dir.mkdirs()
+        return attachments.map { attachment ->
+            val file = File(dir, uniqueName(dir, attachment.name))
+            file.writeBytes(attachment.bytes)
+            file
+        }
+    }
+
+    /** Промпт с блоком вложений: агент получает абсолютные пути к файлам. */
+    private fun promptWithAttachments(prompt: String, files: List<File>): String {
+        if (files.isEmpty()) return prompt
+        return buildString {
+            append(prompt)
+            append("\n\nК запросу приложены файлы (лежат вне папки проекта, пути абсолютные):\n")
+            files.forEach { append("- ").append(it.absolutePath).append('\n') }
+            append("Если файл нужен для задачи — прочитай его инструментом чтения; изображения тоже читаются.")
+        }
+    }
+
+    /** Имя без опасных символов + префикс времени: файлы не перетирают друг друга. */
+    private fun uniqueName(dir: File, name: String): String {
+        val safe = name.replace(Regex("[^\\p{L}\\p{N}._\\-\\u0400-\\u04FF]+"), "_").take(120).ifBlank { "file" }
+        val candidate = "${System.currentTimeMillis()}-$safe"
+        var file = File(dir, candidate)
+        var counter = 1
+        while (file.exists()) {
+            file = File(dir, "${counter++}-$candidate")
+        }
+        return file.name
+    }
 
     private companion object {
         const val PI_PACKAGE = "@earendil-works/pi-coding-agent"

@@ -24,9 +24,11 @@ import io.aequicor.magicpaper.data.storage.JsonChatRepository
 import io.aequicor.magicpaper.data.storage.JsonLlmProfileRepository
 import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
 import io.aequicor.magicpaper.data.storage.KeyValueStore
+import io.aequicor.magicpaper.data.storage.NoopFilePicker
 import io.aequicor.magicpaper.domain.CodingProjectRepository
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.DossierResearcher
+import io.aequicor.magicpaper.domain.FilePicker
 import io.aequicor.magicpaper.domain.LlmMilestoneVerifier
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.PlanComposer
@@ -64,6 +66,7 @@ internal fun buildDependencies(
     codingRuntime: CodingRuntime? = null,
     codingProjects: CodingProjectRepository? = null,
     dirPicker: ProjectDirPicker? = null,
+    filePicker: FilePicker = NoopFilePicker,
 ): MagicPaperDependencies {
     val json = appJson
     val client = HttpClient()
@@ -137,6 +140,7 @@ internal fun buildDependencies(
         dirPicker = dirPicker,
         modelDirectory = modelDirectory,
         gateway = gateway,
+        filePicker = filePicker,
     )
     return MagicPaperDependencies(viewModel)
 }

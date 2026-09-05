@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
@@ -28,6 +29,7 @@ object NoopCodingRuntime : CodingRuntime {
         session: CodingSession,
         prompt: String,
         profile: LlmProfile?,
+        attachments: List<Attachment>,
     ): Flow<CodingEvent> =
         flowOf(
             CodingEvent.Failed("Кодинг-агент не поддерживается на этой платформе."),

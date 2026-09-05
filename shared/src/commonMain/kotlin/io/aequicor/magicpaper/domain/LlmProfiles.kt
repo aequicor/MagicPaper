@@ -173,7 +173,12 @@ enum class LlmChatRole {
 }
 
 @Serializable
-data class LlmMessage(val role: LlmChatRole, val content: String)
+data class LlmMessage(
+    val role: LlmChatRole,
+    val content: String,
+    /** Вложения запроса; исторические сообщения идут без них. */
+    val attachments: List<Attachment> = emptyList(),
+)
 
 @Serializable
 data class LlmProfileSummary(

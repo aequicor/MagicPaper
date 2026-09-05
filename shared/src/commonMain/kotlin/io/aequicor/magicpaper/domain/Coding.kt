@@ -330,6 +330,8 @@ data class CodingMessage(
     val steps: List<CodingStep> = emptyList(),
     val failed: Boolean = false,
     val createdAt: Long,
+    /** Файлы, прикреплённые к запросу (сами лежат в изолированной папке рантайма). */
+    val attachments: List<AttachmentMeta> = emptyList(),
 )
 
 /** Хранилище проектов, их сессий и журналов. */
@@ -369,12 +371,14 @@ interface CodingRuntime {
      * Выполнение запроса в директории проекта в контексте кодинг-сессии
      * (её piSessionId продолжает историю). Несколько прогонов разных сессий
      * могут идти параллельно. Поток событий протокола.
+     * Вложения рантайм раскладывает в изолированную папку и подставляет пути в промпт.
      */
     fun run(
         project: CodingProject,
         session: CodingSession,
         prompt: String,
         profile: LlmProfile?,
+        attachments: List<Attachment> = emptyList(),
     ): Flow<CodingEvent>
 
     /** Прервать прогон конкретной сессии (остановить её процесс агента). */

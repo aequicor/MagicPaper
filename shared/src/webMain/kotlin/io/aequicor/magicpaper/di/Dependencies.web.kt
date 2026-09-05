@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.di
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.coding.NoopProjectDirPicker
+import io.aequicor.magicpaper.data.storage.BrowserFilePicker
 import io.aequicor.magicpaper.data.storage.BrowserKeyValueStore
 import io.aequicor.magicpaper.domain.BrowserProfileBridge
 
@@ -15,5 +16,6 @@ actual fun createMagicPaperDependencies(): MagicPaperDependencies {
         codingRuntime = NoopCodingRuntime,
         codingProjects = JsonCodingProjectRepository(store, appJson),
         dirPicker = NoopProjectDirPicker,
+        filePicker = BrowserFilePicker(),
     )
 }

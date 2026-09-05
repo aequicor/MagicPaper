@@ -26,6 +26,7 @@ class MagicAgent(
         userText: String,
         settings: AppSettings,
         profile: LlmProfile?,
+        attachments: List<Attachment> = emptyList(),
     ): Answer {
         val trimmed = userText.trim()
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
@@ -44,6 +45,7 @@ class MagicAgent(
                     history = history,
                     userText = trimmed,
                     sources = emptyList(),
+                    attachments = attachments,
                 )
             }
         }
@@ -62,6 +64,7 @@ class MagicAgent(
                     history = history,
                     userText = trimmed,
                     sources = hits,
+                    attachments = attachments,
                 )
             }
         }
@@ -74,6 +77,7 @@ class MagicAgent(
             history = history,
             userText = trimmed,
             sources = emptyList(),
+            attachments = attachments,
         )
     }
 
@@ -85,6 +89,7 @@ class MagicAgent(
         history: List<ChatMessage>,
         userText: String,
         sources: List<SearchHit>,
+        attachments: List<Attachment>,
     ): Answer {
         if (profile == null || !profile.configured) {
             return Answer(NOT_CONFIGURED_TEXT, sources)
@@ -97,9 +102,16 @@ class MagicAgent(
             }
             if (context != null) add(LlmMessage(LlmChatRole.SYSTEM, context))
             history.takeLast(profile.advanced.contextMessages).forEach { m ->
-                add(LlmMessage(if (m.role == ChatRole.USER) LlmChatRole.USER else LlmChatRole.ASSISTANT, m.text))
+                add(
+                    LlmMessage(
+                        if (m.role == ChatRole.USER) LlmChatRole.USER else LlmChatRole.ASSISTANT,
+                        m.text,
+                        // Изображения из истории повторно в запрос не вкладываются,
+                        // чтобы каждый ответ не раздувал контекст.
+                    ),
+                )
             }
-            add(LlmMessage(LlmChatRole.USER, userText))
+            add(LlmMessage(LlmChatRole.USER, userText, attachments))
         }
         return runCatching {
             Answer(gateway.complete(profile, messages), sources)

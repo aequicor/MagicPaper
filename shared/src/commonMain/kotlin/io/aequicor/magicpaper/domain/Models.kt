@@ -23,6 +23,8 @@ data class ChatMessage(
     val text: String,
     val createdAt: Long,
     val sources: List<SearchHit> = emptyList(),
+    /** Прикреплённые пользователем файлы (изображения и текст уходят модели). */
+    val attachments: List<Attachment> = emptyList(),
 )
 
 /** Сессия (свиток) чата. */

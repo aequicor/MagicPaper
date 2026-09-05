@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.data.llm
 
 import io.aequicor.magicpaper.domain.AdvancedLlmOptions
+import io.aequicor.magicpaper.domain.Attachment
+import io.aequicor.magicpaper.domain.AttachmentKind
 import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.LlmChatRole
 import io.aequicor.magicpaper.domain.LlmMessage
@@ -237,5 +239,90 @@ class LlmPayloadsTest {
         val p = profile(effort = EffortSelection.of(ReasoningEffort.HIGH), provider = ProviderType.GOOGLE)
         val payload = LlmPayloads.google(p, messages, ReasoningCapability.None)
         assertNull(payload.obj("generationConfig")?.get("thinkingConfig"))
+    }
+
+    // ---- Вложения -------------------------------------------------------
+    // Изображения — мультимодальными блоками, текст — в текст сообщения;
+    // без вложений формат запроса не меняется.
+
+    private val pngBytes = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
+    private val imageAttachment = Attachment.fromBytes("снимок.png", "image/png", pngBytes)
+    private val textAttachment = Attachment.fromBytes("заметка.txt", "text/plain", "строка из файла".encodeToByteArray())
+
+    private fun userWith(vararg attachments: Attachment) = listOf(
+        LlmMessage(LlmChatRole.SYSTEM, "ты ассистент"),
+        LlmMessage(LlmChatRole.USER, "что на картинке?", attachments.toList()),
+    )
+
+    private fun openAiUserContent(payload: JsonObject): kotlinx.serialization.json.JsonElement? =
+        (payload["messages"] as? JsonArray)?.last()?.let { (it as? JsonObject)?.get("content") }
+
+    @Test
+    fun openAiWithoutAttachmentsKeepsPlainContent() {
+        val payload = LlmPayloads.openAi(profile(), messages)
+        val content = openAiUserContent(payload)
+        assertTrue(content is JsonPrimitive, "без вложений контент — строка")
+        assertEquals("привет", (content as JsonPrimitive).content)
+    }
+
+    @Test
+    fun openAiImageBecomesDataUrlBlock() {
+        val payload = LlmPayloads.openAi(profile(), userWith(imageAttachment))
+        val blocks = openAiUserContent(payload) as? JsonArray
+        assertNotNull(blocks, "с картинкой контент — массив блоков")
+        assertEquals("text", (blocks[0] as JsonObject).str("type"))
+        assertTrue((blocks[0] as JsonObject).str("text")!!.contains("что на картинке?"))
+        val imageBlock = blocks[1] as JsonObject
+        assertEquals("image_url", imageBlock.str("type"))
+        val url = imageBlock.obj("image_url")?.str("url")
+        assertTrue(url!!.startsWith("data:image/png;base64,"), "картинка уходит data-URL'ом")
+        assertTrue(url.endsWith(imageAttachment.dataBase64))
+    }
+
+    @Test
+    fun openAiTextAttachmentInlinedIntoText() {
+        val payload = LlmPayloads.openAi(profile(), userWith(textAttachment))
+        val content = openAiUserContent(payload)
+        assertTrue(content is JsonPrimitive, "текстовый файл не порождает блоки")
+        val text = (content as JsonPrimitive).content
+        assertTrue(text.contains("Файл заметка.txt:"))
+        assertTrue(text.contains("строка из файла"))
+    }
+
+    @Test
+    fun anthropicImageBecomesBase64Block() {
+        val payload = LlmPayloads.anthropic(profile(provider = ProviderType.ANTHROPIC), userWith(imageAttachment))
+        val blocks = (payload["messages"] as? JsonArray)?.last()?.let { (it as? JsonObject)?.get("content") } as? JsonArray
+        assertNotNull(blocks, "с картинкой контент — массив блоков")
+        assertEquals("text", (blocks[0] as JsonObject).str("type"))
+        val imageBlock = blocks[1] as JsonObject
+        assertEquals("image", imageBlock.str("type"))
+        val source = imageBlock.obj("source")
+        assertEquals("base64", source?.str("type"))
+        assertEquals("image/png", source?.str("media_type"))
+        assertEquals(imageAttachment.dataBase64, source?.str("data"))
+    }
+
+    @Test
+    fun googleImageBecomesInlineData() {
+        val payload = LlmPayloads.google(profile(provider = ProviderType.GOOGLE), userWith(imageAttachment))
+        val parts = (payload["contents"] as? JsonArray)?.last()?.let { (it as? JsonObject)?.get("parts") } as? JsonArray
+        assertNotNull(parts)
+        assertTrue((parts[0] as JsonObject).str("text")!!.contains("что на картинке?"))
+        val inline = (parts[1] as JsonObject).obj("inlineData")
+        assertEquals("image/png", inline?.str("mimeType"))
+        assertEquals(imageAttachment.dataBase64, inline?.str("data"))
+    }
+
+    @Test
+    fun binaryAttachmentOnlyAddsNotice() {
+        val fileAttachment = Attachment.fromBytes("архив.zip", "application/zip", byteArrayOf(1, 2, 3))
+        assertEquals(AttachmentKind.FILE, fileAttachment.kind)
+        val payload = LlmPayloads.openAi(profile(), userWith(fileAttachment))
+        val content = openAiUserContent(payload)
+        assertTrue(content is JsonPrimitive)
+        val text = (content as JsonPrimitive).content
+        assertTrue(text.contains("архив.zip"), "бинарный файл упоминается в примечании")
+        assertTrue(text.contains("без передачи содержимого"))
     }
 }

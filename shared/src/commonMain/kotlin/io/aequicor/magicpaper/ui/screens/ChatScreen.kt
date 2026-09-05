@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
@@ -49,6 +50,8 @@ import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.MessageAttachments
+import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
@@ -62,8 +65,9 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
             session = state.current,
             profiles = state.llmProfiles,
             activeProfileId = state.settings.activeLlmProfileId,
-            onSend = { vm.send(it) },
+            onSend = { text, attachments -> vm.send(text, attachments) },
             onOpenSwitcher = { vm.toggleModelSwitcher(true) },
+            onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
         )
     }
 }
@@ -173,6 +177,8 @@ private fun MessageBubble(message: ChatMessage) {
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
+                // Прикреплённые файлы: миниатюры изображений, файлы чипами.
+                MessageAttachments(message.attachments)
             } else {
                 // Ответ агента рендерим как markdown: заголовки, списки,
                 // блоки кода с подсветкой синтаксиса и кнопкой копирования.
@@ -237,15 +243,19 @@ private fun Composer(
     session: ChatSession?,
     profiles: List<LlmProfile>,
     activeProfileId: String,
-    onSend: (String) -> Unit,
+    onSend: (String, List<Attachment>) -> Unit,
     onOpenSwitcher: () -> Unit,
+    onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
 ) {
     // Черновик переживает поворот экрана и потерю фокуса окна.
     var text by rememberSaveable { mutableStateOf("") }
+    // Прикреплённые файлы живут до отправки; байты в rememberSaveable не сунуть.
+    var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     fun submit() {
-        if (text.isBlank()) return
-        onSend(text)
+        if (text.isBlank() && attachments.isEmpty()) return
+        onSend(text, attachments)
         text = ""
+        attachments = emptyList()
     }
     Column(modifier = Modifier.fillMaxWidth()) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -256,10 +266,23 @@ private fun Composer(
         ) {
             ModelChip(session, profiles, activeProfileId, onOpenSwitcher)
         }
+        PendingAttachmentsRow(
+            attachments = attachments,
+            onRemove = { target -> attachments = attachments.filterNot { it.id == target.id } },
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            TextButton(
+                enabled = enabled,
+                onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("📎", style = MaterialTheme.typography.titleMedium)
+            }
+            Spacer(Modifier.width(4.dp))
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
@@ -273,7 +296,7 @@ private fun Composer(
             )
             Spacer(Modifier.width(8.dp))
             TextButton(
-                enabled = enabled && text.isNotBlank(),
+                enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()),
                 onClick = ::submit,
                 // M3: зона касания не меньше 48dp.
                 modifier = Modifier.heightIn(min = 48.dp),

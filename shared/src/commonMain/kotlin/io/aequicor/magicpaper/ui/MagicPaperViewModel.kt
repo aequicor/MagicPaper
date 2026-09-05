@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.ui
 import androidx.lifecycle.ViewModel
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.AppSettings
+import io.aequicor.magicpaper.domain.Attachment
+import io.aequicor.magicpaper.domain.FilePicker
+import io.aequicor.magicpaper.domain.MAX_ATTACHMENTS_PER_MESSAGE
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRepository
 import io.aequicor.magicpaper.domain.ChatRole
@@ -35,6 +38,8 @@ import io.aequicor.magicpaper.domain.ProjectDirPicker
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.SettingsRepository
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
+import io.aequicor.magicpaper.domain.asMeta
+import io.aequicor.magicpaper.domain.chatVisible
 import io.aequicor.magicpaper.domain.codingStatusOf
 import io.aequicor.magicpaper.plugins.PluginRegistry
 import io.aequicor.magicpaper.util.Id
@@ -70,6 +75,7 @@ class MagicPaperViewModel(
     private val dirPicker: ProjectDirPicker? = null,
     private val modelDirectory: ModelDirectory? = null,
     private val gateway: LlmGateway? = null,
+    private val filePicker: FilePicker? = null,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -191,6 +197,29 @@ class MagicPaperViewModel(
 
     fun toggleSessionsPanel() = _state.update { it.copy(sessionsPanelOpen = !it.sessionsPanelOpen) }
 
+    /**
+     * Выбрать файлы для вложения. Лимиты и список принятых файлов решает платформа,
+     * здесь добавляем сообщения о причинах отказа (нет пикера / переполнен лимит).
+     */
+    fun pickAttachments(alreadyAttached: Int, onResult: (List<Attachment>) -> Unit) {
+        val picker = filePicker
+        if (picker == null || !picker.supported) {
+            _state.update { it.copy(notice = "Вложения на этой платформе пока не поддерживаются.") }
+            return
+        }
+        scope.launch {
+            val picked = picker.pickFiles()
+            val room = MAX_ATTACHMENTS_PER_MESSAGE - alreadyAttached
+            val accepted = picked.take(room)
+            onResult(accepted.map { Attachment.fromBytes(it.name, it.mimeType, it.bytes) })
+            if (picked.size > room) {
+                _state.update {
+                    it.copy(notice = "Не больше $MAX_ATTACHMENTS_PER_MESSAGE вложений на сообщение.")
+                }
+            }
+        }
+    }
+
     fun dismissNotice() = _state.update { it.copy(notice = null) }
 
     // ---- Чат --------------------------------------------------------------
@@ -235,9 +264,10 @@ class MagicPaperViewModel(
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String, attachments: List<Attachment> = emptyList()) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        val visible = attachments.chatVisible()
+        if (trimmed.isEmpty() && visible.isEmpty()) return
         val s = _state.value
         if (s.busy) return
         val settings = s.settings
@@ -251,6 +281,7 @@ class MagicPaperViewModel(
             role = ChatRole.USER,
             text = trimmed,
             createdAt = Id.now(),
+            attachments = visible,
         )
         val historyBefore = session.messages
         val updated = session.copy(
@@ -268,7 +299,7 @@ class MagicPaperViewModel(
                 )
             }
             val profile = ProfileResolver.resolve(updated, settings, _state.value.llmProfiles)
-            val answer = agent.answer(historyBefore, trimmed, settings, profile)
+            val answer = agent.answer(historyBefore, trimmed, settings, profile, attachments = visible)
             val agentMessage = ChatMessage(
                 id = Id.new(),
                 role = ChatRole.AGENT,
@@ -827,11 +858,11 @@ class MagicPaperViewModel(
      * из фоновой сессии, не переключаясь на неё).
      * Прогоны разных сессий (в том числе разных проектов) идут параллельно.
      */
-    fun sendCodingPromptTo(sessionId: String, text: String) {
+    fun sendCodingPromptTo(sessionId: String, text: String, attachments: List<Attachment> = emptyList()) {
         val runtime = codingRuntime ?: return
         val repo = codingProjects ?: return
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        if (trimmed.isEmpty() && attachments.isEmpty()) return
         val coding = _state.value.coding
         val ui = coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         val session = ui.session
@@ -843,6 +874,7 @@ class MagicPaperViewModel(
             role = CodingRole.USER,
             text = trimmed,
             createdAt = Id.now(),
+            attachments = attachments.map { it.asMeta() },
         )
         val recorder = CodingRunRecorder()
         val job = scope.launch {
@@ -852,7 +884,7 @@ class MagicPaperViewModel(
                 it.copy(messages = history, running = true, draft = recorder.draft(active = true))
             }
             var piSessionId = session.piSessionId
-            runtime.run(project, session, trimmed, codingProfileOf(session)).collect { event ->
+            runtime.run(project, session, trimmed, codingProfileOf(session), attachments).collect { event ->
                 if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                     piSessionId = event.sessionId
                 }
