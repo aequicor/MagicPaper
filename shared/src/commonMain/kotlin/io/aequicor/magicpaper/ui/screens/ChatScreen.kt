@@ -29,8 +29,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +50,7 @@ import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.components.MessageAttachments
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
+import io.aequicor.magicpaper.ui.components.stickToBottom
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
@@ -76,17 +75,9 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
 private fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier) {
     val messages = session?.messages.orEmpty()
     val listState = rememberLazyListState()
-    // Перематываем только если пользователь и так внизу — иначе не мешаем читать историю.
-    val atBottom by remember {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            last == null || last.index == info.totalItemsCount - 1
-        }
-    }
-    LaunchedEffect(messages.size, session?.id, atBottom) {
-        if (messages.isNotEmpty() && atBottom) listState.animateScrollToItem(messages.size - 1)
-    }
+    // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
+    // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
+    stickToBottom(listState, session?.id)
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isEmpty()) {
             EmptyHint()

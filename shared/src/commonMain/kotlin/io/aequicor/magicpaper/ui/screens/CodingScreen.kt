@@ -35,8 +35,6 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +64,7 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.components.CodingAttachments
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
+import io.aequicor.magicpaper.ui.components.stickToBottom
 import io.aequicor.magicpaper.ui.theme.MagicFonts
 
 /** Экран «Проекты и код»: в проекте несколько кодинг-сессий, у каждой — кружок активности. */
@@ -560,23 +559,11 @@ private fun CodingChat(
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    // Перематываем только если пользователь и так внизу — иначе живая лента
-    // не даст прочитать то, что агент сделал выше.
-    val atBottom by remember {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            last == null || last.index == info.totalItemsCount - 1
-        }
-    }
     val messages = session.messages
     val draft = session.draft
-    val lastId = messages.lastOrNull()?.id
-    LaunchedEffect(messages.size, lastId, draft.steps.size, atBottom) {
-        if (atBottom) {
-            listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
-        }
-    }
+    // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
+    // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
+    stickToBottom(listState, session.session.id)
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
