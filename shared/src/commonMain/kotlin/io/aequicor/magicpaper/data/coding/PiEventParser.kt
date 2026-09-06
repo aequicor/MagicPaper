@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.CodingEvent
+import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -9,6 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -23,10 +25,25 @@ object PiEventParser {
     private val json = Json { ignoreUnknownKeys = true }
 
     /** Разбирает одну строку протокола. Нераспознанные и повреждённые строки дают null. */
-    fun parse(line: String): CodingEvent? {
+    fun parse(line: String): CodingEvent? = parseEvents(line).firstOrNull()
+
+    /**
+     * Разбирает строку протокола в события. Больше одного — финал сообщения,
+     * где текст есть, но ответ обрезан: сначала текст, потом предупреждение.
+     */
+    fun parseEvents(line: String): List<CodingEvent> {
+        val obj = parseObject(line) ?: return emptyList()
+        if (obj.type() == "message_end") return parseMessageEnd(obj)
+        return listOfNotNull(parseEvent(obj))
+    }
+
+    private fun parseObject(line: String): JsonObject? {
         val trimmed = line.trim()
         if (trimmed.isEmpty() || !trimmed.startsWith("{")) return null
-        val obj = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()?.jsonObject ?: return null
+        return runCatching { json.parseToJsonElement(trimmed) }.getOrNull()?.jsonObject
+    }
+
+    private fun parseEvent(obj: JsonObject): CodingEvent? {
         return when (obj.type()) {
             "session" -> CodingEvent.SessionStarted(sessionId = obj.primitive("id").orEmpty())
             // Начало ответа ассистента: прогон перешёл из «ждём модель» в «работает».
@@ -52,7 +69,8 @@ object PiEventParser {
                 CodingEvent.Failed(obj.primitive("error") ?: "Провайер отказал после автоповторов")
             }
             "message_update" -> parseDelta(obj)
-            "message_end" -> parseMessageEnd(obj)
+            // message_end даёт несколько событий — его разбирает parseEvents.
+            "message_end" -> null
             "tool_execution_start" -> {
                 val args = obj["args"] as? JsonObject
                 CodingEvent.ToolStarted(
@@ -84,21 +102,47 @@ object PiEventParser {
         return if (delta.isEmpty()) null else CodingEvent.TextDelta(delta)
     }
 
-    private fun parseMessageEnd(obj: JsonObject): CodingEvent? {
-        val message = obj["message"]?.jsonObject ?: return null
-        if (message.primitive("role") != "assistant") return null
+    private fun parseMessageEnd(obj: JsonObject): List<CodingEvent> {
+        val message = obj["message"]?.jsonObject ?: return emptyList()
+        if (message.primitive("role") != "assistant") return emptyList()
         val stopReason = message.primitive("stopReason").orEmpty()
         if (stopReason == "error") {
-            return CodingEvent.Failed(message.primitive("errorMessage") ?: "агент вернул ошибку")
+            return listOf(CodingEvent.Failed(message.primitive("errorMessage") ?: "агент вернул ошибку"))
         }
-        val text = message["content"]?.jsonArray
+        val blocks = message["content"]?.jsonArray
+        val text = blocks
             ?.mapNotNull { block ->
                 val blockObj = runCatching { block.jsonObject }.getOrNull() ?: return@mapNotNull null
                 if (blockObj.type() == "text") blockObj.primitive("text") else null
             }
             ?.joinToString("")
             .orEmpty()
-        return if (text.isBlank()) null else CodingEvent.FinalText(text)
+        // Намерение модели видно и по tool-вызовам: «пустой» ход с правкой файла —
+        // не пустой ход, автопродолжать его не за чем.
+        val hasToolCalls = blocks?.any { block ->
+            val type = runCatching { block.jsonObject }.getOrNull()?.type()
+            type == "toolCall" || type == "tool_use" || type == "tool_call"
+        } ?: false
+        val truncated = stopReason == "length"
+        return when {
+            // Потолок вывода сгорел, не дойдя до тела сообщения (обычно — в
+            // рассуждении). Раньше причина терялась здесь, и прогон выглядел как
+            // «Агент завершился без ответа».
+            truncated && text.isBlank() && !hasToolCalls -> {
+                val usage = message["usage"]?.jsonObject
+                listOf(
+                    CodingEvent.OutputTruncated(
+                        outputTokens = usage?.int("output"),
+                        reasoningTokens = usage?.int("reasoning"),
+                    ),
+                )
+            }
+            // Обрезанный, но содержательный ответ не должен выглядеть полным.
+            truncated && text.isNotBlank() ->
+                listOf(CodingEvent.FinalText(text), CodingEvent.Notice(TRUNCATED_HEADLINE))
+            text.isBlank() -> emptyList()
+            else -> listOf(CodingEvent.FinalText(text))
+        }
     }
 
     /** Короткое описание аргументов инструмента для журнала: путь или команда. */
@@ -145,6 +189,10 @@ object PiEventParser {
 
     private fun JsonObject.primitive(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull
+
+    /** Числовое поле usage (токены); отсутствующее или не-число — null. */
+    private fun JsonObject.int(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.intOrNull
 
     private val EXEC_TOOLS: Set<String> = setOf("bash", "exec", "shell", "run")
 

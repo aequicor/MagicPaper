@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.coding
 
 import com.sun.net.httpserver.HttpServer
+import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingSession
@@ -9,6 +10,7 @@ import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import java.io.File
 import java.net.InetSocketAddress
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertFalse
 import kotlin.test.Test
@@ -136,6 +138,117 @@ class PiCodingRuntimeIntegrationTest {
             mock.stop(0)
             workRoot.deleteRecursively()
         }
+    }
+
+    /**
+     * Регресс самого бага: «Заклинание не сработало: Агент завершился без ответа»
+     * при пустом ходе, сгоревшем в лимите вывода (`finish_reason: "length"`).
+     * Живой движок pi и мок сервера модели — рантайм обязан: заметить обрезку,
+     * сказать о ней в ленту, продолжить ТУ ЖЕ pi-сессию и дойти до ответа без
+     * `Failed`. Проверка на проводе закрепляет причину: переключатель мышления и
+     * потолок вывода из конфига реально уходят в запрос (без них модель и молчала).
+     *
+     * Нужен установочный префикс приложения — он копируется во временный каталог,
+     * чтобы тест не трогал рабочую установку, и потому тест под тем же флагом
+     * MAGICPAPER_PI_IT, что и остальные интеграционные проверки.
+     */
+    @Test
+    fun truncatedEmptyAnswerIsContinuedInSameSession() {
+        if (!enabled) {
+            println("Пропущено: включите MAGICPAPER_PI_IT=true")
+            return
+        }
+        val installedPrefix = File(System.getProperty("user.home"), ".MagicPaper/coding/prefix")
+        assertTrue(installedPrefix.isDirectory, "нет установленного движка pi: $installedPrefix")
+        val workRoot = createTempDir("magicpaper-pi-truncation-it")
+        val projectDir = File(workRoot, "project").apply { mkdirs() }
+        val requests = CopyOnWriteArrayList<String>()
+        val mock = startLengthCappedMockServer(requests)
+        try {
+            installedPrefix.copyRecursively(File(workRoot, "coding/prefix"), overwrite = true)
+            val runtime = PiCodingRuntime(rootDir = File(workRoot, "coding"))
+            val statuses = runBlocking { runtime.ensureReady().toList() }
+            assertEquals(RuntimePhase.READY, statuses.last().phase, "итог установки: ${statuses.last().detail}")
+
+            val profile = LlmProfile(
+                id = "it",
+                name = "мок-сервер",
+                provider = ProviderType.OPENAI_COMPATIBLE,
+                baseUrl = "http://127.0.0.1:${mock.address.port}/v1",
+                modelId = "qwen3.8-flash",
+                apiKey = "test-key",
+                advanced = AdvancedLlmOptions(maxTokens = 16_384, contextLimit = 128_000),
+            )
+            val project = CodingProject(id = "p1", name = "demo", path = projectDir.absolutePath, createdAt = 1L)
+            val session = CodingSession(id = "s1", projectId = "p1", name = "Основная", createdAt = 1L)
+            val events = runBlocking { runtime.run(project, session, "Скажи одно слово", profile).toList() }
+
+            // Пустой ход в лимите — событие обрезки, а не потеря ответа.
+            val truncated = events.filterIsInstance<CodingEvent.OutputTruncated>()
+            assertTrue(truncated.isNotEmpty(), "нет события обрезки; события: $events")
+            assertEquals(8192, truncated.first().outputTokens, "счётчик вывода читается из usage")
+            assertEquals(8192, truncated.first().reasoningTokens, "счётчик рассуждения читается из usage")
+            // О обрезке сказано в ленте, и прогон продолжен в той же сессии.
+            assertTrue(
+                events.filterIsInstance<CodingEvent.Notice>().any { "продолжаю прогон" in it.message },
+                "нет предупреждения о автопродолжении: $events",
+            )
+            // Финал — ответ, а не «без ответа».
+            assertEquals("ПРОДОЛЖИЛ ответ", events.filterIsInstance<CodingEvent.FinalText>().last().text)
+            assertTrue(events.none { it is CodingEvent.Failed }, "прогон не должен завершаться ошибкой: $events")
+            assertTrue(events.last() is CodingEvent.Finished)
+
+            // Причина обрезки на проводе: запрос несёт явный переключатель мышления
+            // (для локального сервера — chat_template_kwargs, для наружного —
+            // enable_thinking + reasoning_effort) и потолок вывода из конфига.
+            assertTrue(requests.size >= 2, "сервер не принял второй запрос: ${requests.size}")
+            val first = requests.first()
+            assertTrue("enable_thinking" in first, "переключатель мышления не доехал до сервера: $first")
+            val ceiling = Regex("\"max(?:_completion)?_tokens\":(\\d+)").find(first)?.groupValues?.get(1)
+            assertEquals("16384", ceiling, "потолок вывода обязан прийти из конфига")
+            // Автопродолжение — та же pi-сессия: исходный запрос виден во второй истории.
+            assertTrue("Скажи одно слово" in requests[1], "продолжение потеряло контекст сессии")
+        } finally {
+            mock.stop(0)
+            workRoot.deleteRecursively()
+        }
+    }
+
+    /**
+     * Мок сервера, который первый ход обрывает на лимите токенов с пустым телом
+     * (так делает Qwen, когда рассуждение съедает весь вывод), а дальше отвечает.
+     * Тела запросов сохраняются для проверки того, что реально ушло на провод.
+     */
+    private fun startLengthCappedMockServer(requests: CopyOnWriteArrayList<String>): HttpServer {
+        val requestNo = AtomicInteger(0)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/chat/completions") { exchange ->
+            val body = exchange.requestBody.readBytes().decodeToString()
+            requests += body
+            val truncated = requestNo.getAndIncrement() == 0
+            val chunks = if (truncated) {
+                listOf(
+                    """{"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}""",
+                    """{"choices":[{"index":0,"delta":{},"finish_reason":"length"}],""" +
+                        """"usage":{"prompt_tokens":1200,"completion_tokens":8192,""" +
+                        """"completion_tokens_details":{"reasoning_tokens":8192}}}""",
+                )
+            } else {
+                listOf(
+                    """{"choices":[{"index":0,"delta":{"role":"assistant","content":"ПРОДОЛЖИЛ "}}]}""",
+                    """{"choices":[{"index":0,"delta":{"content":"ответ"}}]}""",
+                    """{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],""" +
+                        """"usage":{"prompt_tokens":1300,"completion_tokens":40}}""",
+                )
+            }
+            val payload = chunks.joinToString("\n\n") { "data: $it" } + "\n\ndata: [DONE]\n\n"
+            val data = payload.toByteArray()
+            exchange.responseHeaders.add("Content-Type", "text/event-stream")
+            exchange.sendResponseHeaders(200, data.size.toLong())
+            exchange.responseBody.use { it.write(data) }
+        }
+        server.start()
+        return server
     }
 
     /**

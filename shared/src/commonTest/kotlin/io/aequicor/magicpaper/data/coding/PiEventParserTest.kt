@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.CodingEvent
+import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -47,6 +48,48 @@ class PiEventParserTest {
         val event = PiEventParser.parse(line)
         assertIs<CodingEvent.FinalText>(event)
         assertEquals("Готово.", event.text)
+    }
+
+    /**
+     * Регресс того самого прогона: message_end с stopReason="length" и пустым
+     * телом (всё сгорело в рассуждении) раньше разобрался в null, и рантайм
+     * докладывает «Агент завершился без ответа» — причину терял именно этот шаг.
+     */
+    @Test
+    fun emptyTurnCutByLengthIsReportedAsTruncation() {
+        val line = """{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"length","usage":{"input":59969,"output":8192,"reasoning":8192}}}"""
+        val events = PiEventParser.parseEvents(line)
+        assertEquals(1, events.size, "причина должна быть одна и та же, что в usage")
+        val event = assertIs<CodingEvent.OutputTruncated>(events.first())
+        assertEquals(8192, event.outputTokens)
+        assertEquals(8192, event.reasoningTokens)
+        assertTrue(event.summary.contains("Ответ обрезан лимитом max_tokens"), event.summary)
+        // Пустой ход — не «нет событий»: иначе рантайму не о чем сообщить.
+        assertEquals(event, PiEventParser.parse(line))
+    }
+
+    @Test
+    fun thinkingOnlyContentCutByLengthIsTruncationToo() {
+        // Мышление — не ответ: текст сообщения так и остался незаполненным.
+        val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"разбор..."}],"stopReason":"length","usage":{"output":16384,"reasoning":16384}}}"""
+        assertIs<CodingEvent.OutputTruncated>(PiEventParser.parseEvents(line).single())
+    }
+
+    @Test
+    fun truncatedAnswerKeepsTextAndAddsNotice() {
+        val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Прочитал файл"}],"stopReason":"length","usage":{"output":8192,"reasoning":200}}}"""
+        val events = PiEventParser.parseEvents(line)
+        assertEquals(2, events.size)
+        assertEquals(CodingEvent.FinalText("Прочитал файл"), events[0])
+        // Обрезанный ответ не должен выглядеть целым.
+        assertEquals(CodingEvent.Notice(TRUNCATED_HEADLINE), events[1])
+    }
+
+    @Test
+    fun truncatedTurnWithToolCallIsNotAnEmptyTurn() {
+        // Намерение выражено: правка началась, просто не хватило текста рядом.
+        val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"1","name":"edit","arguments":{"path":"a.txt"}}],"stopReason":"length","usage":{"output":8192}}}"""
+        assertTrue(PiEventParser.parseEvents(line).isEmpty())
     }
 
     @Test

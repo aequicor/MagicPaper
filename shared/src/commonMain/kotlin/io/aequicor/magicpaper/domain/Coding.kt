@@ -179,6 +179,11 @@ class CodingRunRecorder {
                 steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false)
             }
             is CodingEvent.Notice -> steps += CodingStep(kind = CodingStepKind.INFO, title = event.message)
+            is CodingEvent.OutputTruncated -> {
+                // Модель отвечала, но не успела: фиксируем фазу и поясняем в ленте.
+                awaiting = false
+                steps += CodingStep(kind = CodingStepKind.INFO, title = event.summary, ok = false)
+            }
             is CodingEvent.AgentEnd -> {
                 awaiting = false
                 flushText()
@@ -236,6 +241,9 @@ val CodingStep.displayLine: String
         else -> title
     }
 
+/** Общая формулировка обрезки: её показывают Notice, лента и автопродолжение. */
+const val TRUNCATED_HEADLINE = "Ответ обрезан лимитом max_tokens"
+
 /** События выполнения кодинг-запроса (протокол пи-агента, режим --mode json). */
 sealed interface CodingEvent {
     /** Заголовок сессии: идентификатор сессии пи-агента (для продолжения контекста). */
@@ -281,6 +289,29 @@ sealed interface CodingEvent {
         val callId: String = "",
         val resultPreview: String = "",
     ) : CodingEvent
+
+    /**
+     * Модель ушла в рассуждение и израсходовала потолок вывода
+     * (`stopReason:"length"`, ни текста, ни tool-вызовов): выразить намерение
+     * ей было нечем. Раньше это терялось и выглядело как «Агент завершился
+     * без ответа» — теперь отдельное событие, чтобы рантайм мог продолжить
+     * сессию, а UI — честно объяснить причину.
+     */
+    data class OutputTruncated(
+        val outputTokens: Int? = null,
+        val reasoningTokens: Int? = null,
+    ) : CodingEvent {
+        /** Подпись для ленты: где именно модель упёрлась. */
+        val summary: String
+            get() = buildString {
+                append(TRUNCATED_HEADLINE)
+                val spent = outputTokens ?: return@buildString
+                append(" — ").append(spent).append(" токенов вывода")
+                reasoningTokens?.let {
+                    if (it > 0) append(", из них ").append(it).append(" на рассуждение")
+                }
+            }
+    }
 
     /**
      * Служебное сообщение жизненного цикла движка (уплотнение контекста, автоповтор

@@ -6,10 +6,10 @@ import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.LlmProfile
-import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
+import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
 import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
@@ -185,10 +185,58 @@ class PiCodingRuntime(
             )
         }
 
+        // Один запуск pi — один процесс с одним промптом. Ответ, сгоревший в лимите
+        // вывода, лечится продолжением ТОЙ ЖЕ pi-сессии: контекст уже набран, и агент
+        // просит «продолжай» ровно то, что пользователь иначе дописывает руками.
+        var promptText = effectivePrompt
+        var piSessionId = session.piSessionId.ifBlank { null }
+        var continues = 0
+        // Инициализатор формален: тело цикла выполняется раньше проверки выхода.
+        var outcome = AttemptOutcome(launchError = "агент не запущен")
+        val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
+        try {
+            while (true) {
+                outcome = runPiAttempt(node, dir, session, profile, promptText, piSessionId, emitEvent)
+                val canContinue = outcome.truncated != null && !outcome.answerSeen &&
+                    !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
+                    continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
+                if (!canContinue) break
+                continues++
+                piSessionId = outcome.piSessionId
+                promptText = CONTINUATION_PROMPT
+                emit(
+                    CodingEvent.Notice(
+                        "$TRUNCATED_HEADLINE — продолжаю прогон, попытка $continues из $MAX_OUTPUT_CONTINUES…"
+                    )
+                )
+            }
+        } finally {
+            abortedSessions.remove(session.id)
+        }
+        if (!outcome.answerSeen) {
+            emit(CodingEvent.Failed(failureReason(profile, outcome, continues)))
+        }
+        emit(CodingEvent.Finished)
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Один запуск pi-агента: процесс, поток событий, id сессии пи и признаки
+     * обрезки вывода. Id сессии сохраняет ViewModel (событием SessionStarted) —
+     * здесь он нужен только чтобы продолжить прогон тем же `--session-id`.
+     */
+    private suspend fun runPiAttempt(
+        node: File,
+        dir: File,
+        session: CodingSession,
+        profile: LlmProfile,
+        prompt: String,
+        piSessionId: String?,
+        emit: suspend (CodingEvent) -> Unit,
+    ): AttemptOutcome {
         val args = mutableListOf(
             node.absolutePath, piCli.absolutePath,
             "--mode", "json",
-            "--provider", PROVIDER_ID,
+            "--provider", PiModelsConfig.PROVIDER_ID,
             "--model", profile.modelId,
             "--session-dir", sessionsDir.absolutePath,
             "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
@@ -200,34 +248,37 @@ class PiCodingRuntime(
         // распадается на части, и обрывки уходят в «сообщения» — агент видит
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
         args += listOf("--append-system-prompt", File(pihome, HINTS_FILE).absolutePath)
+        // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит
+        // (PI_REASONING_LEVEL — то, что pi отдаёт инструментам, а не вход запуска),
+        // а без него включается дефолт pi, и рассуждающая модель молча съедает maxTokens.
+        PiModelsConfig.thinkingLevel(profile)?.let { args += listOf("--thinking", it) }
         // Контекст продолжает КОДИНГ-СЕССИЯ (у проекта их может быть несколько).
-        if (session.piSessionId.isNotBlank()) {
-            args += listOf("--session-id", session.piSessionId)
-        }
+        if (!piSessionId.isNullOrBlank()) args += listOf("--session-id", piSessionId)
 
         val stderrFile = File.createTempFile("magicpaper-pi-stderr", ".log")
         stderrFile.deleteOnExit()
-        val process = ProcessBuilder(args)
-            .directory(dir)
-            .redirectError(stderrFile)
-            .apply { environment().putAll(piEnv(node)) }
-            .start()
-        // Запрос пользователя передаём пайп-стандарт-вводом (пи читает пайп как
-        // UTF-8 и берёт его первоначальным промптом, --mode json неинтерактивен).
-        // Байтовый канал immune к кавычкам/пробелам/переводам строк, в отличие от
-        // аргументов командной строки. Пи читает до EOF — пишем и закрываем.
-        runCatching {
-            process.outputStream.use { out ->
-                out.write(effectivePrompt.toByteArray(StandardCharsets.UTF_8))
-                out.flush()
-            }
-        }
-        runningProcesses[session.id] = process
-        abortedSessions.remove(session.id)
-
-        var sawAnswer = false
+        var process: Process? = null
+        var answerSeen = false
+        var truncated: CodingEvent.OutputTruncated? = null
+        var capturedId: String? = null
         var streamBroken: String? = null
         try {
+            process = ProcessBuilder(args)
+                .directory(dir)
+                .redirectError(stderrFile)
+                .apply { environment().putAll(piEnv(node)) }
+                .start()
+            // Запрос пользователя передаём пайп-стандарт-вводом (пи читает пайп как
+            // UTF-8 и берёт его первоначальным промптом, --mode json неинтерактивен).
+            // Байтовый канал невосприимчив к кавычкам/пробелам/переводам строк, в
+            // отличие от аргументов командной строки. Пи читает до EOF — пишем и закрываем.
+            runCatching {
+                process.outputStream.use { out ->
+                    out.write(prompt.toByteArray(StandardCharsets.UTF_8))
+                    out.flush()
+                }
+            }
+            runningProcesses[session.id] = process
             // Читаем строго UTF-8 с заменой битых байт: на Windows консольные
             // кодовые страницы (cp866/cp1251) иначе роняют поток MalformedInputException.
             readUtf8Tolerant(process.inputStream).use { reader ->
@@ -240,41 +291,94 @@ class PiCodingRuntime(
                         streamBroken = e.message
                         break
                     } ?: break
-                    val event = PiEventParser.parse(line) ?: continue
-                    if (event is CodingEvent.FinalText || event is CodingEvent.Failed) sawAnswer = true
-                    emit(event)
+                    for (event in PiEventParser.parseEvents(line)) {
+                        when (event) {
+                            is CodingEvent.SessionStarted ->
+                                if (event.sessionId.isNotBlank()) capturedId = event.sessionId
+                            is CodingEvent.FinalText -> answerSeen = true
+                            is CodingEvent.Failed -> answerSeen = true
+                            is CodingEvent.OutputTruncated -> truncated = event
+                            else -> Unit
+                        }
+                        emit(event)
+                    }
                 }
             }
             val exit = process.waitFor()
-            if (!sawAnswer) {
-                val err = tailOfFile(stderrFile)
-                emit(
-                    CodingEvent.Failed(
-                        when {
-                            abortedSessions.contains(session.id) -> "Прогон прерван по команде пользователя."
-                            err.isNotBlank() -> err
-                            exit != 0 -> "Агент завершился с кодом $exit."
-                            streamBroken != null -> "Поток агента прервался: ${streamBroken}"
-                            else -> "Агент завершился без ответа."
-                        }
-                    )
-                )
-            }
+            return AttemptOutcome(
+                answerSeen = answerSeen,
+                truncated = truncated,
+                aborted = abortedSessions.contains(session.id),
+                piSessionId = capturedId,
+                exitCode = exit,
+                stderr = tailOfFile(stderrFile),
+                streamBroken = streamBroken,
+            )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            emit(CodingEvent.Failed("Сбой запуска агента: ${e.message ?: e.javaClass.simpleName}"))
+            return AttemptOutcome(
+                answerSeen = answerSeen,
+                truncated = truncated,
+                aborted = abortedSessions.contains(session.id),
+                piSessionId = capturedId,
+                stderr = runCatching { tailOfFile(stderrFile) }.getOrDefault(""),
+                streamBroken = streamBroken,
+                launchError = e.message ?: e.javaClass.simpleName,
+            )
         } finally {
             stderrFile.delete()
             runningProcesses.remove(session.id, process)
-            abortedSessions.remove(session.id)
-            if (process.isAlive) {
-                process.destroy()
-                if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
+            process?.let { running ->
+                if (running.isAlive) {
+                    running.destroy()
+                    if (!running.waitFor(3, TimeUnit.SECONDS)) running.destroyForcibly()
+                }
             }
         }
-        emit(CodingEvent.Finished)
-    }.flowOn(Dispatchers.IO)
+    }
+
+    /** Итог одного запуска pi-агента (см. [runPiAttempt]). */
+    private data class AttemptOutcome(
+        val answerSeen: Boolean = false,
+        val truncated: CodingEvent.OutputTruncated? = null,
+        val aborted: Boolean = false,
+        val piSessionId: String? = null,
+        val exitCode: Int? = null,
+        val stderr: String = "",
+        val streamBroken: String? = null,
+        val launchError: String? = null,
+    )
+
+    /**
+     * Причина прогона без ответа. Порядок важнее содержания: обрезка вывода —
+     * диагноз точнее, чем шум в stderr (предупреждения node пишутся туда и при успехе),
+     * а «без ответа» — вообще не диагноз: он прятал ровно эту причину.
+     */
+    private fun failureReason(profile: LlmProfile, outcome: AttemptOutcome, continues: Int): String {
+        val err = outcome.stderr.trim()
+        return when {
+            outcome.aborted -> "Прогон прерван по команде пользователя."
+            outcome.launchError != null -> "Сбой запуска агента: ${outcome.launchError}"
+            outcome.exitCode != null && outcome.exitCode != 0 -> buildString {
+                append("Агент завершился с кодом ${outcome.exitCode}.")
+                // Код отказа важнее диагностики обрезки, но и её терять нельзя:
+                // чисел usage тут уже нет, поэтому только факт.
+                if (outcome.truncated != null) append(" Последний ход обрезан по лимиту вывода.")
+            }
+            outcome.truncated != null -> {
+                val advice = PiModelsConfig.truncationAdvice(
+                    profile,
+                    outputTokens = outcome.truncated.outputTokens,
+                    reasoningTokens = outcome.truncated.reasoningTokens,
+                )
+                if (continues > 0) "$advice Автопродолжение ($continues попыток) не помогло." else advice
+            }
+            err.isNotBlank() -> err
+            outcome.streamBroken != null -> "Поток агента прервался: ${outcome.streamBroken}"
+            else -> "Агент завершился без ответа."
+        }
+    }
 
     // ---- Windows: оболочка для bash-инструмента агента ---------------------
 
@@ -704,24 +808,11 @@ class PiCodingRuntime(
         pihome.mkdirs()
         writePiHomeDefaults()
         sessionsDir.mkdirs()
-        val key = profile.apiKey.ifBlank { "magicpaper" }
-        val model = jsonEscape(profile.modelId)
-        val baseUrl = jsonEscape(profile.baseUrl.trimEnd('/'))
-        val supportsEffort = ModelDefaults.supportsEffort(profile)
-        // Атомарная замена (tmp+rename): параллельные прогоны сессий не должны
-        // прочитать наполовину записанный models.json.
-        writeAtomically(
-            File(pihome, "models.json"),
-            """
-            {"providers":{"$PROVIDER_ID":{
-              "baseUrl":"$baseUrl",
-              "api":"openai-completions",
-              "apiKey":"${jsonEscape(key)}",
-              "compat":{"supportsDeveloperRole":false,"supportsReasoningEffort":$supportsEffort},
-              "models":[{"id":"$model","name":"$model","reasoning":false,"contextWindow":128000,"maxTokens":8192}]
-            }}}
-            """.trimIndent()
-        )
+        // Сборка конфига — в общем коде (PiModelsConfig: лимиты из профиля,
+        // reasoning и thinkingLevelMap согласованы с возможностями модели), там же
+        // и тестируется. Атомарная замена (tmp+rename): параллельные прогоны сессий
+        // не должны прочитать наполовину записанный models.json.
+        writeAtomically(File(pihome, "models.json"), PiModelsConfig.json(profile))
     }
 
     private fun writeAtomically(target: File, content: String) {
@@ -897,9 +988,25 @@ class PiCodingRuntime(
         const val PI_PACKAGE = "@earendil-works/pi-coding-agent"
         const val PI_VERSION = "0.84.4"
         const val NODE_VERSION = "v22.23.2"
-        const val PROVIDER_ID = "magicpaper"
         const val MIN_NODE_MAJOR = 22
         const val MIN_NODE_MINOR = 19
+
+        /**
+         * Сколько раз продолжать обрезанный ответ в той же pi-сессии. Двух хватает:
+         * если модель и с подсказкой не может уместить намерение в потолок вывода,
+         * причина в профиле (лимит/усилие), а не в везении, и третий прогон —
+         * просто ещё один счёт за токены.
+         */
+        const val MAX_OUTPUT_CONTINUES = 2
+
+        /**
+         * Что отправляем pi-сессии при автопродолжении. Коротко и без извинений:
+         * контекст уже набран, модели нужно только перестать рассуждать и сделать
+         * шаг — поэтому прямо сказано про длину ответа и про одно действие.
+         */
+        const val CONTINUATION_PROMPT =
+            "Предыдущий ответ обрезан лимитом токенов. Не пересказывай разбор: " +
+                "сделай одно следующее действие (правка файла или команда) и опиши его кратко."
 
         /**
          * MinGit — переносимый срез Git for Windows: полный нативный
