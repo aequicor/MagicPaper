@@ -28,7 +28,7 @@ interface PlanningExecutionHooks {
     suspend fun finished(plan: Plan, stage: Milestone, attempt: StageAttempt): StageTurnDecision
 }
 
-@Serializable data class CoordinationRecord(val id: String, val stageId: String, val reply: StageReply, val decision: CoordinatorReply? = null)
+@Serializable data class CoordinationRecord(val id: String, val stageId: String, val reply: StageReply, val decision: CoordinatorReply? = null, val activity: List<CodingStep> = emptyList())
 
 /** An unanswered question stays visible even when orchestration adds newer messages. */
 fun List<CodingMessage>.pendingPlanningQuestion(planIds: Set<String>? = null): CodingMessage? {
@@ -41,7 +41,8 @@ fun List<CodingMessage>.pendingPlanningQuestion(planIds: Set<String>? = null): C
 }
 
 fun Plan.isStageWorking(stage: Milestone): Boolean = intent == ExecutionIntent.RUN &&
-    stage.status == MilestoneStatus.ACTIVE && stage.attempts.lastOrNull()?.error == null
+    stage.status == MilestoneStatus.ACTIVE && stage.attempts.lastOrNull()?.error == null &&
+    stage.attempts.lastOrNull()?.awaitingPlanner != true
 
 /** Keep the coordination envelope out of the user-facing conversation. */
 fun readableStageActivity(steps: List<CodingStep>): List<CodingStep> = steps.map { step ->

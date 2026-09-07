@@ -100,6 +100,7 @@ import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
+import io.aequicor.magicpaper.domain.isStageWorking
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.readableStageActivity
 import io.aequicor.magicpaper.domain.PlanningChatService
@@ -236,7 +237,7 @@ private fun SessionArea(
         val worker = workerPlan?.milestones?.firstOrNull { it.id == active.session.stageId }
         val attempt = worker?.attempts?.lastOrNull()
         val workerLive = attempt?.let { live[it.id] ?: it }
-        val workerRunning = worker != null && worker.status == MilestoneStatus.ACTIVE && workerPlan.intent == ExecutionIntent.RUN && workerLive?.error?.requiresUser != true
+        val workerRunning = worker != null && workerPlan.isStageWorking(worker) && workerLive?.error?.requiresUser != true
         val draft = serviceDrafts[active.session.id] ?: if (workerRunning) CodingDraft(steps = readableStageActivity(workerLive?.steps.orEmpty()), active = true) else active.draft
         val effective = active.copy(messages = if (workerRunning && attempt != null) active.messages.filterNot { it.id == "${attempt.id}-response" } else active.messages,
             draft = draft.copy(awaitingApproval = active.draft.awaitingApproval), running = workerRunning || draft.active || active.running)
@@ -629,7 +630,9 @@ private fun SessionRow(
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             if (status != CodingSessionStatus.WAITING && (nested || item.running)) Text(
-                (if (nested) "Этап · " else "") + status.label,
+                (if (nested) "Этап · " else "") +
+                    if (item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
+                        "передан планировщику" else status.label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
             )

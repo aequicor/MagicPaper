@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -29,6 +30,40 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlanningChatRenderTest {
+    @Test fun plannerActivityRendersAfterWorkerHandoff() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val project = CodingProject("p", "MagicPaper", "/project", 1)
+            val parent = CodingSession("parent", project.id, "Сессия 3", 1, planningMode = true)
+            val child = CodingSession("worker", project.id, "Проверка интерфейса", 2,
+                parentSessionId = parent.id, stageId = "check", planId = "plan")
+            val plan = Plan("plan", project.id, "Проверить интерфейс", parentSessionId = parent.id, intent = ExecutionIntent.RUN,
+                confirmedRevision = 1, milestones = listOf(Milestone("check", "Проверка интерфейса", status = MilestoneStatus.ACTIVE,
+                    attempts = listOf(StageAttempt("attempt", child.id, StageAssignment("model", "m"), phase = AttemptPhase.EXECUTING, awaitingPlanner = true)))))
+            val draft = CodingDraft(active = true, steps = listOf(
+                CodingStep(CodingStepKind.INFO, "Планировщик обрабатывает результат этапа…", running = true),
+                CodingStep(CodingStepKind.THINKING, "Сопоставляю результаты проверки и определяю следующий этап.", callId = "thinking")))
+            val planner = CodingSessionUi(parent, messages = listOf(CodingMessage("result", CodingRole.AGENT,
+                "Исполнитель завершил проверку и передал результат планировщику.", createdAt = 1)), draft = draft, running = true, plan = plan)
+            val worker = CodingSessionUi(child, plan = plan)
+            assertEquals(CodingSessionStatus.WORKING, planner.status)
+            assertEquals(CodingSessionStatus.IDLE, worker.status)
+            val ui = CodingUi(projects = listOf(project), current = project, sessions = listOf(planner, worker), currentSessionId = parent.id)
+            ImageComposeScene(1100, 680) {
+                MagicPaperTheme { Surface { Row {
+                    ProjectsPanel(ui, {}, {}, {}, {}, {}, {}, {}, modifier = Modifier.width(300.dp))
+                    Box(Modifier.weight(1f)) {
+                        CodingChat(project, planner, true, true, { _, _ -> }, {}, { _, _ -> })
+                    }
+                } } }
+            }.use { scene ->
+                repeat(5) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                val output = File("build/reports/planning-chat").apply { mkdirs() }
+                File(output, "planner-handoff.png").writeBytes(scene.render(96_000_000L).use { it.encodeToData()!!.use { data -> data.bytes } })
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun sidebarWidthChangesByDraggingDivider() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {

@@ -56,6 +56,8 @@ import kotlinx.serialization.Serializable
     val mergeAssignment: StageAssignment? = null, val mergePhase: AttemptPhase? = null,
     val mergeReport: String = "", val mergeEngineSessionId: String = "", val mergePath: String = "",
     val startedAt: Long = 0, val updatedAt: Long = 0,
+    /** The worker has returned its turn; the planner owns the next decision. */
+    val awaitingPlanner: Boolean = false,
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",

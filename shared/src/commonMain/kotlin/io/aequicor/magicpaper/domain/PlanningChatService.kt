@@ -25,7 +25,18 @@ class PlanningChatService(
     private val refinementLocks = mutableMapOf<String, Mutex>()
     private val jobs = mutableMapOf<String, Job>()
     private val _drafts = MutableStateFlow<Map<String, CodingDraft>>(emptyMap())
-    val drafts: StateFlow<Map<String, CodingDraft>> = _drafts
+    private data class CoordinatorActivity(val planId: String, val sessionId: String, val steps: List<CodingStep>)
+    private val coordinatorActivity = MutableStateFlow<Map<String, CoordinatorActivity>>(emptyMap())
+    val drafts: StateFlow<Map<String, CodingDraft>> = combine(_drafts, coordinatorActivity) { requests, coordinators ->
+        val combined = requests.toMutableMap()
+        coordinators.entries.groupBy { it.value.sessionId }.forEach { (sessionId, turns) ->
+            val request = requests[sessionId] ?: CodingDraft()
+            combined[sessionId] = request.copy(active = true, steps = request.steps + turns.flatMap { (id, activity) ->
+                activity.steps.map { it.copy(callId = "$id:${it.callId}") }
+            })
+        }
+        combined
+    }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> = _changes
     private val _error = MutableStateFlow<String?>(null)
@@ -54,7 +65,9 @@ class PlanningChatService(
     fun shutdown() { scope.cancel() }
     fun cancelRequest(sessionId: String) {
         jobs[sessionId]?.cancel()
+        val coordinatingPlans = coordinatorActivity.value.values.filter { it.sessionId == sessionId }.map { it.planId }.distinct()
         launch {
+            coordinatingPlans.forEach { execution.stop(it) }
             val plan = store.plans().firstOrNull { it.parentSessionId == sessionId && it.pendingRequest.isNotBlank() } ?: return@launch
             append(plan.projectId, sessionId, CodingMessage("${plan.requestId}-cancelled", CodingRole.AGENT, "Запрос планирования остановлен. Сохранённый план не изменён.", createdAt = Id.now()))
             store.update(plan.id) { it.copy(pendingRequest = "", requestId = "") }
@@ -291,6 +304,43 @@ class PlanningChatService(
     }
     override suspend fun finished(plan: Plan, stage: Milestone, attempt: StageAttempt): StageTurnDecision {
         if (plan.parentSessionId.isBlank()) return StageTurnDecision(StageTurnAction.VERIFY, attempt.report)
+        val activityId = "${plan.id}-${attempt.id}-turn-${attempt.turnIndex}"
+        coordinatorActivity.update { it + (activityId to CoordinatorActivity(plan.id, plan.parentSessionId,
+            listOf(CodingStep(CodingStepKind.INFO, "Планировщик обрабатывает этап «${stage.title}»…", running = true)))) }
+        try {
+            return coordinateTurn(plan, stage, attempt, activityId)
+        } catch (e: Exception) {
+            val cancelled = e is CancellationException && e !is TimeoutCancellationException
+            val text = if (cancelled) "Работа планировщика остановлена."
+                else "Ошибка планировщика: ${e.message ?: "не удалось обработать результат этапа"}"
+            withContext(NonCancellable) {
+                append(plan.projectId, plan.parentSessionId, CodingMessage("${attempt.id}-turn-${attempt.turnIndex}-review", CodingRole.AGENT,
+                    text, createdAt = Id.now(), failed = !cancelled,
+                    steps = completedCoordinatorActivity(activityId) + CodingStep(if (cancelled) CodingStepKind.INFO else CodingStepKind.ERROR, text)))
+            }
+            throw e
+        } finally {
+            coordinatorActivity.update { it - activityId }
+        }
+    }
+
+    private fun coordinatorEvent(id: String, step: CodingStep) {
+        // The final answer is a routing envelope; the readable decision is appended separately.
+        if (step.kind == CodingStepKind.ANSWER) return
+        coordinatorActivity.update { all ->
+            val activity = all[id] ?: return@update all
+            val index = if (step.callId.isNotBlank()) activity.steps.indexOfLast { it.callId == step.callId && it.kind == step.kind }
+                else activity.steps.lastIndex.takeIf { last -> last >= 0 && activity.steps[last].kind == step.kind &&
+                    step.kind in listOf(CodingStepKind.THINKING, CodingStepKind.INFO) } ?: -1
+            val steps = if (index < 0) activity.steps + step else activity.steps.mapIndexed { i, old -> if (i == index) step else old }
+            all + (id to activity.copy(steps = steps))
+        }
+    }
+
+    private fun completedCoordinatorActivity(id: String): List<CodingStep> =
+        coordinatorActivity.value[id]?.steps.orEmpty().map { it.copy(running = false) }
+
+    private suspend fun coordinateTurn(plan: Plan, stage: Milestone, attempt: StageAttempt, activityId: String): StageTurnDecision {
         val eventId = "${attempt.id}-turn-${attempt.turnIndex}"
         var record = plan.coordination.firstOrNull { it.id == eventId }
         if (record == null) {
@@ -310,6 +360,7 @@ class PlanningChatService(
             return StageTurnDecision(StageTurnAction.WAIT, reply.text)
         }
         var decision = record.decision
+        var activity = record.activity
         if (decision == null) {
             val roster = profiles.load()
             val judge = plan.plannerSelection?.let { ProfileResolver.selection(it, roster) } ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
@@ -324,20 +375,22 @@ class PlanningChatService(
             val context = latest.milestones.joinToString("\n") { "${it.id}: ${it.title}: ${it.report}" }
             append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-review", CodingRole.AGENT,
                 "Планировщик разбирает ${if (reply.kind == StageReplyKind.RESULT) "результат" else "обращение"} этапа «${stage.title}» и определяет следующий шаг.", createdAt = Id.now()))
-            val raw = gateway.complete(judge, listOf(LlmMessage(LlmChatRole.SYSTEM,
+            val raw = gateway.completeWithActivity(judge, listOf(LlmMessage(LlmChatRole.SYSTEM,
                 "Ты координатор плана. Ответь JSON {\"reply\":\"объяснение\",\"actions\":[{\"stageId\":\"id\",\"message\":\"информация или задание\"}],\"askUser\":false,\"replan\":false}. Передай сведения между этапами. Если неизвестны требования — askUser=true и questions=[{\"id\":\"уникальный id\",\"title\":\"вопрос пользователю\",\"kind\":\"SINGLE|MULTIPLE|TEXT\",\"options\":[{\"id\":\"id варианта\",\"label\":\"вариант ответа\"}]}]. Для свободного ответа используй TEXT и options=[]. При askUser не выдавай заданий, зависящих от ответа. Не выдумывай результаты. replan=true если надо изменить ещё не начатые этапы в рамках цели. Проверь пересечения изменённых файлов с соседними планами. Если результат требует перепроверки после чужих изменений, передай исполнителю задание перепроверить его. Начатые этапы не удаляй, добавляй продолжения."),
-                LlmMessage(LlmChatRole.USER, "Цель: ${plan.goal}\nЭтапы:\n$context\nДругие планы:\n$peers\nОт ${stage.id} для ${reply.targetStageId} (${reply.kind}): ${reply.text}\nФайлы: ${reply.changedFiles}\nВходящие сообщения: ${latest.deliveries.takeLast(12)}")))
+                LlmMessage(LlmChatRole.USER, "Цель: ${plan.goal}\nЭтапы:\n$context\nДругие планы:\n$peers\nОт ${stage.id} для ${reply.targetStageId} (${reply.kind}): ${reply.text}\nФайлы: ${reply.changedFiles}\nВходящие сообщения: ${latest.deliveries.takeLast(12)}"))) { coordinatorEvent(activityId, it) }
             decision = try { json.decodeFromString<CoordinatorReply>(raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) }
                 catch (_: Exception) { CoordinatorReply("Планировщик вернул неверный ответ. Нужна проверка: ${reply.text}", askUser = true) }
             require(decision.actions.all { a -> plan.milestones.any { it.id == a.stageId } && a.message.isNotBlank() }) { "Некорректное сообщение координатора" }
             val savedDecision = decision
-            store.update(plan.id) { p -> p.copy(coordination = p.coordination.map { if (it.id == eventId) it.copy(decision = savedDecision) else it }) }
+            activity = completedCoordinatorActivity(activityId)
+            store.update(plan.id) { p -> p.copy(coordination = p.coordination.map { if (it.id == eventId) it.copy(decision = savedDecision, activity = activity) else it }) }
         }
         if (decision.askUser || decision.questions.isNotEmpty()) {
-            askUser(plan, stage, "$eventId-coordinator", decision.reply.ifBlank { reply.text }, decision.questions)
+            askUser(plan, stage, "$eventId-coordinator", decision.reply.ifBlank { reply.text }, decision.questions, activity)
             return StageTurnDecision(StageTurnAction.WAIT, reply.text)
         }
-        append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-coordinator", CodingRole.AGENT, "Планировщик: ${decision.reply}", createdAt = Id.now()))
+        append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-coordinator", CodingRole.AGENT, "Планировщик: ${decision.reply}",
+            steps = activity + CodingStep(CodingStepKind.ANSWER, "Планировщик: ${decision.reply}"), createdAt = Id.now()))
         decision.actions.forEachIndexed { index, action -> enqueue(plan.id, plan.parentSessionId, action.stageId, action.message, "$eventId-action-$index") }
         if (decision.replan && store.planFor(plan.id)!!.dialogue.none { it.id == "$eventId-replan-reply" })
             refine(plan.id, "$eventId-replan", "Обнови план в рамках цели. Сохрани начатые этапы и их идентификаторы, добавь необходимые продолжения. ${decision.reply}")
@@ -372,13 +425,14 @@ class PlanningChatService(
         val queued = store.planFor(plan.id)!!.deliveries.any { it.targetStageId == stage.id && it.state == DeliveryState.QUEUED }
         return StageTurnDecision(if (queued) StageTurnAction.CONTINUE else StageTurnAction.VERIFY, reply.text)
     }
-    private suspend fun askUser(plan: Plan, stage: Milestone, id: String, text: String, questions: List<PlanningQuestion> = emptyList()) {
+    private suspend fun askUser(plan: Plan, stage: Milestone, id: String, text: String, questions: List<PlanningQuestion> = emptyList(), activity: List<CodingStep> = emptyList()) {
         val validQuestions = questions.filter { it.title.isNotBlank() }.distinctBy { it.id }.mapIndexed { index, q ->
             q.copy(id = q.id.ifBlank { "$id-question-$index" },
                 kind = if (q.options.isEmpty()) QuestionKind.TEXT else q.kind)
         }.ifEmpty { listOf(PlanningQuestion("$id-question", text)) }
-        append(plan.projectId, plan.parentSessionId, CodingMessage(id, CodingRole.AGENT,
-            "Планировщику нужен ваш ответ по этапу «${stage.title}».\n\n$text", createdAt = Id.now(),
+        val message = "Планировщику нужен ваш ответ по этапу «${stage.title}».\n\n$text"
+        append(plan.projectId, plan.parentSessionId, CodingMessage(id, CodingRole.AGENT, message, createdAt = Id.now(),
+            steps = if (activity.isEmpty()) emptyList() else activity + CodingStep(CodingStepKind.ANSWER, message),
             planning = PlanningChatBlock(plan.id, questions = validQuestions, sourceStageId = stage.id)))
     }
     private suspend fun publish(plan: Plan) {

@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.domain
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.planning.*
 import io.aequicor.magicpaper.data.storage.*
+import io.aequicor.magicpaper.ui.CodingSessionUi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -20,6 +21,18 @@ class PlanningChatServiceTest {
         var overrideReply: String? = null
         var timeout = false
         var coordinator = """{"reply":"Результат принят","actions":[]}"""
+        val coordinatorCallbacks = mutableListOf<(CodingStep) -> Unit>()
+        val coordinatorGates = mutableListOf<CompletableDeferred<Unit>>()
+        override suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
+            if (messages.first().content.contains("Ты координатор")) {
+                val index = coordinatorCallbacks.size
+                coordinatorCallbacks += onActivity
+                onActivity(CodingStep(CodingStepKind.THINKING, "Разбираю результат ${index + 1}", callId = "thinking"))
+                coordinatorGates.getOrNull(index)?.await()
+                return complete(profile, messages)
+            }
+            return super.completeWithActivity(profile, messages, onActivity)
+        }
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
             lastMessages = messages
             if (timeout) withTimeout(10) { awaitCancellation() }
@@ -103,6 +116,109 @@ class PlanningChatServiceTest {
         assertTrue(saved.planningMode)
         f.service.configure(saved, search = SearchProvider.AUTO)
         assertTrue(f.projects.sessions(project.id).first { it.id == ordinary.id }.planningMode)
+    }
+
+    @Test fun handoffShowsLivePlannerActivityAndGreenWorkerThenUserQuestion() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.runtime.gate.complete(Unit)
+        val coordinatorGate = CompletableDeferred<Unit>()
+        f.gateway.coordinatorGates += coordinatorGate
+        f.gateway.coordinator = """{"reply":"Уточните формат","askUser":true}"""
+        f.service.confirm(plan.id); runCurrent()
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        val handedOff = f.store.planFor(plan.id)!!
+        assertTrue(handedOff.milestones.single().attempts.last().awaitingPlanner)
+        assertFalse(handedOff.isStageWorking(handedOff.milestones.single()))
+        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, plan = handedOff).status)
+        val initial = assertNotNull(f.service.drafts.value[parent.id])
+        assertTrue(initial.active)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent, draft = initial, running = initial.active, plan = handedOff).status)
+        assertTrue(initial.steps.any { it.kind == CodingStepKind.THINKING })
+
+        val callback = f.gateway.coordinatorCallbacks.single()
+        callback(CodingStep(CodingStepKind.THINKING, "Сопоставляю результаты этапов", callId = "thinking"))
+        callback(CodingStep(CodingStepKind.TOOL, "Проверка этапов", callId = "check", running = true))
+        runCurrent()
+        assertEquals("Сопоставляю результаты этапов", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.THINKING }.title)
+        assertTrue(f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.TOOL }.running)
+        callback(CodingStep(CodingStepKind.TOOL, "Проверка этапов", callId = "check", result = "Проверено"))
+        callback(CodingStep(CodingStepKind.ANSWER, "{\"askUser\":true}"))
+        runCurrent()
+        assertFalse(f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.TOOL }.running)
+        assertTrue(f.service.drafts.value[parent.id]!!.steps.none { it.kind == CodingStepKind.ANSWER })
+
+        coordinatorGate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertNull(f.service.drafts.value[parent.id])
+        val waiting = f.store.planFor(plan.id)!!
+        val history = f.projects.messages(project.id, parent.id)
+        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, history, plan = waiting).status)
+        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, plan = waiting).status)
+        val message = assertNotNull(history.pendingPlanningQuestion())
+        assertTrue(message.steps.any { it.title == "Сопоставляю результаты этапов" })
+        assertTrue(message.steps.none { it.running })
+        val restored = json.decodeFromString<Plan>(json.encodeToString(Plan.serializer(), waiting))
+        assertTrue(restored.milestones.single().attempts.last().awaitingPlanner)
+        assertTrue(restored.coordination.single().activity.any { it.title == "Сопоставляю результаты этапов" })
+
+        f.gateway.coordinator = """{"reply":"Результат принят"}"""
+        f.service.send(parent, "PDF", replyTo = message.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
+        assertFalse(f.store.planFor(plan.id)!!.milestones.single().attempts.last().awaitingPlanner)
+    }
+
+    @Test fun concurrentCoordinatorTurnsKeepRemainingActivityVisible() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val other = base.milestones.single().copy(id = "other", title = "Другой этап")
+        f.store.save(base.copy(milestones = base.milestones + other,
+            tree = base.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + other.id) else it } +
+                DecisionNode(other.id, other.title, DecisionKind.STAGE, stageId = other.id)))
+        val first = CompletableDeferred<Unit>(); val second = CompletableDeferred<Unit>()
+        f.gateway.coordinatorGates += listOf(first, second)
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(base.id); runCurrent()
+        assertEquals(2, f.gateway.coordinatorCallbacks.size)
+        assertEquals(2, f.service.drafts.value[parent.id]!!.steps.count { it.kind == CodingStepKind.THINKING })
+        first.complete(Unit); runCurrent()
+        val remaining = assertNotNull(f.service.drafts.value[parent.id])
+        assertTrue(remaining.active)
+        assertEquals("Разбираю результат 2", remaining.steps.single { it.kind == CodingStepKind.THINKING }.title)
+        second.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertNull(f.service.drafts.value[parent.id])
+        assertEquals(PlanStatus.DONE, f.store.planFor(base.id)!!.status)
+    }
+
+    @Test fun stoppingCoordinatorClearsLiveActivityAndPreservesItsMessages() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.runtime.gate.complete(Unit)
+        f.gateway.coordinatorGates += CompletableDeferred<Unit>()
+        f.service.confirm(plan.id); runCurrent()
+        assertTrue(f.service.drafts.value[parent.id]!!.active)
+        f.service.cancelRequest(parent.id); runCurrent()
+        assertNull(f.service.drafts.value[parent.id])
+        assertEquals(ExecutionIntent.STOP, f.store.planFor(plan.id)!!.intent)
+        assertTrue(f.projects.messages(project.id, parent.id).any { it.text == "Работа планировщика остановлена." && it.steps.any { step -> step.kind == CodingStepKind.THINKING } })
+    }
+
+    @Test fun coordinatorTimeoutClearsActivityAndKeepsTheErrorInHistory() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.runtime.gate.complete(Unit)
+        f.gateway.timeout = true
+        f.service.confirm(plan.id); runCurrent()
+        assertTrue(f.service.drafts.value[parent.id]!!.active)
+        advanceTimeBy(11); runCurrent()
+        assertNull(f.service.drafts.value[parent.id])
+        val failure = f.projects.messages(project.id, parent.id).last { it.failed }
+        assertTrue(failure.text.startsWith("Ошибка планировщика:"))
+        assertTrue(failure.steps.any { it.kind == CodingStepKind.THINKING })
+        assertEquals(CodingStepKind.ERROR, failure.steps.last().kind)
     }
 
     @Test fun questionsUseHistoryAndAnswersAreStoredOnce() = runTest {

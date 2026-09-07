@@ -421,8 +421,11 @@ class PlanningExecutionService(
                 // Resume the durable decision, never re-run its file operations just to redeliver a reply.
                 val recorded = plan.coordination.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
                 if (recorded != null && chatHooks != null) {
+                    attempt = attempt.copy(awaitingPlanner = true)
+                    saveAttempt(id, stageId, attempt)
                     val resumed = chatHooks!!.finished(plan, stage, attempt)
                     attempt = attempt.copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
+                        awaitingPlanner = resumed.action == StageTurnAction.WAIT,
                         phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
                         error = if (resumed.action == StageTurnAction.WAIT) PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
                     saveAttempt(id, stageId, attempt)
@@ -449,7 +452,7 @@ class PlanningExecutionService(
                     Работай только в этой рабочей папке. Не выполняй внешних публикаций.
                     Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
                 """.trimIndent() + "\n" + extraInstructions
-                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt)
+                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false)
                 saveAttempt(id, stageId, attempt)
                 journal(id, "agent-intent", stageId, attempt.id)
                 var failure: String? = null
@@ -505,9 +508,14 @@ class PlanningExecutionService(
                     attempt = attempt.copy(phase = AttemptPhase.FAILED, error = issue.copy(requiresUser = true))
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
+                if (chatHooks != null) {
+                    attempt = attempt.copy(awaitingPlanner = true)
+                    saveAttempt(id, stageId, attempt)
+                }
                 val decision = chatHooks?.finished(store.planFor(id)!!, stage, attempt)
                 if (decision != null) {
-                    attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1)
+                    attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1,
+                        awaitingPlanner = decision.action == StageTurnAction.WAIT)
                     if (decision.action != StageTurnAction.VERIFY) {
                         attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = if (decision.action == StageTurnAction.WAIT)
                             PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)

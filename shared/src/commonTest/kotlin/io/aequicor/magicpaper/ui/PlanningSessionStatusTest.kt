@@ -38,6 +38,15 @@ class PlanningSessionStatusTest {
         assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.TRANSIENT, "Повтор позже", retryAt = 100))).status)
     }
 
+    @Test fun handedOffWorkerIsGreenUntilExecutionResumes() {
+        val handedOff = plan.copy(milestones = listOf(stage.copy(attempts = listOf(attempt.copy(awaitingPlanner = true)))))
+        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, running = true, plan = handedOff).status)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(worker, plan = plan).status)
+        val planner = CodingSessionUi(parent, listOf(question), draft = CodingDraft(active = true), running = true, plan = handedOff)
+        assertEquals(CodingSessionStatus.WORKING, planner.status)
+        assertEquals(CodingSessionStatus.WAITING, planner.copy(running = false, draft = CodingDraft()).status)
+    }
+
     @Test fun unansweredQuestionsRemainAvailableInOrderAcrossNewMessages() {
         val second = question.copy(id = "second", planning = question.planning!!.copy(questions = listOf(PlanningQuestion("other", "Другой вопрос"))))
         val answeredSecond = CodingMessage("answer", CodingRole.USER, "Ответ", createdAt = 3, planning = PlanningChatBlock(plan.id, replyTo = second.id))

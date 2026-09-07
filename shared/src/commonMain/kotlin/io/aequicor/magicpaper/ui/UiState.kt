@@ -38,14 +38,16 @@ data class CodingSessionUi(
             if (draft.awaitingApproval) return CodingSessionStatus.WAITING
             val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
             if (stage != null) return when {
+                stage.attempts.lastOrNull()?.awaitingPlanner == true -> CodingSessionStatus.IDLE
                 stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.WAITING
                 running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
                 stage.completed -> CodingSessionStatus.IDLE
                 else -> CodingSessionStatus.QUEUED
             }
             if (plan != null && session.id == plan.parentSessionId) return when {
+                running -> CodingSessionStatus.WORKING
                 messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
-                running || plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
+                plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
                 plan.issue?.requiresUser == true || plan.milestones.any { it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.WAITING
                 plan.confirmedRevision != null -> CodingSessionStatus.IDLE
                 else -> codingStatusOf(messages)
