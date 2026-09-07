@@ -71,14 +71,14 @@ class PlanningChatService(
             }
         }
         launch { execution.live.collect { changed() } }
+        launch { drafts.collect { changed() } }
     }
     suspend fun append(projectId: String, sessionId: String, message: CodingMessage) = messageLock.withLock {
         if (projectId in clearingProjects || projects.sessions(projectId).none { it.id == sessionId }) return@withLock
         val history = projects.messages(projectId, sessionId)
         val index = history.indexOfFirst { it.id == message.id }
-        val next = if (index < 0) history + message else history.map { if (it.id == message.id) message else it }
-        if (next != history) projects.saveMessages(projectId, sessionId, next)
-        changed()
+        val next = if (index < 0) history + message else history.map { if (it.id == message.id) message.copy(createdAt = it.createdAt) else it }
+        if (next != history) { projects.saveMessages(projectId, sessionId, next); changed() }
     }
     suspend fun configure(session: CodingSession, planning: Boolean = session.planningMode, search: SearchProvider = session.searchProvider) {
         val latest = projects.sessions(session.projectId).firstOrNull { it.id == session.id } ?: session
@@ -108,24 +108,29 @@ class PlanningChatService(
                 }
                 val current = plan!!
                 if (replyTo != null && projects.messages(session.projectId, session.id).any { it.planning?.replyTo == replyTo }) return@withLock
-                validateAnswers(current, replyTo, answers)
-                val lastQuestion = current.dialogue.lastOrNull()?.takeIf { it.questions.isNotEmpty() }?.id
-                val effectiveReplyTo = replyTo ?: lastQuestion?.takeIf { q -> projects.messages(session.projectId, session.id).none { it.planning?.replyTo == q } }
+                val history = projects.messages(session.projectId, session.id)
+                val question = if (replyTo == null) history.pendingPlanningQuestion(setOf(current.id)) else history.firstOrNull { it.id == replyTo }
+                val effectiveReplyTo = replyTo ?: question?.id
+                validateAnswers(current, effectiveReplyTo, answers, history)
                 val requestId = Id.new()
                 append(current.projectId, session.id, CodingMessage(requestId, CodingRole.USER, text, createdAt = Id.now(),
                     planning = PlanningChatBlock(current.id, answers = answers, replyTo = effectiveReplyTo)))
-                if (current.confirmedRevision != null && current.milestones.any { it.attempts.lastOrNull()?.error?.requiresUser == true }) {
-                    val waiting = current.milestones.filter { it.attempts.lastOrNull()?.error?.requiresUser == true }
-                    waiting.forEach { enqueue(current.id, session.id, it.id, text) }
+                val sourceStageId = question?.planning?.sourceStageId
+                if (current.confirmedRevision != null && (sourceStageId != null || current.milestones.any { it.attempts.lastOrNull()?.error?.requiresUser == true })) {
+                    val waiting = current.milestones.filter {
+                        if (sourceStageId != null) it.id == sourceStageId else it.attempts.lastOrNull()?.error?.requiresUser == true
+                    }
+                    waiting.forEach { enqueue(current.id, session.id, it.id, text, "$requestId-answer-${it.id}", replyTo = effectiveReplyTo) }
                     store.update(current.id) { it.copy(issue = null, intent = ExecutionIntent.RUN) }
                     execution.start(current.id)
                 } else refine(current.id, requestId, text)
             }
         }
     }
-    private fun validateAnswers(plan: Plan, replyTo: String?, answers: List<PlanningAnswer>) {
+    private fun validateAnswers(plan: Plan, replyTo: String?, answers: List<PlanningAnswer>, history: List<CodingMessage>) {
         if (answers.isEmpty()) return
-        val questions = plan.dialogue.firstOrNull { it.id == replyTo }?.questions ?: error("Вопросы не найдены")
+        val questions = history.firstOrNull { it.id == replyTo && it.planning?.planId == plan.id }?.planning?.questions
+            ?: plan.dialogue.firstOrNull { it.id == replyTo }?.questions ?: error("Вопросы не найдены")
         require(answers.map { it.questionId }.distinct().size == answers.size && answers.size == questions.size) { "Ответьте на все вопросы" }
         questions.forEach { q ->
             val a = answers.single { it.questionId == q.id }
@@ -190,11 +195,21 @@ class PlanningChatService(
         val saved = store.update(id) { it.copy(confirmedRevision = it.revision,
             versions = it.versions + PlanVersion(it.revision, it.tree, it.milestones.map { m -> m.copy(attempts = emptyList()) }, Id.now())) }
         prepareSessions(saved)
+        append(saved.projectId, saved.parentSessionId, CodingMessage("${saved.id}-confirmed", CodingRole.AGENT,
+            "План подтверждён. Планировщик распределяет ${saved.selectedMilestones.size} этапов между исполнителями; зависимые этапы ждут завершения предыдущих.", createdAt = Id.now()))
         execution.start(id)
     } }
     fun control(id: String, command: String) = launch {
         if (id in deletedPlans) return@launch
         when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id); else -> execution.start(id) }
+        val plan = store.planFor(id) ?: return@launch
+        val text = when (command) {
+            "pause" -> "Планировщик приостановил выдачу новых заданий. Текущие ходы завершатся."
+            "stop" -> "Планировщик остановил выполнение этапов."
+            "retry" -> "Планировщик повторно запускает незавершённые этапы."
+            else -> "Планировщик возобновил распределение заданий."
+        }
+        append(plan.projectId, plan.parentSessionId, CodingMessage(Id.new(), CodingRole.AGENT, text, createdAt = Id.now()))
     }
     override suspend fun prepareSessions(plan: Plan) {
         if (plan.id in deletedPlans || plan.projectId in clearingProjects) return
@@ -231,7 +246,7 @@ class PlanningChatService(
         append(plan.projectId, plan.parentSessionId, CodingMessage("$id-notice", CodingRole.AGENT, "Сообщение исполнителю «${session.name}»: $text", createdAt = Id.now()))
         if (plan.intent == ExecutionIntent.RUN) execution.start(plan.id)
     }
-    private suspend fun enqueue(id: String, source: String, target: String, text: String, deliveryId: String = Id.new()): String {
+    private suspend fun enqueue(id: String, source: String, target: String, text: String, deliveryId: String = Id.new(), replyTo: String? = null): String {
         if (store.planFor(id)!!.deliveries.any { it.id == deliveryId }) return deliveryId
         val updated = store.update(id) { p ->
             if (p.deliveries.any { it.id == deliveryId }) return@update p
@@ -241,7 +256,7 @@ class PlanningChatService(
             val destination = if (complete) followupId else target
             val followup = stage.copy(id = followupId, title = "Продолжение: ${stage.title}", description = text,
                 status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", dependsOn = listOf(stage.id))
-            p.copy(deliveries = p.deliveries + PlanDelivery(deliveryId, source, destination, text), issue = null,
+            p.copy(deliveries = p.deliveries + PlanDelivery(deliveryId, source, destination, text, replyTo = replyTo), issue = null,
                 phase = if (complete) ExecutionPhase.EXECUTING else p.phase,
                 finalAttempt = if (complete) null else p.finalAttempt,
                 workspace = if (complete && p.sharedWorkspace) p.workspace?.copy(applied = false) else p.workspace,
@@ -252,6 +267,9 @@ class PlanningChatService(
         val delivery = updated.deliveries.first { it.id == deliveryId }
         val targetSession = updated.milestones.first { it.id == delivery.targetStageId }.attempts.firstOrNull()?.sessionId ?: "plan-$id-stage-${delivery.targetStageId}"
         append(updated.projectId, targetSession, CodingMessage(deliveryId, CodingRole.USER, "От $source: $text", createdAt = Id.now(), deliveryId = deliveryId, pendingDelivery = true))
+        val targetStage = updated.milestones.first { it.id == delivery.targetStageId }
+        append(updated.projectId, updated.parentSessionId, CodingMessage("$deliveryId-routed", CodingRole.AGENT,
+            "Планировщик поставил сообщение в очередь этапа «${targetStage.title}»: $text", createdAt = Id.now()))
         return deliveryId
     }
     override suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt): String {
@@ -260,6 +278,9 @@ class PlanningChatService(
             if (d.targetStageId == stage.id && d.state != DeliveryState.ANSWERED) d.copy(state = DeliveryState.DELIVERED, attemptId = attempt.id, turnIndex = attempt.turnIndex) else d
         }) }
         val inbox = p.deliveries.filter { it.targetStageId == stage.id && it.state == DeliveryState.DELIVERED }
+        append(p.projectId, p.parentSessionId, CodingMessage("${attempt.id}-turn-${attempt.turnIndex}-started", CodingRole.AGENT,
+            "Планировщик ${if (attempt.turnIndex == 0) "передал работу исполнителю" else "продолжил работу исполнителя"} этапа «${stage.title}»." +
+                if (inbox.isEmpty()) "" else " Передано сообщений: ${inbox.size}.", createdAt = Id.now()))
         return """
             Ты исполнитель этапа плана. Другие планы могут работать в этой же папке: сохраняй чужие изменения, перед правкой перечитывай файлы.
             Для передачи информации другим этапам обратись к планировщику через QUESTION и targetStageId. Не запускай других исполнителей самостоятельно.
@@ -285,22 +306,26 @@ class PlanningChatService(
         val records = store.planFor(plan.id)!!.coordination.filter { it.stageId == stage.id }
         val blocked = records.takeLastWhile { it.reply.kind != StageReplyKind.RESULT }.size
         if (blocked >= 3) {
-            append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-help", CodingRole.AGENT,
-                "Этап «${stage.title}» остановлен после трёх попыток разрешить блокировку. Нужно ваше уточнение: ${reply.text}", createdAt = Id.now()))
+            askUser(plan, stage, "$eventId-help", "Этап «${stage.title}» остановлен после трёх попыток разрешить блокировку. Нужно ваше уточнение: ${reply.text}")
             return StageTurnDecision(StageTurnAction.WAIT, reply.text)
         }
         var decision = record.decision
         if (decision == null) {
             val roster = profiles.load()
             val judge = plan.plannerSelection?.let { ProfileResolver.selection(it, roster) } ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
-                ?: return StageTurnDecision(StageTurnAction.WAIT, reply.text)
+                ?: run {
+                    askUser(plan, stage, "$eventId-help", "Подключите модель планировщика или уточните, как продолжить этап «${stage.title}»: ${reply.text}")
+                    return StageTurnDecision(StageTurnAction.WAIT, reply.text)
+                }
             val latest = store.planFor(plan.id)!!
             val peers = store.plans.value.filter { it.projectId == plan.projectId && it.id != plan.id }.joinToString("\n") { peer ->
                 "План ${peer.id}: ${peer.goal}; результаты: ${peer.coordination.takeLast(8).joinToString { "${it.stageId}: ${it.reply.text}; files=${it.reply.changedFiles}" }}"
             }
             val context = latest.milestones.joinToString("\n") { "${it.id}: ${it.title}: ${it.report}" }
+            append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-review", CodingRole.AGENT,
+                "Планировщик разбирает ${if (reply.kind == StageReplyKind.RESULT) "результат" else "обращение"} этапа «${stage.title}» и определяет следующий шаг.", createdAt = Id.now()))
             val raw = gateway.complete(judge, listOf(LlmMessage(LlmChatRole.SYSTEM,
-                "Ты координатор плана. Ответь JSON {\"reply\":\"объяснение\",\"actions\":[{\"stageId\":\"id\",\"message\":\"информация или задание\"}],\"askUser\":false,\"replan\":false}. Передай сведения между этапами. Если неизвестны требования — askUser=true. Не выдумывай результаты. replan=true если надо изменить ещё не начатые этапы в рамках цели. Проверь пересечения изменённых файлов с соседними планами. Если результат требует перепроверки после чужих изменений, передай исполнителю задание перепроверить его. Начатые этапы не удаляй, добавляй продолжения."),
+                "Ты координатор плана. Ответь JSON {\"reply\":\"объяснение\",\"actions\":[{\"stageId\":\"id\",\"message\":\"информация или задание\"}],\"askUser\":false,\"replan\":false}. Передай сведения между этапами. Если неизвестны требования — askUser=true и questions=[{\"id\":\"уникальный id\",\"title\":\"вопрос пользователю\",\"kind\":\"SINGLE|MULTIPLE|TEXT\",\"options\":[{\"id\":\"id варианта\",\"label\":\"вариант ответа\"}]}]. Для свободного ответа используй TEXT и options=[]. При askUser не выдавай заданий, зависящих от ответа. Не выдумывай результаты. replan=true если надо изменить ещё не начатые этапы в рамках цели. Проверь пересечения изменённых файлов с соседними планами. Если результат требует перепроверки после чужих изменений, передай исполнителю задание перепроверить его. Начатые этапы не удаляй, добавляй продолжения."),
                 LlmMessage(LlmChatRole.USER, "Цель: ${plan.goal}\nЭтапы:\n$context\nДругие планы:\n$peers\nОт ${stage.id} для ${reply.targetStageId} (${reply.kind}): ${reply.text}\nФайлы: ${reply.changedFiles}\nВходящие сообщения: ${latest.deliveries.takeLast(12)}")))
             decision = try { json.decodeFromString<CoordinatorReply>(raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) }
                 catch (_: Exception) { CoordinatorReply("Планировщик вернул неверный ответ. Нужна проверка: ${reply.text}", askUser = true) }
@@ -308,7 +333,11 @@ class PlanningChatService(
             val savedDecision = decision
             store.update(plan.id) { p -> p.copy(coordination = p.coordination.map { if (it.id == eventId) it.copy(decision = savedDecision) else it }) }
         }
-        append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-coordinator", CodingRole.AGENT, decision.reply, createdAt = Id.now()))
+        if (decision.askUser || decision.questions.isNotEmpty()) {
+            askUser(plan, stage, "$eventId-coordinator", decision.reply.ifBlank { reply.text }, decision.questions)
+            return StageTurnDecision(StageTurnAction.WAIT, reply.text)
+        }
+        append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-coordinator", CodingRole.AGENT, "Планировщик: ${decision.reply}", createdAt = Id.now()))
         decision.actions.forEachIndexed { index, action -> enqueue(plan.id, plan.parentSessionId, action.stageId, action.message, "$eventId-action-$index") }
         if (decision.replan && store.planFor(plan.id)!!.dialogue.none { it.id == "$eventId-replan-reply" })
             refine(plan.id, "$eventId-replan", "Обнови план в рамках цели. Сохрани начатые этапы и их идентификаторы, добавь необходимые продолжения. ${decision.reply}")
@@ -318,7 +347,11 @@ class PlanningChatService(
             if (overlaps.isNotEmpty()) {
                 val checks = store.planFor(plan.id)!!.journal.count { it.stageId == stage.id && it.operation == "shared-conflict-check" }
                 val unseen = overlaps.filter { (_, other) -> store.plans.value.first { it.id == plan.id }.deliveries.none { it.id == "overlap-${stage.id}-${other.id}" } }
-                if (unseen.isNotEmpty() && checks >= 3) return StageTurnDecision(StageTurnAction.WAIT, "Повторяющееся пересечение изменений в общей папке. Нужен ответ пользователя. ${reply.changedFiles}")
+                if (unseen.isNotEmpty() && checks >= 3) {
+                    val question = "Повторяющееся пересечение изменений в общей папке. Уточните, как согласовать файлы: ${reply.changedFiles.joinToString()}."
+                    askUser(plan, stage, "$eventId-conflict", question)
+                    return StageTurnDecision(StageTurnAction.WAIT, question)
+                }
                 unseen.forEach { (peer, other) ->
                     store.update(plan.id) { it.copy(journal = it.journal + PlanJournalEntry("overlap-${other.id}", Id.now(), stage.id, attempt.id, "shared-conflict-check", reply.changedFiles.joinToString())) }
                     enqueue(plan.id, peer.parentSessionId, stage.id, "Обнаружено пересечение файлов с планом ${peer.goal}: ${reply.changedFiles.filter { it in other.reply.changedFiles }}. Перечитай фактическое состояние, согласуй изменения без отката чужих файлов и повтори проверки. Не повторяй уже выполненные правки.", "overlap-${stage.id}-${other.id}")
@@ -334,11 +367,19 @@ class PlanningChatService(
                 }
             }
         }
-        if (decision.askUser) return StageTurnDecision(StageTurnAction.WAIT, reply.text)
         if (reply.kind != StageReplyKind.RESULT && decision.actions.none { it.stageId == stage.id })
             enqueue(plan.id, plan.parentSessionId, stage.id, decision.reply, "$eventId-followup")
         val queued = store.planFor(plan.id)!!.deliveries.any { it.targetStageId == stage.id && it.state == DeliveryState.QUEUED }
         return StageTurnDecision(if (queued) StageTurnAction.CONTINUE else StageTurnAction.VERIFY, reply.text)
+    }
+    private suspend fun askUser(plan: Plan, stage: Milestone, id: String, text: String, questions: List<PlanningQuestion> = emptyList()) {
+        val validQuestions = questions.filter { it.title.isNotBlank() }.distinctBy { it.id }.mapIndexed { index, q ->
+            q.copy(id = q.id.ifBlank { "$id-question-$index" },
+                kind = if (q.options.isEmpty()) QuestionKind.TEXT else q.kind)
+        }.ifEmpty { listOf(PlanningQuestion("$id-question", text)) }
+        append(plan.projectId, plan.parentSessionId, CodingMessage(id, CodingRole.AGENT,
+            "Планировщику нужен ваш ответ по этапу «${stage.title}».\n\n$text", createdAt = Id.now(),
+            planning = PlanningChatBlock(plan.id, questions = validQuestions, sourceStageId = stage.id)))
     }
     private suspend fun publish(plan: Plan) {
         if (plan.id in deletedPlans || plan.projectId in clearingProjects) return
@@ -355,6 +396,9 @@ class PlanningChatService(
         if (plan.confirmedRevision != null) {
             plan.selectedMilestones.forEach { stage ->
                 val sessionId = stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}"
+                if (stage.completed) append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-${stage.id}-completed", CodingRole.AGENT,
+                    if (stage.status == MilestoneStatus.SKIPPED) "Этап «${stage.title}» пропущен."
+                    else "Этап «${stage.title}» завершён и проверен. ${stage.checkNote}", createdAt = stage.updatedAt))
                 stage.attempts.forEach { a ->
                     append(plan.projectId, sessionId, CodingMessage("${a.id}-prompt", CodingRole.USER, a.prompt.ifBlank { stage.description }, createdAt = a.startedAt))
                     append(plan.projectId, sessionId, CodingMessage("${a.id}-response", CodingRole.AGENT, a.report, steps = a.steps.filter { it.isVisibleActivity }.map { step -> if (step.kind == CodingStepKind.ANSWER && step.title.trim().startsWith("{")) step.copy(title = runCatching { json.decodeFromString<StageReply>(step.title).text }.getOrDefault(step.title)) else step },

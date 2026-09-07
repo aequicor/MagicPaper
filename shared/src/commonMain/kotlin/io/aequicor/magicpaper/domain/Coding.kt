@@ -60,6 +60,9 @@ enum class CodingSessionStatus {
     /** Агент задал вопрос, не подтвердил действие или запрос без ответа — жёлтый. */
     WAITING,
 
+    /** Исполнитель ждёт передачи работы планировщиком — серый. */
+    QUEUED,
+
     /** Сессия свободна, ждёт запроса — зелёный. */
     IDLE,
 }
@@ -70,6 +73,7 @@ enum class CodingSessionStatus {
  * иначе IDLE.
  */
 fun codingStatusOf(messages: List<CodingMessage>): CodingSessionStatus {
+    if (messages.pendingPlanningQuestion() != null) return CodingSessionStatus.WAITING
     val last = messages.lastOrNull() ?: return CodingSessionStatus.IDLE
     // Запрос отправлен, ответа нет (сбой или потерянный прогон) — ждём решения.
     if (last.role == CodingRole.USER) return CodingSessionStatus.WAITING

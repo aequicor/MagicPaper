@@ -22,7 +22,7 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
     val source = plans.firstOrNull { it.id == block.planId } ?: return
     if (block.questions.isNotEmpty()) {
         val answered = history.any { it.planning?.replyTo == message.id }
-        Text(if (answered) "Ответы на уточнения отправлены" else "Уточнения — в карточке над полем ввода",
+        Text(if (answered) "Ответы на уточнения отправлены" else "Ответьте в окне уточнений; его можно открыть над полем ввода",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (!block.graph) return

@@ -235,6 +235,7 @@ private fun SessionArea(
                 busy = effective.running,
                 allowQueue = active.session.stageId != null,
                 planningService = service,
+                planningQuestionsSession = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId } ?: effective,
                 onOpenSession = vm::selectCodingSession,
                 engineReady = active.session.planningMode || active.session.stageId != null || ui.runtime.ready || (
                     vm.codingProfileOf(active.session)?.provider == ProviderType.OPENAI_SUBSCRIPTION &&
@@ -383,11 +384,13 @@ private fun runtimeLabel(runtime: RuntimeStatus): String = when (runtime.phase) 
 private val StatusWorking = Color(0xFFCE5B5B)   // красный: агент работает
 private val StatusWaiting = Color(0xFFE0A63C)   // жёлтый: ждёт ответа или подтверждения
 private val StatusIdle = Color(0xFF79A97C)      // зелёный: ждёт запроса
+private val StatusQueued = Color(0xFF97959B)    // серый: ждёт передачи работы
 
 private val CodingSessionStatus.label: String
     get() = when (this) {
         CodingSessionStatus.WORKING -> "работает"
         CodingSessionStatus.WAITING -> "ждёт ответа или подтверждения"
+        CodingSessionStatus.QUEUED -> "ждёт планировщика"
         CodingSessionStatus.IDLE -> "ждёт запроса"
     }
 
@@ -401,6 +404,7 @@ fun ActivityDot(
     val color = when (status) {
         CodingSessionStatus.WORKING -> StatusWorking
         CodingSessionStatus.WAITING -> StatusWaiting
+        CodingSessionStatus.QUEUED -> StatusQueued
         CodingSessionStatus.IDLE -> StatusIdle
     }
     val pulse by animateFloatAsState(
@@ -600,12 +604,6 @@ private fun SessionRow(
             .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (childCount > 0) {
-            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
-                .clickable(onClick = onToggleChildren), contentAlignment = Alignment.Center) {
-                Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
-            }
-        }
         StatusTooltip(status) { ActivityDot(status, size = 8) }
         Spacer(Modifier.width(7.dp))
         Column(Modifier.weight(1f)) {
@@ -622,8 +620,14 @@ private fun SessionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
             )
         }
-        if (childCount > 0) Text(childCount.toString(), style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+        if (childCount > 0) {
+            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
+                .clickable(onClick = onToggleChildren), contentAlignment = Alignment.Center) {
+                Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
+            }
+            Text(childCount.toString(), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+        }
         RowMenu(
             key = "session-${item.session.id}",
             entries = buildList<Pair<String, () -> Unit>> {
@@ -747,6 +751,7 @@ internal fun CodingChat(
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
     modelChip: (@Composable () -> Unit)? = null,
     planningService: PlanningChatService? = null,
+    planningQuestionsSession: CodingSessionUi = session,
     onOpenSession: (String) -> Unit = {},
     allowQueue: Boolean = false,
     onPlanning: (() -> Unit)? = null,
@@ -822,7 +827,8 @@ internal fun CodingChat(
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
             if (planningService != null) PlanningQuestionsDock(
-                session.session, messages, planningService, busy,
+                planningQuestionsSession.session, planningQuestionsSession.messages, planningService,
+                planningService.drafts.collectAsState().value[planningQuestionsSession.session.id]?.active == true,
                 Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
             )
             CodingComposer(

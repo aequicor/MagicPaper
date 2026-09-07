@@ -426,7 +426,11 @@ class PlanningExecutionService(
                         phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
                         error = if (resumed.action == StageTurnAction.WAIT) PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
                     saveAttempt(id, stageId, attempt)
-                    if (resumed.action == StageTurnAction.WAIT) return
+                    if (resumed.action == StageTurnAction.WAIT) {
+                        if (!hasQueuedReply(id, stageId)) return
+                        attempt = attempt.copy(error = null)
+                        saveAttempt(id, stageId, attempt)
+                    }
                     if (resumed.action == StageTurnAction.VERIFY) break
                     continue
                 }
@@ -508,7 +512,11 @@ class PlanningExecutionService(
                         attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = if (decision.action == StageTurnAction.WAIT)
                             PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
                         saveAttempt(id, stageId, attempt)
-                        if (decision.action == StageTurnAction.WAIT) return
+                        if (decision.action == StageTurnAction.WAIT) {
+                            if (!hasQueuedReply(id, stageId)) return
+                            attempt = attempt.copy(error = null)
+                            saveAttempt(id, stageId, attempt)
+                        }
                         continue
                     }
                 }
@@ -669,6 +677,11 @@ class PlanningExecutionService(
             )
         })
     }
+    /** A wizard answer can arrive between publishing the question and saving WAIT. */
+    private suspend fun hasQueuedReply(id: String, stageId: String): Boolean = store.planFor(id)?.deliveries?.any {
+        it.targetStageId == stageId && it.state == DeliveryState.QUEUED && it.replyTo != null
+    } == true
+
     private suspend fun journal(id: String, operation: String, stageId: String = "", attemptId: String = "") = store.update(id) {
         it.copy(journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), stageId, attemptId, operation))
     }

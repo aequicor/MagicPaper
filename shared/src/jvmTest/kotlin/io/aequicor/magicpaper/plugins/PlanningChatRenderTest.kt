@@ -81,8 +81,13 @@ class PlanningChatRenderTest {
             val project = CodingProject("p", "MagicPaper", "/project", 1)
             val parent = CodingSession("s", "p", "Редактор документов", 1, planningMode = true)
             val child = CodingSession("c", "p", "Редактор · Экспорт PDF", 2, parentSessionId = "s", stageId = "export", planId = "plan")
+            val plan = Plan("plan", project.id, "Редактор документов", parentSessionId = parent.id,
+                intent = ExecutionIntent.RUN, confirmedRevision = 1, milestones = listOf(
+                    Milestone("export", "Экспорт PDF", status = MilestoneStatus.ACTIVE), Milestone("check", "Проверка экспорта", dependsOn = listOf("export"))))
+            val queued = child.copy(id = "queued", stageId = "check", name = "Редактор · Проверка экспорта")
             val ui = CodingUi(projects = listOf(project, project.copy(id = "other", name = "Личный сайт")), current = project,
-                sessions = listOf(CodingSessionUi(parent), CodingSessionUi(child, running = true), CodingSessionUi(parent.copy(id = "ordinary", name = "Исправления", planningMode = false))), currentSessionId = "c")
+                sessions = listOf(CodingSessionUi(parent, plan = plan), CodingSessionUi(child, running = true, plan = plan),
+                    CodingSessionUi(queued, plan = plan), CodingSessionUi(parent.copy(id = "ordinary", name = "Исправления", planningMode = false))), currentSessionId = "c")
             for (width in listOf(280, 390)) ImageComposeScene(width, 620) {
                 MagicPaperTheme { Surface { ProjectsPanel(ui, {}, {}, {}, {}, {}, {}, {}) } }
             }.use { scene ->

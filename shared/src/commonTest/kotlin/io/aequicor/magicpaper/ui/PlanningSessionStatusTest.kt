@@ -1,0 +1,49 @@
+package io.aequicor.magicpaper.ui
+
+import io.aequicor.magicpaper.domain.*
+import kotlin.test.*
+
+class PlanningSessionStatusTest {
+    private val parent = CodingSession("parent", "project", "Сессия 3", 1, planningMode = true)
+    private val worker = CodingSession("worker", "project", "Этап", 1,
+        planId = "plan", parentSessionId = parent.id, stageId = "stage")
+    private val attempt = StageAttempt("attempt", worker.id, StageAssignment("profile", "model"), phase = AttemptPhase.EXECUTING)
+    private val stage = Milestone("stage", "Этап", status = MilestoneStatus.ACTIVE, attempts = listOf(attempt))
+    private val plan = Plan("plan", "project", "Цель", parentSessionId = parent.id, confirmedRevision = 1,
+        intent = ExecutionIntent.RUN, milestones = listOf(stage))
+    private val question = CodingMessage("question", CodingRole.AGENT, "Уточните формат", createdAt = 1,
+        planning = PlanningChatBlock(plan.id, questions = listOf(PlanningQuestion("format", "Формат")), sourceStageId = stage.id))
+
+    @Test fun queuedTaskIsGrayDespiteItsUnansweredTaskMessage() {
+        val task = CodingMessage("task", CodingRole.USER, "Реализовать этап", createdAt = 1)
+        val pending = plan.copy(milestones = listOf(stage.copy(status = MilestoneStatus.PENDING, attempts = emptyList())))
+        assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, listOf(task), plan = pending).status)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(worker, listOf(task), plan = plan).status)
+        assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, listOf(task), plan = plan.copy(intent = ExecutionIntent.PAUSE)).status)
+    }
+
+    @Test fun plannerIsRedWhileAnyStageWorksAndYellowUntilQuestionIsAnswered() {
+        val notice = CodingMessage("notice", CodingRole.AGENT, "Следующий этап запущен.", createdAt = 2)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent, plan = plan).status)
+        val waiting = CodingSessionUi(parent, listOf(question, notice), plan = plan)
+        assertEquals(CodingSessionStatus.WAITING, waiting.status)
+        val answer = CodingMessage("answer", CodingRole.USER, "PDF", createdAt = 3, planning = PlanningChatBlock(plan.id, replyTo = question.id))
+        assertEquals(CodingSessionStatus.WORKING, waiting.copy(messages = waiting.messages + answer).status)
+        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(parent, plan = plan.copy(milestones = listOf(stage.copy(status = MilestoneStatus.DONE)))).status)
+    }
+
+    @Test fun stageBlockedForUserIsYellowAndRetryDelayIsGray() {
+        fun withIssue(issue: PlanningIssue) = plan.copy(milestones = listOf(stage.copy(attempts = listOf(attempt.copy(error = issue)))))
+        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.CONFIGURATION, "Нужно уточнение", requiresUser = true))).status)
+        assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.TRANSIENT, "Повтор позже", retryAt = 100))).status)
+    }
+
+    @Test fun unansweredQuestionsRemainAvailableInOrderAcrossNewMessages() {
+        val second = question.copy(id = "second", planning = question.planning!!.copy(questions = listOf(PlanningQuestion("other", "Другой вопрос"))))
+        val answeredSecond = CodingMessage("answer", CodingRole.USER, "Ответ", createdAt = 3, planning = PlanningChatBlock(plan.id, replyTo = second.id))
+        val history = listOf(question, second, answeredSecond)
+        assertEquals(question.id, history.pendingPlanningQuestion()?.id)
+        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(history))
+        assertNull(history.pendingPlanningQuestion(setOf("deleted-plan")))
+    }
+}

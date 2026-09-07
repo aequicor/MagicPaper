@@ -16,6 +16,9 @@ import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
 import io.aequicor.magicpaper.domain.codingStatusOf
+import io.aequicor.magicpaper.domain.Plan
+import io.aequicor.magicpaper.domain.isStageWorking
+import io.aequicor.magicpaper.domain.pendingPlanningQuestion
 import io.aequicor.magicpaper.plugins.MagicPlugin
 
 /** Экраны минималистичной навигации. */
@@ -27,17 +30,31 @@ data class CodingSessionUi(
     val messages: List<CodingMessage> = emptyList(),
     val draft: CodingDraft = CodingDraft(),
     val running: Boolean = false,
+    val plan: Plan? = null,
 ) {
-    /**
-     * Кружок активности: красный, когда агент реально работает; жёлтый —
-     * пока прогон запущен, но ждёт ответ модели (или журнал закончился
-     * вопросом/ошибкой); зелёный — ждёт запроса.
-     */
+    /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */
     val status: CodingSessionStatus
-        get() = when {
-            running && draft.awaitingModel -> CodingSessionStatus.WAITING
-            running -> CodingSessionStatus.WORKING
-            else -> codingStatusOf(messages)
+        get() {
+            val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
+            if (stage != null) return when {
+                stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.WAITING
+                running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
+                stage.completed -> CodingSessionStatus.IDLE
+                else -> CodingSessionStatus.QUEUED
+            }
+            if (plan != null && session.id == plan.parentSessionId) return when {
+                messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
+                running || plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
+                plan.issue?.requiresUser == true || plan.milestones.any { it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.WAITING
+                plan.confirmedRevision != null -> CodingSessionStatus.IDLE
+                else -> codingStatusOf(messages)
+            }
+            return when {
+                running && draft.awaitingModel -> CodingSessionStatus.WAITING
+                running -> CodingSessionStatus.WORKING
+                session.stageId != null -> CodingSessionStatus.QUEUED
+                else -> codingStatusOf(messages)
+            }
         }
 }
 

@@ -9,10 +9,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import io.aequicor.magicpaper.domain.*
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -26,17 +28,34 @@ internal fun PlanningQuestionsDock(
     modifier: Modifier = Modifier,
 ) {
     val plans by service.store.plans.collectAsState()
-    val message = history.lastOrNull { it.planning?.questions?.isNotEmpty() == true } ?: return
+    val message = history.pendingPlanningQuestion(plans.map { it.id }.toSet()) ?: return
     val block = message.planning ?: return
-    if (history.any { it.planning?.replyTo == message.id } || plans.none { it.id == block.planId }) return
     key(session.id, message.id) {
-        PlanningQuestionWizard(block.questions, busy, modifier) { answers ->
+        var open by rememberSaveable { mutableStateOf(true) }
+        val answerState = rememberSaveableStateHolder()
+        val submit: (List<PlanningAnswer>) -> Unit = { answers ->
             val text = block.questions.joinToString("\n\n") { question ->
                 val answer = answers.first { it.questionId == question.id }
                 "${question.title}\n" + (question.options.filter { it.id in answer.selected }.map { it.label } +
                     listOf(answer.text).filter { it.isNotBlank() }).joinToString("; ")
             }
             service.send(session, text, answers, message.id)
+        }
+        TextButton(onClick = { open = true }, modifier = modifier) {
+            Text("Планировщик ждёт ответа · открыть вопросы")
+        }
+        if (open) Dialog(onDismissRequest = { open = false }) {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.widthIn(max = 560.dp).fillMaxWidth().heightIn(max = 640.dp).padding(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Уточнения к плану", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        TextButton(onClick = { open = false }) { Text("Закрыть") }
+                    }
+                    answerState.SaveableStateProvider(message.id) {
+                        PlanningQuestionWizard(block.questions, busy, Modifier.fillMaxWidth().weight(1f, fill = false), submit)
+                    }
+                }
+            }
         }
     }
 }

@@ -101,20 +101,32 @@ class MagicPaperViewModel(
         planningChat?.let { service -> scope.launch {
             service.changes.collect {
                 val repo = codingProjects ?: return@collect
-                val project = _state.value.coding.current ?: return@collect
-                val stored = repo.sessions(project.id)
+                val stored = repo.all().flatMap { repo.sessions(it.id) }
                 val old = _state.value.coding.sessions.associateBy { it.session.id }
                 val sessions = stored.map { session ->
                     val previous = old[session.id] ?: CodingSessionUi(session)
                     if (session.stageId != null || session.planningMode || service.store.plans.value.any { it.parentSessionId == session.id })
-                        previous.copy(session = session, messages = repo.messages(project.id, session.id),
-                            running = service.store.plans.value.firstOrNull { it.id == session.planId }?.let { p -> p.intent == ExecutionIntent.RUN && p.milestones.any { it.id == session.stageId && it.status == MilestoneStatus.ACTIVE && it.attempts.lastOrNull()?.error?.requiresUser != true } } == true || service.drafts.value[session.id]?.active == true || codingJobs[session.id]?.isActive == true)
-                    else previous.copy(session = session)
+                        withPlanningState(previous.copy(session = session, messages = repo.messages(session.projectId, session.id)))
+                    else previous.copy(session = session, messages = if (session.id in old) previous.messages else repo.messages(session.projectId, session.id))
                 }
-                _state.update { state -> state.copy(coding = state.coding.copy(sessions = sessions + state.coding.sessions.filter { it.session.projectId != project.id })) }
+                _state.update { state -> state.copy(coding = state.coding.copy(sessions = sessions)) }
             }
         } }
 
+    }
+
+    private fun withPlanningState(item: CodingSessionUi): CodingSessionUi {
+        val service = planningChat ?: return item
+        val session = item.session
+        val plan = service.store.plans.value.firstOrNull { it.id == session.planId }
+            ?: service.store.plans.value.filter { it.parentSessionId == session.id }
+                .let { plans -> plans.firstOrNull { it.phase != io.aequicor.magicpaper.domain.ExecutionPhase.COMPLETE } ?: plans.lastOrNull() }
+        val workerRunning = plan?.milestones?.firstOrNull { it.id == session.stageId }?.let {
+            plan.isStageWorking(it)
+        } == true
+        return item.copy(plan = plan, draft = service.drafts.value[session.id]
+            ?: if (plan != null || session.planningMode) CodingDraft() else item.draft,
+            running = workerRunning || service.drafts.value[session.id]?.active == true || codingJobs[session.id]?.isActive == true)
     }
 
     private suspend fun bootstrap() {
@@ -176,7 +188,7 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return emptyMap()
         return projects.associate { project ->
             val statuses = repo.sessions(project.id).map { session ->
-                codingStatusOf(repo.messages(project.id, session.id))
+                withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id))).status
             }
             project.id to aggregateCodingStatus(statuses)
         }
@@ -194,7 +206,7 @@ class MagicPaperViewModel(
                 _state.value.coding.sessions.firstOrNull { it.session.id == session.id }?.status
                     ?: CodingSessionStatus.WORKING
             } else {
-                codingStatusOf(repo.messages(projectId, session.id))
+                withPlanningState(CodingSessionUi(session, repo.messages(projectId, session.id))).status
             }
         }
         _state.update {
@@ -922,11 +934,11 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return
         val project = repo.all().firstOrNull { it.id == projectId } ?: return
         val loaded = repo.sessions(projectId).map { session ->
-            CodingSessionUi(
+            withPlanningState(CodingSessionUi(
                 session = session,
                 messages = repo.messages(projectId, session.id),
                 running = codingJobs[session.id]?.isActive == true,
-            )
+            ))
         }
         _state.update { st ->
             // Сессии других проектов с живыми прогонами не выбрасываем — они
