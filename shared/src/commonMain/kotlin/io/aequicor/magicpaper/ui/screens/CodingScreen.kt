@@ -75,6 +75,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingMessage
@@ -756,6 +757,12 @@ internal fun CodingChat(
     val listState = rememberLazyListState()
     val messages = session.messages
     val draft = session.draft
+    var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
+    val hasDraft = draft.steps.isNotEmpty() || draft.thinking.isNotBlank() || draft.failedMessage != null
+    val statusMessageId = messages.lastOrNull()?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
+    val status: @Composable () -> Unit = {
+        AgentMessageStatus(draft, thinkingExpanded, { thinkingExpanded = !thinkingExpanded })
+    }
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
     stickToBottom(listState, session.session.id)
@@ -788,17 +795,21 @@ internal fun CodingChat(
                 )
             }
             items(messages, key = { it.id }) { message ->
-                CodingMessageBubble(message)
-                if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
-                if (planningService != null) PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
+                CodingMessageBubble(message) {
+                    if (busy && message.id == statusMessageId) status()
+                    if (planningService != null && message.planning != null) {
+                        Spacer(Modifier.height(6.dp))
+                        PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
+                    }
+                    if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
+                }
             }
-            if (draft.steps.isNotEmpty() || draft.failedMessage != null) {
-                item(key = "draft") { DraftBubble(draft) }
+            if (hasDraft || (busy && statusMessageId == null)) {
+                item(key = "draft") { DraftBubble(draft, if (busy) status else null) }
             }
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
-            AgentStatusPanel(draft = session.draft, running = busy)
             if (planningService != null) PlanningQuestionsDock(
                 session.session, messages, planningService, busy,
                 Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
@@ -818,7 +829,7 @@ internal fun CodingChat(
 
 /** Бабл записи журнала: лента прогона в хронологическом порядке либо просто текст. */
 @Composable
-private fun CodingMessageBubble(message: CodingMessage) {
+private fun CodingMessageBubble(message: CodingMessage, footer: (@Composable () -> Unit)? = null) {
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -875,6 +886,7 @@ private fun CodingMessageBubble(message: CodingMessage) {
                     }
                 }
             }
+            footer?.invoke()
         }
     }
 }
@@ -1020,91 +1032,54 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
     }
 }
 
-/**
- * Живая лента прогона: зафиксированные шаги (текст, действия, рассуждения) —
- * статус и полный текст размышления показывает нижняя панель [AgentStatusPanel].
- */
+/** Текущий ответ агента со статусом и раскрываемыми размышлениями внизу. */
 @Composable
-private fun DraftBubble(draft: CodingDraft) {
+private fun DraftBubble(draft: CodingDraft, footer: (@Composable () -> Unit)? = null) {
     Column(
-        modifier = Modifier
-            .widthIn(max = 680.dp)
+        Modifier.widthIn(max = 680.dp)
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        draft.steps.forEach { step -> CodingStepRow(step, live = true) }
+        draft.steps.filter { footer == null || it.kind != CodingStepKind.THINKING }
+            .forEach { CodingStepRow(it, live = true) }
+        footer?.invoke()
     }
 }
 
-/**
- * Нижняя панель статуса кодинг-агента: пульсирующий кружок, строка «чем занят»
- * (думает / выполняет инструмент / ждёт движок) и весь текст текущего
- * размышления — живой, приклеенный к нижнему краю, чтобы последние мысли
- * были видны без прокрутки.
- */
 @Composable
-private fun AgentStatusPanel(draft: CodingDraft, running: Boolean) {
-    if (!running) return
-    // Все рассуждения прогона: лента timeline() уже содержит живой хвост
-    // последним шагом THINKING — отдельно draft.thinking не добавляем, иначе дубль.
-    val thinking = draft.steps
-        .filter { it.kind == CodingStepKind.THINKING }
-        .joinToString("\n\n") { it.title }
-        .trim()
-    // Текст размышлений по умолчанию свёрнут: снизу видна только строка статуса.
-    var thinkingExpanded by rememberSaveable("agent-thinking-panel") { mutableStateOf(false) }
-    val activeTool = draft.steps.lastOrNull { it.running }
-    val status = when {
-        activeTool != null -> "Агент выполняет: ${activeTool.title.removePrefix("⚒ ")}"
-        thinking.isNotBlank() -> "Агент думает…"
-        draft.awaitingModel -> "Жду ответ движка…"
-        else -> "Агент работает…"
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.45f))
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-    ) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(Modifier.height(6.dp))
+internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle: () -> Unit) {
+    val recorded = draft.steps.filter { it.kind == CodingStepKind.THINKING }.map { it.title }
+    // The recorder normally includes the live fragment in steps; other runtimes may send it separately.
+    val fragments = if (draft.thinking.isNotBlank() && recorded.lastOrNull() != draft.thinking)
+        recorded + draft.thinking else recorded
+    val thinking = fragments.joinToString("\n\n").trim()
+    val latest = fragments.lastOrNull { it.isNotBlank() }?.lineSequence()?.lastOrNull { it.isNotBlank() }
+    val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
+    val preview = latest ?: tool?.title ?: if (draft.awaitingModel) "Ожидает ответа модели…" else "Ожидает размышлений…"
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ActivityDot(CodingSessionStatus.WORKING, size = 9)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                status,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-            // Раскрыть/свернуть полный текст рассуждений.
-            if (thinking.isNotBlank()) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "💭 ${if (thinkingExpanded) "свернуть" else "размышления"} ${if (thinkingExpanded) "▾" else "▴"}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable { thinkingExpanded = !thinkingExpanded }
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                )
-            }
+            ActivityDot(CodingSessionStatus.WORKING, size = 6)
+            Spacer(Modifier.width(6.dp))
+            Text("Агент работает…", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (thinking.isNotBlank() && thinkingExpanded) {
-            Spacer(Modifier.height(4.dp))
-            val scrollState = rememberScrollState()
-            Box(modifier = Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scrollState)) {
-                Text(
-                    thinking,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            // Рассуждение растёт вниз: держим нижний край — видно последние мысли.
-            LaunchedEffect(thinking.length) { scrollState.scrollTo(scrollState.maxValue) }
+        Text(
+            text = "$preview ${if (expanded) "▴" else "▾"}",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 8.sp, lineHeight = 12.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
+                .semantics { contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления" }
+                .padding(vertical = 4.dp),
+        )
+        if (expanded) {
+            val scroll = rememberScrollState()
+            Text(thinking.ifBlank { "Размышления появятся здесь по мере поступления." },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll))
+            LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
         }
     }
 }
