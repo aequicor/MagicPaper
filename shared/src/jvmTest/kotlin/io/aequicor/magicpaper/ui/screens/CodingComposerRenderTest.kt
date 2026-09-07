@@ -24,6 +24,27 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CodingComposerRenderTest {
+    @Test fun reasoningStatusRendersWithAndWithoutSummaryDuringCommand() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val command = CodingStep(CodingStepKind.EXEC, "⚒ command · bash -lc ./gradlew", running = true)
+            val drafts = listOf(
+                CodingDraft(active = true),
+                CodingDraft(steps = listOf(command), active = true),
+                CodingDraft(steps = listOf(CodingStep(CodingStepKind.THINKING, "Проверю сборку проекта"), command), active = true),
+            )
+            val output = File("build/reports/coding-status").apply { mkdirs() }
+            drafts.forEachIndexed { index, draft ->
+                ImageComposeScene(680, 180) {
+                    MagicPaperTheme { Surface { AgentMessageStatus(draft, expanded = true, onToggle = {}) } }
+                }.use { scene ->
+                    repeat(4) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                    File(output, "$index.png").writeBytes(scene.render(80_000_000L).use { it.encodeToData()!!.use { data -> data.bytes } })
+                }
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun modelRemainsClickableBesideSendAtBothWidths() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

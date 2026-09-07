@@ -208,6 +208,8 @@ class CodexAppServerOpenAiSubscription(
                     put("input", input)
                     put("model", profile.modelId)
                     effort?.let { put("effort", it) }
+                    // Request readable summaries explicitly instead of inheriting a disabled default.
+                    put("summary", "auto")
                     put("approvalPolicy", "never")
                     put("sandboxPolicy", buildJsonObject { put("type", "readOnly") })
                 },
@@ -276,6 +278,8 @@ class CodexAppServerOpenAiSubscription(
                     put("input", buildCodingInput(prompt, attachments))
                     put("model", codingProfile.modelId)
                     effort?.let { put("effort", it) }
+                    // Request readable summaries explicitly instead of inheriting a disabled default.
+                    put("summary", "auto")
                     put("approvalPolicy", "never")
                     put("cwd", project.path)
                     put("sandboxPolicy", buildJsonObject {

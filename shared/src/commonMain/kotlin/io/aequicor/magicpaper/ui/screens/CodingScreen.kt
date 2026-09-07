@@ -1053,26 +1053,32 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
     val thinking = fragments.joinToString("\n\n").trim()
     val latest = fragments.lastOrNull { it.isNotBlank() }?.lineSequence()?.lastOrNull { it.isNotBlank() }
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
-    val preview = latest ?: tool?.title ?: if (draft.awaitingModel) "Ожидает ответа модели…" else "Ожидает размышлений…"
+    val preview = latest ?: "Движок пока не прислал размышления"
+    val activity = when {
+        tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
+        tool != null -> "Агент выполняет действие…"
+        draft.awaitingModel -> "Ожидает ответа модели…"
+        else -> "Агент работает…"
+    }
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             ActivityDot(CodingSessionStatus.WORKING, size = 6)
             Spacer(Modifier.width(6.dp))
-            Text("Агент работает…", style = MaterialTheme.typography.bodySmall,
+            Text(activity, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Text(
-            text = "$preview ${if (expanded) "▴" else "▾"}",
+            text = if (thinking.isBlank()) preview else "$preview ${if (expanded) "▴" else "▾"}",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 8.sp, lineHeight = 12.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
-                .semantics { contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления" }
+            modifier = Modifier.fillMaxWidth().clickable(enabled = thinking.isNotBlank(), onClick = onToggle)
+                .semantics { contentDescription = if (thinking.isBlank()) preview else if (expanded) "Свернуть размышления" else "Развернуть размышления" }
                 .padding(vertical = 4.dp),
         )
-        if (expanded) {
+        if (expanded && thinking.isNotBlank()) {
             val scroll = rememberScrollState()
-            Text(thinking.ifBlank { "Размышления появятся здесь по мере поступления." },
+            Text(thinking,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll))
