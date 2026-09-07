@@ -24,7 +24,9 @@ class CompositeSearchEngine(
             else -> settings.searchProvider
         }
         val engine = engines.firstOrNull { it.provider == target } ?: fallback()
-        return runCatching { engine.search(query, settings, limit) }.getOrElse { emptyList() }
+        return try { engine.search(query, settings, limit) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { emptyList() }
     }
 
     private fun pickAuto(settings: AppSettings): SearchProvider {

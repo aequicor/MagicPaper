@@ -27,6 +27,7 @@ class MagicAgent(
         settings: AppSettings,
         profile: LlmProfile?,
         attachments: List<Attachment> = emptyList(),
+        operationalProfile: LlmProfile? = profile,
     ): Answer {
         val trimmed = userText.trim()
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
@@ -38,7 +39,7 @@ class MagicAgent(
             if (matches.isNotEmpty()) {
                 val context = matches.joinToString("\n\n") { "${it.article.title}\n${it.article.body}" }
                 return tryModel(
-                    profile = profile,
+                    profile = operationalProfile,
                     system = SYSTEM_PROMPT,
                     context = "Документация приложения:\n$context",
                     skills = skills,

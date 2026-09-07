@@ -66,10 +66,12 @@ data class AdvancedLlmOptions(
     val systemPromptOverride: String = "",
     /** Сколько последних сообщений истории отправлять модели. */
     val contextMessages: Int = 8,
+    val sendMaxTokens: Boolean = true,
+    val extraParameters: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
 ) {
     val safeTemperature: Double? get() = temperature?.coerceIn(0.0, 2.0)
-    val safeTopP: Double? get() = topP?.coerceIn(0.05, 1.0)
-    val safeMaxTokens: Int get() = maxTokens.coerceIn(512, 128_000)
+    val safeTopP: Double? get() = topP?.coerceIn(0.0, 1.0)
+    val safeMaxTokens: Int get() = maxTokens.coerceIn(1, 10_000_000)
     val safeTimeoutSeconds: Int get() = timeoutSeconds.coerceIn(0, 3600)
     val safeContextLimit: Int get() = contextLimit.coerceIn(1_024, 10_000_000)
 }
@@ -105,6 +107,10 @@ data class LlmProfile(
     val advanced: AdvancedLlmOptions = AdvancedLlmOptions(),
     /** Когда профиль создан; 0 — наследие ранних версий. */
     val createdAt: Long = 0,
+    val modelCatalog: List<ProviderModel> = emptyList(),
+    val variants: List<ModelVariant> = emptyList(),
+    val modelLibraryVersion: Int = 0,
+    @kotlinx.serialization.Transient val invocationKey: String? = null,
 ) {
     val configured: Boolean
         get() = modelId.isNotBlank() && (provider == ProviderType.OPENAI_SUBSCRIPTION || baseUrl.isNotBlank())
@@ -119,10 +125,10 @@ data class LlmProfile(
      * чтобы выбор в чате и выбор для агента непересекались. Без своей модели
      * профиль уходит как есть.
      */
-    fun forCoding(): LlmProfile = if (codingModelId.isBlank()) this else copy(modelId = codingModelId)
+    fun forCoding(): LlmProfile = forModel(codingModel)
 
     /** Короткая подпись для чипа в чате: «Ollama (локально) · llama3.2». */
-    val shortLabel: String get() = if (modelId.isBlank()) name else "$name · $modelId"
+    val shortLabel: String get() = if (modelId.isBlank()) name else "$name · ${modelName(selectionKey)}"
 
     /**
      * Рабочее состояние переключателя: показываем модель по умолчанию, даже если
@@ -132,16 +138,11 @@ data class LlmProfile(
         activeModel?.takeIf { it.isNotBlank() }?.takeIf { isFavoriteModel(it) || it == modelId || it == codingModelId }
             ?: modelId.takeIf { it.isNotBlank() }
 
-    /** Все модели, показываемые в переключателях: избранные, затем модель по умолчанию и coding-модель. */
+    /** Все модели в переключателях: явно отмеченные модели поставщика и пользовательские варианты. */
     val displayModels: List<String>
-        get() = buildList {
-            favoriteModels.forEach { add(it) }
-            listOf(modelId, codingModelId).forEach {
-                if (it.isNotBlank() && it !in this) add(it)
-            }
-        }
+        get() = (favoriteModels + variants.map { it.id }).filter { it.isNotBlank() }.distinct()
 
-    fun isFavoriteModel(model: String): Boolean = favoriteModels.contains(model)
+    fun isFavoriteModel(model: String): Boolean = model in displayModels
 
     /**
      * Переключение модели: если модель уже в списке — снимаем избранное, иначе добавляем.

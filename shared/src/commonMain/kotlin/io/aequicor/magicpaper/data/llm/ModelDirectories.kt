@@ -1,5 +1,10 @@
 package io.aequicor.magicpaper.data.llm
 
+import io.aequicor.magicpaper.domain.WireDialect
+import io.ktor.http.encodeURLParameter
+import io.aequicor.magicpaper.domain.ProviderModel
+import io.aequicor.magicpaper.domain.connectionConfigured
+import kotlinx.serialization.json.*
 import io.aequicor.magicpaper.domain.DeclaredReasoning
 import io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel
 import io.aequicor.magicpaper.domain.LlmProfile
@@ -25,7 +30,7 @@ internal suspend fun HttpClient.getText(
     url: String,
     headers: Map<String, String>,
     timeoutSeconds: Int,
-): String = withTimeout(timeoutSeconds.toLong() * 1000) {
+): String = withTimeout(if (timeoutSeconds == 0) Long.MAX_VALUE else timeoutSeconds.toLong() * 1000) {
     val response = get(url) {
         headers.forEach { (key, value) -> header(key, value) }
     }
@@ -75,9 +80,25 @@ internal fun parseDeclaredReasoning(
 
 /** Факт о конкретной записи каталога; null — запись ничего не объявляет. */
 private fun declaredOf(entry: JsonObject): DeclaredReasoning? {
+    val capabilities = entry["capabilities"] as? JsonObject
+    val effortCapability = capabilities?.get("effort") as? JsonObject
+    val thinking = capabilities?.get("thinking") as? JsonObject
+    if ((thinking?.get("supported") as? JsonPrimitive)?.booleanOrNull == false &&
+        (effortCapability?.get("supported") as? JsonPrimitive)?.booleanOrNull != true) return DeclaredReasoning.None
+    val supportedEfforts = effortCapability?.entries.orEmpty().mapNotNull { (key, value) ->
+        if (((value as? JsonObject)?.get("supported") as? JsonPrimitive)?.booleanOrNull == true)
+            ReasoningEffort.fromWire(key) else null
+    }.toSet()
+    if (supportedEfforts.isNotEmpty()) {
+        val types = thinking?.get("types") as? JsonObject
+        val adaptive = (((types?.get("adaptive") as? JsonObject)?.get("supported")) as? JsonPrimitive)?.booleanOrNull == true
+        return DeclaredReasoning(efforts = supportedEfforts, dialect = if (adaptive) WireDialect.ADAPTIVE_EFFORT else null)
+    }
+
     val reasoning = entry["reasoning"] as? JsonObject
     val efforts = reasoning?.efforts().orEmpty()
     val mandatory = (reasoning?.get("mandatory") as? JsonPrimitive)?.booleanOrNull
+    val default = (reasoning?.get("default_effort") as? JsonPrimitive)?.contentOrNull?.let(ReasoningEffort::fromWire)
     val parameters = (entry["supported_parameters"] as? JsonArray)
         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.lowercase() }
     val parameterSaysYes = parameters?.any { it == "reasoning" || it.startsWith("reasoning.") || it == "reasoning_effort" }
@@ -85,6 +106,7 @@ private fun declaredOf(entry: JsonObject): DeclaredReasoning? {
         efforts.isNotEmpty() || mandatory != null -> DeclaredReasoning(
             efforts = efforts,
             mandatory = mandatory,
+            default = default,
         )
         parameterSaysYes == true -> DeclaredReasoning()
         // Перечень органов есть, reasoning в нём нет — каталог знает модель точно.
@@ -110,17 +132,14 @@ class OpenAiModelDirectory(
 ) : ModelDirectory {
 
     override suspend fun models(profile: LlmProfile): List<DiscoveredModel> {
-        require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
+        require(profile.connectionConfigured) { "Укажите адрес поставщика." }
         val url = profile.baseUrl.trimEnd('/') + "/models"
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("Authorization", "Bearer " + profile.apiKey)
         }
         val body = client.getText(url, headers, profile.advanced.timeoutSeconds)
-        return ModelDefaults.discover(
-            profile.provider,
-            parseIdList(json, body, "data"),
-            parseDeclaredReasoning(json, body, "data"),
-        )
+        return parseProviderModels(json, body, profile.provider)
+
     }
 }
 
@@ -131,14 +150,24 @@ class AnthropicModelDirectory(
 ) : ModelDirectory {
 
     override suspend fun models(profile: LlmProfile): List<DiscoveredModel> {
-        require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
+        require(profile.connectionConfigured) { "Укажите адрес поставщика." }
         val url = profile.baseUrl.trimEnd('/') + "/v1/models"
         val headers = mapOf(
             "x-api-key" to profile.apiKey,
             "anthropic-version" to API_VERSION,
         )
-        val body = client.getText(url, headers, profile.advanced.timeoutSeconds)
-        return ModelDefaults.discover(profile.provider, parseIdList(json, body, "data"))
+        val result = mutableListOf<DiscoveredModel>()
+        var after: String? = null
+        val seen = mutableSetOf<String>()
+        do {
+            val pageUrl = url + "?limit=100" + (after?.let { "&after_id=${it.encodeURLParameter()}" } ?: "")
+            val body = client.getText(pageUrl, headers, profile.advanced.timeoutSeconds)
+            result += parseProviderModels(json, body, profile.provider)
+            val root = json.parseToJsonElement(body).jsonObject
+            after = if (root["has_more"]?.jsonPrimitive?.booleanOrNull == true) root["last_id"]?.jsonPrimitive?.contentOrNull else null
+            require(after == null || seen.add(after)) { "Каталог повторяет страницу" }
+        } while (after != null)
+        return result.distinctBy { it.id }
     }
 
     private companion object {
@@ -153,21 +182,23 @@ class GoogleModelDirectory(
 ) : ModelDirectory {
 
     override suspend fun models(profile: LlmProfile): List<DiscoveredModel> {
-        require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
+        require(profile.connectionConfigured) { "Укажите адрес поставщика." }
         val url = profile.baseUrl.trimEnd('/') + "/models"
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("x-goog-api-key", profile.apiKey)
         }
-        val body = client.getText(url, headers, profile.advanced.timeoutSeconds)
-        val names = runCatching {
-            val root = json.parseToJsonElement(body)
-            val array = (root as? JsonObject)?.get("models") as? JsonArray ?: JsonArray(emptyList())
-            array.mapNotNull { item ->
-                val name = ((item as? JsonObject)?.get("name") as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
-                name.removePrefix("models/").removePrefix("tunedModels/")
-            }
-        }.getOrElse { error("Не удалось разобрать список моделей: ${it.message}") }
-        return ModelDefaults.discover(profile.provider, names)
+        val result = mutableListOf<DiscoveredModel>()
+        var token: String? = null
+        val seen = mutableSetOf<String>()
+        do {
+            val pageUrl = url + "?pageSize=1000" + (token?.let { "&pageToken=${it.encodeURLParameter()}" } ?: "")
+            val body = client.getText(pageUrl, headers, profile.advanced.timeoutSeconds)
+            result += parseProviderModels(json, body, profile.provider, "models")
+            token = json.parseToJsonElement(body).jsonObject["nextPageToken"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            require(token == null || seen.add(token)) { "Каталог повторяет страницу" }
+        } while (token != null)
+        return result.distinctBy { it.id }
+
     }
 }
 
@@ -181,4 +212,31 @@ class RoutingModelDirectory(
             ?: error("Нет каталога моделей для провайдера ${profile.provider}.")
         return directory.models(profile)
     }
+}
+
+/** Provider metadata uses nullable facts so an id-only directory remains usable. */
+internal fun parseProviderModels(json: Json, body: String, provider: ProviderType, arrayKey: String = "data"): List<DiscoveredModel> {
+    val root = json.parseToJsonElement(body)
+    val array = (root as? JsonObject)?.get(arrayKey) as? JsonArray ?: root as? JsonArray
+        ?: error("В ответе нет списка моделей")
+    return array.mapNotNull { element ->
+        val entry = element as? JsonObject ?: return@mapNotNull null
+        fun str(key: String) = (entry[key] as? JsonPrimitive)?.contentOrNull
+        fun integer(vararg keys: String) = keys.firstNotNullOfOrNull { (entry[it] as? JsonPrimitive)?.intOrNull?.takeIf { n -> n > 0 } }
+        val id = (str("id") ?: str("name"))?.removePrefix("models/")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val methods = entry["supportedGenerationMethods"] as? JsonArray
+        if (provider == ProviderType.GOOGLE && methods != null && methods.none { (it as? JsonPrimitive)?.contentOrNull == "generateContent" }) return@mapNotNull null
+        val defaults = (entry["default_parameters"] as? JsonObject).orEmpty().filterValues { it != JsonNull }.toMutableMap()
+        if (provider == ProviderType.GOOGLE) listOf("temperature" to "temperature", "topP" to "top_p", "topK" to "top_k").forEach { (wire, key) ->
+            entry[wire]?.takeIf { it != JsonNull }?.let { defaults[key] = it }
+        }
+        val declared = declaredOf(entry)
+        val supported = (entry["supported_parameters"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet()
+            ?: if (provider == ProviderType.GOOGLE) defaults.keys + "max_tokens" else null
+        val metadata = ProviderModel(id, str("displayName") ?: str("display_name") ?: str("name")?.takeUnless { it.startsWith("models/") } ?: id,
+            integer("context_length", "context_window", "max_input_tokens", "inputTokenLimit"),
+            integer("max_output_tokens", "max_tokens", "outputTokenLimit") ?: ((entry["top_provider"] as? JsonObject)?.get("max_completion_tokens") as? JsonPrimitive)?.intOrNull,
+            defaults, supported, declared)
+        ModelDefaults.discover(provider, listOf(id), declared?.let { mapOf(id to it) }.orEmpty()).single().copy(metadata = metadata)
+    }.distinctBy { it.id }.sortedBy { it.id }
 }

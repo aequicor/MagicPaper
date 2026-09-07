@@ -83,6 +83,7 @@ data class Plan(
     val projectId: String,
     val goal: String,
     val milestones: List<Milestone> = emptyList(),
+    val plannerSelection: ModelSelection? = null,
     val status: PlanStatus = PlanStatus.DRAFT,
     /**
      * Кодинг-сессия выполнения плана: у плана своя нить диалога с агентом,
@@ -161,6 +162,7 @@ data class ModelDossier(
     val assessment: StageAssessment = StageAssessment(),
     /** Свободное описание сильных сторон модели. */
     val strengths: String = "",
+    val limitations: String = "",
     /** Оценка силы/универсальности 0..5; 0 = не оценивалась. */
     val rating: Int = 0,
     val source: DossierSource = DossierSource.USER,
@@ -229,8 +231,7 @@ object AgentMatcher {
 
     /** Оценка пригодности кандидата: 0..1. */
     fun score(profile: LlmProfile, milestoneText: String, dossiers: List<ModelDossier>): Double {
-        val dossier = dossiers.firstOrNull { it.profileId == profile.id && it.modelId == profile.modelId }
-            ?: dossiers.firstOrNull { it.profileId == profile.id && it.modelId.isBlank() }
+        val dossier = dossiers.forModel(profile, profile.modelId)
         val similarity = if (dossier != null && dossier.strengths.isNotBlank()) {
             stemmedScore(milestoneText, dossier.strengths)
         } else {

@@ -46,6 +46,7 @@ object LlmPayloads {
         val resolved = profile.resolveEffort(capability)
         val a = profile.advanced
         return buildJsonObject {
+            a.extraParameters.filterKeys { it in io.aequicor.magicpaper.domain.CUSTOM_MODEL_PARAMETERS }.forEach { (key, value) -> put(key, value) }
             put("model", profile.modelId)
             put("stream", false)
             put("messages", buildJsonArray {
@@ -65,10 +66,12 @@ object LlmPayloads {
                 }
             })
             resolved.level?.takeIf { it != ReasoningEffort.AUTO }?.let {
-                put("reasoning_effort", it.wire)
+                if (profile.provider == io.aequicor.magicpaper.domain.ProviderType.OPENROUTER) {
+                    put("reasoning", buildJsonObject { put("effort", it.wire) })
+                } else put("reasoning_effort", it.wire)
             }
             if (!resolved.enabled) a.safeTemperature?.let { put("temperature", it) }
-            put("max_tokens", a.safeMaxTokens)
+            if (a.sendMaxTokens) put("max_tokens", a.safeMaxTokens)
             a.safeTopP?.let { put("top_p", it) }
         }
     }
@@ -90,7 +93,12 @@ object LlmPayloads {
         // «выключено» не должны менять поведение модели. Бюджет считаем без
         // обрезки по потолку вывода: ниже потолок поднимется под бюджет.
         val budget = if (resolved.enabled && controls?.dialect == WireDialect.BUDGET_TOKENS) {
-            capability.budgetTokens(resolved.level)?.takeIf { it > 0 }
+            capability.budgetTokens(resolved.level)?.takeIf { it > 0 }?.let { requested ->
+                if (profile.modelLibraryVersion >= 1) {
+                    require(baseMax >= 2048) { "Для рассуждения нужен лимит ответа не меньше 2048 токенов." }
+                    minOf(requested, baseMax - 1024)
+                } else requested
+            }
         } else {
             null
         }
@@ -103,6 +111,8 @@ object LlmPayloads {
 
         return buildJsonObject {
             put("model", profile.modelId)
+            a.extraParameters["top_k"]?.let { put("top_k", it) }
+            a.extraParameters["stop"]?.let { put("stop_sequences", it) }
             put("max_tokens", maxTokens)
             if (system.isNotBlank()) put("system", system)
             put("messages", buildJsonArray {
@@ -176,8 +186,11 @@ object LlmPayloads {
                 }
             })
             put("generationConfig", buildJsonObject {
+                a.extraParameters["top_k"]?.let { put("topK", it) }
+                a.extraParameters["seed"]?.let { put("seed", it) }
+                a.extraParameters["stop"]?.let { put("stopSequences", it) }
                 if (!resolved.enabled) a.safeTemperature?.let { put("temperature", it) }
-                put("maxOutputTokens", baseMax)
+                if (a.sendMaxTokens) put("maxOutputTokens", baseMax)
                 a.safeTopP?.let { put("topP", it) }
                 thinkingConfig(controls, resolved, baseMax)?.let { put("thinkingConfig", it) }
             })

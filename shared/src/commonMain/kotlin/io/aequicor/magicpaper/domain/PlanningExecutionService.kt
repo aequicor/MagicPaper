@@ -350,14 +350,15 @@ class PlanningExecutionService(
 
     private fun assignment(m: Milestone, roster: List<LlmProfile>): StageAssignment {
         m.assignment?.let {
-            val resolved = ModelDefaults.capability(it.executionProfile(roster)).resolveEffort(it.effort)
-            return it.copy(effectiveEffort = EffortSelection.ofOrNull(resolved.level))
+            val request = it.executionProfile(roster)
+            val resolved = ModelDefaults.capability(request).resolveEffort(it.effort)
+            return it.copy(effectiveEffort = EffortSelection.ofOrNull(resolved.level), options = it.options ?: request.advanced)
         }
         val p = roster.firstOrNull { it.id == m.agentProfileId && it.configured } ?: error("Источник этапа «${m.title}» недоступен")
         val model = m.agentModelId.ifBlank { p.codingModelId.ifBlank { p.modelId } }
         val effort = p.effortSelectionFor(model)
         val effective = ModelDefaults.capability(p.copy(modelId = model)).resolveEffort(effort).level
-        return StageAssignment(p.id, model, effort, EffortSelection.ofOrNull(effective))
+        return StageAssignment(p.id, model, effort, EffortSelection.ofOrNull(effective), displayName = p.modelName(model), options = p.forModel(model, effort).advanced)
     }
 
     private suspend fun executeStage(id: String, stageId: String, project: CodingProject, workspace: PlanWorkspace, integration: Mutex, judge: LlmProfile) {

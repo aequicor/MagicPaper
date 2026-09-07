@@ -69,4 +69,20 @@ class DecisionPlannerTest {
         assertTrue(verifier.verify(plan().milestones.first(), "goal", "checks passed", profile).passed)
         assertEquals(2, gateway.calls)
     }
+    @Test fun plannerChoosesOnlyFavoritesAndKeepsItsSupportedEffortRecommendation() = runTest {
+        val p = profile.copy(modelLibraryVersion = 1, favoriteModels = listOf("gpt-5.4"))
+        val proposal = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(
+            assignment = StageAssignment(p.id, "gpt-5.4", EffortSelection.of(ReasoningEffort.LOW), explanation = "A small edit")) }) }
+        val result = PlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", p, listOf(p), emptyList())
+        assertTrue(result.milestones.all { it.assignment?.modelId == "gpt-5.4" && it.assignment?.effort?.level == ReasoningEffort.LOW })
+    }
+
+    @Test fun plannerCannotAssignAnUnfavoritedModelEvenIfItIsOperationalDefault() = runTest {
+        val p = profile.copy(modelId = "not-favorite", favoriteModels = listOf("gpt-5.4"), modelLibraryVersion = 1)
+        val proposal = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(
+            assignment = StageAssignment(p.id, "not-favorite", EffortSelection.of(ReasoningEffort.HIGH))) }) }
+        val result = PlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", p, listOf(p), emptyList())
+        assertTrue(result.milestones.all { it.assignment?.modelId == "gpt-5.4" })
+    }
+
 }

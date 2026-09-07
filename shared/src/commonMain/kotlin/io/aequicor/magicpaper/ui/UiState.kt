@@ -116,11 +116,17 @@ data class UiState(
     val modelSwitcherOpen: Boolean = false,
     /** Профиль, открытый в редакторе настроек (для перехода из чата). */
     val editingLlmProfileId: String? = null,
+    val modelsSettingsOpen: Boolean = false,
     /** Модели, загруженные у провайдера черновика (этап 6). */
     val editorModels: List<io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel> = emptyList(),
     val editorModelsLoading: Boolean = false,
+    val editorModelsFor: String? = null,
     val editorModelsError: String? = null,
     val connectionTesting: Boolean = false,
+    val modelDescriptions: List<io.aequicor.magicpaper.domain.ModelDossier> = emptyList(),
+    val descriptionsGenerating: Boolean = false,
+    val descriptionsProgress: String? = null,
+    val catalogRefreshing: Set<String> = emptySet(),
     val openAiSubscription: OpenAiSubscriptionUi = OpenAiSubscriptionUi(),
 ) {
     /** Источники, которые можно реально выбрать на текущей платформе. */

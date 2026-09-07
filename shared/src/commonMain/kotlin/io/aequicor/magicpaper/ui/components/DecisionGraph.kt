@@ -146,7 +146,7 @@ fun decisionPositions(nodes: List<DecisionNode>, collapsed: Set<String>): Map<St
                             .graphicsLayer { alpha = if (inactive) .55f else 1f }.clickable { onSelect(node.id) }.padding(8.dp)) {
                             Text(node.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(if (inactive) "Не выбран" else status, style = MaterialTheme.typography.labelSmall)
-                            stage?.assignment?.let { Text("${it.modelId} · ${it.effort.shortLabel}", maxLines = 1, style = MaterialTheme.typography.labelSmall, overflow = TextOverflow.Ellipsis) }
+                            stage?.assignment?.let { Text("${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}", maxLines = 1, style = MaterialTheme.typography.labelSmall, overflow = TextOverflow.Ellipsis) }
                             if (node.children.isNotEmpty()) TextButton(onClick = { collapsed = if (node.id in collapsed) collapsed - node.id else collapsed + node.id }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(24.dp)) {
                                 Text(if (node.id in collapsed) "Раскрыть ▸" else "Свернуть ▾", style = MaterialTheme.typography.labelSmall)
                             }

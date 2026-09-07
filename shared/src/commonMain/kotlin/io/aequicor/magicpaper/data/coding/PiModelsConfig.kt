@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
@@ -102,7 +103,11 @@ object PiModelsConfig {
         put("providers", buildJsonObject {
             put(providerId, buildJsonObject {
                 put("baseUrl", profile.baseUrl.trimEnd('/'))
-                put("api", API)
+                put("api", when (profile.provider) {
+                    ProviderType.ANTHROPIC -> "anthropic-messages"
+                    ProviderType.GOOGLE -> "google-generative-ai"
+                    else -> API
+                })
                 put("apiKey", profile.apiKey.ifBlank { ANONYMOUS_KEY })
                 val reasoning = reasoning(profile)
                 // supportsReasoningEffort обязано совпадать с reasoning: при
@@ -142,7 +147,7 @@ object PiModelsConfig {
     fun maxTokens(profile: LlmProfile, modelId: String = profile.modelId): Int {
         val base = profile.advanced.safeMaxTokens
         val controls = controls(profile, modelId) ?: return base
-        return if (controls.supportsEffort) maxOf(base, REASONING_MIN_MAX_TOKENS) else base
+        return if (profile.modelLibraryVersion >= 1) base else if (controls.supportsEffort) maxOf(base, REASONING_MIN_MAX_TOKENS) else base
     }
 
     /** Полная картина о рассуждении модели — её же читает [root]. */

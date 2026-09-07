@@ -33,7 +33,7 @@ class LocalPlanningWorkspace : PlanningWorkspace {
 fun StageAssignment.executionProfile(profiles: List<LlmProfile>): LlmProfile {
     val profile = profiles.firstOrNull { it.id == profileId && it.configured }
         ?: error("Источник этапа недоступен: $profileId")
-    require(profile.provider == ProviderType.OPENAI_COMPATIBLE || profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
+    require(profile.supportsCoding) {
         "Coding-движок не поддерживает источник ${profile.name}"
     }
     require(modelId in profile.displayModels) { "Модель этапа отсутствует в источнике: $modelId" }
@@ -44,6 +44,6 @@ fun StageAssignment.executionProfile(profiles: List<LlmProfile>): LlmProfile {
     require(effectiveEffort.isDefault || effectiveEffort.level == resolved.level) {
         "Поддержка effort модели $modelId изменилась; проверьте назначение"
     }
-    return profile.copy(modelId = modelId, codingModelId = modelId,
-        effort = effort, effortOverrides = profile.effortOverrides + (modelId to effort))
+    val request = profile.forModel(modelId, effort)
+    return if (options != null) request.copy(advanced = options) else request
 }

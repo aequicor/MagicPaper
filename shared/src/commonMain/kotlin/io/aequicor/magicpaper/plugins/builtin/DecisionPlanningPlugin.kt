@@ -13,6 +13,7 @@ import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.plugins.CodingSessionPanel
 import io.aequicor.magicpaper.ui.components.DecisionGraph
+import io.aequicor.magicpaper.ui.components.FavoriteModelPicker
 import io.aequicor.magicpaper.ui.components.EffortControl
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CancellationException
@@ -48,12 +49,14 @@ class CodingPlanningPlugin(
         var busy by remember { mutableStateOf(false) }
         var tab by rememberSaveable { mutableStateOf(0) }
         var showDossiers by remember { mutableStateOf(false) }
+        var pickPlanner by remember { mutableStateOf(false) }
+        var settings by remember { mutableStateOf(AppSettings()) }
         fun action(block: suspend () -> Unit) { scope.launch {
             try { block(); notice = null } catch (e: CancellationException) { throw e }
             catch (e: Exception) { notice = e.message ?: "Не удалось выполнить действие" }
         } }
         LaunchedEffect(Unit) {
-            try { store.plans(); store.dossiers(); projects = projectsRepo?.all().orEmpty(); profiles = profileRepo.load() }
+            try { store.plans(); store.dossiers(); projects = projectsRepo?.all().orEmpty(); profiles = profileRepo.load(); settings = settingsRepo.load() }
             catch (e: Exception) { notice = e.message }
         }
         val project = locked ?: projects.firstOrNull { it.id == projectId } ?: projects.firstOrNull()
@@ -75,7 +78,9 @@ class CodingPlanningPlugin(
                 try {
                     val pending = store.update(current.projectId) { p -> p.copy(dialogue = p.dialogue + PlanningMessage(Id.new(), "user", message)) }
                     profiles = profileRepo.load()
-                    val judge = ProfileResolver.resolve(null as ChatSession?, settingsRepo.load(), profiles)
+                    settings = settingsRepo.load()
+                    val judge = pending.plannerSelection?.let { ProfileResolver.selection(it, profiles) }
+                        ?: ProfileResolver.resolve(null as ChatSession?, settings, profiles)
                     val result = if (nodeId == null) composer.refine(pending, message, judge, profiles, dossiers)
                         else composer.recalculate(pending, nodeId, judge, profiles, dossiers)
                     execution.applyProposal(pending, result)
@@ -99,6 +104,11 @@ class CodingPlanningPlugin(
                 } }) { Text("Начать планирование") }
             } else {
                 Text(plan.goal, style = MaterialTheme.typography.titleMedium)
+                val planner = plan.plannerSelection?.let { ProfileResolver.selection(it, profiles) }
+                    ?: ProfileResolver.resolve(null as ChatSession?, settings, profiles)
+                TextButton(onClick = { pickPlanner = true }, enabled = !busy) {
+                    Text("Планировщик: ${planner?.shortLabel ?: "выбрать модель"} · ${planner?.effort?.shortLabel ?: "default"}${if (plan.plannerSelection == null) " · по умолчанию" else ""} ▾", style = MaterialTheme.typography.labelMedium)
+                }
                 LinearProgressIndicator(progress = { plan.progress }, modifier = Modifier.fillMaxWidth())
                 Text("${phaseLabel(plan)} · ${plan.doneCount}/${plan.selectedMilestones.size} этапов")
                 FlowRow {
@@ -106,7 +116,7 @@ class CodingPlanningPlugin(
                     TextButton(onClick = { action { execution.pause(plan.projectId) } }, enabled = plan.intent == ExecutionIntent.RUN) { Text("Пауза") }
                     TextButton(onClick = { action { execution.stop(plan.projectId) } }, enabled = plan.intent != ExecutionIntent.STOP) { Text("Остановить") }
                     if (plan.issue != null) TextButton(onClick = { action { execution.retry(plan.projectId) } }) { Text("Повторить после исправления") }
-                    TextButton(onClick = { showDossiers = !showDossiers }) { Text("Досье моделей") }
+
                     if (plan.intent == ExecutionIntent.STOP || plan.phase == ExecutionPhase.COMPLETE)
                         TextButton(onClick = { action { store.deletePlan(plan.projectId); selected = null; goal = "" } }) { Text("Новая цель") }
                 }
@@ -152,29 +162,19 @@ class CodingPlanningPlugin(
                 val validation = DecisionCompiler.compile(plan)
                 if (!validation.valid) Text(validation.errors.joinToString("\n"), color = MaterialTheme.colorScheme.error)
             }
+            TextButton(onClick = { showDossiers = !showDossiers }) { Text("${if (showDossiers) "▾" else "▸"} Избранные модели · ${profiles.sumOf { it.displayModels.size }}") }
             if (showDossiers) profiles.forEach { p -> p.displayModels.forEach { model ->
-                val dossier = dossiers.firstOrNull { it.profileId == p.id && it.modelId == model }
-                var strengths by remember(p.id, model, dossier) { mutableStateOf(dossier?.strengths.orEmpty()) }
-                Text("${p.name} · $model", style = MaterialTheme.typography.titleSmall)
-                FlowRow {
-                    val assessment = dossier?.assessment ?: StageAssessment()
-                    listOf("Качество" to assessment.quality, "Скорость" to assessment.speed, "Экономичность" to assessment.economy, "Надёжность" to assessment.safety).forEachIndexed { i, (label, value) ->
-                        TextButton(onClick = { action {
-                            val updated = assessment.withGrade(i, (value + 1) % 4)
-                            store.saveDossier((dossier ?: ModelDossier(Id.new(), p.id, modelId = model)).copy(assessment = updated, strengths = strengths))
-                        } }) { Text("$label: ${grade(value)}") }
-                    }
-                }
-                OutlinedTextField(strengths, { strengths = it }, label = { Text("Сильные стороны и ограничения") }, modifier = Modifier.fillMaxWidth())
-                Row {
-                    TextButton(onClick = { action { store.saveDossier((dossier ?: ModelDossier(Id.new(), p.id, modelId = model)).copy(strengths = strengths, source = DossierSource.USER, updatedAt = Id.now())) } }) { Text("Сохранить") }
-                    TextButton(onClick = { action {
-                        val settings = settingsRepo.load()
-                        val judge = ProfileResolver.resolve(null as ChatSession?, settings, profiles)
-                        store.saveDossier(researcher.research(p.copy(modelId = model), judge, settings).copy(modelId = model))
-                    } }) { Text("Найти сведения") }
-                }
+                val dossier = dossiers.forModel(p, model)
+                Text("${p.name} · ${p.modelName(model)}", style = MaterialTheme.typography.titleSmall)
+                Text(dossier?.strengths?.ifBlank { "Описание не заполнено" } ?: "Описание не заполнено", style = MaterialTheme.typography.bodySmall)
+                dossier?.limitations?.takeIf { it.isNotBlank() }?.let { Text("Ограничения: $it", style = MaterialTheme.typography.bodySmall) }
+                Text("Оценка: ${dossier?.rating?.takeIf { it > 0 }?.let { "$it/5" } ?: "не задана"} · Effort: ${ModelDefaults.capability(p, model).selectableLevels.joinToString { it.shortLabel }.ifBlank { "по умолчанию" }}", style = MaterialTheme.typography.labelSmall)
+                if (!p.supportsCoding) Text("Для чатов и разработки плана; исполнение этапов этим поставщиком пока недоступно.", style = MaterialTheme.typography.labelSmall)
             } }
+            if (pickPlanner && plan != null) FavoriteModelPicker(profiles, plan.plannerSelection,
+                { choice -> edit { it.copy(plannerSelection = choice) } }, { pickPlanner = false }, "Модель планировщика", footer = {
+                    TextButton(onClick = { edit { it.copy(plannerSelection = null) }; pickPlanner = false }) { Text("Модель по умолчанию") }
+                })
             (notice ?: serviceError)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
@@ -225,15 +225,15 @@ class CodingPlanningPlugin(
         TextButton(enabled = !frozen && title.isNotBlank(), onClick = { edit { old -> old.copy(goal = if (node.kind == DecisionKind.GOAL) title else old.goal, tree = old.tree.map { if (it.id == node.id) it.copy(title = title) else it }, milestones = old.milestones.map { if (it.id == stage?.id) it.copy(title = title, description = description, acceptance = acceptance) else it }) } }) { Text("Сохранить изменения") }
         if (stage != null) {
             val assignment = stage.assignment
-            Text(assignment?.let { "Модель: ${it.modelId} · effort: ${it.effort.shortLabel}" } ?: "Исполнитель не назначен")
+            Text(assignment?.let { "Модель: ${profiles.firstOrNull { p -> p.id == it.profileId }?.modelName(it.modelId) ?: it.displayName.ifBlank { it.modelId }} · effort: ${it.effort.shortLabel}" } ?: "Исполнитель не назначен")
             if (!frozen) {
                 var menu by remember { mutableStateOf(false) }
                 Box {
                     TextButton(onClick = { menu = true }) { Text("Выбрать модель") }
-                    DropdownMenu(menu, { menu = false }) { profiles.filter { it.configured && it.provider in listOf(ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENAI_SUBSCRIPTION) }.forEach { p -> p.displayModels.forEach { model ->
-                        DropdownMenuItem(text = { Text("${p.name} · $model") }, onClick = {
+                    DropdownMenu(menu, { menu = false }) { profiles.filter { it.connectionConfigured && it.supportsCoding }.forEach { p -> p.displayModels.forEach { model ->
+                        DropdownMenuItem(text = { Text("${p.name} · ${p.modelName(model)}") }, onClick = {
                             val effective = EffortSelection.ofOrNull(ModelDefaults.capability(p.copy(modelId = model)).resolveEffort(p.effortSelectionFor(model)).level)
-                            updateStage { it.copy(agentProfileId = p.id, agentModelId = model, assignment = StageAssignment(p.id, model, effective, effective, manual = true)) }; menu = false
+                            updateStage { it.copy(agentProfileId = p.id, agentModelId = model, assignment = StageAssignment(p.id, model, effective, effective, manual = true, displayName = p.modelName(model))) }; menu = false
                         })
                     } } }
                 }
@@ -250,7 +250,7 @@ class CodingPlanningPlugin(
                 FilterChip(dep.id in stage.dependsOn, enabled = !frozen, onClick = { updateStage { it.copy(dependsOn = if (dep.id in it.dependsOn) it.dependsOn - dep.id else it.dependsOn + dep.id) } }, label = { Text(dep.title) })
             } }
             stage.attempts.forEach { attempt ->
-                Text("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)} · ${attempt.assignment.modelId} · ${attempt.assignment.effort.shortLabel}")
+                Text("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)} · ${attempt.assignment.displayName.ifBlank { attempt.assignment.modelId }} · ${attempt.assignment.effort.shortLabel}")
                 if (attempt.activity.isNotBlank()) Text(attempt.activity)
                 attempt.error?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
                 if (attempt.report.isNotBlank()) Text(attempt.report)

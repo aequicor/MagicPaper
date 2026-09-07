@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.EffortSelection
@@ -63,6 +64,8 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         ProfileEditor(vm, profile, state)
         return
     }
+
+    if (state.modelsSettingsOpen) { ModelsSettings(vm, state); return }
 
     Column(
         modifier = Modifier
@@ -112,42 +115,14 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         }
         Spacer(Modifier.height(12.dp))
 
-        Section("Магические источники (модели)")
-        Text(
-            "Профили подключения ИИ-провайдеров. Переключать источник можно прямо в чате — " +
-                "кнопкой над полем заклинаний. «Основной» действует для всех свитков.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(6.dp))
-        if (state.llmProfiles.isEmpty()) {
-            Text(
-                "Источники не подключены. Добавьте провайдера — локальный сервер или API.",
-                style = MaterialTheme.typography.bodyLarge,
-            )
-        }
-        state.llmProfiles.forEach { profile ->
-            val isActive = profile.id == settings.activeLlmProfileId
-            ProfileRowEntry(
-                profile = profile,
-                isActive = isActive,
-                onClick = { vm.setActiveProfile(profile.id) },
-                onEdit = { vm.editLlmProfile(profile.id) },
-                onDelete = { vm.deleteLlmProfile(profile.id) },
-                available = profile.provider != ProviderType.OPENAI_SUBSCRIPTION || state.openAiSubscription.available,
-            )
-        }
-        TextButton(
-            onClick = { vm.editLlmProfile(Id.new()) },
-            modifier = Modifier.heightIn(min = 48.dp),
-        ) { Text("+ Подключить провайдера") }
+        NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }
 
         Spacer(Modifier.height(12.dp))
         Section("Поисковый движок")
         SearchProviderPicker(draft.searchProvider) { draft = draft.copy(searchProvider = it) }
-        Field("Querit API-ключ", settings.queritApiKey) { draft = draft.copy(queritApiKey = it) }
-        Field("Google API-ключ", settings.googleApiKey) { draft = draft.copy(googleApiKey = it) }
-        Field("Google Search Engine ID", settings.googleSearchEngineId) {
+        Field("Querit API-ключ", draft.queritApiKey) { draft = draft.copy(queritApiKey = it) }
+        Field("Google API-ключ", draft.googleApiKey) { draft = draft.copy(googleApiKey = it) }
+        Field("Google Search Engine ID", draft.googleSearchEngineId) {
             draft = draft.copy(googleSearchEngineId = it)
         }
 
@@ -176,56 +151,6 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
     }
 }
 
-/** Строка профиля в списке источников: имя·модель, бейдж усилия, активный, правка, удаление. */
-@Composable
-private fun ProfileRowEntry(
-    profile: LlmProfile,
-    isActive: Boolean,
-    onClick: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    available: Boolean,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .clickable(enabled = available, onClick = onClick)
-            .heightIn(min = 48.dp)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                buildString {
-                    append("✦ ")
-                    append(profile.shortLabel)
-                    if (isActive) append("  · основной")
-                    if (!profile.configured) append("  · не настроен")
-                    if (!available) append("  · только desktop")
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-            )
-            Text(
-                buildString {
-                    append(profile.provider.name.lowercase())
-                    append(" · усилие: ")
-                    // Усилие именно дефолтной модели: у неё может быть своё переопределение.
-                    append(profile.effortSelectionFor(profile.modelId).label.lowercase())
-                    if (profile.favoriteModels.isNotEmpty()) append(" · избранное: ${profile.favoriteModels.size}")
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        TextButton(onClick = onEdit) { Text("изм.") }
-        TextButton(onClick = onDelete) { Text("✕") }
-    }
-}
-
 /**
  * Редактор профиля подключения: провайдер из каталога → ключ → модель → усилие → тонкие настройки.
  * Черновик живёт локально; сохранение — одним действием через [MagicPaperViewModel.saveLlmProfile].
@@ -242,6 +167,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         mutableStateOf(initial?.displayName.orEmpty())
     }
     val spec = ProviderCatalog.all.firstOrNull { it.displayName == specName }
+    var chooseProvider by remember { mutableStateOf(!profile.connectionConfigured) }
     val subscription = draft.provider == ProviderType.OPENAI_SUBSCRIPTION
     val subscriptionAvailable = state.openAiSubscription.available
     val uriHandler = LocalUriHandler.current
@@ -253,30 +179,9 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             vm.refreshOpenAiSubscription()
         }
     }
-    // Объявления провайдера об уровнях мышления — сразу в черновик: ручка усилия
-    // должна показывать словарь модели, а не догадку по имени.
     LaunchedEffect(state.editorModels) {
-        val discovered = state.editorModels
-        if (discovered.isEmpty()) return@LaunchedEffect
-        val relevant = (listOf(draft.modelId, draft.codingModelId) + draft.favoriteModels)
-            .filter { it.isNotBlank() }
-            .toSet()
-        var next = draft
-        discovered.forEach { model ->
-            if (model.declared != null && model.id in relevant) {
-                next = next.withDeclaredReasoning(model.id, model.declared)
-            }
-        }
-        if (next != draft) draft = next
+        if (state.editorModels.isNotEmpty() && state.editorModelsFor == "${draft.id}:${draft.provider}:${draft.baseUrl}") draft = draft.withCatalog(state.editorModels)
     }
-    // Тонкие настройки редактируются строками: пустое = «по умолчанию провайдера».
-    val adv = draft.advanced
-    var temperature by remember(profile.id) { mutableStateOf(adv.temperature?.toString().orEmpty()) }
-    var maxTokens by remember(profile.id) { mutableStateOf(adv.maxTokens.toString()) }
-    var topP by remember(profile.id) { mutableStateOf(adv.topP?.toString().orEmpty()) }
-    var timeout by remember(profile.id) { mutableStateOf(adv.timeoutSeconds.toString()) }
-    var contextMessages by remember(profile.id) { mutableStateOf(adv.contextMessages.toString()) }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -292,13 +197,15 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         Spacer(Modifier.height(12.dp))
 
         Section("Провайдер")
-        ProviderCatalog.all.forEach { candidate ->
-            val enabled = !candidate.desktopOnly || subscriptionAvailable
+        TextButton(onClick = { chooseProvider = !chooseProvider }) { Text("${specName.ifBlank { "Выбрать поставщика" }} ▾") }
+        if (chooseProvider) ProviderCatalog.all.forEach { candidate ->
+            val enabled = (!candidate.desktopOnly || subscriptionAvailable) && !state.editorModelsLoading
             ProviderRow(
                 spec = candidate,
                 selected = candidate.displayName == specName,
                 enabled = enabled,
                 onClick = {
+                    chooseProvider = false
                     specName = candidate.displayName
                     draft = draft.copy(
                         provider = candidate.type,
@@ -323,250 +230,19 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         }
 
         Spacer(Modifier.height(10.dp))
-        Section("Модель")
-        val specModels = spec?.models.orEmpty()
-        if (specModels.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                specModels.forEach { model ->
-                    TextButton(onClick = { draft = draft.copy(modelId = model.id) }) {
-                        Text(
-                            model.id,
-                            color = if (draft.modelId == model.id) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                }
-            }
+        TextButton(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured) {
+            Text(if (state.editorModelsLoading) "Загрузка…" else "Получить модели")
         }
-        Field("Имя модели (или своё)", draft.modelId) { draft = draft.copy(modelId = it) }
-        // Избранные модели: именно этот список показывается при выборе модели в чате и кодинг-сессиях.
-        val currentIsFavorite = draft.modelId.isNotBlank() && draft.modelId in draft.favoriteModels
-        TextButton(
-            onClick = {
-                draft = if (currentIsFavorite) {
-                    draft.copy(favoriteModels = draft.favoriteModels - draft.modelId)
-                } else {
-                    draft.copy(favoriteModels = draft.favoriteModels + draft.modelId)
-                }
-            },
-            enabled = draft.modelId.isNotBlank(),
-        ) {
-            Text(if (currentIsFavorite) "★ Модель в избранном — убрать" else "☆ В избранные модели (для чата и кодинга)")
-        }
-        if (draft.favoriteModels.isNotEmpty()) {
-            Text(
-                "Эти модели появятся в переключателе чата и кодинг-сессий:",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                draft.favoriteModels.forEach { favorite ->
-                    TextButton(onClick = { draft = draft.copy(favoriteModels = draft.favoriteModels - favorite) }) {
-                        Text("★ $favorite ✕")
-                    }
-                }
-            }
-        }
-        val effortNative = ModelDefaults.supportsEffort(draft)
-        Text(
-            if (effortNative) "Модель поддерживает нативное усилие."
-            else "У модели нет нативного усилия — поле усилия в запрос не попадает.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(
-                onClick = { vm.fetchModels(draft) },
-                enabled = !state.editorModelsLoading,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text(if (state.editorModelsLoading) "Загружаю…" else "⟳ Запросить список моделей")
-            }
-            TextButton(
-                onClick = { vm.testConnection(draft) },
-                enabled = !state.connectionTesting,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text(if (state.connectionTesting) "Проверяю…" else "✓ Проверить подключение")
-            }
-        }
-        state.editorModelsError?.let { error ->
-            Text(
-                error,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (state.editorModels.isNotEmpty()) {
-            Text(
-                "Доступно моделей: ${state.editorModels.size}. Тап — выбрать модель и применить её рекомендуемые параметры; ★ — в избранное.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            state.editorModels.forEach { found ->
-                DiscoveredModelRow(
-                    model = found,
-                    selected = found.id == draft.modelId,
-                    favorite = found.id in draft.favoriteModels,
-                    currentEffort = draft.effortSelectionFor(found.id),
-                    onClick = {
-                        val rec = found.recommendation
-                        draft = draft.copy(modelId = found.id, advanced = rec.advanced)
-                            .withDeclaredReasoning(found.id, found.declared)
-                        // Своё усилие модели не затираем рекомендацией; иначе — дефолт модели.
-                        if (!draft.effortOverrides.containsKey(found.id)) {
-                            draft = draft.copy(effort = rec.effort)
-                        }
-                        temperature = rec.advanced.temperature?.toString().orEmpty()
-                        maxTokens = rec.advanced.maxTokens.toString()
-                        topP = rec.advanced.topP?.toString().orEmpty()
-                    },
-                    onToggleFavorite = {
-                        draft = if (found.id in draft.favoriteModels) {
-                            draft.copy(favoriteModels = draft.favoriteModels - found.id)
-                        } else {
-                            draft.copy(favoriteModels = draft.favoriteModels + found.id)
-                        }
-                    },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Section("Усилие")
-        Text(
-            if (draft.modelId.isBlank()) {
-                "Уровни — те, которые принимает модель: укажите модель выше."
-            } else {
-                "Показаны только уровни модели ${draft.modelId}; выбор запоминается за этой моделью."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        EffortControl(
-            capability = ModelDefaults.capability(draft),
-            selection = draft.effortSelectionFor(draft.modelId),
-            onSelect = { selection ->
-                draft = if (draft.modelId.isBlank()) {
-                    draft.copy(effort = selection)
-                } else {
-                    draft.withEffortFor(draft.modelId, selection)
-                }
-            },
-        )
-
-        Spacer(Modifier.height(10.dp))
-        Section("Тонкие настройки (пусто = по умолчанию провайдера)")
-        if (!subscription) {
-            Field("Температура (0–2)", temperature) { temperature = it }
-            Field("Макс. токенов ответа", maxTokens) { maxTokens = it }
-            Field("Top-p (0–1)", topP) { topP = it }
-        }
-        Field("Таймаут, секунд", timeout) { timeout = it }
-        Field("Глубина истории (сообщений)", contextMessages) { contextMessages = it }
-        Field("Свой системный промпт (пусто = штатный)", adv.systemPromptOverride) {
-            draft = draft.copy(advanced = draft.advanced.copy(systemPromptOverride = it))
-        }
-
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(
-                onClick = {
-                    vm.saveLlmProfile(
-                        draft.copy(
-                            // Текущая модель автоматически попадает в избранное,
-                            // чтобы переключатель в чате не остался пустым.
-                            favoriteModels = (draft.favoriteModels + draft.modelId)
-                                .filter { it.isNotBlank() }
-                                .distinct(),
-                            advanced = AdvancedLlmOptions(
-                                temperature = temperature.toDoubleOrNull(),
-                                maxTokens = maxTokens.toIntOrNull() ?: draft.advanced.maxTokens,
-                                topP = topP.toDoubleOrNull(),
-                                timeoutSeconds = timeout.toIntOrNull() ?: draft.advanced.timeoutSeconds,
-                                contextLimit = draft.advanced.contextLimit,
-                                systemPromptOverride = draft.advanced.systemPromptOverride,
-                                contextMessages = contextMessages.toIntOrNull() ?: draft.advanced.contextMessages,
-                            ),
-                        ),
-                    )
-                },
-                enabled = draft.configured && (
-                    !subscription || (subscriptionAvailable && state.openAiSubscription.account?.signedIn == true)
-                    ),
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text("Сохранить источник") }
-            TextButton(
-                onClick = { vm.closeLlmProfileEditor() },
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text("Отмена") }
-        }
+        state.editorModelsError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Text("Моделей: ${draft.modelCatalog.size}", style = MaterialTheme.typography.bodySmall)
+        if (draft.modelCatalog.isEmpty()) Field("Модель вручную (если каталога нет)", draft.modelId) { draft = draft.copy(modelId = it) }
+        TextButton(onClick = {
+            val first = draft.modelId.ifBlank { draft.modelCatalog.firstOrNull()?.id.orEmpty() }
+            vm.saveLlmProfile(draft.copy(modelId = first, modelLibraryVersion = 1))
+        }, enabled = draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) { Text("Сохранить поставщика") }
+        TextButton(onClick = vm::closeLlmProfileEditor) { Text("Отмена") }
     }
-}
 
-/** Строка найденной у провайдера модели: поддержка усилия, рекомендации, звезда избранного. */
-@Composable
-private fun DiscoveredModelRow(
-    model: DiscoveredModel,
-    selected: Boolean,
-    favorite: Boolean,
-    currentEffort: EffortSelection,
-    onClick: () -> Unit,
-    onToggleFavorite: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .clickable(onClick = onClick)
-            .heightIn(min = 40.dp)
-            .padding(horizontal = 10.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            if (selected) "◉" else "○",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(model.id, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
-            Text(
-                buildString {
-                    val levels = model.levels
-                    when {
-                        levels.isEmpty() -> append("без нативного усилия")
-                        else -> {
-                            append("уровни: ")
-                            append(levels.joinToString("/") { it.shortLabel })
-                            if (model.declared != null) append(" · по каталогу провайдера")
-                        }
-                    }
-                    append(" · сейчас: ").append(currentEffort.shortLabel)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        TextButton(onClick = onToggleFavorite) {
-            Text(
-                if (favorite) "★" else "☆",
-                color = if (favorite) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-        }
-        Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
 }
 
 /** Строка выбора провайдера из каталога. */

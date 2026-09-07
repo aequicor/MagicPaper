@@ -15,6 +15,8 @@ import kotlinx.serialization.Serializable
     val effectiveEffort: EffortSelection = EffortSelection.Default,
     val explanation: String = "",
     val manual: Boolean = false,
+    val displayName: String = "",
+    val options: AdvancedLlmOptions? = null,
 )
 
 /** 0 means unknown; higher values are better for quality/speed/economy/safety. */

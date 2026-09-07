@@ -19,7 +19,9 @@ class LlmProfileCodingModelTest {
     @Test
     fun codingModelFallsBackToProfileModel() {
         assertEquals("chat-model", base.codingModel)
-        assertEquals(base, base.forCoding())
+        assertEquals("chat-model", base.forCoding().modelId)
+        assertEquals("chat-model", base.forCoding().selectionKey)
+        assertEquals(base.baseUrl, base.forCoding().baseUrl)
     }
 
     @Test

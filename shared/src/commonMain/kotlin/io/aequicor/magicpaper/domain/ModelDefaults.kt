@@ -50,7 +50,9 @@ object ModelDefaults {
      * ([LlmProfile.modelReasoning]), затем каталог и эвристика по имени.
      */
     fun capability(profile: LlmProfile, modelId: String = profile.modelId): ReasoningCapability =
-        capability(profile.provider, modelId, profile.modelReasoning[modelId.trim()])
+        capability(profile.provider, profile.sourceModelId(modelId),
+            profile.modelCatalog.firstOrNull { it.id == profile.sourceModelId(modelId) }?.reasoning
+                ?: profile.modelReasoning[profile.sourceModelId(modelId)])
 
     /** Возможность модели по провайдеру и её идентификатору. */
     fun capability(
@@ -93,6 +95,7 @@ object ModelDefaults {
         val recommendation: ModelRecommendation,
         /** Что сервер объявил сам; null — объявлений не было, работаем по эвристике. */
         val declared: DeclaredReasoning? = null,
+        val metadata: ProviderModel? = null,
     ) {
         val supportsEffort: Boolean get() = reasoning.supportsEffort
 

@@ -144,6 +144,7 @@ class CodexAppServerOpenAiSubscription(
         require(profile.provider == ProviderType.OPENAI_SUBSCRIPTION)
         val ids = mutableListOf<String>()
         val declarations = mutableMapOf<String, DeclaredReasoning>()
+        val metadata = mutableMapOf<String, io.aequicor.magicpaper.domain.ProviderModel>()
         var cursor: String? = null
         do {
             val page = request(
@@ -163,11 +164,12 @@ class CodexAppServerOpenAiSubscription(
                     .mapNotNull { it.jsonObject.string("reasoningEffort") }
                     .mapNotNull(ReasoningEffort::fromWire)
                     .toSet()
-                declarations[id] = if (efforts.isEmpty()) DeclaredReasoning.None else DeclaredReasoning(efforts = efforts)
+                declarations[id] = if (efforts.isEmpty()) DeclaredReasoning.None else DeclaredReasoning(efforts = efforts, default = model.string("defaultReasoningEffort")?.let(ReasoningEffort::fromWire))
+                metadata[id] = io.aequicor.magicpaper.domain.ProviderModel(id, model.string("displayName") ?: id, supportedParameters = emptySet(), reasoning = declarations[id])
             }
             cursor = page.string("nextCursor")
         } while (!cursor.isNullOrBlank())
-        return ModelDefaults.discover(ProviderType.OPENAI_SUBSCRIPTION, ids, declarations)
+        return ModelDefaults.discover(ProviderType.OPENAI_SUBSCRIPTION, ids, declarations).map { it.copy(metadata = metadata[it.id]) }
     }
 
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
@@ -255,7 +257,7 @@ class CodexAppServerOpenAiSubscription(
                     put("approvalPolicy", "never")
                     put("sandbox", "workspace-write")
                     put("serviceName", "MagicPaper Coding")
-                    put("developerInstructions", CODING_INSTRUCTIONS)
+                    put("developerInstructions", listOf(CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride).filter { it.isNotBlank() }.joinToString("\n\n"))
                 },
             ).jsonObject["thread"]?.jsonObject?.requireString("id")
                 ?: error("Codex не вернул идентификатор coding-сессии.")

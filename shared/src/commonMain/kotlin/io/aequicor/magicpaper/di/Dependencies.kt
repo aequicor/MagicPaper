@@ -92,6 +92,7 @@ internal fun buildDependencies(
             putAll(
                 mapOf(
                     ProviderType.OPENAI_COMPATIBLE to OpenAiCompatibleGateway(client, json),
+                    ProviderType.OPENROUTER to OpenAiCompatibleGateway(client, json),
                     ProviderType.ANTHROPIC to AnthropicGateway(client, json),
                     ProviderType.GOOGLE to GoogleGateway(client, json),
                 ),
@@ -160,6 +161,7 @@ internal fun buildDependencies(
         dirPicker = dirPicker,
         modelDirectory = modelDirectory,
         gateway = gateway,
+        dossierResearcher = DossierResearcher(gateway, search, json),
         filePicker = filePicker,
         openAiSubscription = openAiSubscription,
     )

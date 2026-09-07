@@ -12,7 +12,7 @@ import kotlin.test.*
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlanningExecutionServiceTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val profile = LlmProfile("agent", "Agent", baseUrl = "http://test/v1", modelId = "m")
+    private val profile = LlmProfile("agent", "Agent", baseUrl = "http://test/v1", modelId = "m", favoriteModels = listOf("m"), modelLibraryVersion = 1)
     private val project = CodingProject("project", "Project", "/fake", 1)
     private val pass = object : MilestoneVerifier {
         override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "checked")

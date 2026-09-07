@@ -160,7 +160,7 @@ class PiCodingRuntime(
             emit(CodingEvent.Finished)
             return@flow
         }
-        if (profile.provider != ProviderType.OPENAI_COMPATIBLE) {
+        if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
             emit(CodingEvent.Failed("Кодинг-агент работает только с OpenAI-совместимыми серверами (сейчас выбран: ${profile.name})."))
             emit(CodingEvent.Finished)
             return@flow
@@ -254,6 +254,7 @@ class PiCodingRuntime(
         // распадается на части, и обрывки уходят в «сообщения» — агент видит
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
         args += listOf("--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
+        args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
         // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит
         // (PI_REASONING_LEVEL — то, что pi отдаёт инструментам, а не вход запуска),
         // а без него включается дефолт pi, и рассуждающая модель молча съедает maxTokens.
@@ -822,6 +823,9 @@ class PiCodingRuntime(
         // и тестируется. Атомарная замена (tmp+rename): параллельные прогоны сессий
         // не должны прочитать наполовину записанный models.json.
         writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile))
+        writeAtomically(File(home, "model-options.mjs"), PiModelOptions.extension(profile))
+        if (profile.advanced.systemPromptOverride.isNotBlank()) File(home, HINTS_FILE).appendText("\n\n" + profile.advanced.systemPromptOverride)
+
     }
 
     private fun writeAtomically(target: File, content: String) {

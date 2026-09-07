@@ -13,14 +13,40 @@ object ProfileResolver {
      * Ненастроенные профили пропускаются; если ни одного нет — null.
      */
     fun resolve(profileId: String?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
+        if (profileId == null && settings.defaultModel != null) return selection(settings.defaultModel, profiles)
         val wanted = profileId ?: settings.activeLlmProfileId
-        return profiles.firstOrNull { it.id == wanted && it.configured }
-            ?: profiles.firstOrNull { it.configured }
+        val profile = profiles.firstOrNull { it.id == wanted && it.configured }
+            ?: profiles.firstOrNull { it.configured } ?: return null
+        return profile.forModel()
     }
 
-    /** Профиль для чат-свитка (переопределение свитка важнее глобального). */
-    fun resolve(session: ChatSession?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? =
-        resolve(session?.llmProfileId, settings, profiles)
+    fun selection(choice: ModelSelection, profiles: List<LlmProfile>): LlmProfile? =
+        profiles.firstOrNull { it.id == choice.profileId && it.connectionConfigured }
+            ?.takeIf { choice.modelId in it.displayModels || choice.modelId == it.modelId || it.modelCatalog.any { model -> model.id == choice.modelId } }
+            ?.forModel(choice.modelId, choice.effort)
+
+    fun resolve(session: ChatSession?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
+        session?.modelSelection?.let { return selection(it, profiles) }
+        return resolve(session?.llmProfileId, settings, profiles)
+    }
+
+    fun favoriteDefault(settings: AppSettings, profiles: List<LlmProfile>, coding: Boolean = false): ModelSelection? {
+        val eligible = profiles.filter { it.connectionConfigured && (!coding || it.supportsCoding) }
+        val main = resolve(null as String?, settings, eligible)
+        if (main != null && eligible.any { it.id == main.id && main.selectionKey in it.displayModels })
+            return ModelSelection(main.id, main.selectionKey, main.effortSelectionFor())
+        val first = eligible.firstOrNull { it.id == settings.activeLlmProfileId && it.displayModels.isNotEmpty() }
+            ?: eligible.firstOrNull { it.displayModels.isNotEmpty() } ?: return null
+        return ModelSelection(first.id, first.displayModels.first())
+    }
+
+    fun coding(session: CodingSession, project: CodingProject?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
+        val choice = session.modelSelection ?: project?.modelSelection
+        if (choice != null) return selection(choice, profiles)?.takeIf { it.supportsCoding }
+        val profile = profiles.firstOrNull { it.id == session.llmProfileId && it.connectionConfigured }
+        return (profile?.forCoding() ?: resolve(null as String?, settings, profiles))?.takeIf { it.supportsCoding }
+    }
+
 }
 
 /**

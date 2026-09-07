@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,13 +39,6 @@ fun EffortControl(
 ) {
     val controls = capability as? ReasoningCapability.Controls
     if (controls == null || controls.values.isEmpty()) {
-        Column(modifier = modifier.fillMaxWidth()) {
-            Text(
-                "У модели нет нативной ручки усилия — запрос уйдёт без поля усилия.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         return
     }
 
@@ -56,7 +51,7 @@ fun EffortControl(
             } else {
                 "Усилие: ${selection.label}"
             },
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (resolved.clamped) {
@@ -93,7 +88,8 @@ private fun EffortChip(
     onSelect: (EffortSelection) -> Unit,
     effective: Boolean,
 ) {
-    TextButton(onClick = { onSelect(value) }, modifier = Modifier.padding(0.dp)) {
+    TextButton(onClick = { onSelect(value) }, modifier = Modifier.padding(0.dp),
+        colors = ButtonDefaults.textButtonColors(containerColor = if (current == value) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)) {
         Text(
             if (effective) "$title →" else title,
             style = MaterialTheme.typography.labelMedium,

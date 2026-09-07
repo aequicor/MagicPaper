@@ -19,6 +19,7 @@ data class CodingProject(
      * новые запуски его не используют.
      */
     val piSessionId: String = "",
+    val modelSelection: ModelSelection? = null,
 )
 
 /**
@@ -39,6 +40,7 @@ data class CodingSession(
      * null = глобальный активный профиль из настроек.
      */
     val llmProfileId: String? = null,
+    val modelSelection: ModelSelection? = null,
 )
 
 /**

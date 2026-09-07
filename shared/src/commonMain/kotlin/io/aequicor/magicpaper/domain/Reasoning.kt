@@ -234,6 +234,8 @@ data class DeclaredReasoning(
     val efforts: Set<ReasoningEffort> = emptySet(),
     /** Мышление нельзя выключить — уровень NONE снимается с ручки. */
     val mandatory: Boolean? = null,
+    val default: ReasoningEffort? = null,
+    val dialect: WireDialect? = null,
 ) {
     companion object {
         /** Каталог прямо сказал: органов управления мышлением нет. */
@@ -259,14 +261,14 @@ fun ReasoningCapability.withDeclared(declared: DeclaredReasoning): ReasoningCapa
     }
     val values = declared.efforts.toMutableSet()
     // «Авто» — режим, объявленный формой ручки; каталоги его не перечисляют.
-    if (controls != null && ReasoningEffort.AUTO in controls.values) values += ReasoningEffort.AUTO
+    // An explicit provider vocabulary is authoritative.
     if (mandatory) values -= ReasoningEffort.NONE
     if (values.none { it != ReasoningEffort.AUTO }) return ReasoningCapability.None
-    val default = controls?.default?.takeIf { it in values } ?: nearestDefault(values)
+    val default = declared.default?.takeIf { it in values } ?: controls?.default?.takeIf { it in values } ?: nearestDefault(values)
     return ReasoningCapability.Controls(
         values = values,
         default = default,
-        dialect = controls?.dialect ?: WireDialect.EFFORT,
+        dialect = declared.dialect ?: controls?.dialect ?: WireDialect.EFFORT,
         mandatory = mandatory,
         overrides = controls?.overrides.orEmpty(),
         budget = controls?.budget,

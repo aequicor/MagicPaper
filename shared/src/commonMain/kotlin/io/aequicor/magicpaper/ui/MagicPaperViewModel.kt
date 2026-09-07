@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui
 
+import io.aequicor.magicpaper.domain.*
 import androidx.lifecycle.ViewModel
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.AppSettings
@@ -77,6 +78,7 @@ class MagicPaperViewModel(
     private val dirPicker: ProjectDirPicker? = null,
     private val modelDirectory: ModelDirectory? = null,
     private val gateway: LlmGateway? = null,
+    private val dossierResearcher: DossierResearcher? = null,
     private val filePicker: FilePicker? = null,
     private val openAiSubscription: OpenAiSubscriptionService? = null,
 ) : ViewModel() {
@@ -95,11 +97,27 @@ class MagicPaperViewModel(
     private suspend fun bootstrap() {
         val settings = settingsRepo.load()
         val states = settingsRepo.pluginStates().associateBy { it.id }
-        val sessions = chats.sessions()
+        var sessions = chats.sessions()
         val projects = codingProjects?.all().orEmpty()
         // Одноразовая миграция: старая «одна модель» становится профилем подключения.
-        val migratedSettings = migrateLegacyModel(settings)
-        val profiles = profileRepo.load()
+        var migratedSettings = migrateLegacyModel(settings)
+        val profiles = profileRepo.load().map { it.migrateModelLibrary() }
+        profiles.forEach { profileRepo.save(it) }
+        if (migratedSettings.defaultModel == null) {
+            val main = profiles.firstOrNull { it.id == migratedSettings.activeLlmProfileId && it.configured }
+                ?: profiles.firstOrNull { it.configured }
+            if (main != null) {
+                migratedSettings = migratedSettings.copy(defaultModel = ModelSelection(main.id, main.modelId, main.effortSelectionFor()))
+                settingsRepo.save(migratedSettings)
+            }
+        }
+        sessions = sessions.map { session ->
+            if (session.modelSelection != null) session else {
+                val request = ProfileResolver.resolve(session, migratedSettings, profiles)
+                session.copy(modelSelection = request?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) })
+                    .also { chats.save(it) }
+            }
+        }
         _state.update {
             it.copy(
                 settings = migratedSettings,
@@ -111,6 +129,7 @@ class MagicPaperViewModel(
                 storageInfo = store.description,
                 showWelcome = !migratedSettings.onboardingDone,
                 llmProfiles = profiles,
+                modelDescriptions = planning?.dossiers().orEmpty(),
                 openAiSubscription = it.openAiSubscription.copy(available = openAiSubscription != null),
                 codingPanelPlugin = resolveCodingPanel(states),
                 coding = it.coding.copy(
@@ -184,21 +203,13 @@ class MagicPaperViewModel(
      */
     fun codingProfileOf(session: CodingSession): LlmProfile? {
         val s = _state.value
-        return ProfileResolver.resolve(session.llmProfileId, s.settings, s.availableLlmProfiles)
-    }
-
-    /** Переопределить профиль кодинг-сессии (или снять переопределение: profileId = null). */
-    fun selectCodingProfile(sessionId: String, profileId: String?) {
-        val repo = codingProjects ?: return
-        val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
-        val updated = ui.session.copy(llmProfileId = profileId)
-        scope.launch {
-            repo.saveSession(updated)
-            updateCodingSession(sessionId) { it.copy(session = updated) }
-        }
+        return ProfileResolver.coding(session, s.coding.projects.firstOrNull { it.id == session.projectId }, s.settings, s.availableLlmProfiles)
     }
 
     // ---- Навигация -------------------------------------------------------
+
+    fun openModelsSettings() = _state.update { it.copy(screen = Screen.SETTINGS, modelsSettingsOpen = true) }
+    fun closeModelsSettings() = _state.update { it.copy(modelsSettingsOpen = false) }
 
     fun open(screen: Screen) = _state.update { it.copy(screen = screen) }
 
@@ -238,17 +249,16 @@ class MagicPaperViewModel(
             title = "Новый свиток",
             createdAt = now,
             updatedAt = now,
+            modelSelection = ProfileResolver.favoriteDefault(_state.value.settings, _state.value.availableLlmProfiles),
         )
-        scope.launch {
-            chats.save(session)
-            _state.update {
+        _state.update {
                 it.copy(
                     sessions = listOf(session) + it.sessions,
                     current = session,
                     sessionsPanelOpen = false,
                 )
-            }
         }
+        scope.launch { chats.save(session) }
     }
 
     fun selectSession(id: String) {
@@ -296,6 +306,8 @@ class MagicPaperViewModel(
             title = if (session.messages.isEmpty()) trimmed.take(40) else session.title,
             updatedAt = Id.now(),
         )
+        val requestProfile = ProfileResolver.resolve(updated, settings, _state.value.availableLlmProfiles)
+        val operationalProfile = ProfileResolver.resolve(null as ChatSession?, settings, _state.value.availableLlmProfiles)
         scope.launch {
             chats.save(updated)
             _state.update { st ->
@@ -305,8 +317,7 @@ class MagicPaperViewModel(
                     busy = true,
                 )
             }
-            val profile = ProfileResolver.resolve(updated, settings, _state.value.availableLlmProfiles)
-            val answer = agent.answer(historyBefore, trimmed, settings, profile, attachments = visible)
+            val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile)
             val agentMessage = ChatMessage(
                 id = Id.new(),
                 role = ChatRole.AGENT,
@@ -314,14 +325,17 @@ class MagicPaperViewModel(
                 createdAt = Id.now(),
                 sources = answer.sources,
             )
+            val latest = _state.value.sessions.firstOrNull { it.id == updated.id } ?: updated
             val final = updated.copy(
+                modelSelection = latest.modelSelection,
+                llmProfileId = latest.llmProfileId,
                 messages = updated.messages + agentMessage,
                 updatedAt = Id.now(),
             )
             chats.save(final)
             _state.update { st ->
                 st.copy(
-                    current = final,
+                    current = if (st.current?.id == final.id) final else st.current,
                     sessions = st.sessions.map { if (it.id == final.id) final else it },
                     busy = false,
                 )
@@ -337,7 +351,7 @@ class MagicPaperViewModel(
         scope.launch {
             val withProfile = onboardingProfile != null && onboardingProfile.configured &&
                 (onboardingProfile.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscriptionSignedIn())
-            if (withProfile) profileRepo.save(onboardingProfile)
+            if (withProfile) profileRepo.save(onboardingProfile.migrateModelLibrary())
             val done = settings.copy(
                 onboardingDone = true,
                 activeLlmProfileId = if (withProfile && settings.activeLlmProfileId.isBlank()) {
@@ -374,11 +388,11 @@ class MagicPaperViewModel(
      * Первый сохранённый профиль становится активным автоматически. */
     fun saveLlmProfile(profile: LlmProfile) {
         scope.launch {
-            profileRepo.save(profile)
+            profileRepo.save(profile.copy(modelLibraryVersion = 1))
             val profiles = profileRepo.load()
             val settings = _state.value.settings
             val updated = if (settings.activeLlmProfileId.isBlank()) {
-                settings.copy(activeLlmProfileId = profile.id).also { settingsRepo.save(it) }
+                settings.copy(activeLlmProfileId = profile.id, defaultModel = profile.modelId.takeIf { it.isNotBlank() }?.let { ModelSelection(profile.id, it) }).also { settingsRepo.save(it) }
             } else {
                 settings
             }
@@ -387,6 +401,7 @@ class MagicPaperViewModel(
                     settings = updated,
                     llmProfiles = profiles,
                     editingLlmProfileId = null,
+                    modelsSettingsOpen = true,
                     notice = "Источник «${profile.name}» сохранён.",
                 )
             }
@@ -404,7 +419,7 @@ class MagicPaperViewModel(
             } else {
                 settings.activeLlmProfileId
             }
-            val updated = settings.copy(activeLlmProfileId = newActive)
+            val updated = settings.copy(activeLlmProfileId = newActive, defaultModel = settings.defaultModel?.takeUnless { it.profileId == id })
             settingsRepo.save(updated)
             // Снимаем переопределения свитков, ссылающиеся на удалённый профиль.
             _state.value.sessions.filter { it.llmProfileId == id }.forEach { session ->
@@ -423,78 +438,100 @@ class MagicPaperViewModel(
         }
     }
 
-    /** Сделать профиль глобально активным (для всех свитков без переопределения). */
-    fun setActiveProfile(id: String) {
-        scope.launch {
-            val updated = _state.value.settings.copy(activeLlmProfileId = id)
-            settingsRepo.save(updated)
-            val profile = _state.value.llmProfiles.firstOrNull { it.id == id }
-            _state.update {
-                it.copy(settings = updated, notice = profile?.let { p -> "Основной источник: ${p.shortLabel}." })
-            }
-        }
-    }
-
-    /** Переопределить профиль только для текущего свитка (или снять переопределение: id = null). */
-    fun selectChatProfile(id: String?) {
+    fun selectChatModel(selection: ModelSelection) {
+        if (_state.value.availableLlmProfiles.none { it.id == selection.profileId && selection.modelId in it.displayModels }) return
+        if (_state.value.current == null) newSession()
         val session = _state.value.current ?: return
-        scope.launch {
-            val updated = session.copy(llmProfileId = id, updatedAt = Id.now())
-            chats.save(updated)
-            _state.update { st ->
-                st.copy(
-                    current = updated,
-                    sessions = st.sessions.map { if (it.id == updated.id) updated else it },
-                )
-            }
+        val updated = session.copy(modelSelection = selection, llmProfileId = selection.profileId)
+        _state.update { st -> st.copy(current = updated, sessions = st.sessions.map { if (it.id == updated.id) updated else it }) }
+        scope.launch { chats.save(updated) }
+    }
+
+    fun selectCodingModel(sessionId: String, selection: ModelSelection, forProject: Boolean = false) {
+        val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (ProfileResolver.selection(selection, _state.value.availableLlmProfiles)?.supportsCoding != true) return
+        val updated = ui.session.copy(modelSelection = selection, llmProfileId = selection.profileId)
+        updateCodingSession(sessionId) { it.copy(session = updated) }
+        scope.launch { codingProjects?.saveSession(updated) }
+        if (forProject) {
+            val project = _state.value.coding.projects.firstOrNull { it.id == updated.projectId } ?: return
+            val next = project.copy(modelSelection = selection)
+            _state.update { st -> st.copy(coding = st.coding.copy(projects = st.coding.projects.map { if (it.id == next.id) next else it }, current = st.coding.current?.let { if (it.id == next.id) next else it })) }
+            scope.launch { codingProjects?.save(next) }
         }
     }
 
-    /** Быстрая смена уровня усилия профиля (из переключателя в чате).
-     * С моделью — персональная настройка ([LlmProfile.withEffortFor]), без — профильная. */
-    fun setProfileEffort(id: String, effort: EffortSelection, modelId: String? = null) {
+    fun setDefaultModel(selection: ModelSelection) {
+        if (ProfileResolver.selection(selection, _state.value.availableLlmProfiles) == null) return
+        val updated = _state.value.settings.copy(defaultModel = selection, activeLlmProfileId = selection.profileId)
+        _state.update { it.copy(settings = updated) }
+        scope.launch { settingsRepo.save(updated) }
+    }
+
+    fun updateModelLibrary(profile: LlmProfile) {
+        val old = _state.value.llmProfiles.firstOrNull { it.id == profile.id }
+        val removedDefault = old?.variants?.firstOrNull { it.id == profile.modelId && profile.variants.none { variant -> variant.id == it.id } }
+        val next = profile.copy(modelLibraryVersion = 1, modelId = removedDefault?.sourceModelId ?: profile.modelId)
+        _state.update { st -> st.copy(llmProfiles = st.llmProfiles.map { if (it.id == next.id) next else it }) }
+        scope.launch { profileRepo.save(next) }
+    }
+
+    fun refreshModelCatalog(id: String) {
+        val directory = modelDirectory ?: return
+        val profile = _state.value.llmProfiles.firstOrNull { it.id == id } ?: return
+        if (id in _state.value.catalogRefreshing) return
+        _state.update { it.copy(catalogRefreshing = it.catalogRefreshing + id) }
         scope.launch {
-            val profile = profileRepo.load().firstOrNull { it.id == id } ?: return@launch
-            val updated = if (modelId.isNullOrBlank()) {
-                profile.copy(effort = effort)
-            } else {
-                profile.withEffortFor(modelId, effort)
-            }
-            profileRepo.save(updated)
-            _state.update { it.copy(llmProfiles = profileRepo.load()) }
+            try {
+                val models = directory.models(profile)
+                val current = _state.value.llmProfiles.firstOrNull { it.id == id } ?: return@launch
+                val updated = current.withCatalog(models)
+                profileRepo.save(updated)
+                _state.update { st -> st.copy(llmProfiles = st.llmProfiles.map { if (it.id == id) updated else it }) }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = "Не удалось обновить каталог ${profile.name}: ${e.message}") } }
+            finally { _state.update { it.copy(catalogRefreshing = it.catalogRefreshing - id) } }
         }
     }
 
-    /** Быстрая смена модели профиля — выбор из избранных в переключателе. */
-    fun setProfileModel(id: String, modelId: String) {
-        if (modelId.isBlank()) return
+    fun saveModelDescription(dossier: ModelDossier) {
         scope.launch {
-            val profile = profileRepo.load().firstOrNull { it.id == id } ?: return@launch
-            profileRepo.save(profile.copy(modelId = modelId))
-            _state.update {
-                val updated = it.llmProfiles.map { p -> if (p.id == id) p.copy(modelId = modelId) else p }
-                it.copy(llmProfiles = updated, notice = "Модель: $modelId.")
-            }
+            planning?.saveDossier(dossier.copy(id = dossier.id.ifBlank { Id.new() }, source = DossierSource.USER, updatedAt = Id.now()))
+            _state.update { it.copy(modelDescriptions = planning?.dossiers().orEmpty()) }
         }
     }
 
-    /**
-     * Быстрая смена модели кодинг-контура профиля — выбор в переключателе
-     * кодинг-сессии; чатную модель по умолчанию не трогает.
-     */
-    fun setProfileCodingModel(id: String, modelId: String) {
-        if (modelId.isBlank()) return
+    fun generateModelDescriptions() {
+        val researcher = dossierResearcher ?: return
+        if (_state.value.descriptionsGenerating) return
+        val snapshot = _state.value
+        val judge = ProfileResolver.resolve(null as ChatSession?, snapshot.settings, snapshot.availableLlmProfiles)
+        if (judge == null) { _state.update { it.copy(notice = "Сначала выберите модель по умолчанию.") }; return }
+        val targets = snapshot.availableLlmProfiles.flatMap { p -> p.displayModels.map { p.forModel(it) } }
+        if (targets.isEmpty()) { _state.update { it.copy(notice = "Добавьте избранные модели.") }; return }
+        _state.update { it.copy(descriptionsGenerating = true) }
         scope.launch {
-            val profile = profileRepo.load().firstOrNull { it.id == id } ?: return@launch
-            profileRepo.save(profile.copy(codingModelId = modelId))
-            _state.update {
-                val updated = it.llmProfiles.map { p -> if (p.id == id) p.copy(codingModelId = modelId) else p }
-                it.copy(llmProfiles = updated, notice = "Модель агента: $modelId.")
-            }
+            var failures = 0
+            try {
+                targets.forEachIndexed { index, target ->
+                    _state.update { it.copy(descriptionsProgress = "${index + 1}/${targets.size} · ${target.modelName(target.selectionKey)}") }
+                    val dossier = researcher.research(target, judge, snapshot.settings)
+                    if (dossier.source == DossierSource.HEURISTIC) failures++
+                    else {
+                        // Do not replace an edit made while research was in flight.
+                        val before = snapshot.modelDescriptions.firstOrNull { it.profileId == target.id && it.modelId == target.selectionKey }
+                        val current = planning?.dossiers()?.firstOrNull { it.profileId == target.id && it.modelId == target.selectionKey }
+                        if (current == before) planning?.saveDossier(dossier.copy(id = current?.id ?: Id.new(), updatedAt = Id.now()))
+                    }
+                    _state.update { it.copy(modelDescriptions = planning?.dossiers().orEmpty()) }
+                }
+                _state.update { it.copy(notice = if (failures == 0) "Описания созданы." else "Не удалось создать описания для $failures моделей. Сохранённые описания оставлены.") }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = "Не удалось сохранить описания: ${e.message}") } }
+            finally { _state.update { it.copy(descriptionsGenerating = false, descriptionsProgress = null) } }
         }
     }
 
-    /** Открыт/закрыт ли переключатель модели в чате. */
     fun toggleModelSwitcher(open: Boolean) = _state.update { it.copy(modelSwitcherOpen = open) }
 
     /** Перейти к редактированию профиля на экране настроек. */
@@ -602,15 +639,15 @@ class MagicPaperViewModel(
             _state.update { it.copy(editorModelsError = "Каталог моделей недоступен на этой платформе.") }
             return
         }
-        if (!draft.configured) {
+        if (!draft.connectionConfigured) {
             val message = if (draft.provider == io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION) {
                 "Войдите в ChatGPT и укажите модель."
-            } else "Укажите Base URL и имя модели, затем повторите."
+            } else "Укажите адрес поставщика, затем повторите."
             _state.update { it.copy(editorModelsError = message) }
             return
         }
         if (_state.value.editorModelsLoading) return
-        _state.update { it.copy(editorModelsLoading = true, editorModelsError = null) }
+        _state.update { it.copy(editorModelsLoading = true, editorModelsError = null, editorModelsFor = "${draft.id}:${draft.provider}:${draft.baseUrl}") }
         scope.launch {
             val result = runCatching { directory.models(draft) }
             _state.update {
@@ -713,6 +750,7 @@ class MagicPaperViewModel(
                 sessions = chats.sessions(),
                 skills = skills?.all().orEmpty(),
                 llmProfiles = s.llmProfiles,
+                modelDescriptions = planning?.dossiers().orEmpty(),
             )
             val encoded = json.encodeToString(ProfileBundle.serializer(), bundle)
             val ok = bridge.export(encoded)
@@ -737,7 +775,8 @@ class MagicPaperViewModel(
             settingsRepo.savePluginStates(bundle.plugins)
             bundle.sessions.forEach { chats.save(it) }
             bundle.skills.forEach { skill -> skills?.save(skill) }
-            bundle.llmProfiles.forEach { profile -> profileRepo.save(profile) }
+            bundle.llmProfiles.forEach { profile -> profileRepo.save(profile.migrateModelLibrary()) }
+            bundle.modelDescriptions.forEach { planning?.saveDossier(it) }
             bootstrap()
             _state.update { it.copy(notice = "Профиль импортирован.") }
         }
@@ -912,6 +951,7 @@ class MagicPaperViewModel(
                 projectId = project.id,
                 name = "Сессия $ordinal",
                 createdAt = Id.now(),
+                modelSelection = project.modelSelection ?: ProfileResolver.favoriteDefault(_state.value.settings, _state.value.availableLlmProfiles, coding = true),
             )
             repo.saveSession(session)
             _state.update {
@@ -986,6 +1026,7 @@ class MagicPaperViewModel(
             attachments = attachments.map { it.asMeta() },
         )
         val recorder = CodingRunRecorder()
+        val requestProfile = codingProfileOf(session)
         val job = scope.launch {
             val history = repo.messages(project.id, session.id) + userMessage
             repo.saveMessages(project.id, session.id, history)
@@ -993,7 +1034,7 @@ class MagicPaperViewModel(
                 it.copy(messages = history, running = true, draft = recorder.draft(active = true))
             }
             var piSessionId = session.piSessionId
-            runtime.run(project, session, trimmed, codingProfileOf(session), attachments).collect { event ->
+            runtime.run(project, session, trimmed, requestProfile, attachments).collect { event ->
                 if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                     piSessionId = event.sessionId
                 }
@@ -1005,7 +1046,8 @@ class MagicPaperViewModel(
             // но история берётся из хранилища, а не из снимка — источник истины один.
             val finalLog = repo.messages(project.id, session.id) + agentMessage
             repo.saveMessages(project.id, session.id, finalLog)
-            val updatedSession = session.copy(piSessionId = piSessionId)
+            val latestSession = _state.value.coding.sessions.firstOrNull { it.session.id == session.id }?.session ?: session
+            val updatedSession = latestSession.copy(piSessionId = piSessionId)
             if (piSessionId != session.piSessionId) repo.saveSession(updatedSession)
             codingJobs.remove(session.id)
             updateCodingSession(session.id) {

@@ -40,6 +40,7 @@ data class ChatSession(
      * null = глобальный активный профиль (см. [ProfileResolver]).
      */
     val llmProfileId: String? = null,
+    val modelSelection: ModelSelection? = null,
 )
 
 /** Доступные поисковые движки. */
@@ -51,6 +52,7 @@ enum class SearchProvider { AUTO, WIKIPEDIA, QUERIT, GOOGLE }
 data class AppSettings(
     /** Активный по умолчанию профиль подключения (см. [LlmProfile]). */
     val activeLlmProfileId: String = "",
+    val defaultModel: ModelSelection? = null,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val queritApiKey: String = "",
     val googleApiKey: String = "",
@@ -90,4 +92,5 @@ data class ProfileBundle(
     val sessions: List<ChatSession>,
     val skills: List<io.aequicor.magicpaper.domain.Skill> = emptyList(),
     val llmProfiles: List<LlmProfile> = emptyList(),
+    val modelDescriptions: List<ModelDossier> = emptyList(),
 )

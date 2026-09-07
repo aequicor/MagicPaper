@@ -1,6 +1,10 @@
 package io.aequicor.magicpaper.data.coding
 
 import com.sun.net.httpserver.HttpServer
+import io.aequicor.magicpaper.domain.EffortSelection
+import io.aequicor.magicpaper.domain.ReasoningEffort
+import io.aequicor.magicpaper.domain.ModelVariant
+import kotlinx.serialization.json.*
 import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
@@ -38,7 +42,8 @@ class PiCodingRuntimeIntegrationTest {
         }
         val workRoot = createTempDir("magicpaper-pi-it")
         val projectDir = File(workRoot, "project").apply { mkdirs() }
-        val mock = startMockModelServer()
+        val requests = CopyOnWriteArrayList<String>()
+        val mock = startMockModelServer(requests)
         try {
             val profile = LlmProfile(
                 id = "it",
@@ -47,6 +52,9 @@ class PiCodingRuntimeIntegrationTest {
                 baseUrl = "http://127.0.0.1:${mock.address.port}/v1",
                 modelId = "mock-model",
                 apiKey = "test-key",
+                modelLibraryVersion = 1,
+                codingModelId = "variant:it",
+                variants = listOf(ModelVariant("variant:it", "Custom", "mock-model", AdvancedLlmOptions(temperature = .23, topP = .81, maxTokens = 7000))),
             )
             val runtime = PiCodingRuntime(rootDir = File(workRoot, "coding"))
 
@@ -64,6 +72,11 @@ class PiCodingRuntimeIntegrationTest {
             assertTrue(finals.isNotEmpty(), "нет финального текста; события: $events")
             assertTrue(finals.last().text.contains("PONG"), "текст: ${finals.last().text}")
             assertTrue(events.last() is CodingEvent.Finished)
+            val sent = Json.parseToJsonElement(requests.first()).jsonObject
+            assertEquals("mock-model", sent["model"]!!.jsonPrimitive.content)
+            assertEquals(.23, sent["temperature"]!!.jsonPrimitive.double)
+            assertEquals(.81, sent["top_p"]!!.jsonPrimitive.double)
+            assertEquals(7000, sent["max_tokens"]!!.jsonPrimitive.int)
 
             runBlocking { runtime.uninstall() }
             assertTrue(!File(workRoot, "coding").exists(), "установка не удалена полностью")
@@ -71,6 +84,52 @@ class PiCodingRuntimeIntegrationTest {
             mock.stop(0)
             workRoot.deleteRecursively()
         }
+    }
+
+    @Test fun nativeProvidersSendVariantOptions() {
+        if (!enabled) return
+        val workRoot = createTempDir("magicpaper-native-models-it")
+        val projectDir = File(workRoot, "project").apply { mkdirs() }
+        val requests = CopyOnWriteArrayList<String>()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            val body = exchange.requestBody.readBytes().decodeToString()
+            requests += body
+            val payload = if (exchange.requestURI.path.endsWith("messages")) {
+                listOf(
+                    "message_start" to """{"type":"message_start","message":{"id":"msg-test","type":"message","role":"assistant","model":"mock-model","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}""",
+                    "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+                    "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PONG"}}""",
+                    "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+                    "message_delta" to """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}""",
+                    "message_stop" to """{"type":"message_stop"}""",
+                ).joinToString("\n\n", postfix = "\n\n") { (type, data) -> "event: $type\ndata: $data" }
+            } else {
+                "data: " + """{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"PONG"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}""" + "\n\n"
+            }
+            val bytes = payload.toByteArray()
+            exchange.responseHeaders.add("Content-Type", "text/event-stream")
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        server.start()
+        try {
+            val runtime = PiCodingRuntime(rootDir = File(workRoot, "coding"))
+            assertEquals(RuntimePhase.READY, runBlocking { runtime.ensureReady().toList().last().phase })
+            for (provider in listOf(ProviderType.ANTHROPIC, ProviderType.GOOGLE)) {
+                val profile = LlmProfile("it", "Test", baseUrl = "http://127.0.0.1:${server.address.port}/v1", apiKey = "test-key", provider = provider,
+                    modelId = "mock-model", codingModelId = "variant:it", modelLibraryVersion = 1,
+                    variants = listOf(ModelVariant("variant:it", "Custom", "mock-model", AdvancedLlmOptions(temperature = .23, topP = .81, maxTokens = 7000))))
+                val events = runBlocking { runtime.run(CodingProject("p", "Test", projectDir.absolutePath, 1), CodingSession(provider.name, "p", "Test", 1), "Say PONG", profile).toList() }
+                assertTrue(events.any { it is CodingEvent.FinalText && it.text.contains("PONG") }, "$provider: $events")
+                val sent = Json.parseToJsonElement(requests.last()).jsonObject
+                val options = if (provider == ProviderType.GOOGLE) sent["generationConfig"]!!.jsonObject else sent
+                assertEquals(.23, options["temperature"]!!.jsonPrimitive.double)
+                assertEquals(.81, options[if (provider == ProviderType.GOOGLE) "topP" else "top_p"]!!.jsonPrimitive.double)
+                assertEquals(7000, options[if (provider == ProviderType.GOOGLE) "maxOutputTokens" else "max_tokens"]!!.jsonPrimitive.int)
+            }
+            runBlocking { runtime.uninstall() }
+        } finally { server.stop(0); workRoot.deleteRecursively() }
     }
 
     /**
@@ -177,7 +236,10 @@ class PiCodingRuntimeIntegrationTest {
                 baseUrl = "http://127.0.0.1:${mock.address.port}/v1",
                 modelId = "qwen3.8-flash",
                 apiKey = "test-key",
-                advanced = AdvancedLlmOptions(maxTokens = 16_384, contextLimit = 128_000),
+                modelLibraryVersion = 1,
+                codingModelId = "variant:reasoning",
+                effort = EffortSelection.of(ReasoningEffort.MEDIUM),
+                variants = listOf(ModelVariant("variant:reasoning", "Reasoning", "qwen3.8-flash", AdvancedLlmOptions(maxTokens = 16_384, contextLimit = 128_000))),
             )
             val project = CodingProject(id = "p1", name = "demo", path = projectDir.absolutePath, createdAt = 1L)
             val session = CodingSession(id = "s1", projectId = "p1", name = "Основная", createdAt = 1L)
@@ -305,10 +367,11 @@ class PiCodingRuntimeIntegrationTest {
         "{\"path\":\"notes.txt\",\"edits\":[{\"oldText\":\"$oldText\",\"newText\":\"$newText\"}]}"
 
     /** Мок OpenAI-совместимого сервера со стримингом SSE. */
-    private fun startMockModelServer(): HttpServer {
+    private fun startMockModelServer(requests: MutableList<String>? = null): HttpServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/v1/chat/completions") { exchange ->
             val body = exchange.requestBody.readBytes().decodeToString()
+            requests?.add(body)
             val stream = "\"stream\":true" in body.replace(" ", "")
             val chunks = listOf(
                 """{"choices":[{"delta":{"role":"assistant"},"index":0}]}""",
