@@ -42,6 +42,7 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.Screen
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ModelSwitcherDialog
+import io.aequicor.magicpaper.ui.components.MagicPaperBackground
 import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
@@ -105,22 +106,33 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
 
 @Composable
 private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
-    Row(modifier = Modifier.fillMaxSize()) {
-        AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen == Screen.CHAT) {
-            Row {
-                SessionsPanel(vm, state.sessions, state.current?.id)
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
+    Box(Modifier.fillMaxSize()) {
+        if (state.screen == Screen.CHAT || state.screen == Screen.CODING) {
+            MagicPaperBackground(state.settings.paperAnimationEnabled, Modifier.matchParentSize())
         }
-        Box(modifier = Modifier.weight(1f)) {
-            when (state.screen) {
-                Screen.CHAT -> ChatScreen(vm, state)
-                Screen.CODING -> CodingScreen(vm, state.coding, state.codingPanelPlugin)
-                Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
-                    ActivePlugins(state.plugins, state.pluginStates)
+        Row(modifier = Modifier.fillMaxSize()) {
+            AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen == Screen.CHAT) {
+                Row {
+                    SessionsPanel(vm, state.sessions, state.current?.id)
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
-                Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
-                Screen.SETTINGS -> SettingsScreen(vm, state)
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                when (state.screen) {
+                    Screen.CHAT -> ChatScreen(vm, state)
+                    Screen.CODING -> CodingScreen(
+                        vm,
+                        state.coding,
+                        state.codingPanelPlugin,
+                        profiles = state.llmProfiles,
+                        activeProfileId = state.settings.activeLlmProfileId,
+                    )
+                    Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
+                        ActivePlugins(state.plugins, state.pluginStates)
+                    }
+                    Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
+                    Screen.SETTINGS -> SettingsScreen(vm, state)
+                }
             }
         }
     }

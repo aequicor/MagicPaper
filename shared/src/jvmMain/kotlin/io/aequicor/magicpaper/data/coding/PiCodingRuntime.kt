@@ -169,7 +169,10 @@ class PiCodingRuntime(
             return@flow
         }
 
-        writePiConfig(profile)
+        // Кодинг-контур: модель и всё, что из неё выводится (models.json,
+        // effort, maxTokens), берётся из codingModelId профиля, если задана.
+        val codingProfile = profile.forCoding()
+        writePiConfig(codingProfile)
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
@@ -196,7 +199,7 @@ class PiCodingRuntime(
         val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
         try {
             while (true) {
-                outcome = runPiAttempt(node, dir, session, profile, promptText, piSessionId, emitEvent)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
@@ -214,7 +217,7 @@ class PiCodingRuntime(
             abortedSessions.remove(session.id)
         }
         if (!outcome.answerSeen) {
-            emit(CodingEvent.Failed(failureReason(profile, outcome, continues)))
+            emit(CodingEvent.Failed(failureReason(codingProfile, outcome, continues)))
         }
         emit(CodingEvent.Finished)
     }.flowOn(Dispatchers.IO)

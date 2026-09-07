@@ -27,6 +27,41 @@ import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 
 /**
+ * Чип текущей модели кодинг-сессии в композиции: тап открывает переключатель.
+ * Показывает кодинг-контур профиля: имя источника, его coding-модель и усилие.
+ */
+@Composable
+fun CodingModelChip(
+    profile: LlmProfile?,
+    overridden: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 40.dp),
+    ) {
+        if (profile == null) {
+            Text(
+                "✦ Источник не подключён",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            val model = profile.codingModel
+            val capability = ModelDefaults.capability(profile, model)
+            val effort = profile.effortLabel(capability, model)
+            Text(
+                "${if (overridden) "◌ " else ""}✦ ${profile.name} · $model · $effort ▾",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
  * Переключатель источника кодинг-агента: выбор действует для конкретной
  * кодинг-сессии; «основной» — глобально; усилие меняется прямо здесь.
  */
@@ -91,34 +126,40 @@ fun CodingModelSwitcherDialog(
                     }
                 }
 
-                // Избранные модели и усилие выбранного профиля.
+                // Избранные модели и усилие выбранного профиля (кодинг-контур).
                 val resolved = profiles.firstOrNull { it.id == resolvedId }
                 if (resolved != null) {
                     Spacer(Modifier.height(6.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Spacer(Modifier.height(8.dp))
+                    val codingModel = resolved.codingModel
                     Text(
-                        "Модель",
+                        "Модель агента",
                         style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "Выбор действует только на кодинг-сессии; чат сохраняет свою модель.",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     FavoriteModelsSection(
                         profile = resolved,
+                        currentModel = codingModel,
                         onPick = { modelId ->
                             if (resolved.id != resolvedId) vm.selectCodingProfile(sessionId, resolved.id)
-                            vm.setProfileModel(resolved.id, modelId)
+                            vm.setProfileCodingModel(resolved.id, modelId)
                         },
                         onEditSource = { vm.editLlmProfile(resolved.id) },
                     )
                     Spacer(Modifier.height(8.dp))
-                    val codingModel = resolved.codingModelId.ifBlank { resolved.modelId }
                     Text(
                         "Усилие модели",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     EffortControl(
-                        capability = ModelDefaults.capability(resolved.provider, codingModel),
+                        capability = ModelDefaults.capability(resolved, codingModel),
                         selection = resolved.effortSelectionFor(codingModel),
                         onSelect = { vm.setProfileEffort(resolved.id, it, codingModel) },
                     )

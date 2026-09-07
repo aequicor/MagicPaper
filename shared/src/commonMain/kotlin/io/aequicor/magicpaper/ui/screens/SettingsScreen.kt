@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -19,7 +20,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,9 +30,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import io.aequicor.magicpaper.domain.AppSettings
+import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel
@@ -79,6 +84,31 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         Spacer(Modifier.height(16.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(16.dp))
+
+        Section("Оформление")
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .toggleable(
+                    value = draft.paperAnimationEnabled,
+                    role = Role.Switch,
+                    onValueChange = { draft = draft.copy(paperAnimationEnabled = it) },
+                ).padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Анимация магической бумаги", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Живой фон чата и проектов на мощных ПК и телефонах. " +
+                        "При заряде 20% и ниже анимация приостанавливается автоматически. " +
+                        "На Android также учитывается энергосбережение. " +
+                        "На неподдерживаемых устройствах и в браузере — статичная бумага.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = draft.paperAnimationEnabled, onCheckedChange = null)
+        }
+        Spacer(Modifier.height(12.dp))
 
         Section("Магические источники (модели)")
         Text(
@@ -178,7 +208,8 @@ private fun ProfileRowEntry(
                 buildString {
                     append(profile.provider.name.lowercase())
                     append(" · усилие: ")
-                    append(profile.effort.label.lowercase())
+                    // Усилие именно дефолтной модели: у неё может быть своё переопределение.
+                    append(profile.effortSelectionFor(profile.modelId).label.lowercase())
                     if (profile.favoriteModels.isNotEmpty()) append(" · избранное: ${profile.favoriteModels.size}")
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -206,6 +237,22 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         mutableStateOf(initial?.displayName.orEmpty())
     }
     val spec = ProviderCatalog.all.firstOrNull { it.displayName == specName }
+    // Объявления провайдера об уровнях мышления — сразу в черновик: ручка усилия
+    // должна показывать словарь модели, а не догадку по имени.
+    LaunchedEffect(state.editorModels) {
+        val discovered = state.editorModels
+        if (discovered.isEmpty()) return@LaunchedEffect
+        val relevant = (listOf(draft.modelId, draft.codingModelId) + draft.favoriteModels)
+            .filter { it.isNotBlank() }
+            .toSet()
+        var next = draft
+        discovered.forEach { model ->
+            if (model.declared != null && model.id in relevant) {
+                next = next.withDeclaredReasoning(model.id, model.declared)
+            }
+        }
+        if (next != draft) draft = next
+    }
     // Тонкие настройки редактируются строками: пустое = «по умолчанию провайдера».
     val adv = draft.advanced
     var temperature by remember(profile.id) { mutableStateOf(adv.temperature?.toString().orEmpty()) }
@@ -306,7 +353,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         val effortNative = ModelDefaults.supportsEffort(draft)
         Text(
             if (effortNative) "Модель поддерживает нативное усилие."
-            else "У модели нет нативного усилия — уровень применится температурным режимом.",
+            else "У модели нет нативного усилия — поле усилия в запрос не попадает.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -345,9 +392,15 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                     model = found,
                     selected = found.id == draft.modelId,
                     favorite = found.id in draft.favoriteModels,
+                    currentEffort = draft.effortSelectionFor(found.id),
                     onClick = {
                         val rec = found.recommendation
-                        draft = draft.copy(modelId = found.id, effort = rec.effort, advanced = rec.advanced)
+                        draft = draft.copy(modelId = found.id, advanced = rec.advanced)
+                            .withDeclaredReasoning(found.id, found.declared)
+                        // Своё усилие модели не затираем рекомендацией; иначе — дефолт модели.
+                        if (!draft.effortOverrides.containsKey(found.id)) {
+                            draft = draft.copy(effort = rec.effort)
+                        }
                         temperature = rec.advanced.temperature?.toString().orEmpty()
                         maxTokens = rec.advanced.maxTokens.toString()
                         topP = rec.advanced.topP?.toString().orEmpty()
@@ -365,10 +418,25 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
 
         Spacer(Modifier.height(10.dp))
         Section("Усилие")
+        Text(
+            if (draft.modelId.isBlank()) {
+                "Уровни — те, которые принимает модель: укажите модель выше."
+            } else {
+                "Показаны только уровни модели ${draft.modelId}; выбор запоминается за этой моделью."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         EffortControl(
             capability = ModelDefaults.capability(draft),
-            selection = draft.effort,
-            onSelect = { draft = draft.copy(effort = it) },
+            selection = draft.effortSelectionFor(draft.modelId),
+            onSelect = { selection ->
+                draft = if (draft.modelId.isBlank()) {
+                    draft.copy(effort = selection)
+                } else {
+                    draft.withEffortFor(draft.modelId, selection)
+                }
+            },
         )
 
         Spacer(Modifier.height(10.dp))
@@ -422,6 +490,7 @@ private fun DiscoveredModelRow(
     model: DiscoveredModel,
     selected: Boolean,
     favorite: Boolean,
+    currentEffort: EffortSelection,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
 ) {
@@ -443,10 +512,17 @@ private fun DiscoveredModelRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(model.id, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
-                if (model.supportsEffort) {
-                    "нативное усилие · рекомендуется: ${model.recommendation.effort.label}"
-                } else {
-                    "без нативного усилия · рекомендуется: ${model.recommendation.effort.label}"
+                buildString {
+                    val levels = model.levels
+                    when {
+                        levels.isEmpty() -> append("без нативного усилия")
+                        else -> {
+                            append("уровни: ")
+                            append(levels.joinToString("/") { it.shortLabel })
+                            if (model.declared != null) append(" · по каталогу провайдера")
+                        }
+                    }
+                    append(" · сейчас: ").append(currentEffort.shortLabel)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

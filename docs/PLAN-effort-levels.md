@@ -363,3 +363,26 @@ platform fs с TTL 24 ч + прогрев в фоне, чтобы первый �
 - Ближайший **более слабый** (Hermes, экономия) или ближайший по расстоянию (Cherry, точность)?
 - Хранить ли `effortOverrides` по `modelId` глобально или в пределах профиля (у нас профиль = провайдер + ключ).
 - Что делать со шкалой в кодинг-сессиях: показывать только уровни пи (`off…max`) или общий словарь?
+
+---
+
+## 9. Статус внедрения
+
+Сделано (этапы 1–5, 7 и часть 6):
+
+- словарь `ReasoningEffort` + `EffortSelection` с tolerant-read легаси-чисел (`domain/Reasoning.kt`);
+- `ReasoningCapability.Controls` (словарь уровней, диалект, бюджет, `mandatory`, вендорские `overrides`)
+  и `resolveEffort` — клампинг к ближайшему по шкале, NONE не цель подмены;
+- пейлоады кодируют из `ResolvedEffort` (`data/llm/LlmPayloads.kt`), подменной температуры нет;
+- уровень хранится на модели: `LlmProfile.effort` + `effortOverrides`;
+- `EffortControl` рисует чип «умолч» и только `selectableLevels` модели, при унаследованном
+  недоступном уровне показывает, во что он превратится в запросе;
+- мост пи пишет `thinkingLevelMap` по словарю модели (`data/coding/PiModelsConfig.kt`);
+- **обогащение из живого каталога**: `parseDeclaredReasoning` читает OpenRouter-схему
+  (`reasoning.supported_efforts`, `reasoning.mandatory`, `supported_parameters`) трёхзначно —
+  «есть уровни» / «точно нет ручки» / «неизвестно»; объявления хранятся в
+  `LlmProfile.modelReasoning` и перевешивают эвристику в UI и в транспортах
+  (`DeclaredReasoning.withDeclared`). Каталог доступен и для OPENROUTER-профиля.
+
+Не сделано из этапа 6: диск-кэш объявлений с TTL и фоновый прогрев — объявления сейчас
+приходят вместе с запросом списка моделей в редакторе источника и запоминаются в профиле.

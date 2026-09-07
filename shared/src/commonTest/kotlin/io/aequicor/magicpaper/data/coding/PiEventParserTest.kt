@@ -37,8 +37,16 @@ class PiEventParserTest {
     }
 
     @Test
+    fun thinkingDeltaIsExtracted() {
+        val line = """{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Думаю о правке"}}"""
+        val event = PiEventParser.parse(line)
+        assertIs<CodingEvent.ThinkingDelta>(event)
+        assertEquals("Думаю о правке", event.delta)
+    }
+
+    @Test
     fun nonTextDeltaIsIgnored() {
-        val line = """{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"thinking_delta","delta":"..."}}"""
+        val line = """{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"toolcall_delta","delta":"..."}}"""
         assertNull(PiEventParser.parse(line))
     }
 
@@ -48,6 +56,15 @@ class PiEventParserTest {
         val event = PiEventParser.parse(line)
         assertIs<CodingEvent.FinalText>(event)
         assertEquals("Готово.", event.text)
+    }
+
+    @Test
+    fun messageEndCarriesThinkingBeforeText() {
+        val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Сначала проверю файл"},{"type":"text","text":"Готово"}],"stopReason":"stop"}}"""
+        val events = PiEventParser.parseEvents(line)
+        assertIs<CodingEvent.FinalThinking>(events[0])
+        assertEquals("Сначала проверю файл", (events[0] as CodingEvent.FinalThinking).text)
+        assertIs<CodingEvent.FinalText>(events[1])
     }
 
     /**
@@ -72,7 +89,10 @@ class PiEventParserTest {
     fun thinkingOnlyContentCutByLengthIsTruncationToo() {
         // Мышление — не ответ: текст сообщения так и остался незаполненным.
         val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"разбор..."}],"stopReason":"length","usage":{"output":16384,"reasoning":16384}}}"""
-        assertIs<CodingEvent.OutputTruncated>(PiEventParser.parseEvents(line).single())
+        val events = PiEventParser.parseEvents(line)
+        // Рассуждение показываем даже когда до тела сообщения потолок не дошёл.
+        assertEquals(CodingEvent.FinalThinking("разбор..."), events[0])
+        assertIs<CodingEvent.OutputTruncated>(events[1])
     }
 
     @Test

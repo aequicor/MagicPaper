@@ -72,7 +72,24 @@ class PlanRunner(
                 return current
             }
         }
-        current = current.copy(status = PlanStatus.DONE)
+        // График мог встать: у оставшихся шагов провален предшественник.
+        val blocked = current.blockedPending
+        if (blocked.isNotEmpty()) {
+            current = current.copy(
+                status = PlanStatus.FAILED,
+                milestones = current.milestones.map { m ->
+                    if (m.id in blocked.map { it.id }) {
+                        m.copy(status = MilestoneStatus.FAILED, checkNote = "Провален шаг-предшественник")
+                    } else m
+                },
+            )
+            onUpdate(current)
+            return current
+        }
+        current = current.copy(
+            // Все завершены — DONE; иначе что-то осталось незакрытым (цикл/тупик графика).
+            status = if (current.milestones.all { it.completed }) PlanStatus.DONE else PlanStatus.FAILED,
+        )
         onUpdate(current)
         return current
     }
@@ -89,8 +106,12 @@ class PlanRunner(
         judge: LlmProfile?,
         onUpdate: suspend (Plan) -> Unit,
     ): StepOutcome {
-        val profile = profiles.firstOrNull { it.id == milestone.agentProfileId && it.configured }
-            ?: profiles.firstOrNull { it.configured }
+        val bound = profiles.firstOrNull { it.id == milestone.agentProfileId && it.configured }
+        // Закреплённая модель шага (из избранного профиля) важнее дефолтной модели профиля.
+        val profile = when {
+            bound != null && milestone.agentModelId.isNotBlank() -> bound.copy(modelId = milestone.agentModelId)
+            else -> bound ?: profiles.firstOrNull { it.configured }
+        }
 
         // Шаг 1: пометка «выполняется» — лента сразу показывает активную веху.
         val runningPlan = plan.replaceMilestone(milestone.copy(status = MilestoneStatus.ACTIVE))

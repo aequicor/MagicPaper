@@ -24,7 +24,9 @@ enum class MilestoneStatus {
 
 /**
  * Мэилстоун плана: шаг с закреплённым «оптимальным агентом» (профилем
- * подключения), отчётом выполнения и вердиктом проверки достижимости.
+ * подключения и моделью из его избранного), отчётом выполнения и вердиктом
+ * проверки достижимости. dependsOn рисует график: шаги без взаимных
+ * зависимостей — параллельные ветви, зависимые ждут своих предшественников.
  */
 @Serializable
 data class Milestone(
@@ -34,6 +36,10 @@ data class Milestone(
     val status: MilestoneStatus = MilestoneStatus.PENDING,
     /** Идентификатор профиля подключения — закреплённый агент мэилстоуна. */
     val agentProfileId: String = "",
+    /** Избранная модель закреплённого агента; пусто — дефолтная модель профиля. */
+    val agentModelId: String = "",
+    /** Идентификаторы шагов-предшественников: шаг ждёт их завершения. */
+    val dependsOn: List<String> = emptyList(),
     /** Отчёт агента о выполнении (итоговый текст прогона). */
     val report: String = "",
     /** Вердикт проверки достижимости цели мэилстоуна. */
@@ -89,7 +95,20 @@ data class Plan(
 
     /** Ближайший мэилстоун, требующий выполнения (включая повтор после сбоя). */
     val nextPending: Milestone? get() = milestones.firstOrNull {
-        it.status == MilestoneStatus.PENDING || it.status == MilestoneStatus.FAILED
+        (it.status == MilestoneStatus.PENDING || it.status == MilestoneStatus.FAILED) &&
+            it.dependsOn.all { dep -> milestones.firstOrNull { m -> m.id == dep }?.completed == true }
+    }
+
+    /** Незавершённые шаги с проваленным непосредственным предшественником: график встал. */
+    val blockedPending: List<Milestone> get() = milestones.filter { m ->
+        !m.completed && m.dependsOn.any { dep ->
+            milestones.firstOrNull { it.id == dep }?.status == MilestoneStatus.FAILED
+        }
+    }
+
+    /** Удовлетворены ли шаги-предшественники (или их не было). */
+    fun depsSatisfied(milestone: Milestone): Boolean = milestone.dependsOn.all { dep ->
+        milestones.firstOrNull { it.id == dep }?.completed == true
     }
 }
 
@@ -144,13 +163,21 @@ interface PlanningRepository {
     suspend fun wipe()
 }
 
-/** Черновик мэилстоуна от планировщика (до закрепления агента). */
+/**
+ * Черновик мэилстоуна от планировщика (до закрепления агента).
+ * [depends] — номера предшествующих шагов этого же черновика (считаются с 1,
+ * как их нумерует планировщик в промпте); пустой список — шаг стартует сразу,
+ * ветви без взаимных зависимостей считаются параллельными.
+ */
 @Serializable
 data class MilestoneDraft(
     val title: String = "",
     val description: String = "",
     /** Подсказка модели: имя агента для этого шага (пусто — подобрать). */
     val agent: String = "",
+    /** Подсказка модели: имя оптимальной агента (ищется среди избранных моделей профиля). */
+    val model: String = "",
+    val depends: List<Int> = emptyList(),
 )
 
 /** Черновик плана: цепочка шагов и пометка о способе создания. */

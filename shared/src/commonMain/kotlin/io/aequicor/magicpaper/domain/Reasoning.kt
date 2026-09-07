@@ -24,17 +24,23 @@ import kotlin.math.abs
  * шкала 0–100 лишь изображала точность — 95 % её положений попадали в один и
  * тот же бакет.
  */
+/**
+ * Имена уровней — те же слова, что показывают другие агенты (pi, Cherry Studio,
+ * Hermes, Codex): `off/minimal/low/medium/high/xhigh/max`, плюс `auto` и
+ * `default`. Русское [label] — пояснение к имени, а не замена ему: пользователь
+ * приходит из других инструментов и ищет привычные слова.
+ */
 enum class ReasoningEffort(val wire: String, val label: String, val shortLabel: String) {
-    NONE("none", "Выключено", "выкл"),
-    MINIMAL("minimal", "Минимальное", "мин"),
-    LOW("low", "Низкое", "низ"),
-    MEDIUM("medium", "Среднее", "ср"),
-    HIGH("high", "Высокое", "выс"),
-    XHIGH("xhigh", "Очень высокое", "х-выс"),
-    MAX("max", "Максимум", "макс"),
+    NONE("none", "Выключено (off)", "off"),
+    MINIMAL("minimal", "Минимальное (min)", "min"),
+    LOW("low", "Низкое (low)", "low"),
+    MEDIUM("medium", "Среднее (medium)", "medium"),
+    HIGH("high", "Высокое (high)", "high"),
+    XHIGH("xhigh", "Очень высокое (xhigh)", "xhigh"),
+    MAX("max", "Максимум (max / ultra)", "max"),
 
     /** «Реши сама» — режим, а не интенсивность: в шкалу не входит. */
-    AUTO("auto", "Авто (по модели)", "авто"),
+    AUTO("auto", "Авто — уровень выбирает модель (auto)", "auto"),
     ;
 
     companion object {
@@ -90,12 +96,15 @@ data class EffortSelection private constructor(val level: ReasoningEffort?) {
 
     val isDefault: Boolean get() = level == null
 
-    /** Подпись для чипов: короткое имя уровня либо «умолч». */
-    val shortLabel: String get() = level?.shortLabel ?: "умолч"
+    /** Подпись для чипов: имя уровня как у других агентов либо `default`. */
+    val shortLabel: String get() = level?.shortLabel ?: DEFAULT_LABEL
 
-    val label: String get() = level?.label ?: "По умолчанию провайдера"
+    val label: String get() = level?.label ?: "default — по умолчанию провайдера"
 
     companion object {
+        /** Имя состояния «не задавать усилие» — как в других агентах. */
+        const val DEFAULT_LABEL: String = "default"
+
         /** Не задавать усилие — пусть модель/провайдер решает сам. */
         val Default: EffortSelection = EffortSelection(null)
 
@@ -206,6 +215,77 @@ sealed interface ReasoningCapability {
         val overrides: Map<ReasoningEffort, ReasoningEffort> = emptyMap(),
         val budget: TokenRange? = null,
     ) : ReasoningCapability
+}
+
+/**
+ * Что провайдер сам объявил о модели в своём каталоге (`/models`). Это факт,
+ * а не догадка по имени, поэтому он перевешивает эвристику [ModelDefaults]:
+ * ручка показывает ровно те уровни, которые сервер перечислил.
+ *
+ * Контракт трёхзначный, как у Hermes:
+ *  - [supports] = false — каталог знает модель и органов управления нет;
+ *  - [efforts] пуст при `supports = true` — reasoning есть, уровни не объявлены
+ *    (словарь не сужаем, берём эвристику);
+ *  - [efforts] непуст — объявленный словарь уровней.
+ */
+@Serializable
+data class DeclaredReasoning(
+    val supports: Boolean = true,
+    val efforts: Set<ReasoningEffort> = emptySet(),
+    /** Мышление нельзя выключить — уровень NONE снимается с ручки. */
+    val mandatory: Boolean? = null,
+) {
+    companion object {
+        /** Каталог прямо сказал: органов управления мышлением нет. */
+        val None: DeclaredReasoning = DeclaredReasoning(supports = false)
+    }
+}
+
+/**
+ * Наложить объявленный провайдером словарь на форму ручки: диалект, бюджет и
+ * вендорские подмены — знание о поколении API, оно сохраняется; набор уровней
+ * и обязательность мышления берутся из объявления.
+ */
+fun ReasoningCapability.withDeclared(declared: DeclaredReasoning): ReasoningCapability {
+    if (!declared.supports) return ReasoningCapability.None
+    val controls = this as? ReasoningCapability.Controls
+    val mandatory = declared.mandatory ?: controls?.mandatory ?: false
+    if (declared.efforts.isEmpty()) {
+        // Уровни не объявлены — не выдумываем их, но обязательность учитываем.
+        if (controls == null || !mandatory) return this
+        val values = controls.values - ReasoningEffort.NONE
+        if (values.isEmpty()) return this
+        return controls.copy(values = values, mandatory = true)
+    }
+    val values = declared.efforts.toMutableSet()
+    // «Авто» — режим, объявленный формой ручки; каталоги его не перечисляют.
+    if (controls != null && ReasoningEffort.AUTO in controls.values) values += ReasoningEffort.AUTO
+    if (mandatory) values -= ReasoningEffort.NONE
+    if (values.none { it != ReasoningEffort.AUTO }) return ReasoningCapability.None
+    val default = controls?.default?.takeIf { it in values } ?: nearestDefault(values)
+    return ReasoningCapability.Controls(
+        values = values,
+        default = default,
+        dialect = controls?.dialect ?: WireDialect.EFFORT,
+        mandatory = mandatory,
+        overrides = controls?.overrides.orEmpty(),
+        budget = controls?.budget,
+    )
+}
+
+/**
+ * Штатный уровень для нового словаря: ближайший к прежнему дефолту по шкале
+ * (при равенстве расстояний — более сильный, как в [resolveEffort]); если
+ * прежнего нет — середина объявленного словаря.
+ */
+private fun nearestDefault(values: Set<ReasoningEffort>): ReasoningEffort? {
+    val ladder = ReasoningEffort.LADDER.filter { it in values }
+    if (ladder.isEmpty()) return ReasoningEffort.AUTO.takeIf { it in values }
+    val anchor = ReasoningEffort.MEDIUM
+    return ladder.minWith(
+        compareBy<ReasoningEffort> { kotlin.math.abs(ReasoningEffort.rank(it) - ReasoningEffort.rank(anchor)) }
+            .thenByDescending { ReasoningEffort.rank(it) },
+    )
 }
 
 /** Результат перевода выбора пользователя на словарь конкретной модели. */

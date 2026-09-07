@@ -68,7 +68,11 @@ kotlin {
             implementation(libs.kotlinx.coroutinesTest)
         }
         jvmMain.dependencies {
+            implementation(libs.oshi.core)
             implementation(libs.ktor.clientCio)
+        }
+        jvmTest.dependencies {
+            implementation(compose.desktop.currentOs)
         }
         webMain.dependencies {
             implementation(libs.kotlinx.browser)

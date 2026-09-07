@@ -10,6 +10,37 @@ import kotlin.test.assertTrue
 class CodingRunRecorderTest {
 
     @Test
+    fun thinkingIsKeptAsTimelineStepAndInDraft() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.MessageStarted)
+        recorder.apply(CodingEvent.ThinkingDelta("Думаю: сначала прочитаю файл. "))
+        // Живой черновик показывает рассуждение ещё до фиксации в ленту.
+        assertTrue(recorder.draft(active = true).thinking.contains("сначала прочитаю файл"))
+
+        recorder.apply(CodingEvent.TextDelta("Готово."))
+        val timeline = recorder.timeline()
+        assertEquals(
+            listOf(CodingStepKind.THINKING, CodingStepKind.ANSWER),
+            timeline.map { it.kind },
+        )
+        assertEquals("Думаю: сначала прочитаю файл.", timeline[0].title)
+        // После фиксации живой хвост пуст: дублировать рассуждение в панели не нужно.
+        assertEquals("", recorder.draft(active = true).thinking)
+    }
+
+    @Test
+    fun finalThinkingOverridesDeltasButStaysBeforeAnswer() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.ThinkingDelta("черновик мысли"))
+        recorder.apply(CodingEvent.FinalThinking("полная мысль из message_end"))
+        recorder.apply(CodingEvent.FinalText("Ответ"))
+        recorder.apply(CodingEvent.AgentEnd)
+        val kinds = recorder.timeline().map { it.kind }
+        assertEquals(listOf(CodingStepKind.THINKING, CodingStepKind.ANSWER), kinds)
+        assertEquals("полная мысль из message_end", recorder.timeline()[0].title)
+    }
+
+    @Test
     fun timelineKeepsChronologicalOrder() {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.TextDelta("Сейчас посмотрю файл. "))

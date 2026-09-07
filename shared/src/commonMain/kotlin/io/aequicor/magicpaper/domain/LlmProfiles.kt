@@ -93,12 +93,28 @@ data class LlmProfile(
      * поэтому профиль, где ничего не меняли, остаётся одним значением.
      */
     val effortOverrides: Map<String, EffortSelection> = emptyMap(),
+    /**
+     * Что провайдер сам объявил об уровнях модели (из его `/models`). Храним,
+     * чтобы ручка усилия показывала словарь модели и между запросами каталога:
+     * эвристика по имени — только запасной вариант.
+     */
+    val modelReasoning: Map<String, DeclaredReasoning> = emptyMap(),
     val advanced: AdvancedLlmOptions = AdvancedLlmOptions(),
     /** Когда профиль создан; 0 — наследие ранних версий. */
     val createdAt: Long = 0,
 ) {
     val configured: Boolean get() = modelId.isNotBlank() && baseUrl.isNotBlank()
     val codingConfigured: Boolean get() = codingModelId.isNotBlank() && baseUrl.isNotBlank()
+
+    /** Модель кодинг-контура: своя, если отмечена, иначе общая модель профиля. */
+    val codingModel: String get() = codingModelId.ifBlank { modelId }
+
+    /**
+     * Профиль для кодинг-сессий: в контуре пи модель берётся из [codingModelId],
+     * чтобы выбор в чате и выбор для агента непересекались. Без своей модели
+     * профиль уходит как есть.
+     */
+    fun forCoding(): LlmProfile = if (codingModelId.isBlank()) this else copy(modelId = codingModelId)
 
     /** Короткая подпись для чипа в чате: «Ollama (локально) · llama3.2». */
     val shortLabel: String get() = if (modelId.isBlank()) name else "$name · $modelId"
@@ -136,6 +152,13 @@ data class LlmProfile(
         }
     }
 
+    /** Запомнить объявление провайдера о модели (пустое объявление не хранит). */
+    fun withDeclaredReasoning(modelId: String, declared: DeclaredReasoning?): LlmProfile {
+        val key = modelId.trim()
+        if (key.isEmpty() || declared == null) return this
+        return copy(modelReasoning = modelReasoning + (key to declared))
+    }
+
     /** Выбор усилия для модели: персональная настройка, иначе профильная по умолчанию. */
     fun effortSelectionFor(modelId: String = this.modelId): EffortSelection =
         effortOverrides[modelId.trim()] ?: effort
@@ -146,13 +169,13 @@ data class LlmProfile(
         modelId: String = this.modelId,
     ): ResolvedEffort = capability.resolveEffort(effortSelectionFor(modelId))
 
-    /** Подпись для UI: «умолч», «ср», а при подмене уровня — «х-выс→выс». */
+    /** Подпись для UI: «default», «medium», а при подмене уровня — «xhigh→high». */
     fun effortLabel(
         capability: ReasoningCapability,
         modelId: String = this.modelId,
     ): String {
         val resolved = resolveEffort(capability, modelId)
-        val shown = resolved.level?.shortLabel ?: "умолч"
+        val shown = resolved.level?.shortLabel ?: EffortSelection.DEFAULT_LABEL
         return if (resolved.clamped) "${resolved.requested?.shortLabel ?: shown}→$shown" else shown
     }
 

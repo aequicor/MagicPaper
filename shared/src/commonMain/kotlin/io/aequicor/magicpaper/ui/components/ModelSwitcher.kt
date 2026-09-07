@@ -203,20 +203,22 @@ internal fun ProfileRow(
 /**
  * Избранные модели выбранного профиля: именно этот список показывается при выборе модели.
  * Тап — выбрать модель (и сам профиль, если выбран другой).
+ * [currentModel] — какой модели ставить маркер (в кодинг-контуре это [LlmProfile.codingModel]).
  */
 @Composable
 internal fun FavoriteModelsSection(
     profile: LlmProfile,
     onPick: (String) -> Unit,
     onEditSource: () -> Unit,
+    currentModel: String = profile.modelId,
 ) {
     // Текущая модель всегда видна, даже если её забыли добавить в избранное.
-    val models = if (profile.modelId.isBlank()) {
+    val models = if (currentModel.isBlank()) {
         profile.favoriteModels
-    } else if (profile.modelId in profile.favoriteModels) {
+    } else if (currentModel in profile.favoriteModels) {
         profile.favoriteModels
     } else {
-        listOf(profile.modelId) + profile.favoriteModels
+        listOf(currentModel) + profile.favoriteModels
     }
     if (models.isEmpty()) {
         Text(
@@ -228,7 +230,7 @@ internal fun FavoriteModelsSection(
         return
     }
     models.forEach { modelId ->
-        FavoriteModelRow(modelId = modelId, selected = modelId == profile.modelId, onClick = { onPick(modelId) })
+        FavoriteModelRow(modelId = modelId, selected = modelId == currentModel, onClick = { onPick(modelId) })
     }
     if (profile.favoriteModels.isEmpty()) {
         Text(

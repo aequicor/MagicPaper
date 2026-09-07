@@ -470,6 +470,22 @@ class MagicPaperViewModel(
         }
     }
 
+    /**
+     * Быстрая смена модели кодинг-контура профиля — выбор в переключателе
+     * кодинг-сессии; чатную модель по умолчанию не трогает.
+     */
+    fun setProfileCodingModel(id: String, modelId: String) {
+        if (modelId.isBlank()) return
+        scope.launch {
+            val profile = profileRepo.load().firstOrNull { it.id == id } ?: return@launch
+            profileRepo.save(profile.copy(codingModelId = modelId))
+            _state.update {
+                val updated = it.llmProfiles.map { p -> if (p.id == id) p.copy(codingModelId = modelId) else p }
+                it.copy(llmProfiles = updated, notice = "Модель агента: $modelId.")
+            }
+        }
+    }
+
     /** Открыт/закрыт ли переключатель модели в чате. */
     fun toggleModelSwitcher(open: Boolean) = _state.update { it.copy(modelSwitcherOpen = open) }
 

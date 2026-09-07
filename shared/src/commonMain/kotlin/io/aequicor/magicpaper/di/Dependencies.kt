@@ -94,6 +94,9 @@ internal fun buildDependencies(
     val modelDirectory = RoutingModelDirectory(
         mapOf(
             ProviderType.OPENAI_COMPATIBLE to OpenAiModelDirectory(client, json),
+            // OpenRouter — тот же OpenAI-совместимый /models, но с объявлениями
+            // об уровнях мышления (supported_parameters / reasoning).
+            ProviderType.OPENROUTER to OpenAiModelDirectory(client, json),
             ProviderType.ANTHROPIC to AnthropicModelDirectory(client, json),
             ProviderType.GOOGLE to GoogleModelDirectory(client, json),
         )

@@ -1,17 +1,22 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.util.TextSimilarity
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Планировщик: превращает цель в цепочку мэилстоунов и закрепляет за каждым
- * оптимального агента. Два пути (как у [SkillEducator]):
+ * Планировщик: превращает цель в график мэилстоунов (связанные шаги с
+ * зависимостями и параллельными ветвями) и закрепляет за каждого оптимального
+ * агента с оптимальной моделью. Два пути (как у [SkillEducator]):
  *  1. модель подключена — модель разбивает цель на шаги;
- *  2. модели нет — эвристический одношаговый план, помеченный «без модели».
+ *  2. модели нет (или все попытки сорвались) — эвристический одношаговый план,
+ *     честно помеченный причиной сбоя.
  * Имена агентов, предложенные моделью, сопоставляются с реальными профилями
  * по косинусной близости ([AgentMatcher]); несовпавшие получают лучшего из
- * свободных кандидатов.
+ * свободных кандидатов. Без ответа планировщика compose пробует других
+ * настроенных агентов — молчаливый откат в «один шаг» был главным источником
+ * жалоб на планы.
  */
 class PlanComposer(
     private val gateway: LlmGateway,
@@ -19,7 +24,17 @@ class PlanComposer(
 ) {
 
     @Serializable
-    private data class RawMilestone(val title: String = "", val description: String = "", val agent: String = "")
+    private data class RawMilestone(
+        val title: String = "",
+        val description: String = "",
+        val agent: String = "",
+        val model: String = "",
+        /** Номера предшественников (с 1); оба написания, что любят модели. */
+        val depends: List<Int> = emptyList(),
+        @SerialName("depends_on") val dependsOn: List<Int> = emptyList(),
+    ) {
+        val dependsAll: List<Int> get() = depends + dependsOn
+    }
 
     /**
      * Составляет черновик плана. [dossiers] — досье моделей (подсказка для модели,
@@ -31,9 +46,22 @@ class PlanComposer(
         dossiers: List<ModelDossier>,
         candidates: List<LlmProfile>,
     ): PlanDraft {
-        if (profile == null || !profile.configured || goal.isBlank()) return heuristicDraft(goal)
-        return runCatching { modelDraft(goal, profile, dossiers, candidates) }
-            .getOrElse { heuristicDraft(goal) }
+        if (goal.isBlank()) return heuristicDraft(goal)
+        // Порядок планировщиков: разрешённый judge, затем остальные настроенные —
+        // сбой одного (таймаут, пустой ответ, неподдерживаемый транспорт) не должен
+        // превращать план в молчаливую одну веху.
+        val planners = buildList {
+            profile?.takeIf { it.configured }?.let { add(it) }
+            candidates.filter { it.configured }.forEach { p -> if (none { it.id == p.id }) add(p) }
+        }
+        if (planners.isEmpty()) return heuristicDraft(goal, "ни один источник не настроен")
+        var lastError: String? = null
+        for (planner in planners) {
+            val draft = runCatching { modelDraft(goal, planner, dossiers, candidates) }
+            draft.getOrNull()?.let { return it }
+            lastError = draft.exceptionOrNull()?.message
+        }
+        return heuristicDraft(goal, lastError)
     }
 
     private suspend fun modelDraft(
@@ -43,7 +71,8 @@ class PlanComposer(
         candidates: List<LlmProfile>,
     ): PlanDraft {
         val roster = buildString {
-            appendLine("Доступные агенты (профили) и их сильные стороны:")
+            appendLine("Доступные агенты (профили) и их сильные стороны;")
+            appendLine("для шага можно указать оптимальную модель из списка моделей агента:")
             val usable = candidates.filter { it.configured }
             if (usable.isEmpty()) {
                 appendLine("- (нет настроенных профилей)")
@@ -52,7 +81,8 @@ class PlanComposer(
                 val dossier = dossiers.firstOrNull { it.profileId == p.id }
                 val strengths = dossier?.strengths?.takeIf { it.isNotBlank() } ?: "описания нет"
                 val rating = dossier?.rating?.takeIf { it > 0 }?.let { " · сила $it/5" } ?: ""
-                appendLine("- ${p.name} (${p.shortLabel}): $strengths$rating")
+                val models = p.displayModels.joinToString(", ").ifBlank { "избранных моделей нет" }
+                appendLine("- ${p.name}$rating: $strengths | модели: $models")
             }
         }
         val messages = listOf(
@@ -62,13 +92,21 @@ class PlanComposer(
         )
         val raw = gateway.complete(profile, messages)
         val steps = parseSteps(raw)
-        require(steps.isNotEmpty()) { "Модель вернула пустой план" }
-        val bound = steps.map { step ->
+        require(steps.isNotEmpty()) { "модель вернула пустой план" }
+        val bound = steps.mapIndexed { index, step ->
             MilestoneDraft(
                 title = step.title.trim(),
                 description = step.description.trim(),
                 agent = resolveAgent(step.agent, dossiers, candidates),
+                model = step.model.trim(),
+                // Номера предшественников: только корректные (строго раньше текущего шага).
+                depends = step.dependsAll.filter { it in 1..<index + 1 }.distinct(),
             )
+        }
+        // Одна веха от модели на объёмную цель — явный отказ: иначе «оптимальный
+        // план» неотличим от молчаливого фолбэка, и дефект «всегда один шаг» не поймать.
+        require(bound.size > 1 || goal.trim().length < 40) {
+            "модель предложила один шаг на всю цель"
         }
         return PlanDraft(milestones = bound)
     }
@@ -89,21 +127,57 @@ class PlanComposer(
         return ""
     }
 
-    /** Вырезаем первый JSON-массив из ответа (модель может обернуть его в ```-блок). */
+    /** Вырезаем JSON-массив шагов из ответа: перебираем сбалансированные скобки —
+     * модель может обёрнуть его в ```-блок или обставить пояснениями. */
     private fun parseSteps(raw: String): List<RawMilestone> {
-        val start = raw.indexOf('[')
-        val end = raw.lastIndexOf(']')
-        require(start >= 0 && end > start) { "В ответе модели нет JSON-массива" }
-        return json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(RawMilestone.serializer()), raw.substring(start, end + 1))
-            .filter { it.title.isNotBlank() }
+        val serializer = kotlinx.serialization.builtins.ListSerializer(RawMilestone.serializer())
+        var start = raw.indexOf('[')
+        while (start >= 0) {
+            val end = matchingBracket(raw, start)
+            if (end != null) {
+                val steps = runCatching {
+                    json.decodeFromString(serializer, raw.substring(start, end + 1))
+                }.getOrNull()?.filter { it.title.isNotBlank() }
+                if (!steps.isNullOrEmpty()) return steps
+                start = end
+            }
+            start = raw.indexOf('[', start + 1)
+        }
+        return emptyList()
     }
 
-    /** Эвристический план: одна веха на всю цель, честно помечено. */
-    private fun heuristicDraft(goal: String): PlanDraft {
+    /** Парный `]` для `[` на позиции [start]; null — массив не закрыт. */
+    private fun matchingBracket(text: String, start: Int): Int? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until text.length) {
+            val c = text[i]
+            when {
+                inString && escaped -> escaped = false
+                inString && c == '\\' -> escaped = true
+                inString && c == '"' -> inString = false
+                !inString && c == '"' -> inString = true
+                !inString && c == '[' -> depth++
+                !inString && c == ']' -> {
+                    depth--
+                    if (depth == 0) return i
+                }
+            }
+        }
+        return null
+    }
+
+    /** Эвристический план: одна веха на всю цель, честно помечено — с причиной сбоя. */
+    private fun heuristicDraft(goal: String, reason: String? = null): PlanDraft {
         val task = goal.trim().ifBlank { "выполнить задачу" }
         return PlanDraft(
             milestones = listOf(MilestoneDraft(title = task, description = "Выполни задачу целиком: $task")),
-            note = "План составлен без модели: один шаг на всю цель. При подключённом источнике план разбивается на шаги.",
+            note = buildString {
+                append("План составлен без модели: один шаг на всю цель")
+                if (!reason.isNullOrBlank()) append(" — сбой планировщика: $reason")
+                append(". При рабочем источнике план разбивается на шаги с зависимостями.")
+            },
         )
     }
 
@@ -111,12 +185,20 @@ class PlanComposer(
         val DEFAULT_JSON = Json { ignoreUnknownKeys = true }
 
         val COMPOSE_PROMPT = """
-            Ты — планировщик инженерной задачи. Разбей цель на 2–6 последовательных
-            мэилстоунов: каждый — проверяемый результат (файл, работающая функция, тест).
-            Для каждого шага выбери оптимального агента из списка доступных: того, чьи
-            сильные стороны лучше всего подходят шагу. Ответь строго одним JSON-массивом
-            без пояснений: [{"title": "короткое имя шага", "description": "что сделать и
-            как проверить результат", "agent": "имя агента из списка или пустая строка"}].
+            Ты — планировщик инженерной задачи. Разбей цель на ГРАФИК из 2–6
+            мэилстоунов: каждый — проверяемый результат (файл, работающая функция,
+            тест). Никогда не отдавай весь план одним шагом, кроме тривиально
+            коротких целей.
+            Шаги, которые можно выполнять независимо, не связывай — они образуют
+            параллельные ветви; зависимый шаг перечисляет номера предшественников
+            в поле depends (нумерация шагов с 1).
+            Для каждого шага выбери оптимальных агента и модель из списка
+            доступных: того, чьи сильные стороны лучше всего подходят шагу.
+            Ответь строго одним JSON-массивом без пояснений:
+            [{"title": "короткое имя шага", "description": "что сделать и как
+            проверить результат", "agent": "имя агента из списка или пустая
+            строка", "model": "имя модели из списка моделей агента или пустая
+            строка", "depends": [номера предшественников]}].
         """.trimIndent()
     }
 }

@@ -97,9 +97,17 @@ object PiEventParser {
 
     private fun parseDelta(obj: JsonObject): CodingEvent? {
         val event = obj["assistantMessageEvent"]?.jsonObject ?: return null
-        if (event.type() != "text_delta") return null
-        val delta = event.primitive("delta").orEmpty()
-        return if (delta.isEmpty()) null else CodingEvent.TextDelta(delta)
+        return when (event.type()) {
+            "text_delta" -> event.primitive("delta")?.let {
+                if (it.isEmpty()) null else CodingEvent.TextDelta(it)
+            }
+            // Дельта рассуждения модели: тот же поток, что и текст ответа,
+            // но в отдельном блоке thinking — показываем как «о чём думает агент».
+            "thinking_delta" -> event.primitive("delta")?.let {
+                if (it.isEmpty()) null else CodingEvent.ThinkingDelta(it)
+            }
+            else -> null
+        }
     }
 
     private fun parseMessageEnd(obj: JsonObject): List<CodingEvent> {
@@ -117,6 +125,15 @@ object PiEventParser {
             }
             ?.joinToString("")
             .orEmpty()
+        // Рассуждение модели живёт в блоках thinking: авторитетная полная версия
+        // (дельты могли и не дойти — например, в нестримящемся режиме).
+        val thinking = blocks
+            ?.mapNotNull { block ->
+                val blockObj = runCatching { block.jsonObject }.getOrNull() ?: return@mapNotNull null
+                if (blockObj.type() == "thinking") blockObj.primitive("thinking") else null
+            }
+            ?.joinToString("\n\n")
+            .orEmpty()
         // Намерение модели видно и по tool-вызовам: «пустой» ход с правкой файла —
         // не пустой ход, автопродолжать его не за чем.
         val hasToolCalls = blocks?.any { block ->
@@ -124,7 +141,7 @@ object PiEventParser {
             type == "toolCall" || type == "tool_use" || type == "tool_call"
         } ?: false
         val truncated = stopReason == "length"
-        return when {
+        val events = when {
             // Потолок вывода сгорел, не дойдя до тела сообщения (обычно — в
             // рассуждении). Раньше причина терялась здесь, и прогон выглядел как
             // «Агент завершился без ответа».
@@ -142,6 +159,12 @@ object PiEventParser {
                 listOf(CodingEvent.FinalText(text), CodingEvent.Notice(TRUNCATED_HEADLINE))
             text.isBlank() -> emptyList()
             else -> listOf(CodingEvent.FinalText(text))
+        }
+        // Рассуждение идёт перед телом сообщения: оно хронологически раньше текста.
+        return if (thinking.isNotBlank()) {
+            listOf(CodingEvent.FinalThinking(thinking)) + events
+        } else {
+            events
         }
     }
 

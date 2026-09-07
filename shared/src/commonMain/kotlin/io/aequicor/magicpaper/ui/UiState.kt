@@ -64,6 +64,20 @@ data class CodingUi(
             projectStatuses[projectId] ?: fallback
         }
     }
+
+    /** Сессии проекта (в состоянии лежат и фоновые сессии других проектов). */
+    fun sessionsOf(projectId: String): List<CodingSessionUi> =
+        sessions.filter { it.session.projectId == projectId }
+
+    /**
+     * Активная сессия проекта: выбранная либо первая, если id сбросился
+     * (пустое состояние, удаление). Нужна и левому меню (подсветка), и
+     * правой части (какой журнал показывать).
+     */
+    fun activeSessionIdOf(projectId: String): String? {
+        val own = sessionsOf(projectId)
+        return (own.firstOrNull { it.session.id == currentSessionId } ?: own.firstOrNull())?.session?.id
+    }
 }
 
 /** Вкладки кодинг-сессии. */

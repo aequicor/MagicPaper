@@ -71,4 +71,78 @@ class PlanComposerTest {
         val draft = composer.compose("цель", planner, dossiers = emptyList(), candidates = candidates)
         assertTrue(draft.note.contains("без модели"))
     }
+
+    /** Шлюз, у которого первый вызов падает, остальные отвечают заготовкой. */
+    private class FlakyFirstGateway(private val reply: String) : LlmGateway {
+        val tried = mutableListOf<String>()
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+            tried += profile.name
+            if (tried.size == 1) error("сервер молчит")
+            return reply
+        }
+    }
+
+    private val graphReply = """
+        [
+          {"title": "Каркас", "description": "d1", "agent": "Кодер", "model": "m-coder", "depends": []},
+          {"title": "Тесты", "description": "d2", "agent": "Кодер", "model": "m-coder", "depends_on": [1]},
+          {"title": "Доки", "description": "d3", "depends": [1, 9, 3, 1]}
+        ]
+    """.trimIndent()
+
+    @Test
+    fun graphStepsKeepModelAndDepends() = runTest {
+        val composer = PlanComposer(ScriptedGateway(graphReply))
+        val coder = LlmProfile(
+            id = "p-coder", name = "Кодер", baseUrl = "http://x/v1", modelId = "m",
+            favoriteModels = listOf("m-coder"),
+        )
+        val draft = composer.compose(
+            "цель",
+            coder,
+            dossiers = emptyList(),
+            candidates = listOf(coder, LlmProfile(id = "p-writer", name = "Писатель", baseUrl = "http://x/v1", modelId = "m")),
+        )
+        assertEquals(3, draft.milestones.size)
+        // Параллельная ветвь: без зависимостей.
+        assertEquals(emptyList(), draft.milestones[0].depends)
+        // Оба написания ключа зависимостей работают.
+        assertEquals(listOf(1), draft.milestones[1].depends)
+        assertEquals("m-coder", draft.milestones[1].model)
+        // Нумерация с 1: некорректные (в будущее, на себя, повторы) вычищены.
+        assertEquals(listOf(1), draft.milestones[2].depends)
+    }
+
+    @Test
+    fun secondPlannerRescuesWhenFirstFails() = runTest {
+        val gateway = FlakyFirstGateway(graphReply)
+        val composer = PlanComposer(gateway)
+        val brokenJudge = LlmProfile(id = "judge", name = "Судья", baseUrl = "http://x/v1", modelId = "m")
+        val draft = composer.compose("цель", brokenJudge, dossiers = emptyList(), candidates = candidates)
+        // Первый планировщик сгорел — compose сам перешёл на настроенного кандидата.
+        assertEquals(2, gateway.tried.size)
+        assertEquals(3, draft.milestones.size)
+        assertTrue(draft.note.isBlank())
+    }
+
+    @Test
+    fun singleStepOnBigGoalRejected() = runTest {
+        val gateway = ScriptedGateway("""[{"title": "Всё сразу", "description": "d"}]""")
+        val composer = PlanComposer(gateway)
+        val bigGoal = "добавить полноценную авторизацию с тестами, документацией и миграциями базы данных"
+        val draft = composer.compose(bigGoal, candidates.first(), dossiers = emptyList(), candidates = candidates)
+        // Модель отдалась одной вехой на объёмную цель — это фолбэк с честной причиной, а не «оптимальный план».
+        assertEquals(1, draft.milestones.size)
+        assertTrue(draft.note.contains("без модели"))
+        assertTrue(draft.note.contains("один шаг"))
+    }
+
+    @Test
+    fun wrapperObjectReplyParsed() = runTest {
+        val reply = "План такой:\n```json\n{\"milestones\": $graphReply}\n```\nУдачи!"
+        val composer = PlanComposer(ScriptedGateway(reply))
+        val draft = composer.compose("цель", candidates.first(), dossiers = emptyList(), candidates = candidates)
+        assertEquals(3, draft.milestones.size)
+        assertEquals("Каркас", draft.milestones[0].title)
+    }
 }

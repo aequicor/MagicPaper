@@ -1,10 +1,12 @@
 package io.aequicor.magicpaper.data.llm
 
+import io.aequicor.magicpaper.domain.DeclaredReasoning
 import io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ModelDirectory
 import io.aequicor.magicpaper.domain.ProviderType
+import io.aequicor.magicpaper.domain.ReasoningEffort
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -15,6 +17,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /** Общий каркас: GET с таймаутом из профиля и проверкой статуса. */
@@ -42,6 +45,64 @@ internal fun parseIdList(json: Json, body: String, arrayKey: String): List<Strin
     }
 }.getOrElse { error("Не удалось разобрать список моделей: ${it.message}") }
 
+/**
+ * Объявления провайдера об управлении мышлением: id модели → факт из его
+ * каталога. Читаем схему OpenRouter-подобных каталогов:
+ *  - `reasoning.supported_efforts` (также `efforts`/`supportedEfforts`) — словарь уровней;
+ *  - `reasoning.mandatory` — мышление нельзя выключить;
+ *  - `supported_parameters` — перечень органов модели: есть `reasoning` — ручка есть,
+ *    а вот перечень без неё означает «точно нет» (так же, как у Hermes).
+ *
+ * Серверы, которые отдают только `id` (Ollama, LM Studio), объявлений не дают —
+ * для них остаётся эвристика [ModelDefaults]; догадываться «нет ручки» по
+ * отсутствию поля нельзя.
+ */
+internal fun parseDeclaredReasoning(
+    json: Json,
+    body: String,
+    arrayKey: String = "data",
+): Map<String, DeclaredReasoning> = runCatching {
+    val root = json.parseToJsonElement(body)
+    val array = (root as? JsonObject)?.get(arrayKey) as? JsonArray ?: root as? JsonArray
+        ?: return@runCatching emptyMap()
+    array.mapNotNull { item ->
+        val entry = item as? JsonObject ?: return@mapNotNull null
+        val id = (entry["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        id to (declaredOf(entry) ?: return@mapNotNull null)
+    }.toMap()
+}.getOrDefault(emptyMap())
+
+/** Факт о конкретной записи каталога; null — запись ничего не объявляет. */
+private fun declaredOf(entry: JsonObject): DeclaredReasoning? {
+    val reasoning = entry["reasoning"] as? JsonObject
+    val efforts = reasoning?.efforts().orEmpty()
+    val mandatory = (reasoning?.get("mandatory") as? JsonPrimitive)?.booleanOrNull
+    val parameters = (entry["supported_parameters"] as? JsonArray)
+        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.lowercase() }
+    val parameterSaysYes = parameters?.any { it == "reasoning" || it.startsWith("reasoning.") || it == "reasoning_effort" }
+    return when {
+        efforts.isNotEmpty() || mandatory != null -> DeclaredReasoning(
+            efforts = efforts,
+            mandatory = mandatory,
+        )
+        parameterSaysYes == true -> DeclaredReasoning()
+        // Перечень органов есть, reasoning в нём нет — каталог знает модель точно.
+        !parameters.isNullOrEmpty() -> DeclaredReasoning.None
+        else -> null
+    }
+}
+
+/** Объявленные уровни: имена приводим к нашему словарю, незнакомые не выдумываем. */
+private fun JsonObject.efforts(): Set<ReasoningEffort> {
+    val array = listOf("supported_efforts", "supportedEfforts", "efforts", "levels")
+        .firstNotNullOfOrNull { key -> this[key] as? JsonArray }
+        ?: return emptySet()
+    return array.mapNotNull { item ->
+        (item as? JsonPrimitive)?.contentOrNull?.let { ReasoningEffort.fromWire(it) }
+    }.toSet()
+}
+
 /** Список моделей у OpenAI-совместимого сервера: GET {base}/models. */
 class OpenAiModelDirectory(
     private val client: HttpClient,
@@ -55,7 +116,11 @@ class OpenAiModelDirectory(
             if (profile.apiKey.isNotBlank()) put("Authorization", "Bearer " + profile.apiKey)
         }
         val body = client.getText(url, headers, profile.advanced.timeoutSeconds)
-        return ModelDefaults.discover(profile.provider, parseIdList(json, body, "data"))
+        return ModelDefaults.discover(
+            profile.provider,
+            parseIdList(json, body, "data"),
+            parseDeclaredReasoning(json, body, "data"),
+        )
     }
 }
 

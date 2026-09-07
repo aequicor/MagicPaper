@@ -148,16 +148,31 @@ class CodingPlanningPlugin(
             val current = draft ?: return
             val proj = project ?: return
             val now = Id.now()
-            // Закрепление оптимального агента: имя из плана → реальный профиль,
-            // иначе подбор по досье (близость шага к сильным сторонам + оценка).
-            val milestones = current.milestones.map { step ->
+            // Закрепление оптимального агента и модели: имя из плана → реальный профиль,
+            // иначе подбор по досье (близость шага к сильным сторонам + оценка);
+            // модель шага ищется среди избранных моделей закреплённого профиля.
+            val ids = current.milestones.map { Id.new() }
+            val milestones = current.milestones.mapIndexed { index, step ->
                 val named = profiles.firstOrNull { it.name == step.agent && it.configured }
                 val bound = named ?: AgentMatcher.best("${step.title} ${step.description}", dossiers, profiles)
+                val model = step.model.trim()
+                val modelId = when {
+                    bound == null || model.isBlank() -> ""
+                    model.equals(bound.modelId, ignoreCase = true) -> bound.modelId
+                    bound.displayModels.any { it.equals(model, ignoreCase = true) } ->
+                        bound.displayModels.first { it.equals(model, ignoreCase = true) }
+                    else -> ""
+                }
                 Milestone(
-                    id = Id.new(),
+                    id = ids[index],
                     title = step.title,
                     description = step.description,
                     agentProfileId = bound?.id.orEmpty(),
+                    agentModelId = modelId,
+                    // Номера предшественников черновика (с 1) → идентификаторы шагов.
+                    dependsOn = step.depends.mapNotNull { dep -> ids.getOrNull(dep - 1) }.filter {
+                        it != ids[index]
+                    },
                 )
             }
             scope.launch {
@@ -788,10 +803,24 @@ private fun DraftView(draft: PlanDraft, onApprove: () -> Unit, onDismiss: () -> 
                     )
                 }
                 if (step.agent.isNotBlank()) {
+                    val modelHint = step.model.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
                     Text(
-                        "оптимальный агент: ${step.agent}",
+                        "оптимальный агент: ${step.agent}$modelHint",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                if (step.depends.isNotEmpty()) {
+                    Text(
+                        "зависит от: ${step.depends.joinToString(", ")}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "параллельная ветвь (без зависимостей)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -850,26 +879,46 @@ private fun MilestoneRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Рёбра графика: чем питается этот шаг (параллельные ветви пустые).
+                val depTitles = milestone.dependsOn.mapNotNull { dep ->
+                    plan.milestones.firstOrNull { it.id == dep }?.title
+                }
+                if (depTitles.isNotEmpty()) {
+                    Text(
+                        "↓ зависит от: ${depTitles.joinToString(", ")}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box {
                 TextButton(onClick = { agentMenuOpen = true }, enabled = !running) {
                     Text(
-                        agent?.shortLabel ?: "агент не назначен",
+                        agent?.let {
+                            if (milestone.agentModelId.isNotBlank()) "${it.name} · ${milestone.agentModelId}" else it.shortLabel
+                        } ?: "агент не назначен",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (agent != null) scheme.primary else scheme.error,
                     )
                 }
                 DropdownMenu(expanded = agentMenuOpen, onDismissRequest = { agentMenuOpen = false }) {
+                    // Не провайдеры с дефолтной моделью, а избранные модели каждого источника;
+                    // без избранного остаётся одна строка с дефолтной моделью.
                     profiles.filter { it.configured }.forEach { p ->
-                        DropdownMenuItem(
-                            text = { Text(p.shortLabel) },
-                            onClick = {
-                                onMilestoneUpdate(plan, milestone.copy(agentProfileId = p.id))
-                                agentMenuOpen = false
-                            },
-                        )
+                        p.favoriteModels.ifEmpty { listOf(p.modelId) }.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text("${p.name} · $model") },
+                                onClick = {
+                                    onMilestoneUpdate(
+                                        plan,
+                                        milestone.copy(agentProfileId = p.id, agentModelId = model),
+                                    )
+                                    agentMenuOpen = false
+                                },
+                            )
+                        }
                     }
                 }
             }

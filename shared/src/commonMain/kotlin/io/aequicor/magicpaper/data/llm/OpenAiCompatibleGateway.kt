@@ -67,14 +67,18 @@ class OpenAiCompatibleGateway(
 
     private fun parseResponse(body: String): String = runCatching {
         val root = json.parseToJsonElement(body) as? JsonObject ?: error("Unexpected LLM response")
-        val content = (root["choices"] as? JsonArray)
+        val message = (root["choices"] as? JsonArray)
             ?.firstOrNull()
             ?.let { it as? JsonObject }
             ?.get("message")
             ?.let { it as? JsonObject }
-            ?.get("content")
-            ?.let { it as? JsonPrimitive }
-            ?.contentOrNull
-        content ?: error("Empty LLM response")
+            ?: error("Empty LLM response")
+        val content = (message["content"] as? JsonPrimitive)?.contentOrNull
+        // Модели-рассудители (o-серия, deepseek-r1 в некоторых шлюзах) кладут текст
+        // в reasoning_content, оставляя content пустым — без этого фолбэка план
+        // молча разваливался в одну веху.
+        content?.takeIf { it.isNotBlank() }
+            ?: (message["reasoning_content"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: error("Empty LLM response")
     }.getOrElse { error("Ошибка ответа модели: ${it.message}") }
 }

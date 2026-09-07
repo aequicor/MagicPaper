@@ -24,8 +24,9 @@ object ModelDefaults {
         provider: ProviderType,
         modelId: String,
         current: AdvancedLlmOptions = AdvancedLlmOptions(),
+        declared: DeclaredReasoning? = null,
     ): ModelRecommendation {
-        val capability = capability(provider, modelId)
+        val capability = capability(provider, modelId, declared)
         val controls = capability as? ReasoningCapability.Controls
         val effort = controls?.default?.let { EffortSelection.of(it) } ?: EffortSelection.Default
         val maxTokens = when {
@@ -44,26 +45,42 @@ object ModelDefaults {
         )
     }
 
-    /** Возможность модели по профилю (провайдер + активная модель). */
-    fun capability(profile: LlmProfile): ReasoningCapability =
-        capability(profile.provider, profile.modelId)
+    /**
+     * Возможность модели по профилю: сначала то, что провайдер объявил сам
+     * ([LlmProfile.modelReasoning]), затем каталог и эвристика по имени.
+     */
+    fun capability(profile: LlmProfile, modelId: String = profile.modelId): ReasoningCapability =
+        capability(profile.provider, modelId, profile.modelReasoning[modelId.trim()])
 
     /** Возможность модели по провайдеру и её идентификатору. */
-    fun capability(provider: ProviderType, modelId: String): ReasoningCapability {
+    fun capability(
+        provider: ProviderType,
+        modelId: String,
+        declared: DeclaredReasoning? = null,
+    ): ReasoningCapability {
         val id = modelId.trim().lowercase()
         if (id.isEmpty()) return ReasoningCapability.None
-        return when (provider) {
+        // Объявление провайдера — факт о конкретной модели, оно важнее догадок.
+        if (declared != null && !declared.supports) return ReasoningCapability.None
+        return declared?.let { heuristic(provider, id).withDeclared(it) } ?: heuristic(provider, id)
+    }
+
+    private fun heuristic(provider: ProviderType, id: String): ReasoningCapability =
+        when (provider) {
             ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER -> openAiCapability(id)
             ProviderType.ANTHROPIC -> anthropicCapability(id)
             ProviderType.GOOGLE -> googleCapability(id)
         }
-    }
 
     /** Есть ли у модели нативная ручка усилия — спрашивают транспорты и UI. */
-    fun supportsEffort(provider: ProviderType, modelId: String): Boolean =
-        capability(provider, modelId).supportsEffort
+    fun supportsEffort(
+        provider: ProviderType,
+        modelId: String,
+        declared: DeclaredReasoning? = null,
+    ): Boolean = capability(provider, modelId, declared).supportsEffort
 
-    fun supportsEffort(profile: LlmProfile): Boolean = supportsEffort(profile.provider, profile.modelId)
+    fun supportsEffort(profile: LlmProfile, modelId: String = profile.modelId): Boolean =
+        capability(profile, modelId).supportsEffort
 
     /**
      * Модель из живого каталога провайдера: что нашли + что рекомендуем.
@@ -73,16 +90,31 @@ object ModelDefaults {
         val id: String,
         val reasoning: ReasoningCapability = ReasoningCapability.None,
         val recommendation: ModelRecommendation,
+        /** Что сервер объявил сам; null — объявлений не было, работаем по эвристике. */
+        val declared: DeclaredReasoning? = null,
     ) {
         val supportsEffort: Boolean get() = reasoning.supportsEffort
+
+        /** Уровни, которые показывает ручка: только объявленные моделью. */
+        val levels: List<ReasoningEffort> get() = reasoning.selectableLevels
     }
 
-    fun discover(provider: ProviderType, ids: List<String>): List<DiscoveredModel> =
+    /**
+     * Разбор каталога провайдера. [declared] — объявления из ответа сервера
+     * (ключ — id модели): они перевешивают эвристику, потому что это факт.
+     */
+    fun discover(
+        provider: ProviderType,
+        ids: List<String>,
+        declared: Map<String, DeclaredReasoning> = emptyMap(),
+    ): List<DiscoveredModel> =
         ids.filter { it.isNotBlank() }.distinct().sorted().map { id ->
+            val fact = declared[id] ?: declared[id.trim().lowercase()]
             DiscoveredModel(
                 id = id,
-                reasoning = capability(provider, id),
-                recommendation = recommendation(provider, id),
+                reasoning = capability(provider, id, fact),
+                recommendation = recommendation(provider, id, declared = fact),
+                declared = fact,
             )
         }
 

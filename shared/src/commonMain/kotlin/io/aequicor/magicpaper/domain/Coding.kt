@@ -99,12 +99,16 @@ data class CodingDraft(
     val active: Boolean = false,
     /** Прогон запущен, но модель ещё не начала отвечать (или ждёт подтверждения). */
     val awaitingModel: Boolean = false,
+    /** Живой текст текущего рассуждения модели (ещё не зафиксированный в ленту). */
+    val thinking: String = "",
 )
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
 class CodingRunRecorder {
     /** Накопленный текст текущего (ещё не зафиксированного в ленту) фрагмента ответа. */
     private val text = StringBuilder()
+    /** Накопленный текст рассуждения модели (thinking) до его фиксации в ленту. */
+    private val thinking = StringBuilder()
     private val steps = mutableListOf<CodingStep>()
     private var failed: String? = null
 
@@ -118,10 +122,28 @@ class CodingRunRecorder {
             is CodingEvent.MessageStarted -> awaiting = false
             is CodingEvent.TextDelta -> {
                 awaiting = false
+                // Ответ начался — рассуждение до него остаётся в прошлом.
+                flushThinking()
                 text.append(event.delta)
+            }
+            is CodingEvent.ThinkingDelta -> {
+                awaiting = false
+                // Мысль пришла раньше текста: зафиксированный ответ остаётся в ленте.
+                flushText()
+                thinking.append(event.delta)
+            }
+            is CodingEvent.FinalThinking -> {
+                awaiting = false
+                flushText()
+                // message_end авторитетнее потоковых дельт рассуждения.
+                if (event.text.isNotBlank()) {
+                    thinking.setLength(0)
+                    thinking.append(event.text)
+                }
             }
             is CodingEvent.FinalText -> {
                 awaiting = false
+                flushThinking()
                 // message_end авторитетнее потоковых дельт текущего сообщения ассистента.
                 if (event.text.isNotBlank()) {
                     text.setLength(0)
@@ -131,6 +153,7 @@ class CodingRunRecorder {
             is CodingEvent.ToolStarted -> {
                 awaiting = false
                 // Перед действием фиксируем текст: лента остаётся хронологичной.
+                flushThinking()
                 flushText()
                 steps += CodingStep(
                     kind = if (event.isExec) CodingStepKind.EXEC else CodingStepKind.TOOL,
@@ -174,6 +197,7 @@ class CodingRunRecorder {
             }
             is CodingEvent.Failed -> {
                 awaiting = false
+                flushThinking()
                 flushText()
                 failed = event.message
                 steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false)
@@ -182,10 +206,13 @@ class CodingRunRecorder {
             is CodingEvent.OutputTruncated -> {
                 // Модель отвечала, но не успела: фиксируем фазу и поясняем в ленте.
                 awaiting = false
+                flushThinking()
+                flushText()
                 steps += CodingStep(kind = CodingStepKind.INFO, title = event.summary, ok = false)
             }
             is CodingEvent.AgentEnd -> {
                 awaiting = false
+                flushThinking()
                 flushText()
             }
             is CodingEvent.Finished -> return true
@@ -200,10 +227,21 @@ class CodingRunRecorder {
         text.setLength(0)
     }
 
-    /** Лента прогона: зафиксированные шаги плюс живой текст в конце. */
+    /** Переносит накопленное рассуждение в ленту как шаг THINKING. */
+    private fun flushThinking() {
+        if (thinking.isBlank()) return
+        steps += CodingStep(kind = CodingStepKind.THINKING, title = thinking.toString().trim())
+        thinking.setLength(0)
+    }
+
+    /** Лента прогона: зафиксированные шаги плюс живые рассуждение и текст в конце. */
     fun timeline(): List<CodingStep> {
         val snapshot = steps.toList()
-        return if (text.isNotBlank()) snapshot + CodingStep(CodingStepKind.ANSWER, text.toString()) else snapshot
+        val live = buildList {
+            if (thinking.isNotBlank()) add(CodingStep(CodingStepKind.THINKING, thinking.toString()))
+            if (text.isNotBlank()) add(CodingStep(CodingStepKind.ANSWER, text.toString()))
+        }
+        return snapshot + live
     }
 
     fun draft(active: Boolean): CodingDraft =
@@ -212,9 +250,11 @@ class CodingRunRecorder {
             failedMessage = failed,
             active = active,
             awaitingModel = active && awaiting,
+            thinking = thinking.toString(),
         )
 
     fun message(id: String, createdAt: Long): CodingMessage {
+        flushThinking()
         flushText()
         val answerText = steps.filter { it.kind == CodingStepKind.ANSWER }
             .joinToString("\n\n") { it.title }
@@ -236,6 +276,7 @@ class CodingRunRecorder {
 val CodingStep.displayLine: String
     get() = when {
         kind == CodingStepKind.ANSWER -> title
+        kind == CodingStepKind.THINKING -> "💭 ${title.lineSequence().firstOrNull().orEmpty().take(90)}"
         !ok -> "$title → ошибка"
         result.isNotBlank() -> "$title · ${result.lineSequence().firstOrNull().orEmpty().take(90)}"
         else -> title
@@ -257,6 +298,12 @@ sealed interface CodingEvent {
 
     /** Живой фрагмент текста ответа. */
     data class TextDelta(val delta: String) : CodingEvent
+
+    /** Живой фрагмент рассуждения модели (thinking-дельта протокола пи). */
+    data class ThinkingDelta(val delta: String) : CodingEvent
+
+    /** Итоговый текст рассуждения (авторитетный, из блоков thinking сообщения message_end). */
+    data class FinalThinking(val text: String) : CodingEvent
 
     /** Итоговый текст ассистента (авторитетный, из события message_end). */
     data class FinalText(val text: String) : CodingEvent
@@ -329,9 +376,9 @@ sealed interface CodingEvent {
     data object Finished : CodingEvent
 }
 
-/** Роль строки ленты прогона: действие агента, его текст или ошибка. */
+/** Роль строки ленты прогона: действие агента, его текст, рассуждение или ошибка. */
 @Serializable
-enum class CodingStepKind { TOOL, EXEC, ANSWER, ERROR, INFO }
+enum class CodingStepKind { TOOL, EXEC, ANSWER, THINKING, ERROR, INFO }
 
 /** Строка ленты прогона кодинг-агента (chronological timeline). */
 @Serializable

@@ -44,6 +44,7 @@ import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
@@ -217,7 +218,11 @@ private fun ModelChip(
                 color = MaterialTheme.colorScheme.error,
             )
         } else {
-            val effortGlyph = resolved.effortSelectionFor(resolved.modelId).shortLabel
+            // Подпись с учётом словаря модели: при подмене уровня видно «х-выс→выс».
+            val effortGlyph = resolved.effortLabel(
+                ModelDefaults.capability(resolved),
+                resolved.modelId,
+            )
             Text(
                 "${if (overridden) "◌ " else ""}✦ ${resolved.shortLabel} · $effortGlyph ▾",
                 style = MaterialTheme.typography.bodyMedium,

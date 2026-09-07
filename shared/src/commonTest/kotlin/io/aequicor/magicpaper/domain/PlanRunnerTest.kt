@@ -15,6 +15,7 @@ class PlanRunnerTest {
         private val default: String = "готово",
     ) : CodingRuntime {
         val prompts = mutableListOf<String>()
+        val profiles = mutableListOf<LlmProfile?>()
         override val supported = true
         override val rootPath = "/tmp/fake"
 
@@ -29,6 +30,7 @@ class PlanRunnerTest {
             attachments: List<Attachment>,
         ): Flow<CodingEvent> {
             prompts += prompt
+            profiles += profile
             val reply = replies.entries.firstOrNull { prompt.contains(it.key) }?.value ?: default
             return flowOf(
                 CodingEvent.TextDelta(reply),
@@ -59,6 +61,38 @@ class PlanRunnerTest {
     private val project = CodingProject(id = "proj", name = "тест", path = "/tmp/proj", createdAt = 1L)
     private val session = CodingSession(id = "sess", projectId = "proj", name = "план", createdAt = 1L)
     private val agent = LlmProfile(id = "agent", name = "Агент", baseUrl = "http://x/v1", modelId = "m")
+
+    @Test
+    fun milestoneRunsBoundFavoriteModelOverProfileDefault() = runTest {
+        val runtime = FakeRuntime(emptyMap())
+        val runner = PlanRunner(runtime, AlwaysPass())
+        val fav = agent.copy(favoriteModels = listOf("fav-2", "fav-3"))
+        runner.run(
+            plan(listOf(Milestone(id = "m1", title = "шаг один", agentProfileId = "agent", agentModelId = "fav-3"))),
+            project,
+            session,
+            listOf(fav),
+            judge = null,
+            onUpdate = {},
+        )
+        assertEquals("fav-3", runtime.profiles.single()?.modelId)
+    }
+
+    @Test
+    fun milestoneWithoutModelKeepsProfileDefault() = runTest {
+        val runtime = FakeRuntime(emptyMap())
+        val runner = PlanRunner(runtime, AlwaysPass())
+        val fav = agent.copy(favoriteModels = listOf("fav-2", "fav-3"))
+        runner.run(
+            plan(listOf(Milestone(id = "m1", title = "шаг один", agentProfileId = "agent"))),
+            project,
+            session,
+            listOf(fav),
+            judge = null,
+            onUpdate = {},
+        )
+        assertEquals("m", runtime.profiles.single()?.modelId)
+    }
 
     private fun plan(milestones: List<Milestone>) = Plan(
         id = "plan",

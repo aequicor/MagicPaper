@@ -234,7 +234,7 @@ object PiModelsConfig {
     }
 
     private fun controls(profile: LlmProfile, modelId: String): ReasoningCapability.Controls? =
-        ModelDefaults.capability(profile.provider, modelId) as? ReasoningCapability.Controls
+        ModelDefaults.capability(profile, modelId) as? ReasoningCapability.Controls
 
     /**
      * Пояснение к обрезке для итоговой ошибки: потолок из того, что реально

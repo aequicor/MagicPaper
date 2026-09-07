@@ -57,6 +57,8 @@ data class AppSettings(
     val googleSearchEngineId: String = "",
     /** Завершён ли ознакомительный тур (welcome-screen). */
     val onboardingDone: Boolean = false,
+    /** Живая фактура бумаги; ограничения устройства и батареи действуют всегда. */
+    val paperAnimationEnabled: Boolean = true,
     // ---- Легаси-поля «одной модели» -------------------------------------
     // Сохраняются для совместимости со старыми файлами настроек; при первом
     // запуске переносятся в профиль подключением (см. ProfileMigrator).
