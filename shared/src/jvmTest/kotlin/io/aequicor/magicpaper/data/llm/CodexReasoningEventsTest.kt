@@ -37,6 +37,8 @@ class CodexReasoningEventsTest {
             assertEquals("Проверю сборку проекта", draft.steps.single { it.kind == CodingStepKind.THINKING }.title)
             assertTrue(draft.steps.last().running)
             assertEquals(CodingStepKind.EXEC, draft.steps.last().kind)
+            receive("guardianWarning", """{"message":"Запрос доступа отклонён"}""")
+            assertTrue(recorder.draft(true).steps.any { it.title.contains("Проверка разрешений: Запрос доступа отклонён") })
         } finally {
             service.close()
             home.toFile().deleteRecursively()

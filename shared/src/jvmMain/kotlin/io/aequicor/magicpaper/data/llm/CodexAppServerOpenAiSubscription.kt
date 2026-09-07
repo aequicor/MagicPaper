@@ -238,6 +238,9 @@ class CodexAppServerOpenAiSubscription(
             check(profile.configured) { "Не настроена модель OpenAI по подписке." }
             check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
             val codingProfile = profile.forCoding()
+            val permissions = CodexCodingPermissions(Paths.get(project.path))
+            val instructions = listOf(CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride)
+                .filter { it.isNotBlank() }.joinToString("\n\n")
             val resumed = session.piSessionId.takeIf { it.isNotBlank() }?.let { oldId ->
                 runCatching {
                     request(
@@ -246,8 +249,10 @@ class CodexAppServerOpenAiSubscription(
                             put("threadId", oldId)
                             put("cwd", project.path)
                             put("model", codingProfile.modelId)
-                            put("approvalPolicy", "never")
+                            with(permissions) { approvals() }
                             put("sandbox", "workspace-write")
+                            put("config", permissions.threadConfig())
+                            put("developerInstructions", instructions)
                         },
                     ).jsonObject["thread"]?.jsonObject?.string("id")
                 }.getOrNull()
@@ -257,10 +262,11 @@ class CodexAppServerOpenAiSubscription(
                 buildJsonObject {
                     put("cwd", project.path)
                     put("model", codingProfile.modelId)
-                    put("approvalPolicy", "never")
+                    with(permissions) { approvals() }
                     put("sandbox", "workspace-write")
+                    put("config", permissions.threadConfig())
                     put("serviceName", "MagicPaper Coding")
-                    put("developerInstructions", listOf(CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride).filter { it.isNotBlank() }.joinToString("\n\n"))
+                    put("developerInstructions", instructions)
                 },
             ).jsonObject["thread"]?.jsonObject?.requireString("id")
                 ?: error("Codex не вернул идентификатор coding-сессии.")
@@ -279,13 +285,9 @@ class CodexAppServerOpenAiSubscription(
                     effort?.let { put("effort", it) }
                     // Request readable summaries explicitly instead of inheriting a disabled default.
                     put("summary", "auto")
-                    put("approvalPolicy", "never")
+                    with(permissions) { approvals() }
                     put("cwd", project.path)
-                    put("sandboxPolicy", buildJsonObject {
-                        put("type", "workspaceWrite")
-                        put("networkAccess", false)
-                        put("writableRoots", buildJsonArray { add(JsonPrimitive(project.path)) })
-                    })
+                    put("sandboxPolicy", permissions.sandboxPolicy())
                 },
             ).jsonObject
             accumulator.turnId = turn["turn"]?.jsonObject?.string("id")
@@ -507,6 +509,11 @@ class CodexAppServerOpenAiSubscription(
     private fun handleNotification(method: String?, params: JsonObject?) {
         if (params == null) return
         when (method) {
+            "guardianWarning" -> {
+                val threadId = params.string("threadId") ?: return
+                val warning = params.string("message") ?: return
+                codingRuns[threadId]?.emit(CodingEvent.Notice("Проверка разрешений: $warning"))
+            }
             "account/login/completed" -> loginEvents.value = LoginEvent(
                 loginId = params.string("loginId"),
                 success = params["success"]?.jsonPrimitive?.booleanOrNull == true,
@@ -718,7 +725,12 @@ class CodexAppServerOpenAiSubscription(
         const val CHAT_INSTRUCTIONS =
             "Ты отвечаешь в чате MagicPaper. Не используй инструменты, файлы или команды. Верни только полезный ответ пользователю."
         const val CODING_INSTRUCTIONS =
-            "Ты coding-агент MagicPaper. Работай только внутри открытой папки проекта, выполняй задачу до результата и кратко сообщи итог."
+            "Ты coding-агент MagicPaper. Изменяй исходники внутри открытой папки проекта, выполняй задачу до результата и кратко сообщи итог. " +
+                "Для сборки используй установленный toolchain и обычный кеш Gradle (GRADLE_USER_HOME из окружения или ~/.gradle); " +
+                "не переноси кеш в проект ради обхода ограничений и не добавляй --offline без необходимости. " +
+                "Если сборке нужны сеть, зависимости или доступ за пределами песочницы, запроси разрешение штатным механизмом Codex: " +
+                "запросы проверяются автоматически. Не останавливайся после первого отказа песочницы. " +
+                "Если автоматическая проверка отклонила запрос, не обходи отказ; сообщи конкретную операцию и причину."
 
         fun defaultAppHome(): Path = Paths.get(System.getProperty("user.home"), ".MagicPaper", "codex")
 
