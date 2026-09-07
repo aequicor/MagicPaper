@@ -51,6 +51,15 @@ class DecisionPlannerTest {
         assertEquals(plan(), original)
     }
 
+    @Test fun refinementKeepsDurationsWhenTheResponseOmitsThem() = runTest {
+        val original = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(complexityPoints = 2.5) }) }
+        val result = PlanComposer(Gateway(response(plan()))).refine(original, "Refine", profile, listOf(profile), emptyList())
+        assertTrue(result.milestones.all { it.complexityPoints == 2.5 })
+        val restored = Json.decodeFromString(Plan.serializer(), Json.encodeToString(Plan.serializer(), result))
+        assertEquals(result, restored)
+        assertNull(Json.decodeFromString(Milestone.serializer(), """{"id":"old","title":"Old"}""").complexityPoints)
+    }
+
     @Test fun targetedRecalculationPreservesUnrelatedBranch() = runTest {
         val original = plan()
         val proposal = original.copy(tree = original.tree.map { if (it.id == "b") it.copy(title = "unwanted change") else it },

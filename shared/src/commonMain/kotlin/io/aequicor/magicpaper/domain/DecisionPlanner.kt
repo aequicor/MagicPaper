@@ -30,8 +30,9 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                 "stageId":"id этапа или null", "assessment":{"quality":0,"speed":0,"economy":0,"safety":0,"complexity":0,"explanation":"почему"}}.
                 Одна GOAL; CHOICE содержит OPTION; STAGE ссылается на milestone. Общие этапы не дублируй.
                 Milestone: {"id":"id", "title":"имя", "description":"что сделать", "acceptance":"проверяемые критерии",
-                "agentProfileId":"id источника", "agentModelId":"ключ модели",
+                "complexityPoints":null, "agentProfileId":"id источника", "agentModelId":"ключ модели",
                 "assignment":{"profileId":"id источника","modelId":"ключ модели","effort":"default|low|medium|high и т.д.","explanation":"почему эта модель и этот effort оптимальны для этапа"}, "dependsOn":["id этапа"], "assessment":{...}}.
+                complexityPoints — относительная сложность в условных единицах (например 1, 2, 3, 5, 8, 13). Оцени каждый этап, включая альтернативные; это не часы. Сохраняй заданные пользователем оценки.
                 Зависимости не должны образовывать циклы или вести в невыбранные альтернативы.
                 Сохраняй идентификаторы существующих узлов, ручные выборы и уже начатые этапы.
                 Если пользователь явно попросил отдельную ветку или рабочую копию, верни isolatedWorkspace=true; иначе не задавай это поле.
@@ -67,6 +68,7 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                     val old = existing[stage.id]
                     if (old != null && (old.attempts.isNotEmpty() || old.status != MilestoneStatus.PENDING)) old
                     else stage.copy(status = MilestoneStatus.PENDING, report = "", checkNote = "", attempts = emptyList(),
+                        complexityPoints = stage.complexityPoints ?: old?.complexityPoints,
                         assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities))
                 }
                 val nodes = proposal.tree.map { n ->

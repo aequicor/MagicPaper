@@ -49,6 +49,10 @@ data class Milestone(
     /** Вердикт проверки достижимости цели мэилстоуна. */
     val checkNote: String = "",
     val updatedAt: Long = 0,
+    /** Planned duration in hours; null means no estimate. */
+    val durationHours: Double? = null,
+    /** Relative complexity; independent of elapsed time. */
+    val complexityPoints: Double? = null,
 ) {
     /** Завершён ли мэилстоун (выполнен или осознанно пропущен). */
     val completed: Boolean get() = status == MilestoneStatus.DONE || status == MilestoneStatus.SKIPPED

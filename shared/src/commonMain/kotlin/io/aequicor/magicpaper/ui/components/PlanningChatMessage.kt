@@ -79,7 +79,8 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
                 shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Схема плана", style = MaterialTheme.typography.titleMedium)
-                    DecisionGraph(display, selected, { selected = it }, Modifier.fillMaxWidth().weight(1f), fitInitially = true)
+                    DecisionGraph(display, selected, { selected = it }, Modifier.fillMaxWidth().weight(1f), fitInitially = true,
+                        onChooseOption = if (original || drafts[session.id]?.active == true) null else { choiceId, optionId -> service.chooseOption(plan.id, plan.revision, choiceId, optionId) })
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { graphOpen = false; selected = null }) { Text("Закрыть") }
                     }

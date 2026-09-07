@@ -171,6 +171,12 @@ class PlanningChatService(
             store.update(id) { it.copy(pendingRequest = "", requestId = "") }
         } finally { _drafts.update { it - sessionId }; changed() }
     }
+    fun chooseOption(id: String, revision: Long, choiceId: String, optionId: String) = launch {
+        if (id in deletedPlans) return@launch
+        execution.edit(id, revision) { selectPlanningOption(it, choiceId, optionId) }
+        changed()
+    }
+
     fun confirm(id: String) = launch { confirmation.withLock {
         val plan = store.planFor(id) ?: return@withLock
         if (plan.confirmedRevision != null) { prepareSessions(plan); execution.start(id); return@withLock }

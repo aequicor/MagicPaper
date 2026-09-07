@@ -214,7 +214,8 @@ class CodingPlanningPlugin(
                     }
                     plan.issue?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
                     }
-                    DecisionGraph(plan, selected, { selected = it }, Modifier.fillMaxWidth().height(480.dp), fitInitially = true)
+                    DecisionGraph(plan, selected, { selected = it }, Modifier.fillMaxWidth().height(480.dp), fitInitially = true,
+                        onChooseOption = if (busy || submitting) null else { choiceId, optionId -> edit { selectPlanningOption(it, choiceId, optionId) } })
                     if (!running) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(enabled = !busy && !submitting && !running, onClick = { navigate(PlanningStep.CLARIFY) }) { Text("Уточнить") }
                         Button(enabled = !busy && !submitting && !running && runtime.supported && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid,
@@ -307,6 +308,9 @@ class CodingPlanningPlugin(
     var title by remember(node.id, node.title) { mutableStateOf(node.title) }
     var description by remember(stage?.id, stage?.description) { mutableStateOf(stage?.description.orEmpty()) }
     var acceptance by remember(stage?.id, stage?.acceptance) { mutableStateOf(stage?.acceptance.orEmpty()) }
+    var complexity by remember(stage?.id, stage?.complexityPoints) { mutableStateOf(stage?.complexityPoints?.toString().orEmpty()) }
+    val parsedComplexity = complexity.replace(',', '.').toDoubleOrNull()
+    val complexityValid = complexity.isBlank() || (parsedComplexity != null && parsedComplexity.isFinite() && parsedComplexity > 0)
     fun updateStage(change: (Milestone) -> Milestone) = edit { old -> old.copy(milestones = old.milestones.map { if (it.id == stage?.id) change(it) else it }) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         HorizontalDivider(); Text("Выбрано: ${node.title}", style = MaterialTheme.typography.titleMedium)
@@ -327,10 +331,13 @@ class CodingPlanningPlugin(
         }
         OutlinedTextField(title, { title = it }, enabled = !frozen, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
         if (stage != null) {
+            OutlinedTextField(complexity, { complexity = it }, enabled = !frozen, label = { Text("Сложность, усл. ед.") },
+                supportingText = { Text("Относительная оценка: например, 1, 2, 3, 5, 8, 13") },
+                isError = !complexityValid, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(description, { description = it }, enabled = !frozen, label = { Text("Что сделать") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(acceptance, { acceptance = it }, enabled = !frozen, label = { Text("Критерии проверки") }, modifier = Modifier.fillMaxWidth())
         }
-        TextButton(enabled = !frozen && title.isNotBlank(), onClick = { edit { old -> old.copy(goal = if (node.kind == DecisionKind.GOAL) title else old.goal, tree = old.tree.map { if (it.id == node.id) it.copy(title = title) else it }, milestones = old.milestones.map { if (it.id == stage?.id) it.copy(title = title, description = description, acceptance = acceptance) else it }) } }) { Text("Сохранить изменения") }
+        TextButton(enabled = !frozen && title.isNotBlank() && complexityValid, onClick = { edit { old -> old.copy(goal = if (node.kind == DecisionKind.GOAL) title else old.goal, tree = old.tree.map { if (it.id == node.id) it.copy(title = title) else it }, milestones = old.milestones.map { if (it.id == stage?.id) it.copy(title = title, description = description, acceptance = acceptance, complexityPoints = parsedComplexity) else it }) } }) { Text("Сохранить изменения") }
         if (stage != null) {
             val assignment = stage.assignment
             Text(assignment?.let { "Модель: ${profiles.firstOrNull { p -> p.id == it.profileId }?.modelName(it.modelId) ?: it.displayName.ifBlank { it.modelId }} · effort: ${it.effort.shortLabel}" } ?: "Исполнитель не назначен")
