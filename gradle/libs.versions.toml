@@ -21,9 +21,11 @@ ktor = "3.5.2"
 material3 = "1.11.0-alpha07"
 multiplatformMarkdownRenderer = "0.41.0"
 oshi = "6.10.0"
+jbr-api = "1.9.0"
 
 [libraries]
 oshi-core = { module = "com.github.oshi:oshi-core", version.ref = "oshi" }
+jbr-api = { module = "org.jetbrains.runtime:jbr-api", version.ref = "jbr-api" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlin-testJunit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 junit = { module = "junit:junit", version.ref = "junit" }

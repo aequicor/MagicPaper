@@ -54,6 +54,7 @@ import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 import io.aequicor.magicpaper.ui.window.WindowDragArea
+import io.aequicor.magicpaper.ui.window.WindowTitleBarArea
 import kotlinx.coroutines.delay
 
 /** Корневой композиционный узел: тема + каркас. */
@@ -146,47 +147,51 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
     // Интерактивные кнопки живут ВНЕ зоны перетаскивания, чтобы клик не
     // пересекался с жестом переноса окна.
     val chrome = LocalWindowChrome.current
-    // На macOS: нативный «светофор» поверх контента — сдвигаем кнопки от него.
+    // Нативные кнопки поверх контента: macOS слева, Windows справа.
     val layoutDirection = LocalLayoutDirection.current
-    val trafficLights = LocalWindowTitleBarInsets.current.calculateLeftPadding(layoutDirection)
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(
-            start = trafficLights.coerceAtLeast(12.dp),
-            end = if (chrome != null) 6.dp else 12.dp,
-            top = 4.dp,
-            bottom = 4.dp,
-        ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(
-            onClick = { vm.toggleSessionsPanel() },
-            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
-        ) { Text("☰", style = MaterialTheme.typography.titleMedium) }
-        WindowDragArea(modifier = Modifier.weight(1f)) {
-            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Text("MagicPaper", style = MaterialTheme.typography.titleMedium)
+    val nativeInsets = LocalWindowTitleBarInsets.current
+    val nativeStart = nativeInsets.calculateLeftPadding(layoutDirection)
+    val nativeEnd = nativeInsets.calculateRightPadding(layoutDirection)
+    WindowTitleBarArea(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(
+                start = nativeStart.coerceAtLeast(12.dp),
+                end = nativeEnd.coerceAtLeast(if (chrome != null) 6.dp else 12.dp),
+                top = 4.dp,
+                bottom = 4.dp,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = { vm.toggleSessionsPanel() },
+                modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
+            ) { Text("☰", style = MaterialTheme.typography.titleMedium) }
+            WindowDragArea(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text("MagicPaper", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        screen.subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            TextButton(
+                onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
+                modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
+            ) {
                 Text(
-                    screen.subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "⚙",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (screen == Screen.SETTINGS) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
+            if (chrome != null) WindowButtons(chrome)
         }
-        TextButton(
-            onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
-            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
-        ) {
-            Text(
-                "⚙",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (screen == Screen.SETTINGS) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-        }
-        if (chrome != null) WindowButtons(chrome)
     }
 }
 

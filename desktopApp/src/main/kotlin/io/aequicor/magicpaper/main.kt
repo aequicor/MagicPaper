@@ -17,6 +17,8 @@ import io.aequicor.magicpaper.ui.window.DesktopWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowScope
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
+import io.aequicor.magicpaper.ui.window.LocalWindowsTitleBarController
+import io.aequicor.magicpaper.ui.window.WindowsTitleBarController
 import java.awt.Frame
 import java.awt.Image
 import java.awt.event.ComponentAdapter
@@ -40,39 +42,62 @@ private fun FrameWindowScope.setAppIcons() {
     if (AppIcons.isNotEmpty()) (window as? Frame)?.iconImages = AppIcons
 }
 
-/** macOS: нативные декорации + прозрачный тайтлбар; иначе — кастомный хром без тайтлбара. */
-private fun isMacOs(): Boolean = System.getProperty("os.name").lowercase().startsWith("mac")
-
 /** Нативная высота тайтлбара macOS (unified title bar). */
 private val MacTitleBarHeight = 28.dp
 
 /** Ширина зоны «светофора»: три кнопки по ~12pt с шагом 20, отступ 7pt + запас. */
 private val MacTrafficLightsWidth = 78.dp
 
-fun main() = application {
-    val state = rememberWindowState(width = 1000.dp, height = 700.dp)
-    Window(
-        onCloseRequest = ::exitApplication,
-        title = "MagicPaper — Шалость удалась",
-        state = state,
-        // Windows/Linux: окно без системных декораций — тайтлбар, кнопки ─ ▢ ✕
-        // и перетаскивание рисует само приложение; ресайз за края остаётся
-        // (встроен в недекорированные окна Compose).
-        // macOS: декорации нативные — скругления, снап к краям и «светофор»
-        // сохраняются; убираем только видимость тайтлбара (см. ниже).
-        undecorated = !isMacOs(),
-    ) {
-        setAppIcons()
-        val chrome = remember(window) { if (isMacOs()) null else DesktopWindowChrome(window) }
-        val titleBarInsets = rememberMacTitleBarInsets()
-        // Фон окна в цвет приложения — без белой вспышки в углах при ресайзе.
-        window.background = java.awt.Color(0xF5, 0xEF, 0xE3)
-        CompositionLocalProvider(
-            LocalWindowChrome provides chrome,
-            LocalWindowScope provides this,
-            LocalWindowTitleBarInsets provides titleBarInsets,
+fun main() {
+    val osName = System.getProperty("os.name")
+    val isWindows = osName.lowercase().startsWith("windows")
+    val mode = desktopWindowMode(
+        osName = osName,
+        windowDecorationsSupported = isWindows && WindowsTitleBarController.isSupported(),
+    )
+    application {
+        val state = rememberWindowState(width = 1000.dp, height = 700.dp)
+        Window(
+            onCloseRequest = ::exitApplication,
+            title = "MagicPaper — Шалость удалась",
+            state = state,
+            // Windows keeps a real decorated frame: JBR merges our Compose bar
+            // into it while Windows retains the border, shadow, Snap and buttons.
+            // Linux keeps the existing fully custom, undecorated chrome.
+            undecorated = mode == DesktopWindowMode.LINUX_CUSTOM,
         ) {
-            App()
+            setAppIcons()
+            val chrome = remember(window, mode) {
+                if (mode == DesktopWindowMode.LINUX_CUSTOM) DesktopWindowChrome(window) else null
+            }
+            val windowsTitleBar = remember(window, mode) {
+                if (mode == DesktopWindowMode.WINDOWS_JBR_CUSTOM) {
+                    (window as? Frame)?.let(WindowsTitleBarController::create)
+                } else {
+                    null
+                }
+            }
+            DisposableEffect(windowsTitleBar) {
+                onDispose { windowsTitleBar?.dispose() }
+            }
+            val titleBarInsets = when (mode) {
+                DesktopWindowMode.MAC_SYSTEM -> rememberMacTitleBarInsets()
+                DesktopWindowMode.WINDOWS_JBR_CUSTOM -> PaddingValues(
+                    start = (windowsTitleBar?.leftInset ?: 0f).dp,
+                    end = (windowsTitleBar?.rightInset ?: 0f).dp,
+                )
+                else -> PaddingValues()
+            }
+            // Фон окна в цвет приложения — без белой вспышки в углах при ресайзе.
+            window.background = java.awt.Color(0xF5, 0xEF, 0xE3)
+            CompositionLocalProvider(
+                LocalWindowChrome provides chrome,
+                LocalWindowScope provides this,
+                LocalWindowTitleBarInsets provides titleBarInsets,
+                LocalWindowsTitleBarController provides windowsTitleBar,
+            ) {
+                App()
+            }
         }
     }
 }
@@ -85,7 +110,6 @@ fun main() = application {
  */
 @Composable
 private fun FrameWindowScope.rememberMacTitleBarInsets(): PaddingValues {
-    if (!isMacOs()) return PaddingValues()
     var insets by remember { mutableStateOf(macInsets(fullScreen = false)) }
     fun read() {
         // В полноэкранном режиме окно занимает ровно весь экран (с точностью

@@ -7,10 +7,8 @@ import androidx.compose.ui.Modifier
 
 /**
  * Управление хромом окна (свернуть / развернуть / закрыть).
- * Не равно нулю на платформах без системных декораций — сейчас это
- * десктопные Windows и Linux с их кастомным тайтлбаром.
- * На macOS декорации нативные (светофор, скругления, снап к краям),
- * но тайтлбар прозрачный и контент рисуется под ним.
+ * Не равно нулю на платформах без системных кнопок — сейчас это Linux.
+ * На Windows и macOS кнопки и рамку предоставляет оконная система.
  */
 interface WindowChrome {
     fun minimize()
@@ -23,8 +21,8 @@ val LocalWindowChrome = staticCompositionLocalOf<WindowChrome?> { null }
 
 /**
  * Инсеты нативного тайтлбара, под который заезжает контент (edge-to-edge):
- * top — высота тайтлбара (macOS), start — зона «светофора», чтобы кнопки
- * приложения не оказывались под нативными кнопками окна.
+ * top — высота системного тайтлбара над контентом (macOS), start/end — зоны
+ * нативных кнопок, чтобы элементы приложения не оказывались под ними.
  * На остальных платформах — пустые.
  */
 val LocalWindowTitleBarInsets = staticCompositionLocalOf { PaddingValues() }
@@ -36,3 +34,11 @@ val LocalWindowTitleBarInsets = staticCompositionLocalOf { PaddingValues() }
  */
 @Composable
 expect fun WindowDragArea(modifier: Modifier = Modifier, content: @Composable () -> Unit)
+
+/**
+ * Верхняя область приложения, объединённая с системным тайтлбаром там, где
+ * платформа это поддерживает. Интерактивное содержимое сохраняет свои клики,
+ * свободное место получает нативные drag и double-click-to-maximize.
+ */
+@Composable
+expect fun WindowTitleBarArea(modifier: Modifier = Modifier, content: @Composable () -> Unit)

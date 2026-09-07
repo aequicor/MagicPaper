@@ -9,3 +9,8 @@ import androidx.compose.ui.Modifier
 actual fun WindowDragArea(modifier: Modifier, content: @Composable () -> Unit) {
     Box(modifier, propagateMinConstraints = true) { content() }
 }
+
+@Composable
+actual fun WindowTitleBarArea(modifier: Modifier, content: @Composable () -> Unit) {
+    Box(modifier, propagateMinConstraints = true) { content() }
+}

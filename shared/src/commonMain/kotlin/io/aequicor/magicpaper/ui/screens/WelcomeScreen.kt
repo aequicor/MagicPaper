@@ -51,6 +51,7 @@ import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
+import io.aequicor.magicpaper.ui.window.WindowTitleBarArea
 import io.aequicor.magicpaper.util.Id
 
 /**
@@ -74,73 +75,85 @@ fun WelcomeScreen(
     val lastPage = 3
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxSize(),
     ) {
-        // Верхняя строка: точки-прогресс и «пропустить».
-        // На macOS — отступ слева под нативный «светофор».
+        // Верхняя строка: точки-прогресс и «пропустить». На desktop это также
+        // нативная область тайтлбара; кнопки ОС резервируют место по краям.
         val layoutDirection = LocalLayoutDirection.current
-        val trafficLights = LocalWindowTitleBarInsets.current.calculateLeftPadding(layoutDirection)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = trafficLights),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PageDots(page = page, pageCount = lastPage + 1, modifier = Modifier.weight(1f))
-            if (page == 0) {
-                TextButton(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Пропустить") }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-
-        AnimatedContent(
-            targetState = page,
-            transitionSpec = {
-                val dir = if (targetState > initialState) 1 else -1
-                (slideInHorizontally(tween(220)) { w -> dir * w } + fadeIn(tween(220)))
-                    .togetherWith(slideOutHorizontally(tween(220)) { w -> -dir * w } + fadeOut(tween(120)))
-            },
-            label = "welcome-page",
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        ) { p ->
-            Box(
-                modifier = Modifier.fillMaxSize().widthIn(max = 560.dp),
-                contentAlignment = Alignment.TopCenter,
+        val titleBarInsets = LocalWindowTitleBarInsets.current
+        WindowTitleBarArea(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(
+                    start = 24.dp + titleBarInsets.calculateLeftPadding(layoutDirection),
+                    end = 24.dp + titleBarInsets.calculateRightPadding(layoutDirection),
+                    top = 16.dp,
+                ),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    when (p) {
-                        0 -> WelcomeIntro()
-                        1 -> WelcomeModel(vm, state, profileDraft) { profileDraft = it }
-                        2 -> WelcomeSearch(draft) { draft = it }
-                        else -> WelcomePlugins(plugins, states) { id, on -> vm.togglePlugin(id, on) }
-                    }
+                PageDots(page = page, pageCount = lastPage + 1, modifier = Modifier.weight(1f))
+                if (page == 0) {
+                    TextButton(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Пропустить") }
                 }
             }
         }
-
-        // Нижняя навигация тура.
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (page > 0) {
-                TextButton(
-                    onClick = { page-- },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text("← Назад") }
-            } else {
-                Spacer(Modifier.width(1.dp))
+            Spacer(Modifier.height(16.dp))
+
+            AnimatedContent(
+                targetState = page,
+                transitionSpec = {
+                    val dir = if (targetState > initialState) 1 else -1
+                    (slideInHorizontally(tween(220)) { w -> dir * w } + fadeIn(tween(220)))
+                        .togetherWith(slideOutHorizontally(tween(220)) { w -> -dir * w } + fadeOut(tween(120)))
+                },
+                label = "welcome-page",
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) { p ->
+                Box(
+                    modifier = Modifier.fillMaxSize().widthIn(max = 560.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        when (p) {
+                            0 -> WelcomeIntro()
+                            1 -> WelcomeModel(vm, state, profileDraft) { profileDraft = it }
+                            2 -> WelcomeSearch(draft) { draft = it }
+                            else -> WelcomePlugins(plugins, states) { id, on -> vm.togglePlugin(id, on) }
+                        }
+                    }
+                }
             }
-            if (page < lastPage) {
-                Button(onClick = { page++ }) { Text("Далее →") }
-            } else {
-                Button(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Начать работу") }
+
+            // Нижняя навигация тура.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (page > 0) {
+                    TextButton(
+                        onClick = { page-- },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) { Text("← Назад") }
+                } else {
+                    Spacer(Modifier.width(1.dp))
+                }
+                if (page < lastPage) {
+                    Button(onClick = { page++ }) { Text("Далее →") }
+                } else {
+                    Button(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Начать работу") }
+                }
             }
         }
     }

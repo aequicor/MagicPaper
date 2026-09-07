@@ -69,6 +69,7 @@ kotlin {
         }
         jvmMain.dependencies {
             implementation(libs.oshi.core)
+            implementation(libs.jbr.api)
             implementation(libs.ktor.clientCio)
         }
         jvmTest.dependencies {
