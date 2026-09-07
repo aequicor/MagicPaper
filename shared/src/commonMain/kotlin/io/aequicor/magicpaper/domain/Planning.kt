@@ -104,6 +104,8 @@ data class Plan(
     val finalAttempt: StageAttempt? = null,
     val issue: PlanningIssue? = null,
     val journal: List<PlanJournalEntry> = emptyList(),
+    /** Transport failures outside a stage attempt (preflight and workspace preparation). */
+    val transportRetries: Int = 0,
 ) {
     val selectedMilestones: List<Milestone> get() = if (tree.isEmpty()) milestones else {
         val selected = DecisionCompiler.compile(this).stageIds.toSet()

@@ -202,6 +202,85 @@ class PlanningExecutionServiceTest {
         assertEquals(Long.MAX_VALUE, store.planFor(project.id)!!.issue?.retryAt)
     }
 
+    @Test fun thrownVerificationErrorsPreservePhaseAndExhaustDurableRetries() = runTest {
+        var checks = 0
+        val verifier = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                checks++
+                throw IllegalStateException("503 network unavailable")
+            }
+        }
+        val (store, service, runtime) = fixture(verifier = verifier)
+        store.save(plan(stage("a")))
+        service.start(project.id); advanceTimeBy(200); runCurrent()
+        repeat(3) {
+            val saved = store.planFor(project.id)!!.milestones.single().attempts.single()
+            assertEquals(it + 1, saved.transportRetries)
+            assertTrue(saved.error!!.retryAt > 0)
+            assertEquals(AttemptPhase.VERIFYING, saved.phase)
+            store.update(project.id) { p -> p.copy(milestones = p.milestones.map { m ->
+                m.copy(attempts = m.attempts.map { a -> a.copy(error = a.error?.copy(retryAt = 0)) })
+            }) }
+            service.retry(project.id); advanceTimeBy(200); runCurrent()
+        }
+        assertEquals(4, checks)
+        assertEquals(1, runtime.calls.size)
+        val saved = store.planFor(project.id)!!
+        assertEquals(3, saved.milestones.single().attempts.single().transportRetries)
+        assertTrue(saved.issue!!.requiresUser)
+    }
+
+    @Test fun workspaceTransportExceptionsHaveDurableBoundedRetries() = runTest {
+        var preparations = 0
+        val workspace = object : PlanningWorkspace by LocalPlanningWorkspace() {
+            override suspend fun prepare(project: CodingProject, runId: String): PlanWorkspace {
+                preparations++
+                throw IllegalStateException("HTTP 500: unavailable")
+            }
+        }
+        val (store, service, runtime) = fixture(workspace = workspace)
+        store.save(plan(stage("a")))
+        service.start(project.id); advanceTimeBy(200); runCurrent()
+        repeat(3) {
+            assertEquals(it + 1, store.planFor(project.id)!!.transportRetries)
+            assertTrue(store.planFor(project.id)!!.issue!!.retryAt > 0)
+            service.retry(project.id); advanceTimeBy(200); runCurrent()
+        }
+        assertEquals(4, preparations)
+        assertTrue(runtime.calls.isEmpty())
+        assertEquals(3, store.planFor(project.id)!!.transportRetries)
+        assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
+    @Test fun finalVerificationUnknownExternalCommandRequiresAcknowledgement() = runTest {
+        val (store, service, runtime) = fixture()
+        val attempt = StageAttempt("final", "session", StageAssignment("agent", "m"), phase = AttemptPhase.EXECUTING,
+            pendingTool = "curl https://example.com/action", pendingToolExternal = true)
+        store.save(plan(stage("a").copy(status = MilestoneStatus.DONE)).copy(
+            intent = ExecutionIntent.RUN, runId = "run", finalAttempt = attempt))
+        service.bootstrap(); advanceTimeBy(500); runCurrent()
+        assertTrue(runtime.calls.isEmpty())
+        assertEquals(IssueKind.UNCERTAIN, store.planFor(project.id)!!.issue!!.kind)
+        assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
+    @Test fun finalVerifierThrownErrorRetainsAttemptAndRetryBudget() = runTest {
+        val verifier = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict =
+                throw IllegalStateException("503 network unavailable")
+        }
+        val (store, service, runtime) = fixture(verifier = verifier)
+        val attempt = StageAttempt("final", "session", StageAssignment("agent", "m"), phase = AttemptPhase.VERIFYING,
+            report = "Completed checks", transportRetries = 3)
+        store.save(plan(stage("a").copy(status = MilestoneStatus.DONE)).copy(
+            intent = ExecutionIntent.RUN, runId = "run", finalAttempt = attempt))
+        service.bootstrap(); advanceTimeBy(500); runCurrent()
+        assertTrue(runtime.calls.isEmpty())
+        assertEquals(AttemptPhase.VERIFYING, store.planFor(project.id)!!.finalAttempt!!.phase)
+        assertEquals(3, store.planFor(project.id)!!.finalAttempt!!.transportRetries)
+        assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
     @Test fun committedDeliveryResumesVerificationBeforeTransfer() = runTest {
         var finished = false
         val port = object : PlanningWorkspace by LocalPlanningWorkspace() {

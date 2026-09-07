@@ -199,7 +199,25 @@ class PlanningExecutionService(
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            try { block(id, classify(e.message ?: "Ошибка исполнения")) }
+            try {
+                val issue = classify(e.message ?: "Ошибка исполнения")
+                val saved = store.planFor(id)
+                val failed = saved?.finalAttempt?.let { withRetry(it, issue) }
+                if (failed != null) {
+                    store.update(id) { it.copy(finalAttempt = safeAttempt(failed)) }
+                    block(id, failed.error!!)
+                } else if (issue.kind == IssueKind.TRANSIENT && saved != null) {
+                    val count = saved.transportRetries
+                    val exhausted = count >= 3
+                    val next = if (exhausted) count else count + 1
+                    val waiting = issue.copy(retries = next, requiresUser = exhausted,
+                        retryAt = if (exhausted) 0 else Id.now() + PlanningRetryPolicy.delayMillis(next,
+                            PlanningRetryPolicy.fromMessage(issue.message), Id.now(), Random.nextLong(500)))
+                    store.update(id) { it.copy(transportRetries = next,
+                        issue = waiting.copy(message = safeText(waiting.message)), phase = ExecutionPhase.WAITING,
+                        status = if (exhausted) PlanStatus.FAILED else PlanStatus.RUNNING) }
+                } else block(id, issue)
+            }
             catch (storage: Exception) { errorState.value = "Не удалось сохранить состояние: ${storage.message}" }
         } finally {
             val plan = store.plans.value.firstOrNull { it.projectId == id }
@@ -285,6 +303,11 @@ class PlanningExecutionService(
         persist()
         if (attempt.phase != AttemptPhase.VERIFYING) {
             runtime.reconcile(attempt.sessionId)
+            if (attempt.pendingToolExternal && attempt.pendingTool.isNotBlank()) {
+                block(id, PlanningIssue(IssueKind.UNCERTAIN,
+                    "Нет подтверждения результата команды итоговой проверки: ${attempt.pendingTool}", requiresUser = true))
+                return false
+            }
             attempt = attempt.copy(phase = AttemptPhase.EXECUTING); persist()
             journal(id, "final-verification-intent", attemptId = attempt.id)
             var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
@@ -298,7 +321,9 @@ class PlanningExecutionService(
                         is CodingEvent.SessionStarted -> attempt = attempt.copy(engineSessionId = event.sessionId)
                         is CodingEvent.FinalText -> attempt = attempt.copy(report = event.text)
                         is CodingEvent.TextDelta -> attempt = attempt.copy(report = attempt.report + event.delta)
-                        is CodingEvent.ToolStarted -> attempt = attempt.copy(activity = event.summary)
+                        is CodingEvent.ToolStarted -> attempt = attempt.copy(activity = event.summary, pendingTool = event.summary,
+                            pendingToolExternal = event.isExec && !PlanningRetryPolicy.localCheck(event.summary))
+                        is CodingEvent.ToolFinished -> attempt = attempt.copy(pendingTool = "", pendingToolExternal = false)
                         is CodingEvent.Failed -> failure = event.message
                         CodingEvent.Finished -> ended = true
                         else -> Unit
@@ -522,7 +547,13 @@ class PlanningExecutionService(
             throw e
         } catch (e: Exception) {
             val issue = classify(e.message ?: "Ошибка этапа")
-            try { block(id, issue) } catch (storage: Exception) { errorState.value = storage.message; throw storage }
+            try {
+                // Read the durable attempt: local snapshots can precede a phase transition.
+                val saved = store.planFor(id)?.milestones?.firstOrNull { it.id == stageId }?.attempts?.lastOrNull()
+                val failed = saved?.let { withRetry(it, issue) }
+                if (failed != null) saveAttempt(id, stageId, failed)
+                block(id, failed?.error ?: issue.copy(requiresUser = true))
+            } catch (storage: Exception) { errorState.value = storage.message; throw storage }
         } finally {
             currentAttempt?.let { a -> liveState.update { it - a.id } }
         }
@@ -600,7 +631,8 @@ class PlanningExecutionService(
             uncertain -> IssueKind.UNCERTAIN
             listOf("ошибка сохранения", "поврежден", "повреждён", "disk", "no space", "диске").any { it in lower } -> IssueKind.STORAGE
             listOf("401", "403", "авториз", "источник", "модель", "папка", "подключите").any { it in lower } -> IssueKind.CONFIGURATION
-            listOf("429", "503", "502", "504", "network", "connection", "timeout", "сеть").any { it in lower } -> IssueKind.TRANSIENT
+            Regex("\\b5\\d{2}\\b").containsMatchIn(lower) ||
+                listOf("429", "network", "connection", "timeout", "сеть").any { it in lower } -> IssueKind.TRANSIENT
             "конфликт" in lower || "conflict" in lower -> IssueKind.CONFLICT
             else -> IssueKind.UNCERTAIN
         }
