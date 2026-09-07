@@ -62,7 +62,7 @@ class PlanningChatRenderTest {
             val state = LazyListState()
             ImageComposeScene(320, 620) {
                 MagicPaperTheme { Surface { ProjectsPanel(CodingUi(projects = listOf(project), current = project, sessions = sessions),
-                    {}, {}, {}, {}, {}, {}, {}, { _, _ -> }, listState = state) } }
+                    {}, {}, {}, {}, {}, {}, {}, listState = state) } }
             }.use { scene ->
                 repeat(5) { scene.render(it * 16_000_000L).close(); runCurrent() }
                 state.scrollToItem(12)
@@ -84,7 +84,7 @@ class PlanningChatRenderTest {
             val ui = CodingUi(projects = listOf(project, project.copy(id = "other", name = "Личный сайт")), current = project,
                 sessions = listOf(CodingSessionUi(parent), CodingSessionUi(child, running = true), CodingSessionUi(parent.copy(id = "ordinary", name = "Исправления", planningMode = false))), currentSessionId = "c")
             for (width in listOf(280, 390)) ImageComposeScene(width, 620) {
-                MagicPaperTheme { Surface { ProjectsPanel(ui, {}, {}, {}, {}, {}, {}, {}, { _, _ -> }) } }
+                MagicPaperTheme { Surface { ProjectsPanel(ui, {}, {}, {}, {}, {}, {}, {}) } }
             }.use { scene ->
                 repeat(5) { scene.render(it * 16_000_000L).close(); runCurrent() }
                 val bytes = scene.render(96_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } }

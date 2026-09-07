@@ -18,9 +18,11 @@ class PlanningChatServiceTest {
         var lastMessages = emptyList<LlmMessage>()
         var gate: CompletableDeferred<Unit>? = null
         var overrideReply: String? = null
+        var timeout = false
         var coordinator = """{"reply":"Результат принят","actions":[]}"""
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
             lastMessages = messages
+            if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
             overrideReply?.let { return it }
             if (messages.first().content.contains("Ты координатор")) return coordinator
@@ -118,6 +120,45 @@ class PlanningChatServiceTest {
         f.service.send(session, "PDF, read and write, tests", answers, question.id); runCurrent()
         assertEquals(1, f.projects.messages(project.id, session.id).count { it.planning?.replyTo == question.id })
     }
+    @Test fun timeoutAfterAnswersPublishesErrorAndAllowsRetry() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val session = f.session("parent")
+        f.service.send(session, "Make an editor"); runCurrent()
+        val original = f.store.plans.value.single()
+        f.gateway.timeout = true
+        f.service.send(session, "PDF, read and write, tests"); runCurrent()
+        advanceTimeBy(11); runCurrent()
+
+        val failed = f.projects.messages(project.id, session.id).last()
+        assertEquals(CodingRole.AGENT, failed.role)
+        assertTrue(failed.failed)
+        assertTrue(failed.text.contains("время"))
+        assertEquals(failed.text, failed.steps.last().title)
+        val saved = f.store.planFor(original.id)!!
+        assertEquals("", saved.pendingRequest)
+        assertEquals("", saved.requestId)
+        assertEquals(original.tree, saved.tree)
+        assertTrue(f.service.drafts.value.isEmpty())
+
+        f.gateway.timeout = false
+        f.gateway.overrideReply = """{"reply":"План готов","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["stage"]},{"id":"stage","title":"Stage","kind":"STAGE","stageId":"stage"}],"milestones":[{"id":"stage","title":"Stage","acceptance":"Checks pass"}]}"""
+        f.service.send(session, "Повтори планирование"); runCurrent()
+        val history = f.projects.messages(project.id, session.id)
+        assertTrue(history.any { it.text == "План готов" && it.role == CodingRole.AGENT })
+        assertEquals(1, history.count { it.planning?.graph == true })
+        assertEquals("", f.store.planFor(original.id)!!.pendingRequest)
+    }
+
+    @Test fun invalidModelResponsePublishesError() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val session = f.session("parent")
+        f.gateway.overrideReply = "invalid response"
+        f.service.send(session, "Goal"); runCurrent()
+        assertTrue(f.projects.messages(project.id, session.id).last().failed)
+        assertEquals("", f.store.plans.value.single().pendingRequest)
+        assertTrue(f.service.drafts.value.isEmpty())
+    }
+
     @Test fun confirmationIsIdempotentAndTwoPlansShareCurrentFolder() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val one = f.readyPlan("one", f.session("s1")); val two = f.readyPlan("two", f.session("s2"))

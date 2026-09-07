@@ -1042,7 +1042,9 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
     val latest = fragments.lastOrNull { it.isNotBlank() }?.lineSequence()?.lastOrNull { it.isNotBlank() }
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
     val preview = latest ?: "Движок пока не прислал размышления"
+    val progress = draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.INFO && it.running }
     val activity = when {
+        progress != null -> progress.title
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
         draft.awaitingModel -> "Ожидает ответа модели…"

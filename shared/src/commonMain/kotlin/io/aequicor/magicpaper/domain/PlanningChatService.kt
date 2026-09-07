@@ -145,7 +145,7 @@ class PlanningChatService(
         val activity = MutableStateFlow<List<CodingStep>>(emptyList())
         fun event(step: CodingStep) {
             activity.update { history ->
-                if (step.kind == CodingStepKind.THINKING && history.lastOrNull()?.let { it.kind == step.kind && it.callId == step.callId } == true) history.dropLast(1) + step else history + step
+                if ((step.kind == CodingStepKind.THINKING || (step.kind == CodingStepKind.INFO && step.running)) && history.lastOrNull()?.let { it.kind == step.kind && it.callId == step.callId } == true) history.dropLast(1) + step else history + step
             }
             _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true)) }
         }
@@ -165,9 +165,15 @@ class PlanningChatService(
                 versions = if (result.tree != pending.tree || result.milestones != pending.milestones) it.versions + snapshot else it.versions) }
             val saved = store.planFor(id)!!
             if (saved.confirmedRevision != null) prepareSessions(saved)
-        } catch (e: CancellationException) { throw e }
-        catch (e: Exception) {
-            append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, e.message ?: "Ошибка планирования", failed = true, createdAt = Id.now(), steps = activity.value + CodingStep(CodingStepKind.ERROR, e.message.orEmpty())))
+        } catch (e: Exception) {
+            // A model/request timeout cancels its child coroutine, not this planning turn.
+            // Preserve actual cancellation, but publish timeouts like other request failures.
+            currentCoroutineContext().ensureActive()
+            if (e is CancellationException && e !is TimeoutCancellationException) throw e
+            val message = if (e is TimeoutCancellationException)
+                "Модель не успела завершить планирование за отведённое время. Отправьте сообщение ещё раз или увеличьте время ожидания в настройках модели."
+            else e.message?.takeIf { it.isNotBlank() } ?: "Ошибка планирования"
+            append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, message, failed = true, createdAt = Id.now(), steps = activity.value + CodingStep(CodingStepKind.ERROR, message)))
             store.update(id) { it.copy(pendingRequest = "", requestId = "") }
         } finally { _drafts.update { it - sessionId }; changed() }
     }

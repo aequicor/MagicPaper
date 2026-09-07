@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.withLock
@@ -215,9 +216,7 @@ class CodexAppServerOpenAiSubscription(
                 },
             )
             val timeout = profile.advanced.safeTimeoutSeconds
-            val text = if (timeout == 0) accumulator.done.await() else withTimeout(timeout * 1_000L) {
-                accumulator.done.await()
-            }
+            val text = accumulator.awaitResult(timeout)
             return text.ifBlank { error("OpenAI вернул пустой ответ.") }
         } finally {
             turns.remove(threadId)
@@ -527,11 +526,14 @@ class CodexAppServerOpenAiSubscription(
                 turns[threadId]?.started(item)
                 codingRuns[threadId]?.startItem(item)
             }
-            "item/agentMessage/delta" -> codingRuns[params.string("threadId")]?.emit(
-                CodingEvent.TextDelta(params.string("delta").orEmpty()),
-            )
+            "item/agentMessage/delta" -> {
+                val delta = params.string("delta").orEmpty()
+                turns[params.string("threadId")]?.textDelta(delta)
+                codingRuns[params.string("threadId")]?.emit(CodingEvent.TextDelta(delta))
+            }
             "item/reasoning/textDelta", "item/reasoning/summaryTextDelta" -> {
                 codingRuns[params.string("threadId")]?.emit(CodingEvent.ThinkingDelta(params.string("delta").orEmpty()))
+                turns[params.string("threadId")]?.heartbeat()
                 // Planning displays the provider's public reasoning summary only.
                 if (method == "item/reasoning/summaryTextDelta") turns[params.string("threadId")]?.summary(params.string("delta").orEmpty())
             }
@@ -578,16 +580,48 @@ class CodexAppServerOpenAiSubscription(
         stderrTail.lastOrNull()?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
     }
 
-    private class TurnAccumulator(private val onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit) {
+    internal class TurnAccumulator(private val onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit) {
+        private val activity = Channel<Unit>(Channel.CONFLATED)
+        private var receivedCharacters = 0
         private var summaryText = ""
         private var itemId = ""
+
+        fun heartbeat() { activity.trySend(Unit) }
+
+        suspend fun awaitResult(timeoutSeconds: Int): String {
+            if (timeoutSeconds == 0) return done.await()
+            while (true) {
+                // Each provider event renews the inactivity deadline; completion wins a tie.
+                val result = withTimeout(timeoutSeconds * 1_000L) {
+                    select<String?> {
+                        done.onAwait { it }
+                        activity.onReceive { null }
+                    }
+                }
+                if (result != null) return result
+            }
+        }
+
+        fun textDelta(delta: String) {
+            if (delta.isEmpty()) return
+            heartbeat()
+            receivedCharacters += delta.length
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(
+                io.aequicor.magicpaper.domain.CodingStepKind.INFO,
+                "Модель формирует ответ… Получено $receivedCharacters символов",
+                callId = "model-response-progress", running = true,
+            ))
+        }
         fun started(item: JsonObject) {
+            heartbeat()
+            receivedCharacters = 0
             itemId = item.string("id").orEmpty()
             summaryText = ""
             onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.INFO,
                 when (item.string("type")) { "reasoning" -> "Модель обдумывает план…"; "agentMessage" -> "Модель формирует ответ…"; else -> "Действие агента: ${item.string("type").orEmpty()}" }))
         }
         fun summary(delta: String) {
+            heartbeat()
             summaryText += delta
             onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.THINKING, summaryText, callId = itemId))
         }
@@ -596,6 +630,7 @@ class CodexAppServerOpenAiSubscription(
         private var final = ""
 
         fun accept(text: String, phase: String?) {
+            heartbeat()
             if (text.isBlank()) return
             last = text
             if (phase == "commentary") onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text))
