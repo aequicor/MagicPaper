@@ -42,7 +42,7 @@ fun decisionPositions(nodes: List<DecisionNode>, collapsed: Set<String>): Map<St
     return positions
 }
 
-@Composable fun DecisionGraph(sourcePlan: Plan, selected: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+@Composable fun DecisionGraph(sourcePlan: Plan, selected: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier, fitInitially: Boolean = false) {
     val plan = remember(sourcePlan) { planningGraphProjection(sourcePlan) }
     var collapsed by remember(plan.id) { mutableStateOf(emptySet<String>()) }
     var zoom by remember(plan.id) { mutableStateOf(1f) }
@@ -98,6 +98,12 @@ fun decisionPositions(nodes: List<DecisionNode>, collapsed: Set<String>): Map<St
     Column(modifier) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds().background(scheme.surfaceVariant.copy(alpha = .3f))) {
             val viewportWidth = maxWidth.value; val viewportHeight = (maxHeight.value - 48).coerceAtLeast(1f)
+            LaunchedEffect(plan.id, fitInitially, viewportWidth, viewportHeight) {
+                if (fitInitially) {
+                    zoom = minOf(viewportWidth / graphWidth, viewportHeight / graphHeight).coerceIn(.005f, 1f)
+                    pan = Offset.Zero
+                }
+            }
             Box(Modifier.fillMaxSize().padding(top = 48.dp).clipToBounds().onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) false else when (event.key) {
                     Key.DirectionLeft -> { pan += Offset(60f, 0f); true }

@@ -25,6 +25,7 @@ class PlanningExecutionService(
     private val workspaces: PlanningWorkspace = LocalPlanningWorkspace(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
+    var chatHooks: PlanningExecutionHooks? = null
     private val jobs = mutableMapOf<String, Job>()
     private val jobsLock = Mutex()
     private val errorState = MutableStateFlow<String?>(null)
@@ -52,7 +53,7 @@ class PlanningExecutionService(
                     }
                     store.plans().filter { it.intent == ExecutionIntent.RUN && it.phase != ExecutionPhase.COMPLETE && it.issue?.requiresUser != true }
                         .forEach { plan ->
-                            if ((plan.issue?.retryAt ?: 0) <= Id.now()) launchProject(plan.projectId)
+                            if ((plan.issue?.retryAt ?: 0) <= Id.now()) launchProject(plan.id)
                         }
                     if (store.failure.value == null) errorState.value = null
                 } catch (e: CancellationException) { throw e }
@@ -65,11 +66,14 @@ class PlanningExecutionService(
     suspend fun start(projectId: String) {
         require(runtime.supported) { "Выполнение доступно в Desktop" }
         val plan = store.planFor(projectId) ?: error("План не найден")
+        if (plan.phase == ExecutionPhase.COMPLETE) return
+        if (plan.intent == ExecutionIntent.RUN) { launchProject(plan.id); return }
         val graph = DecisionCompiler.compile(plan)
         require(graph.valid && graph.stageIds.isNotEmpty()) { graph.errors.joinToString("\n").ifBlank { "Нет этапов" } }
-        store.update(projectId) { it.copy(intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING,
+        store.update(projectId) { it.copy(intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING, wizardStep = PlanningStep.STATUS,
             runId = it.runId.ifBlank { Id.new() }, issue = null, status = PlanStatus.RUNNING) }
-        launchProject(projectId)
+        chatHooks?.prepareSessions(store.planFor(plan.id)!!)
+        launchProject(plan.id)
     }
     suspend fun pause(projectId: String) {
         store.update(projectId) { it.copy(intent = ExecutionIntent.PAUSE) }
@@ -77,7 +81,12 @@ class PlanningExecutionService(
     suspend fun stop(projectId: String) {
         val plan = store.update(projectId) { it.copy(intent = ExecutionIntent.STOP, status = PlanStatus.STOPPED) }
         plan.milestones.flatMap { it.attempts }.filter { it.phase != AttemptPhase.COMPLETE }.forEach { runtime.abort(it.sessionId) }
-        jobsLock.withLock { jobs[projectId]?.cancel() }
+        jobsLock.withLock { jobs[plan.id]?.cancel() }
+    }
+    suspend fun stopAndJoin(planId: String) {
+        stop(planId)
+        val job = jobsLock.withLock { jobs[planId] }
+        job?.join()
     }
     suspend fun edit(projectId: String, revision: Long, change: (Plan) -> Plan) = store.update(projectId, revision) { old ->
         change(old).also {
@@ -88,13 +97,13 @@ class PlanningExecutionService(
         }
     }
     /** Rebase an LLM proposal over telemetry, never over intervening user edits or started work. */
-    suspend fun applyProposal(base: Plan, proposal: Plan) = store.update(base.projectId) { latest ->
+    suspend fun applyProposal(base: Plan, proposal: Plan) = store.update(base.id) { latest ->
         require(latest.tree == base.tree && latest.goal == base.goal && latest.priorities == base.priorities && latest.dialogue == base.dialogue) {
             "Дерево изменилось во время ответа планировщика; повторите запрос"
         }
         fun spec(m: Milestone) = m.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", updatedAt = 0)
         require(latest.milestones.map(::spec) == base.milestones.map(::spec)) { "Этапы изменились во время ответа планировщика" }
-        val rebased = latest.copy(tree = proposal.tree, dialogue = proposal.dialogue, milestones = proposal.milestones.map { proposed ->
+        val rebased = latest.copy(sharedWorkspace = if (latest.confirmedRevision == null) proposal.sharedWorkspace else latest.sharedWorkspace, tree = proposal.tree, dialogue = proposal.dialogue, wizardStep = proposal.wizardStep, milestones = proposal.milestones.map { proposed ->
             latest.milestones.firstOrNull { it.id == proposed.id }?.takeIf { it.attempts.isNotEmpty() || it.status != MilestoneStatus.PENDING }?.let { current ->
                 require(spec(current) == spec(proposed)) { "Этап «${current.title}» начался во время планирования" }
                 current
@@ -112,10 +121,11 @@ class PlanningExecutionService(
                 val acknowledged = a.copy(error = a.error?.copy(requiresUser = false))
                 if (p.issue?.kind == IssueKind.UNCERTAIN) acknowledged.copy(pendingToolExternal = false, pendingTool = "") else acknowledged
             }) }) }
-        launchProject(projectId)
+        launchProject(store.planFor(projectId)!!.id)
     }
     suspend fun shutdown() {
         closing = true
+        (chatHooks as? PlanningChatService)?.shutdown()
         watcher?.cancelAndJoin()
         val active = jobsLock.withLock { jobs.values.toList() }
         active.forEach { it.cancel() }; active.joinAll()
@@ -128,9 +138,11 @@ class PlanningExecutionService(
         jobs[id] = scope.launch { executeProject(id) }
     }
     private suspend fun executeProject(id: String) {
+        val workspaces = workspaceFor(id)
         var acquiredProject: CodingProject? = null
         try {
-            val project = projects?.all()?.firstOrNull { it.id == id }
+            val initial = store.planFor(id) ?: return
+            val project = projects?.all()?.firstOrNull { it.id == initial.projectId }
             if (project == null) { block(id, PlanningIssue(IssueKind.CONFIGURATION, "Папка проекта не найдена")); return }
             if (!workspaces.acquire(project)) {
                 errorState.value = "Проект выполняется другим экземпляром приложения"
@@ -147,7 +159,7 @@ class PlanningExecutionService(
                 require(it.acceptance.isNotBlank() || it.description.isNotBlank()) { "Задайте критерии этапа «${it.title}»" }
                 (it.attempts.lastOrNull()?.assignment ?: assignment(it, roster)).executionProfile(roster)
             }.distinctBy { it.id }.forEach { runtime.preflight(it) }
-            val judge = ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
+            val judge = plan.plannerSelection?.let { ProfileResolver.selection(it, roster) } ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
             require(judge?.configured == true) { "Подключите модель для проверки результата" }
             if (plan.issue != null) plan = store.update(id) { it.copy(issue = null, phase = ExecutionPhase.RECOVERING) }
             if (plan.runId.isBlank()) plan = store.update(id) { it.copy(runId = Id.new()) }
@@ -156,12 +168,17 @@ class PlanningExecutionService(
                 val workspace = workspaces.prepare(project, plan.runId)
                 plan = store.update(id) { it.copy(workspace = workspace, issue = null) }
             }
+            chatHooks?.prepareSessions(plan)
             val workspace = plan.workspace!!
             val integration = Mutex()
             coroutineScope {
                 val active = mutableMapOf<String, Job>()
                 while (isActive && !closing) {
                     plan = store.planFor(id) ?: break
+                    if (plan.deliveries.any { d -> d.state == DeliveryState.QUEUED && plan.milestones.any { it.id == d.targetStageId && it.completed } }) {
+                        chatHooks?.prepareSessions(plan)
+                        plan = store.planFor(id) ?: break
+                    }
                     active.entries.removeAll { it.value.isCompleted }
                     val compiled = DecisionCompiler.compile(plan)
                     if (!compiled.valid) { block(id, PlanningIssue(IssueKind.CONFIGURATION, compiled.errors.joinToString("\n"), requiresUser = true)); break }
@@ -174,7 +191,7 @@ class PlanningExecutionService(
                             (m.attempts.lastOrNull()?.error?.retryAt ?: 0) <= Id.now() &&
                             compiled.dependencies[m.id].orEmpty().all { dep -> plan.milestones.first { it.id == dep }.completed }
                     }
-                    val slots = (if (workspace.git) plan.parallelism.coerceIn(1, 8) else 1) - active.size
+                    val slots = (if (workspace.git || plan.sharedWorkspace) plan.parallelism.coerceIn(1, 8) else 1) - active.size
                     candidates.take(slots.coerceAtLeast(0)).forEach { stage ->
                         active[stage.id] = launch { executeStage(id, stage.id, project, workspace, integration, judge!!) }
                     }
@@ -191,6 +208,10 @@ class PlanningExecutionService(
             if (plan.intent != ExecutionIntent.RUN || plan.issue != null || closing) return
             if (plan.selectedMilestones.all { it.completed }) {
                 if (!verifyIntegration(id, project, workspace, judge!!)) return
+                if (store.planFor(id)!!.selectedMilestones.any { !it.completed }) {
+                    store.update(id) { it.copy(finalAttempt = null, phase = ExecutionPhase.EXECUTING) }
+                    return
+                }
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
                 journal(id, "apply-intent")
                 val applied = applyResult(id, project, workspace, judge) ?: return
@@ -220,7 +241,7 @@ class PlanningExecutionService(
             }
             catch (storage: Exception) { errorState.value = "Не удалось сохранить состояние: ${storage.message}" }
         } finally {
-            val plan = store.plans.value.firstOrNull { it.projectId == id }
+            val plan = store.plans.value.firstOrNull { it.id == id }
             val ids = plan?.milestones.orEmpty().flatMap { it.attempts }.map { it.id }.toSet() + listOfNotNull(plan?.finalAttempt?.id)
             liveState.update { it - ids }
             acquiredProject?.let { withContext(NonCancellable) { workspaces.release(it) } }
@@ -228,6 +249,7 @@ class PlanningExecutionService(
     }
 
     private suspend fun applyResult(id: String, project: CodingProject, workspace: PlanWorkspace, judge: LlmProfile): PlanWorkspace? {
+        val workspaces = workspaceFor(id)
         while (canRun(id)) {
             try {
                 val pending = store.planFor(id)!!.finalAttempt
@@ -257,9 +279,13 @@ class PlanningExecutionService(
                     journal(id, "delivery-conflict-intent", attemptId = attempt.id)
                     var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
                     try {
+                        val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                        val activityRecorder = CodingRunRecorder()
                         monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId),
                             "Разреши Git merge-конфликт, сохрани пользовательские изменения и результат плана. Цель: ${plan.goal}. Если изменения уже объединены, продолжи проверки. Добавь разрешённые файлы в индекс, выполни подходящие тесты и сообщи фактические результаты. Не изменяй исходную папку вне этой рабочей копии. Предыдущий отчёт: ${attempt.mergeReport}",
                             (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
+                            activityRecorder.apply(event)
+                            attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
                             when (event) {
                                 is CodingEvent.SessionStarted -> attempt = attempt.copy(mergeEngineSessionId = event.sessionId)
                                 is CodingEvent.Failed -> failure = event.message
@@ -294,6 +320,7 @@ class PlanningExecutionService(
     }
 
     private suspend fun verifyIntegration(id: String, project: CodingProject, workspace: PlanWorkspace, judge: LlmProfile): Boolean {
+        val workspaces = workspaceFor(id)
         var plan = store.planFor(id)!!
         if (plan.workspace?.applied == true) return true
         var attempt = plan.finalAttempt ?: StageAttempt("${plan.runId}-final", "${plan.runId}-final-session",
@@ -313,10 +340,14 @@ class PlanningExecutionService(
             var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
             val criteria = plan.selectedMilestones.joinToString("\n") { "${it.title}: ${it.acceptance.ifBlank { it.description }}" }
             try {
+                val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                val activityRecorder = CodingRunRecorder()
                 monitoredRun(project.copy(path = workspace.integrationPath),
                     CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId),
                     "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
                     attempt.assignment.executionProfile(profiles.load())).collect { event ->
+                    activityRecorder.apply(event)
+                    attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
                     when (event) {
                         is CodingEvent.SessionStarted -> attempt = attempt.copy(engineSessionId = event.sessionId)
                         is CodingEvent.FinalText -> attempt = attempt.copy(report = event.text)
@@ -362,10 +393,11 @@ class PlanningExecutionService(
     }
 
     private suspend fun executeStage(id: String, stageId: String, project: CodingProject, workspace: PlanWorkspace, integration: Mutex, judge: LlmProfile) {
+        val workspaces = workspaceFor(id)
         var currentAttempt: StageAttempt? = null
         try {
             var stage = store.planFor(id)!!.milestones.first { it.id == stageId }
-            var attempt = stage.attempts.lastOrNull() ?: StageAttempt(Id.new(), Id.new(), assignment(stage, profiles.load()), startedAt = Id.now())
+            var attempt = stage.attempts.lastOrNull() ?: StageAttempt(Id.new(), if (store.planFor(id)!!.parentSessionId.isNotBlank()) "plan-$id-stage-$stageId" else Id.new(), assignment(stage, profiles.load()), startedAt = Id.now())
             currentAttempt = attempt
             if (stage.attempts.isEmpty()) saveAttempt(id, stageId, attempt)
             if (attempt.path.isBlank()) {
@@ -385,9 +417,23 @@ class PlanningExecutionService(
                 if (!canRun(id)) return
                 val frozen = attempt.assignment.executionProfile(profiles.load())
                 val plan = store.planFor(id)!!
+                // A completed runtime turn may have been checkpointed before its coordinator finished.
+                // Resume the durable decision, never re-run its file operations just to redeliver a reply.
+                val recorded = plan.coordination.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
+                if (recorded != null && chatHooks != null) {
+                    val resumed = chatHooks!!.finished(plan, stage, attempt)
+                    attempt = attempt.copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
+                        phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
+                        error = if (resumed.action == StageTurnAction.WAIT) PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
+                    saveAttempt(id, stageId, attempt)
+                    if (resumed.action == StageTurnAction.WAIT) return
+                    if (resumed.action == StageTurnAction.VERIFY) break
+                    continue
+                }
                 val context = DecisionCompiler.compile(plan).dependencies[stageId].orEmpty().joinToString("\n") { dep ->
                     plan.milestones.first { it.id == dep }.let { "${it.title}: ${it.report}" }
                 }
+                val extraInstructions = chatHooks?.instructions(plan, stage, attempt).orEmpty()
                 val prompt = """
                     Общая цель: ${plan.goal}
                     Этап: ${stage.title}
@@ -398,8 +444,8 @@ class PlanningExecutionService(
                     Продолжай с фактического состояния файлов; сначала проверь уже выполненные изменения.
                     Работай только в этой рабочей папке. Не выполняй внешних публикаций.
                     Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
-                """.trimIndent()
-                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null)
+                """.trimIndent() + "\n" + extraInstructions
+                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt)
                 saveAttempt(id, stageId, attempt)
                 journal(id, "agent-intent", stageId, attempt.id)
                 var failure: String? = null
@@ -407,8 +453,12 @@ class PlanningExecutionService(
                 var lastSave = 0L
                 var lastDisplay = 0L
                 val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId)
-                projects?.saveSession(session)
+                if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
+                val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                val activityRecorder = CodingRunRecorder()
                 monitoredRun(project.copy(path = attempt.path), session, prompt, frozen).collect { event ->
+                    activityRecorder.apply(event)
+                    attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
                     when (event) {
                         is CodingEvent.SessionStarted -> {
                             attempt = attempt.copy(engineSessionId = event.sessionId)
@@ -450,6 +500,17 @@ class PlanningExecutionService(
                     }
                     attempt = attempt.copy(phase = AttemptPhase.FAILED, error = issue.copy(requiresUser = true))
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
+                }
+                val decision = chatHooks?.finished(store.planFor(id)!!, stage, attempt)
+                if (decision != null) {
+                    attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1)
+                    if (decision.action != StageTurnAction.VERIFY) {
+                        attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = if (decision.action == StageTurnAction.WAIT)
+                            PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
+                        saveAttempt(id, stageId, attempt)
+                        if (decision.action == StageTurnAction.WAIT) return
+                        continue
+                    }
                 }
                 attempt = attempt.copy(phase = AttemptPhase.VERIFYING)
                 saveAttempt(id, stageId, attempt)
@@ -503,9 +564,13 @@ class PlanningExecutionService(
                         journal(id, "conflict-agent-intent", stageId, attempt.id)
                         val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId)
                         var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
+                        val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                        val activityRecorder = CodingRunRecorder()
                         monitoredRun(project.copy(path = workspace.integrationPath), mergeSession,
                             "Разреши текущий Git merge-конфликт, сохрани результаты обеих ветвей, добавь разрешённые файлы в индекс. Если объединение уже сделано, продолжи проверки. Критерии: ${stage.acceptance.ifBlank { stage.description }}. Предыдущий отчёт: ${attempt.mergeReport}. Отчитайся о фактических проверках.",
                             (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
+                            activityRecorder.apply(event)
+                            attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
                             when (event) {
                                 is CodingEvent.SessionStarted -> attempt = attempt.copy(mergeEngineSessionId = event.sessionId)
                                 is CodingEvent.Failed -> failure = event.message
@@ -559,6 +624,11 @@ class PlanningExecutionService(
             currentAttempt?.let { a -> liveState.update { it - a.id } }
         }
     }
+    private val shared = object : PlanningWorkspace by LocalPlanningWorkspace() {
+        override suspend fun acquire(project: CodingProject) = true
+        override suspend fun release(project: CodingProject) = Unit
+    }
+    private suspend fun workspaceFor(id: String) = if (store.planFor(id)?.sharedWorkspace == true) shared else workspaces
     private suspend fun canRun(id: String) = !closing && store.failure.value == null && store.planFor(id)?.intent == ExecutionIntent.RUN
     private fun withRetry(attempt: StageAttempt, issue: PlanningIssue): StageAttempt {
         if (issue.kind != IssueKind.TRANSIENT) return attempt.copy(error = issue)
@@ -567,33 +637,24 @@ class PlanningExecutionService(
         val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(issue.message), Id.now(), Random.nextLong(500))
         return attempt.copy(transportRetries = count, error = issue.copy(retries = count, retryAt = Id.now() + wait))
     }
-    /** Time out silent model requests, but never mistake a long-running tool for an idle model. */
+    /** Flush partial output while waiting. A coding turn may legitimately be silent during reasoning;
+     * the chat-request timeout is not an inactivity deadline for the coding runtime.
+     * Runtime failures and explicit cancellation remain authoritative. */
     private fun monitoredRun(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> = channelFlow {
         val events = runtime.run(project, session, prompt, profile).produceIn(this)
-        val activeTools = mutableSetOf<String>()
-        val timeout = profile.advanced.safeTimeoutSeconds.toLong() * 1000
-        var lastActivity = Id.now()
+        var silentTicks = 0
         try {
             while (isActive) {
                 val received = withTimeoutOrNull(100) { events.receiveCatching() }
                 if (received == null) {
-                    if (timeout > 0 && activeTools.isEmpty() && Id.now() - lastActivity >= timeout) {
-                        runtime.abort(session.id)
-                        send(CodingEvent.Failed("Нет событий модели в течение настроенного таймаута; результат прерванного запроса требует проверки"))
-                        send(CodingEvent.Finished)
-                        break
-                    }
-                    // A flush tick preserves the last text chunk even if the engine goes silent.
+                    silentTicks++
+                    if (silentTicks == 300) send(CodingEvent.Notice("Ожидание новых событий агента. Запрос остаётся активным; при необходимости его можно остановить."))
+                    // Flush without adding a visible or persisted timeline entry on every tick.
                     send(CodingEvent.Notice(""))
                     continue
                 }
                 val event = received.getOrNull() ?: break
-                lastActivity = Id.now()
-                when (event) {
-                    is CodingEvent.ToolStarted -> activeTools += event.callId.ifBlank { event.tool }
-                    is CodingEvent.ToolFinished -> activeTools -= event.callId.ifBlank { event.tool }
-                    else -> Unit
-                }
+                silentTicks = 0
                 send(event)
                 if (event == CodingEvent.Finished) break
             }
@@ -620,11 +681,12 @@ class PlanningExecutionService(
         val safe = safeAttempt(attempt)
         liveState.update { state ->
             val old = state[attempt.id]
-            if (old?.report == safe.report && old.activity == safe.activity && old.mergeReport == safe.mergeReport) state
+            if (old?.report == safe.report && old.activity == safe.activity && old.mergeReport == safe.mergeReport && old.steps == safe.steps) state
             else state + (attempt.id to safe.copy(updatedAt = Id.now()))
         }
     }
-    private fun safeAttempt(a: StageAttempt) = a.copy(report = safeText(a.report), activity = safeText(a.activity),
+    private fun safeAttempt(a: StageAttempt) = a.copy(prompt = safeText(a.prompt), report = safeText(a.report), activity = safeText(a.activity),
+        steps = a.steps.filter { it.isVisibleActivity }.map { it.copy(title = safeText(it.title), result = safeText(it.result), tool = safeText(it.tool), callId = safeText(it.callId)) },
         mergeReport = safeText(a.mergeReport), pendingTool = safeText(a.pendingTool), error = a.error?.let { it.copy(message = safeText(it.message)) })
     private fun classify(message: String, uncertain: Boolean = false): PlanningIssue {
         val lower = message.lowercase()

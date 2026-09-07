@@ -172,7 +172,9 @@ class CodexAppServerOpenAiSubscription(
         return ModelDefaults.discover(ProviderType.OPENAI_SUBSCRIPTION, ids, declarations).map { it.copy(metadata = metadata[it.id]) }
     }
 
-    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = completeWithActivity(profile, messages) {}
+
+    override suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit): String {
         require(profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
             "Этот транспорт принимает только OpenAI по подписке ChatGPT."
         }
@@ -193,7 +195,7 @@ class CodexAppServerOpenAiSubscription(
         ).jsonObject
         val threadId = thread["thread"]?.jsonObject?.requireString("id")
             ?: error("Codex не вернул идентификатор диалога.")
-        val accumulator = TurnAccumulator()
+        val accumulator = TurnAccumulator(onActivity)
         turns[threadId] = accumulator
         try {
             val input = buildTurnInput(messages, profile.advanced.contextMessages)
@@ -518,13 +520,17 @@ class CodexAppServerOpenAiSubscription(
             "item/started" -> {
                 val threadId = params.string("threadId") ?: return
                 val item = params["item"] as? JsonObject ?: return
+                turns[threadId]?.started(item)
                 codingRuns[threadId]?.startItem(item)
             }
             "item/agentMessage/delta" -> codingRuns[params.string("threadId")]?.emit(
                 CodingEvent.TextDelta(params.string("delta").orEmpty()),
             )
-            "item/reasoning/textDelta", "item/reasoning/summaryTextDelta" ->
+            "item/reasoning/textDelta", "item/reasoning/summaryTextDelta" -> {
                 codingRuns[params.string("threadId")]?.emit(CodingEvent.ThinkingDelta(params.string("delta").orEmpty()))
+                // Planning displays the provider's public reasoning summary only.
+                if (method == "item/reasoning/summaryTextDelta") turns[params.string("threadId")]?.summary(params.string("delta").orEmpty())
+            }
             "item/commandExecution/outputDelta" -> codingRuns[params.string("threadId")]?.emit(
                 CodingEvent.ToolProgress(
                     tool = "command",
@@ -568,7 +574,19 @@ class CodexAppServerOpenAiSubscription(
         stderrTail.lastOrNull()?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()
     }
 
-    private class TurnAccumulator {
+    private class TurnAccumulator(private val onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit) {
+        private var summaryText = ""
+        private var itemId = ""
+        fun started(item: JsonObject) {
+            itemId = item.string("id").orEmpty()
+            summaryText = ""
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.INFO,
+                when (item.string("type")) { "reasoning" -> "Модель обдумывает план…"; "agentMessage" -> "Модель формирует ответ…"; else -> "Действие агента: ${item.string("type").orEmpty()}" }))
+        }
+        fun summary(delta: String) {
+            summaryText += delta
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.THINKING, summaryText, callId = itemId))
+        }
         val done = CompletableDeferred<String>()
         private var last = ""
         private var final = ""
@@ -576,6 +594,7 @@ class CodexAppServerOpenAiSubscription(
         fun accept(text: String, phase: String?) {
             if (text.isBlank()) return
             last = text
+            if (phase == "commentary") onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text))
             if (phase == "final_answer" || phase == "finalAnswer") final = text
         }
 

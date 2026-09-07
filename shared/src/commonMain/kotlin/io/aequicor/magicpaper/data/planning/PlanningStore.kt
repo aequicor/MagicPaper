@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.data.planning
 
 import io.aequicor.magicpaper.domain.ModelDossier
 import io.aequicor.magicpaper.domain.Plan
+import io.aequicor.magicpaper.domain.resolvePlan
 import io.aequicor.magicpaper.domain.PlanningRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,7 +62,7 @@ class PlanningStore(private val repo: PlanningRepository) : PlanningRepository {
 
     override suspend fun plans(): List<Plan> = lock.withLock { refreshPlans() }
 
-    override suspend fun planFor(projectId: String): Plan? = lock.withLock { refreshPlans().firstOrNull { it.projectId == projectId } }
+    override suspend fun planFor(projectId: String): Plan? = lock.withLock { refreshPlans().resolvePlan(projectId) }
 
     override suspend fun save(plan: Plan) = lock.withLock {
         requireWritable()

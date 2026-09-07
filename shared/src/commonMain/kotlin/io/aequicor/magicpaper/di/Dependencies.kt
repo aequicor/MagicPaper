@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.domain.PlanningChatService
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
@@ -129,7 +130,7 @@ internal fun buildDependencies(
     )
     val planner = CodingPlanningPlugin(
         store = planningStore,
-        composer = PlanComposer(gateway, json),
+        composer = PlanComposer(gateway, json, search),
         researcher = DossierResearcher(gateway, search, json),
         execution = planningExecution,
         runtime = codingRuntime ?: NoopCodingRuntime,
@@ -144,6 +145,7 @@ internal fun buildDependencies(
         .register(SkillsRepositoryPlugin(EmbeddedSkillCatalog(), installer, skillStore))
         .register(SelfEducationPlugin(SkillEducator(gateway, json), installer, skillStore, chatRepo, settingsRepo, profileRepo))
         .register(planner)
+    val planningChat = codingProjects?.let { PlanningChatService(planningStore, planningExecution, it, profileRepo, settingsRepo, PlanComposer(gateway, json, search), gateway) }
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,
@@ -156,6 +158,7 @@ internal fun buildDependencies(
         json = json,
         skills = skillStore,
         planning = planningStore,
+        planningChat = planningChat,
         codingRuntime = codingRuntime,
         codingProjects = codingProjects,
         dirPicker = dirPicker,
@@ -165,6 +168,7 @@ internal fun buildDependencies(
         filePicker = filePicker,
         openAiSubscription = openAiSubscription,
     )
+    planningChat?.bootstrap()
     planningExecution.bootstrap()
     return MagicPaperDependencies(viewModel, planningExecution)
 }

@@ -49,6 +49,7 @@ class JsonCodingProjectRepository(
         saveSessions(allSessions().filterNot { it.projectId == id })
         // Журнал легаси-проекта, если миграция ещё не успела произойти.
         store.delete(legacyLogKey(id))
+        store.delete(clearedKey(id))
     }
 
     // ---- Сессии -----------------------------------------------------------
@@ -56,6 +57,7 @@ class JsonCodingProjectRepository(
     override suspend fun sessions(projectId: String): List<CodingSession> {
         val existing = allSessions().filter { it.projectId == projectId }.sortedBy { it.createdAt }
         if (existing.isNotEmpty()) return existing
+        if (store.read(clearedKey(projectId)) != null) return emptyList()
         val project = all().firstOrNull { it.id == projectId } ?: return emptyList()
         val main = CodingSession(
             id = "main-${project.id}",
@@ -74,6 +76,8 @@ class JsonCodingProjectRepository(
     }
 
     override suspend fun deleteSession(projectId: String, sessionId: String) {
+        // An explicitly emptied project must not be mistaken for an unmigrated legacy project.
+        store.write(clearedKey(projectId), "true")
         saveSessions(allSessions().filterNot { it.id == sessionId })
         store.delete(logKey(projectId, sessionId))
     }
@@ -91,7 +95,7 @@ class JsonCodingProjectRepository(
 
     override suspend fun wipe() {
         allSessions().forEach { store.delete(logKey(it.projectId, it.id)) }
-        all().forEach { store.delete(legacyLogKey(it.id)) } // легаси-журналы немигрированных проектов
+        all().forEach { store.delete(legacyLogKey(it.id)); store.delete(clearedKey(it.id)) } // легаси-журналы немигрированных проектов
         store.delete(KEY_SESSIONS)
         store.delete(KEY_PROJECTS)
     }
@@ -117,6 +121,8 @@ class JsonCodingProjectRepository(
     }
 
     private fun logKey(projectId: String, sessionId: String) = "coding-log:$projectId:$sessionId"
+
+    private fun clearedKey(projectId: String) = "coding-sessions-cleared:$projectId"
 
     private fun legacyLogKey(projectId: String) = "coding-log:$projectId"
 

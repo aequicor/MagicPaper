@@ -84,6 +84,17 @@ data class Plan(
     val goal: String,
     val milestones: List<Milestone> = emptyList(),
     val plannerSelection: ModelSelection? = null,
+    val searchProvider: SearchProvider = SearchProvider.AUTO,
+    val wizardStep: PlanningStep? = null,
+    val parentSessionId: String = "",
+    val sharedWorkspace: Boolean = false,
+    val confirmedRevision: Long? = null,
+    val versions: List<PlanVersion> = emptyList(),
+    val deliveries: List<PlanDelivery> = emptyList(),
+    val pendingRequest: String = "",
+    val requestId: String = "",
+    val coordination: List<CoordinationRecord> = emptyList(),
+
     val status: PlanStatus = PlanStatus.DRAFT,
     /**
      * Кодинг-сессия выполнения плана: у плана своя нить диалога с агентом,
@@ -177,10 +188,10 @@ data class ModelDossier(
 interface PlanningRepository {
     suspend fun plans(): List<Plan>
 
-    /** План проекта (на проект — один актуальный план). */
+    /** Lookup by plan ID. Legacy project IDs are accepted only when unambiguous. */
     suspend fun planFor(projectId: String): Plan?
 
-    /** Сохраняет план, заменяя прежний план этого проекта. */
+    /** Upsert by plan ID; other plans in the project are preserved. */
     suspend fun save(plan: Plan)
 
     suspend fun deletePlan(projectId: String)
@@ -252,3 +263,10 @@ object AgentMatcher {
         return TextSimilarity.cosine(aTokens, bTokens)
     }
 }
+
+@Serializable
+enum class PlanningStep { GOAL, CLARIFY, REVIEW, STATUS }
+
+val Plan.currentPlanningStep: PlanningStep
+    get() = if (intent != ExecutionIntent.STOP || phase != ExecutionPhase.IDLE || milestones.any { it.attempts.isNotEmpty() }) PlanningStep.STATUS
+        else wizardStep ?: if (milestones.isNotEmpty()) PlanningStep.REVIEW else PlanningStep.CLARIFY

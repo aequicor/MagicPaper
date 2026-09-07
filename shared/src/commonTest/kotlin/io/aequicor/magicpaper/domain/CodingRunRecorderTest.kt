@@ -8,6 +8,17 @@ import kotlin.test.assertTrue
 
 /** Лента прогона: порядок шагов хронологичен, живость и финал совпадают. */
 class CodingRunRecorderTest {
+    @Test fun silentFlushTicksNeverBecomeTimelineEntries() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.TextDelta("Начало ответа"))
+        repeat(600) { recorder.apply(CodingEvent.Notice(if (it % 2 == 0) "" else "  \n")) }
+        assertEquals(listOf(CodingStep(CodingStepKind.ANSWER, "Начало ответа")), recorder.timeline())
+        recorder.apply(CodingEvent.Notice("Ожидание инструмента"))
+        assertTrue(recorder.timeline().any { it.kind == CodingStepKind.INFO && it.title == "Ожидание инструмента" })
+        assertFalse(CodingStep(CodingStepKind.INFO, " ").isVisibleActivity)
+        assertTrue(CodingStep(CodingStepKind.TOOL, "", result = "Результат").isVisibleActivity)
+    }
+
 
     @Test
     fun thinkingIsKeptAsTimelineStepAndInDraft() {

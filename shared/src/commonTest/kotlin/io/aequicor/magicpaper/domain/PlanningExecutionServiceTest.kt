@@ -28,6 +28,9 @@ class PlanningExecutionServiceTest {
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             calls += session.id
             emit(CodingEvent.SessionStarted("engine-${session.id}"))
+            emit(CodingEvent.ThinkingDelta("Проверяю критерии"))
+            emit(CodingEvent.ToolStarted("read", "Чтение проекта", "read-1"))
+            emit(CodingEvent.ToolFinished("read", false, "read-1", "Файлы прочитаны"))
             gate?.await()
             if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText("Verified result"))
             emit(CodingEvent.Finished)
@@ -60,7 +63,51 @@ class PlanningExecutionServiceTest {
         gate.complete(Unit); advanceTimeBy(500); runCurrent()
         assertEquals(4, runtime.calls.size) // includes the combined-project verification
         assertEquals(PlanStatus.DONE, store.planFor(project.id)?.status)
+        assertContains(store.planFor(project.id)!!.milestones.first().attempts.first().prompt, "Общая цель: Goal")
+        val timeline = store.planFor(project.id)!!.milestones.first().attempts.first().steps
+        assertTrue(timeline.any { it.kind == CodingStepKind.THINKING && it.title == "Проверяю критерии" })
+        assertTrue(timeline.any { it.kind == CodingStepKind.TOOL && it.result == "Файлы прочитаны" })
     }
+    @Test fun silentRunningStageDoesNotAccumulateEmptyActivity() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val (store, service) = fixture(Runtime(gate))
+        store.save(plan(stage("a")))
+        service.start(project.id); runCurrent()
+        advanceTimeBy(2500); runCurrent()
+        val attempt = store.planFor(project.id)!!.milestones.single().attempts.single()
+        assertTrue(attempt.steps.isNotEmpty())
+        assertTrue(attempt.steps.none { it.kind == CodingStepKind.INFO && it.title.isBlank() })
+        service.stop(project.id); runCurrent()
+    }
+
+    @Test fun longReasoningPauseDoesNotAbortAndCanFinishNormally() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val runtime = Runtime(gate)
+        val (store, service) = fixture(runtime)
+        store.save(plan(stage("a")))
+        service.start(project.id); runCurrent()
+        advanceTimeBy(180_000); runCurrent()
+        assertTrue(runtime.aborted.isEmpty())
+        assertEquals(ExecutionIntent.RUN, store.planFor(project.id)!!.intent)
+        assertNull(store.planFor(project.id)!!.issue)
+        gate.complete(Unit); advanceTimeBy(500); runCurrent()
+        assertEquals(PlanStatus.DONE, store.planFor(project.id)!!.status)
+        val notices = store.planFor(project.id)!!.milestones.single().attempts.single().steps.filter { it.kind == CodingStepKind.INFO }
+        assertEquals(1, notices.size)
+        assertContains(notices.single().title, "Ожидание новых событий")
+    }
+
+    @Test fun silentAgentStillRespondsToExplicitStop() = runTest {
+        val runtime = Runtime(CompletableDeferred())
+        val (store, service) = fixture(runtime)
+        store.save(plan(stage("a")))
+        service.start(project.id); runCurrent()
+        advanceTimeBy(180_000); runCurrent()
+        service.stop(project.id); runCurrent()
+        assertTrue(runtime.aborted.isNotEmpty())
+        assertEquals(ExecutionIntent.STOP, store.planFor(project.id)!!.intent)
+    }
+
     @Test fun nonGitOnlyStartsOneStage() = runTest {
         val gate = CompletableDeferred<Unit>(); val runtime = Runtime(gate)
         val (store, service) = fixture(runtime, Workspaces(false))

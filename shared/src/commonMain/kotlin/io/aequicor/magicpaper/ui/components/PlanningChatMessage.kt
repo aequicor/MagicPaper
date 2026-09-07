@@ -1,0 +1,101 @@
+package io.aequicor.magicpaper.ui.components
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.domain.*
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun PlanningChatMessage(message: CodingMessage, session: CodingSession, history: List<CodingMessage>, service: PlanningChatService, onOpenSession: (String) -> Unit) {
+    val block = message.planning ?: return
+    val plans by service.store.plans.collectAsState()
+    val live by service.execution.live.collectAsState()
+    val drafts by service.drafts.collectAsState()
+    val source = plans.firstOrNull { it.id == block.planId } ?: return
+    if (block.questions.isNotEmpty()) {
+        val answered = history.firstOrNull { it.planning?.replyTo == message.id }
+        QuestionBlock(block.questions, answered?.planning?.answers, drafts[session.id]?.active == true) { answers ->
+            val text = block.questions.joinToString("\n\n") { q ->
+                val answer = answers.first { it.questionId == q.id }
+                "${q.title}\n" + (q.options.filter { it.id in answer.selected }.map { it.label } + listOf(answer.text).filter { it.isNotBlank() }).joinToString("; ")
+            }
+            service.send(session, text, answers, message.id)
+        }
+    }
+    if (!block.graph) return
+    fun preview(a: StageAttempt) = live[a.id]?.takeIf { it.updatedAt > a.updatedAt } ?: a
+    val plan = source.copy(milestones = source.milestones.map { it.copy(attempts = it.attempts.map(::preview)) }, finalAttempt = source.finalAttempt?.let(::preview))
+    var selected by rememberSaveable(message.id) { mutableStateOf<String?>(null) }
+    var original by rememberSaveable(message.id) { mutableStateOf(false) }
+    val initial = plan.versions.firstOrNull { it.revision == plan.confirmedRevision }
+    val display = if (original && initial != null) plan.copy(tree = initial.tree, milestones = initial.milestones, finalAttempt = null) else plan
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(plan.goal, style = MaterialTheme.typography.titleMedium)
+            if (plan.confirmedRevision != null) {
+                Text("${plan.doneCount}/${plan.selectedMilestones.size} этапов · ${when { plan.phase == ExecutionPhase.COMPLETE -> "Готово"; plan.intent == ExecutionIntent.PAUSE -> "Пауза"; plan.issue != null -> "Нужно внимание"; plan.intent == ExecutionIntent.STOP -> "Остановлено"; else -> "Выполняется" }}")
+                LinearProgressIndicator(progress = { plan.progress }, modifier = Modifier.fillMaxWidth())
+            }
+            DecisionGraph(display, selected, { selected = it }, Modifier.fillMaxWidth().height(380.dp), fitInitially = true)
+            if (plan.confirmedRevision == null) {
+                Button(onClick = { service.confirm(plan.id) }, enabled = plan.wizardStep != PlanningStep.CLARIFY && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid && drafts[session.id]?.active != true) { Text("Подтвердить") }
+                Text("Для уточнения напишите сообщение в этом чате.", style = MaterialTheme.typography.bodySmall)
+            } else FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (plan.phase != ExecutionPhase.COMPLETE) {
+                    OutlinedButton(onClick = { service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) { Text(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить") }
+                    TextButton(onClick = { service.control(plan.id, "stop") }, enabled = plan.intent != ExecutionIntent.STOP) { Text("Остановить") }
+                    if (plan.issue != null) TextButton(onClick = { service.control(plan.id, "retry") }) { Text("Повторить") }
+                }
+                if (initial != null) TextButton(onClick = { original = !original }) { Text(if (original) "Актуальный план" else "Подтверждённая версия") }
+            }
+            plan.issue?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+    if (selected != null) {
+        val projected = planningGraphProjection(display)
+        projected.tree.firstOrNull { it.id == selected }?.let { node ->
+            StageDetailsDialog(projected, node, { selected = null }) {
+                val stage = plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }
+                if (stage != null && plan.confirmedRevision != null) Button(onClick = {
+                    selected = null
+                    onOpenSession(stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}")
+                }) { Text("Открыть сессию") }
+            }
+        }
+    }
+}
+
+@Composable internal fun QuestionBlock(questions: List<PlanningQuestion>, submitted: List<PlanningAnswer>?, busy: Boolean, onSubmit: (List<PlanningAnswer>) -> Unit) {
+    val serializer = ListSerializer(PlanningAnswer.serializer())
+    val saver = androidx.compose.runtime.saveable.Saver<List<PlanningAnswer>, String>(save = { Json.encodeToString(serializer, it) }, restore = { Json.decodeFromString(serializer, it) })
+    var answers by rememberSaveable(questions, stateSaver = saver) { mutableStateOf(questions.map { PlanningAnswer(it.id) }) }
+    val shown = submitted ?: answers
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            questions.forEach { q ->
+                val answer = shown.firstOrNull { it.questionId == q.id } ?: PlanningAnswer(q.id)
+                Text(q.title, style = MaterialTheme.typography.titleSmall)
+                q.options.forEach { option ->
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        val change: (Boolean) -> Unit = { checked ->
+                            answers = answers.map { if (it.questionId != q.id) it else it.copy(selected = if (q.kind == QuestionKind.SINGLE) listOf(option.id) else if (checked) (it.selected + option.id).distinct() else it.selected - option.id) }
+                        }
+                        if (q.kind == QuestionKind.SINGLE) RadioButton(option.id in answer.selected, { change(true) }, enabled = submitted == null && !busy)
+                        else Checkbox(option.id in answer.selected, change, enabled = submitted == null && !busy)
+                        Text(option.label)
+                    }
+                }
+                OutlinedTextField(answer.text, { text -> answers = answers.map { if (it.questionId == q.id) it.copy(text = text) else it } },
+                    label = { Text(if (q.kind == QuestionKind.TEXT) "Ваш ответ" else "Дополнительный комментарий") }, enabled = submitted == null && !busy, modifier = Modifier.fillMaxWidth())
+            }
+            if (submitted == null) Button(enabled = !busy && answers.all { it.selected.isNotEmpty() || it.text.isNotBlank() }, onClick = { onSubmit(answers) }) { Text("Ответить") }
+            else Text("Ответ отправлен", style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}

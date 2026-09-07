@@ -30,6 +30,19 @@ class JsonPlanningRepositoryTest {
         updatedAt = updated,
     )
 
+    @Test fun siblingPlansSurviveDeletionAndCheckpointRecovery() = runTest {
+        val first = plan("same").copy(id = "first")
+        val second = plan("same").copy(id = "second")
+        repo.save(first); repo.save(second)
+        assertEquals(2, repo.plans().size)
+        assertFailsWith<IllegalArgumentException> { repo.planFor("same") }
+        repo.deletePlan("first")
+        store.write("coding-plans", "{broken")
+        store.write("coding-plans-backup", "{broken")
+        assertEquals(listOf("second"), repo.plans().map { it.id })
+        assertEquals("same", repo.planFor("second")?.projectId)
+    }
+
     @Test
     fun planRoundTripAndReplacePerProject() = runTest {
         repo.save(plan("p1"))

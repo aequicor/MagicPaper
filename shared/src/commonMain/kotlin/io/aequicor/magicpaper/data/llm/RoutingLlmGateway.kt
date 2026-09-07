@@ -15,6 +15,11 @@ class RoutingLlmGateway(
     private val transports: Map<ProviderType, LlmGateway>,
 ) : LlmGateway {
 
+    override suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit): String {
+        val transport = transports[profile.provider] ?: error("Нет транспорта для провайдера ${profile.provider}.")
+        return transport.completeWithActivity(profile.forModel(), messages, onActivity)
+    }
+
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
         val transport = transports[profile.provider]
             ?: error("Нет транспорта для провайдера ${profile.provider}.")

@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.planning
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.ModelDossier
 import io.aequicor.magicpaper.domain.Plan
+import io.aequicor.magicpaper.domain.resolvePlan
 import io.aequicor.magicpaper.domain.PlanningRepository
 import io.aequicor.magicpaper.domain.DecisionCompiler
 import kotlinx.serialization.builtins.ListSerializer
@@ -28,33 +29,42 @@ class JsonPlanningRepository(
         val raw = store.read(KEY_PLANS)
         val decoded = raw?.let { runCatching { json.decodeFromString(plansSerializer, it) }.getOrNull() }
             ?: store.read("$KEY_PLANS-backup")?.let { runCatching { json.decodeFromString(plansSerializer, it) }.getOrNull() }
-            ?: if (raw == null || checkpoints.isNotEmpty()) emptyList() else error("Повреждены снимки планов; требуется восстановление данных")
-        val restored = decoded.associateBy { it.projectId }.toMutableMap()
-        val known = restored.keys + checkpoints.map { it.projectId }
+            ?: if (raw == null || checkpoints.isNotEmpty() || store.keys("coding-plan-v2-").isNotEmpty()) emptyList() else error("Повреждены снимки планов; требуется восстановление данных")
+        val restored = decoded.associateBy { it.id }.toMutableMap()
+        val known = decoded.map { it.projectId } + checkpoints.map { it.projectId }
         require(checkpointKeys.all { it.removePrefix("coding-plan-checkpoint-") in known }) {
             "Повреждён журнал проекта, для которого нет резервного снимка"
         }
-        checkpoints.forEach { if (it.plan == null) restored.remove(it.projectId) else restored[it.projectId] = it.plan }
+        checkpoints.forEach { checkpoint ->
+            if (checkpoint.plan == null) restored.entries.removeAll { it.value.projectId == checkpoint.projectId }
+            else restored[checkpoint.plan.id] = checkpoint.plan
+        }
+        store.keys("coding-plan-v2-").forEach { key ->
+            val checkpoint = store.read(key)?.let { raw -> json.decodeFromString<Checkpoint>(raw) } ?: error("Повреждён журнал плана")
+            val id = key.removePrefix("coding-plan-v2-")
+            if (checkpoint.plan == null) restored.remove(id) else restored[id] = checkpoint.plan
+        }
         return restored.values.map(DecisionCompiler::migrate)
             .sortedByDescending { it.updatedAt }
     }
 
     override suspend fun planFor(projectId: String): Plan? =
-        plans().firstOrNull { it.projectId == projectId }
+        plans().resolvePlan(projectId)
 
     override suspend fun save(plan: Plan) {
-        // На проект — один актуальный план: новый заменяет прежний.
-        val current = plans().filterNot { it.projectId == plan.projectId } + plan
+        // Each chat owns its plan; replacing one never removes sibling plans.
+        val current = plans().filterNot { it.id == plan.id } + plan
         val previous = json.encodeToString(plansSerializer, plans())
         // Write-ahead checkpoint includes the operation journal; index/snapshot can be rebuilt.
-        store.write(checkpointKey(plan.projectId), json.encodeToString(Checkpoint.serializer(), Checkpoint(plan.projectId, plan)))
+        store.write("coding-plan-v2-${plan.id}", json.encodeToString(Checkpoint.serializer(), Checkpoint(plan.projectId, plan)))
         store.write("$KEY_PLANS-backup", previous)
         store.write(KEY_PLANS, json.encodeToString(plansSerializer, current))
     }
 
     override suspend fun deletePlan(projectId: String) {
-        val current = plans().filterNot { it.projectId == projectId }
-        store.write(checkpointKey(projectId), json.encodeToString(Checkpoint.serializer(), Checkpoint(projectId, null)))
+        val target = plans().resolvePlan(projectId) ?: return
+        val current = plans().filterNot { it.id == target.id }
+        store.write("coding-plan-v2-${target.id}", json.encodeToString(Checkpoint.serializer(), Checkpoint(projectId, null)))
         store.write(KEY_PLANS, json.encodeToString(plansSerializer, current))
     }
 
@@ -72,6 +82,7 @@ class JsonPlanningRepository(
 
     override suspend fun wipe() {
         store.keys("coding-plan-checkpoint-").forEach { store.delete(it) }
+        store.keys("coding-plan-v2-").forEach { store.delete(it) }
         store.delete(KEY_PLANS)
         store.delete("$KEY_PLANS-backup")
         store.delete(KEY_DOSSIERS)

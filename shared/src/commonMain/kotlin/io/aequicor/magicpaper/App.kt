@@ -129,7 +129,7 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
                         activeProfileId = state.settings.activeLlmProfileId,
                     )
                     Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
-                        ActivePlugins(state.plugins, state.pluginStates)
+                        ActivePlugins(state.plugins, state.pluginStates, vm::openPlanningChat)
                     }
                     Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
                     Screen.SETTINGS -> SettingsScreen(vm, state)
@@ -232,7 +232,7 @@ private val Screen.subtitle: String
 
 /** Панели включённых плагинов: интерфейс расширяется их суммой. */
 @Composable
-private fun ActivePlugins(plugins: List<MagicPlugin>, states: Map<String, PluginState>) {
+private fun ActivePlugins(plugins: List<MagicPlugin>, states: Map<String, PluginState>, openPlanning: () -> Unit) {
     val enabledIds = states.filterValues { it.enabled }.keys
     Column {
         Text("Активные панели", style = MaterialTheme.typography.titleMedium)
@@ -254,7 +254,8 @@ private fun ActivePlugins(plugins: List<MagicPlugin>, states: Map<String, Plugin
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(12.dp),
             ) {
-                plugin.Content()
+                if (plugin.id == "coding-planning") androidx.compose.material3.TextButton(onClick = openPlanning) { Text("Открыть планирование в чате проекта") }
+                else plugin.Content()
             }
         }
     }

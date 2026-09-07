@@ -46,6 +46,10 @@ interface SearchEngine {
  */
 interface LlmGateway {
     suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String
+    suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
+        onActivity(CodingStep(CodingStepKind.INFO, "Ожидание ответа модели ${profile.shortLabel}. Подключение возвращает итоговый ответ."))
+        return complete(profile, messages)
+    }
 }
 
 /** Платформенный мост для сохранения/загрузки файла профиля. */

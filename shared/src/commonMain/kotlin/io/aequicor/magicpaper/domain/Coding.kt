@@ -41,6 +41,12 @@ data class CodingSession(
      */
     val llmProfileId: String? = null,
     val modelSelection: ModelSelection? = null,
+    val planId: String? = null,
+    val parentSessionId: String? = null,
+    val stageId: String? = null,
+    val planningMode: Boolean = false,
+    val searchProvider: SearchProvider = SearchProvider.AUTO,
+
 )
 
 /**
@@ -204,7 +210,7 @@ class CodingRunRecorder {
                 failed = event.message
                 steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false)
             }
-            is CodingEvent.Notice -> steps += CodingStep(kind = CodingStepKind.INFO, title = event.message)
+            is CodingEvent.Notice -> if (event.message.isNotBlank()) steps += CodingStep(kind = CodingStepKind.INFO, title = event.message)
             is CodingEvent.OutputTruncated -> {
                 // Модель отвечала, но не успела: фиксируем фазу и поясняем в ленте.
                 awaiting = false
@@ -412,6 +418,10 @@ data class CodingMessage(
     val createdAt: Long,
     /** Файлы, прикреплённые к запросу (сами лежат в изолированной папке рантайма). */
     val attachments: List<AttachmentMeta> = emptyList(),
+    val planning: PlanningChatBlock? = null,
+    val deliveryId: String? = null,
+    val pendingDelivery: Boolean = false,
+
 )
 
 /** Хранилище проектов, их сессий и журналов. */
@@ -479,3 +489,7 @@ interface CodingRuntime {
 interface ProjectDirPicker {
     suspend fun pickDirectory(): String?
 }
+
+/** Empty service ticks are transport housekeeping, including in older saved timelines. */
+val CodingStep.isVisibleActivity: Boolean
+    get() = kind != CodingStepKind.INFO || title.isNotBlank()

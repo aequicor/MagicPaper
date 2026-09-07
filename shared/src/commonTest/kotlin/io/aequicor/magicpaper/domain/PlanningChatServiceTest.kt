@@ -1,0 +1,231 @@
+package io.aequicor.magicpaper.domain
+
+import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
+import io.aequicor.magicpaper.data.planning.*
+import io.aequicor.magicpaper.data.storage.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.test.*
+import kotlinx.serialization.json.Json
+import kotlin.test.*
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class PlanningChatServiceTest {
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val profile = LlmProfile("model", "Planner", baseUrl = "http://test/v1", modelId = "m", favoriteModels = listOf("m"), modelLibraryVersion = 1)
+    private val project = CodingProject("project", "Project", "/shared", 1)
+    private class Gateway : LlmGateway {
+        var lastMessages = emptyList<LlmMessage>()
+        var gate: CompletableDeferred<Unit>? = null
+        var overrideReply: String? = null
+        var coordinator = """{"reply":"Результат принят","actions":[]}"""
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+            lastMessages = messages
+            gate?.await()
+            overrideReply?.let { return it }
+            if (messages.first().content.contains("Ты координатор")) return coordinator
+            return """{"reply":"Уточним результат","questions":[{"id":"single","title":"Формат?","kind":"SINGLE","options":[{"id":"pdf","label":"PDF"},{"id":"doc","label":"DOC"}]},{"id":"multi","title":"Возможности?","kind":"MULTIPLE","options":[{"id":"read","label":"Чтение"},{"id":"write","label":"Запись"}]},{"id":"text","title":"Критерии?","kind":"TEXT"}]}"""
+        }
+    }
+    private class Runtime(val gate: CompletableDeferred<Unit> = CompletableDeferred()) : CodingRuntime {
+        val calls = mutableListOf<Pair<CodingSession, String>>()
+        val paths = mutableListOf<String>()
+        override val supported = true
+        override val rootPath = "/shared"
+        override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
+        override fun ensureReady() = flowOf(RuntimeStatus(RuntimePhase.READY))
+        override fun abort(sessionId: String) = Unit
+        override fun abortAll() = Unit
+        override suspend fun uninstall() = Unit
+        override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
+            calls += session to prompt; paths += project.path
+            emit(CodingEvent.SessionStarted("engine-${session.id}"))
+            gate.await()
+            emit(CodingEvent.FinalText("""{"kind":"RESULT","text":"Проверки выполнены","changedFiles":[]}"""))
+            emit(CodingEvent.Finished)
+        }
+    }
+    private inner class Fixture(scope: TestScope) {
+        val kv = InMemoryKeyValueStore()
+        val store = PlanningStore(JsonPlanningRepository(kv, json))
+        val projects = JsonCodingProjectRepository(kv, json)
+        val profiles = JsonLlmProfileRepository(kv, json)
+        val settings = JsonSettingsRepository(kv, json)
+        val gateway = Gateway()
+        val runtime = Runtime()
+        val execution = PlanningExecutionService(store, runtime, projects, profiles, settings, object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "Checked")
+        }, scope = scope.backgroundScope)
+        val service = PlanningChatService(store, execution, projects, profiles, settings, PlanComposer(gateway), gateway, scope.backgroundScope)
+        suspend fun initialize() {
+            projects.save(project); profiles.save(profile); settings.save(AppSettings(activeLlmProfileId = profile.id))
+            service.bootstrap()
+        }
+        suspend fun session(id: String): CodingSession = CodingSession(id, project.id, id, 1, planningMode = true,
+            modelSelection = ModelSelection(profile.id, "m")).also { projects.saveSession(it) }
+        suspend fun readyPlan(id: String, parent: CodingSession) = Plan(id, project.id, "Goal $id", parentSessionId = parent.id, sharedWorkspace = true,
+            plannerSelection = parent.modelSelection, milestones = listOf(Milestone("stage", "Stage", description = "Change files", acceptance = "Checks pass", assignment = StageAssignment(profile.id, "m"))),
+            tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage")), DecisionNode("stage", "Stage", DecisionKind.STAGE, stageId = "stage"))).also { store.save(it) }
+    }
+    @Test fun deletingAllSessionsStopsPlansAndPreservesOtherProjects() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("plan", parent)
+        val other = project.copy(id = "other")
+        f.projects.save(other)
+        f.projects.saveSession(CodingSession("other-session", other.id, "Keep", 1))
+        f.store.save(Plan("other-plan", other.id, "Keep"))
+        f.service.confirm(plan.id); runCurrent()
+        assertEquals(1, f.runtime.calls.size)
+        val deletedSessions = f.projects.sessions(project.id)
+        f.service.deleteProjectSessions(project.id)
+        f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertTrue(f.projects.sessions(project.id).isEmpty())
+        assertTrue(JsonCodingProjectRepository(f.kv, json).sessions(project.id).isEmpty())
+        assertTrue(f.store.plans.value.none { it.projectId == project.id })
+        assertTrue(deletedSessions.all { f.projects.messages(project.id, it.id).isEmpty() })
+        assertNotNull(f.projects.all().firstOrNull { it.id == project.id })
+        assertEquals(1, f.projects.sessions(other.id).size)
+        assertNotNull(f.store.planFor("other-plan"))
+        f.service.deleteProjectSessions(project.id)
+        assertEquals(1, f.runtime.calls.size)
+    }
+
+    @Test fun planningModeCannotBeRevertedEvenWithStaleSession() = runTest {
+        val f = Fixture(this); f.initialize()
+        val ordinary = CodingSession("locked", project.id, "Chat", 1)
+        f.projects.saveSession(ordinary)
+        f.service.configure(ordinary, planning = true)
+        assertFailsWith<IllegalArgumentException> { f.service.configure(ordinary, planning = false) }
+        val saved = f.projects.sessions(project.id).first { it.id == ordinary.id }
+        assertTrue(saved.planningMode)
+        f.service.configure(saved, search = SearchProvider.AUTO)
+        assertTrue(f.projects.sessions(project.id).first { it.id == ordinary.id }.planningMode)
+    }
+
+    @Test fun questionsUseHistoryAndAnswersAreStoredOnce() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val session = f.session("parent")
+        f.projects.saveMessages(project.id, session.id, listOf(CodingMessage("history", CodingRole.USER, "Existing context", createdAt = 1)))
+        f.service.send(session, "Make an editor"); runCurrent()
+        val plan = f.store.plans.value.single()
+        assertTrue(plan.sharedWorkspace)
+        assertTrue(plan.dialogue.any { it.text == "Existing context" })
+        val question = plan.dialogue.last()
+        assertEquals(listOf(QuestionKind.SINGLE, QuestionKind.MULTIPLE, QuestionKind.TEXT), question.questions.map { it.kind })
+        val answers = listOf(PlanningAnswer("single", listOf("pdf")), PlanningAnswer("multi", listOf("read", "write")), PlanningAnswer("text", text = "Tests"))
+        f.service.send(session, "PDF, read and write, tests", answers, question.id); runCurrent()
+        f.service.send(session, "PDF, read and write, tests", answers, question.id); runCurrent()
+        assertEquals(1, f.projects.messages(project.id, session.id).count { it.planning?.replyTo == question.id })
+    }
+    @Test fun confirmationIsIdempotentAndTwoPlansShareCurrentFolder() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val one = f.readyPlan("one", f.session("s1")); val two = f.readyPlan("two", f.session("s2"))
+        f.service.confirm(one.id); f.service.confirm(one.id); f.service.confirm(two.id); runCurrent()
+        assertEquals(2, f.runtime.calls.size)
+        assertEquals(listOf("/shared", "/shared"), f.runtime.paths)
+        assertEquals(2, f.projects.sessions(project.id).count { it.stageId != null })
+        assertEquals(2, f.store.plans.value.size)
+        assertNotNull(f.store.planFor(one.id)?.confirmedRevision)
+        assertFailsWith<IllegalArgumentException> { f.store.planFor(project.id) }
+    }
+    @Test fun userMessageIsQueuedAndConsumedAfterCurrentTurn() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.service.confirm(plan.id); runCurrent()
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        f.service.send(worker, "Also check export"); runCurrent()
+        assertEquals(1, f.runtime.calls.size)
+        assertTrue(f.projects.messages(project.id, worker.id).any { it.pendingDelivery })
+        f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertTrue(f.runtime.calls.drop(1).any { "Also check export" in it.second })
+        assertTrue(f.store.planFor(plan.id)!!.deliveries.all { it.state == DeliveryState.ANSWERED })
+        assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
+        assertEquals(1, f.projects.messages(project.id, "parent").count { it.planning?.graph == true })
+    }
+    @Test fun queuedMessageDoesNotResumePausedPlan() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.service.confirm(plan.id); runCurrent()
+        f.execution.pause(plan.id)
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        f.service.send(worker, "После возобновления проверь экспорт"); runCurrent()
+        assertEquals(ExecutionIntent.PAUSE, f.store.planFor(plan.id)!!.intent)
+        assertEquals(DeliveryState.QUEUED, f.store.planFor(plan.id)!!.deliveries.single().state)
+    }
+
+    @Test fun coordinationRoutesToOtherStageAndRejectsInvalidResult() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val base = f.readyPlan("p", f.session("parent"))
+        val plan = base.copy(milestones = base.milestones + Milestone("other", "Other", description = "Read info", acceptance = "Checked"),
+            tree = base.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + "other") else it } + DecisionNode("other", "Other", DecisionKind.STAGE, stageId = "other"))
+        f.store.save(plan)
+        f.gateway.coordinator = """{"reply":"Передаю вопрос","actions":[{"stageId":"other","message":"Уточни формат"},{"stageId":"stage","message":"Сначала проверь документацию"}]}"""
+        val attempt = StageAttempt("a", "worker", StageAssignment("model", "m"), report = """{"kind":"QUESTION","text":"Какой формат?","targetStageId":"other"}""")
+        val response = f.service.finished(plan, plan.milestones.first(), attempt)
+        assertEquals(StageTurnAction.CONTINUE, response.action)
+        assertTrue(f.store.planFor(plan.id)!!.deliveries.any { it.targetStageId == "other" })
+        val count = f.store.planFor(plan.id)!!.deliveries.size
+        f.service.finished(f.store.planFor(plan.id)!!, plan.milestones.first(), attempt)
+        assertEquals(count, f.store.planFor(plan.id)!!.deliveries.size)
+        f.gateway.coordinator = """{"reply":"Нужен правильный формат","actions":[]}"""
+        var latest = f.store.planFor(plan.id)!!
+        for (turn in 1..3) {
+            val decision = f.service.finished(latest, latest.milestones.first(), attempt.copy(turnIndex = turn, report = "not a result"))
+            assertNotEquals(StageTurnAction.VERIFY, decision.action)
+            latest = f.store.planFor(plan.id)!!
+        }
+    }
+    @Test fun plannerCancellationPreservesSavedPlanAndClearsPendingRequest() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val session = f.session("parent")
+        f.gateway.gate = CompletableDeferred()
+        f.service.send(session, "Goal"); runCurrent()
+        assertTrue(f.store.plans.value.single().pendingRequest.isNotBlank())
+        f.service.cancelRequest(session.id); runCurrent()
+        assertEquals("", f.store.plans.value.single().pendingRequest)
+        assertTrue(f.service.drafts.value.isEmpty())
+        assertTrue(f.store.plans.value.single().milestones.isEmpty())
+    }
+    @Test fun automaticReplanningKeepsCompletedStageAndAddsNewSession() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val session = f.session("parent")
+        val base = f.readyPlan("p", session)
+        val completed = base.milestones.single().copy(status = MilestoneStatus.DONE,
+            attempts = listOf(StageAttempt("done", "plan-p-stage-stage", StageAssignment("model", "m"), phase = AttemptPhase.COMPLETE)))
+        f.store.save(base.copy(confirmedRevision = 1, milestones = listOf(completed)))
+        f.gateway.overrideReply = """{"reply":"Добавлен этап проверки","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["stage","extra"]},{"id":"stage","title":"Stage","kind":"STAGE","stageId":"stage"},{"id":"extra","title":"Extra","kind":"STAGE","stageId":"extra"}],"milestones":[{"id":"stage","title":"Stage","acceptance":"Checks pass"},{"id":"extra","title":"Extra","description":"Additional check","acceptance":"Checked","dependsOn":["stage"]}]}"""
+        f.service.send(session, "Добавь проверку"); runCurrent()
+        val updated = f.store.planFor("p")!!
+        assertEquals(completed, updated.milestones.first { it.id == "stage" })
+        assertTrue(updated.milestones.any { it.id == "extra" })
+        assertTrue(f.projects.sessions(project.id).any { it.stageId == "extra" })
+        assertTrue(updated.versions.isNotEmpty())
+    }
+
+    @Test fun recordedTurnResumesCoordinatorWithoutRepeatingWorkerOperations() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val attempt = StageAttempt("a", "plan-p-stage-stage", StageAssignment("model", "m"), phase = AttemptPhase.EXECUTING,
+            path = "/shared", report = "Saved result")
+        f.store.save(base.copy(confirmedRevision = 1, milestones = listOf(base.milestones.single().copy(status = MilestoneStatus.ACTIVE, attempts = listOf(attempt))),
+            coordination = listOf(CoordinationRecord("a-turn-0", "stage", StageReply(StageReplyKind.RESULT, "Saved result"), CoordinatorReply("Accepted")))))
+        f.runtime.gate.complete(Unit)
+        f.service.confirm("p"); advanceTimeBy(1000); runCurrent()
+        assertTrue(f.runtime.calls.none { it.first.id == attempt.sessionId })
+        assertEquals(PlanStatus.DONE, f.store.planFor("p")!!.status)
+        assertEquals(1, f.store.planFor("p")!!.coordination.size)
+    }
+
+    @Test fun legacyMigrationDoesNotStartRuntimeOrDuplicateMessages() = runTest {
+        val f = Fixture(this)
+        f.projects.save(project); f.profiles.save(profile)
+        f.store.save(Plan("old", project.id, "Old goal", dialogue = listOf(PlanningMessage("q", "assistant", "Question?"))))
+        f.service.bootstrap(); runCurrent()
+        assertEquals("planning-old", f.store.planFor("old")!!.parentSessionId)
+        assertTrue(f.runtime.calls.isEmpty())
+        assertEquals(1, f.projects.messages(project.id, "planning-old").count { it.id == "q" })
+        assertFalse(f.store.planFor("old")!!.sharedWorkspace)
+    }
+}

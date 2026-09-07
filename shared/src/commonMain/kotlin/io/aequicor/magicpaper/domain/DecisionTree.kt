@@ -41,7 +41,7 @@ import kotlinx.serialization.Serializable
     val assessment: StageAssessment = StageAssessment(), val explanation: String = "",
     val manualSelection: Boolean = false,
 )
-@Serializable data class PlanningMessage(val id: String, val role: String, val text: String)
+@Serializable data class PlanningMessage(val id: String, val role: String, val text: String, val activity: List<CodingStep> = emptyList(), val questions: List<PlanningQuestion> = emptyList())
 @Serializable data class PlanningIssue(
     val kind: IssueKind, val message: String, val retryAt: Long = 0,
     val retries: Int = 0, val requiresUser: Boolean = false,
@@ -50,7 +50,7 @@ import kotlinx.serialization.Serializable
     val id: String, val sessionId: String, val assignment: StageAssignment,
     val phase: AttemptPhase = AttemptPhase.PREPARED, val engineSessionId: String = "",
     val path: String = "", val baseCommit: String = "", val resultCommit: String = "",
-    val report: String = "", val activity: String = "", val error: PlanningIssue? = null,
+    val turnIndex: Int = 0, val prompt: String = "", val report: String = "", val activity: String = "", val steps: List<CodingStep> = emptyList(), val error: PlanningIssue? = null,
     val pendingTool: String = "", val pendingToolExternal: Boolean = false,
     val transportRetries: Int = 0, val repairRetries: Int = 0, val mergeRetries: Int = 0,
     val mergeAssignment: StageAssignment? = null, val mergePhase: AttemptPhase? = null,

@@ -5,6 +5,19 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -37,6 +51,9 @@ import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +63,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +77,14 @@ import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.CodingStep
+import io.aequicor.magicpaper.domain.readableStageActivity
+import io.aequicor.magicpaper.domain.PlanningChatService
+import io.aequicor.magicpaper.domain.SearchProvider
+import io.aequicor.magicpaper.domain.ExecutionIntent
+import io.aequicor.magicpaper.domain.MilestoneStatus
+import io.aequicor.magicpaper.ui.components.PlanningChatMessage
+import kotlinx.coroutines.launch
+import io.aequicor.magicpaper.domain.isVisibleActivity
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
@@ -92,21 +120,21 @@ fun CodingScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         RuntimeBar(ui.runtime, ui.installing, vm::prepareCodingRuntime, vm::uninstallCodingRuntime)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(modifier = Modifier.weight(1f)) {
+        ResizableProjectPanels(modifier = Modifier.weight(1f), sidebar = { panelModifier ->
             ProjectsPanel(
                 ui = ui,
                 onAddProject = vm::addCodingProject,
                 onSelectProject = vm::selectCodingProject,
                 onDeleteProject = vm::deleteCodingProject,
+                onDeleteAllSessions = vm::deleteAllCodingSessions,
                 onSelectSession = vm::selectCodingSession,
                 onAddSession = vm::addCodingSession,
                 onDeleteSession = vm::deleteCodingSession,
                 onAbortSession = vm::abortCodingSession,
                 onReply = { id, text -> vm.sendCodingPromptTo(id, text) },
-                modifier = Modifier.width(272.dp),
+                modifier = panelModifier,
             )
-            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Box(modifier = Modifier.weight(1f)) {
+        }) {
                 val project = ui.current
                 val activeId = project?.let { ui.activeSessionIdOf(it.id) }
                 val active = ui.sessions.firstOrNull { it.session.id == activeId }
@@ -123,7 +151,36 @@ fun CodingScreen(
                         activeProfileId = activeProfileId,
                     )
                 }
+        }
+    }
+}
+
+@Composable
+internal fun ResizableProjectPanels(
+    modifier: Modifier = Modifier,
+    sidebar: @Composable (Modifier) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    var preferredWidth by rememberSaveable { mutableStateOf(272f) }
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val maximum = (maxWidth.value - 328f).coerceIn(160f, 600f)
+        val minimum = minOf(200f, maximum)
+        val panelWidth = preferredWidth.coerceIn(minimum, maximum)
+        Row(Modifier.fillMaxSize()) {
+            sidebar(Modifier.width(panelWidth.dp))
+            Box(
+                Modifier.width(8.dp).fillMaxHeight()
+                    .semantics { contentDescription = "Изменить ширину списка сессий" }
+                    .draggable(rememberDraggableState { delta ->
+                        preferredWidth = (preferredWidth.coerceIn(minimum, maximum) + with(density) { delta.toDp().value }).coerceIn(minimum, maximum)
+                    }, Orientation.Horizontal),
+                contentAlignment = Alignment.Center,
+            ) {
+                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Box(Modifier.width(3.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small))
             }
+            Box(Modifier.weight(1f)) { content() }
         }
     }
 }
@@ -142,53 +199,63 @@ private fun SessionArea(
     // Переключатель источника/модели/усилия активной сессии.
     var switcherOpen by rememberSaveable(active.session.id) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
-        if (panelPlugin != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SessionTab(
-                    label = "Диалог",
-                    selected = ui.sessionMode == CodingSessionMode.DIALOG,
-                    onClick = { vm.setCodingSessionMode(CodingSessionMode.DIALOG) },
-                )
-                Spacer(Modifier.width(8.dp))
-                SessionTab(
-                    label = "План",
-                    selected = ui.sessionMode == CodingSessionMode.PLUGIN_PANEL,
-                    onClick = { vm.setCodingSessionMode(CodingSessionMode.PLUGIN_PANEL) },
-                )
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        }
-        if (ui.sessionMode == CodingSessionMode.PLUGIN_PANEL && panelPlugin != null) {
-            panelPlugin.SessionPanel(
-                project,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
-        } else {
+        val service = vm.planningChat
+        val scope = rememberCoroutineScope()
+        val serviceError = service?.error?.collectAsState()?.value
+        serviceError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
+        val serviceDrafts = service?.drafts?.collectAsState()?.value.orEmpty()
+        val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
+        val live = service?.execution?.live?.collectAsState()?.value.orEmpty()
+        val workerPlan = plans.firstOrNull { it.id == active.session.planId }
+        val worker = workerPlan?.milestones?.firstOrNull { it.id == active.session.stageId }
+        val attempt = worker?.attempts?.lastOrNull()
+        val workerLive = attempt?.let { live[it.id] ?: it }
+        val workerRunning = worker != null && worker.status == MilestoneStatus.ACTIVE && workerPlan.intent == ExecutionIntent.RUN && workerLive?.error?.requiresUser != true
+        val draft = serviceDrafts[active.session.id] ?: if (workerRunning) CodingDraft(steps = readableStageActivity(workerLive?.steps.orEmpty()), active = true) else active.draft
+        val effective = active.copy(messages = if (workerRunning && attempt != null) active.messages.filterNot { it.id == "${attempt.id}-response" } else active.messages, draft = draft, running = workerRunning || draft.active || active.running)
             CodingChat(
                 project = project,
-                session = active,
-                busy = active.running,
-                engineReady = ui.runtime.ready || (
+                session = effective,
+                busy = effective.running,
+                allowQueue = active.session.stageId != null,
+                planningService = service,
+                onOpenSession = vm::selectCodingSession,
+                engineReady = active.session.planningMode || active.session.stageId != null || ui.runtime.ready || (
                     vm.codingProfileOf(active.session)?.provider == ProviderType.OPENAI_SUBSCRIPTION &&
                         vm.openAiSubscriptionSignedIn()
                     ),
                 onSend = { text, attachments -> vm.sendCodingPromptTo(active.session.id, text, attachments) },
-                onAbort = { vm.abortCodingSession(active.session.id) },
+                onAbort = {
+                    when {
+                        active.session.stageId != null && active.session.planId != null -> service?.control(active.session.planId, "stop")
+                        serviceDrafts[active.session.id]?.active == true -> service?.cancelRequest(active.session.id)
+                        else -> vm.abortCodingSession(active.session.id)
+                    }
+                },
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 modelChip = {
-                    CodingModelChip(
+                    if (service != null && active.session.stageId == null) {
+                        ComposerModeButton(active.session.planningMode) {
+                            scope.launch { service.configure(active.session, planning = true) }
+                        }
+                        if (active.session.planningMode) {
+                            var searchMenu by remember { mutableStateOf(false) }
+                            Box {
+                                TextButton(onClick = { searchMenu = true }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Поиск: ${active.session.searchProvider.name} ▾", style = MaterialTheme.typography.labelMedium) }
+                                DropdownMenu(searchMenu, { searchMenu = false }) {
+                                    SearchProvider.entries.forEach { provider -> DropdownMenuItem(text = { Text(provider.name) }, onClick = { searchMenu = false; scope.launch { service.configure(active.session, search = provider) } }) }
+                                }
+                            }
+                        }
+                    }
+                    if (active.session.stageId != null) Text(worker?.assignment?.let { "${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}" }.orEmpty(), style = MaterialTheme.typography.labelMedium)
+                    else CodingModelChip(
                         profile = vm.codingProfileOf(active.session),
                         overridden = active.session.llmProfileId != null,
                         onClick = { switcherOpen = true },
                     )
                 },
             )
-        }
     }
     if (switcherOpen) {
         CodingModelSwitcherDialog(
@@ -337,7 +404,8 @@ fun ActivityDot(
     val scale = if (status == CodingSessionStatus.WORKING) 0.75f + 0.25f * pulse else 1f
     Box(
         modifier = modifier
-            .size((size * scale).dp)
+            .size(size.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(androidx.compose.foundation.shape.CircleShape)
             .background(color),
     )
@@ -347,8 +415,9 @@ fun ActivityDot(
  * Левое меню раздела: список проектов, а под выбранным — его кодинг-сессии.
  * У каждой сессии свой кружок статуса, быстрый ответ и меню (прервать, удалить).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ProjectsPanel(
+internal fun ProjectsPanel(
     ui: CodingUi,
     onAddProject: () -> Unit,
     onSelectProject: (String) -> Unit,
@@ -359,6 +428,8 @@ private fun ProjectsPanel(
     onAbortSession: (String) -> Unit,
     onReply: (String, String) -> Unit,
     modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
+    onDeleteAllSessions: (String) -> Unit = {},
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Text(
@@ -367,33 +438,58 @@ private fun ProjectsPanel(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(ui.projects, key = { it.id }) { project ->
+        val collapsed = remember { mutableStateMapOf<String, Boolean>() }
+        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
+            var position = 0
+            ui.projects.forEach { project ->
                 val expanded = project.id == ui.current?.id
                 val own = ui.sessionsOf(project.id)
-                ProjectRow(
-                    project = project,
-                    selected = expanded,
-                    expanded = expanded,
-                    status = ui.statusOf(project.id),
-                    runningSessions = own.count { it.running },
-                    sessionCount = own.size,
-                    onSelect = { onSelectProject(project.id) },
-                    onDelete = { onDeleteProject(project.id) },
-                )
+                val projectHeader: @Composable (Boolean) -> Unit = { compact ->
+                    ProjectRow(project, expanded, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
+                        { onSelectProject(project.id) }, { onDeleteProject(project.id) }, compact, { onDeleteAllSessions(project.id) })
+                }
+                val projectPosition = position
+                stickyHeader(key = "project-${project.id}") {
+                    val pinned = listState.firstVisibleItemIndex > projectPosition ||
+                        (listState.firstVisibleItemIndex == projectPosition && listState.firstVisibleItemScrollOffset > 0)
+                    Column(Modifier.fillMaxWidth().background(if (pinned) MaterialTheme.colorScheme.surface else Color.Transparent)) { projectHeader(pinned) }
+                }
+                position++
                 if (expanded) {
                     val activeId = ui.activeSessionIdOf(project.id)
-                    own.forEach { item ->
-                        SessionRow(
-                            item = item,
-                            selected = item.session.id == activeId,
-                            onSelect = { onSelectSession(item.session.id) },
-                            onDelete = { onDeleteSession(item.session.id) },
-                            onAbort = { onAbortSession(item.session.id) },
-                            onReply = { text -> onReply(item.session.id, text) },
-                        )
+                    val ids = own.map { it.session.id }.toSet()
+                    own.filter { it.session.parentSessionId !in ids }.forEach { sessionUi ->
+                        val children = own.filter { it.session.parentSessionId == sessionUi.session.id }
+                        val showChildren = collapsed[sessionUi.session.id] != true
+                        val headerPosition = position++
+                        val sessionRow: @Composable () -> Unit = {
+                            SessionRow(sessionUi, sessionUi.session.id == activeId,
+                                { onSelectSession(sessionUi.session.id) }, { onDeleteSession(sessionUi.session.id) },
+                                { onAbortSession(sessionUi.session.id) }, { onReply(sessionUi.session.id, it) },
+                                childCount = children.size, expanded = showChildren,
+                                onToggleChildren = { collapsed[sessionUi.session.id] = showChildren })
+                        }
+                        if (sessionUi.session.planningMode || children.isNotEmpty()) {
+                            stickyHeader(key = "session-${sessionUi.session.id}") {
+                                val pinned = listState.firstVisibleItemIndex > headerPosition ||
+                                    (listState.firstVisibleItemIndex == headerPosition && listState.firstVisibleItemScrollOffset > 0)
+                                Column(Modifier.fillMaxWidth().background(if (pinned) MaterialTheme.colorScheme.surface else Color.Transparent)) {
+                                    if (pinned) projectHeader(true)
+                                    sessionRow()
+                                }
+                            }
+                        } else item(key = "session-${sessionUi.session.id}") { sessionRow() }
+                        if (showChildren) children.forEach { child ->
+                            item(key = "session-${child.session.id}") {
+                                SessionRow(child, child.session.id == activeId,
+                                    { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
+                                    { onAbortSession(child.session.id) }, { onReply(child.session.id, it) }, nested = true)
+                            }
+                            position++
+                        }
                     }
-                    AddSessionRow(onAdd = onAddSession)
+                    item(key = "add-${project.id}") { AddSessionRow(onAdd = onAddSession) }
+                    position++
                 }
             }
         }
@@ -413,25 +509,20 @@ private fun ProjectRow(
     sessionCount: Int,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
+    compact: Boolean = false,
+    onDeleteAllSessions: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
             .clip(MaterialTheme.shapes.small)
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                } else {
-                    Color.Transparent
-                }
-            )
             .clickable(onClick = onSelect)
-            .padding(vertical = 6.dp),
+            .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Стрелка-маркер: под выбранным проектом раскрыт список его сессий.
-        Text(
+        if (!compact) Text(
             if (expanded) "▾" else "▸",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.outline,
@@ -442,15 +533,16 @@ private fun ProjectRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 project.name,
+                fontWeight = FontWeight.SemiBold,
+                overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
             )
-            Text(
+            if (!compact) Text(
                 buildString {
-                    append(project.path)
+                    append("$sessionCount ${sessionCountWord(sessionCount)}")
                     if (sessionCount > 0) {
-                        append(" · $sessionCount ${sessionCountWord(sessionCount)}")
                         if (runningSessions > 0) append(", $runningSessions работают")
                     }
                 },
@@ -459,7 +551,7 @@ private fun ProjectRow(
                 maxLines = 1,
             )
         }
-        RowMenu(key = "project-${project.id}", entries = listOf("Удалить проект" to onDelete))
+        RowMenu(key = "project-${project.id}", entries = listOf("Удалить все сессии" to onDeleteAllSessions, "Удалить проект" to onDelete))
     }
 }
 
@@ -475,12 +567,16 @@ private fun SessionRow(
     onDelete: () -> Unit,
     onAbort: () -> Unit,
     onReply: (String) -> Unit,
+    nested: Boolean = false,
+    childCount: Int = 0,
+    expanded: Boolean = false,
+    onToggleChildren: () -> Unit = {},
 ) {
     val status = item.status
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp)
+            .padding(start = if (nested) 42.dp else 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
             .clip(MaterialTheme.shapes.small)
             .background(
                 if (selected) {
@@ -493,19 +589,30 @@ private fun SessionRow(
             .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (childCount > 0) {
+            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
+                .clickable(onClick = onToggleChildren), contentAlignment = Alignment.Center) {
+                Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
+            }
+        }
         StatusTooltip(status) { ActivityDot(status, size = 8) }
         Spacer(Modifier.width(7.dp))
-        Text(
-            item.session.name,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = 1,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                (if (item.session.planningMode && !item.session.name.startsWith("🔀")) "🔀 " else "") + item.session.name,
+                style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (nested || item.running || status == CodingSessionStatus.WAITING) Text(
+                (if (nested) "Этап · " else "") + status.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+            )
+        }
+        if (childCount > 0) Text(childCount.toString(), style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
         // Быстрый ответ агенту без перехода в сессию.
         if (status == CodingSessionStatus.WAITING && !item.running) {
             TextButton(onClick = { onReply("Продолжай") }, modifier = Modifier.heightIn(min = 28.dp)) {
@@ -625,7 +732,7 @@ private fun ProjectsEmptyHint(hasProject: Boolean) {
 }
 
 @Composable
-private fun CodingChat(
+internal fun CodingChat(
     project: CodingProject,
     session: CodingSessionUi,
     busy: Boolean,
@@ -634,6 +741,9 @@ private fun CodingChat(
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
     modelChip: (@Composable () -> Unit)? = null,
+    planningService: PlanningChatService? = null,
+    onOpenSession: (String) -> Unit = {},
+    allowQueue: Boolean = false,
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -650,28 +760,26 @@ private fun CodingChat(
         ) {
             item {
                 Text(
-                    "Проект «${project.name}» · сессия «${session.session.name}» · ${project.path}",
+                    "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${project.path}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            items(messages, key = { it.id }) { message -> CodingMessageBubble(message) }
+            items(messages, key = { it.id }) { message ->
+                CodingMessageBubble(message)
+                if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
+                if (planningService != null) PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
+            }
             if (draft.steps.isNotEmpty() || draft.failedMessage != null) {
                 item(key = "draft") { DraftBubble(draft) }
             }
         }
-        // Ряд с чипом модели: тап открывает переключатель источника/модели/усилия.
-        if (modelChip != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) { modelChip() }
-        }
         // Статус работы агента — снизу, над полем ввода: чем занят и о чём думает.
         AgentStatusPanel(draft = session.draft, running = busy)
         CodingComposer(
-            enabled = engineReady && !busy,
-            busy = busy,
+            enabled = engineReady && (!busy || allowQueue),
+            busy = busy && !allowQueue,
+            controls = modelChip,
             onSend = onSend,
             onAbort = onAbort,
             onPickAttachments = onPickAttachments,
@@ -747,7 +855,8 @@ private fun CodingMessageBubble(message: CodingMessage) {
  * с раскрывающимся выводом инструмента (что реально пришло в ответ).
  */
 @Composable
-private fun CodingStepRow(step: CodingStep, live: Boolean) {
+internal fun CodingStepRow(step: CodingStep, live: Boolean) {
+    if (!step.isVisibleActivity) return
     when (step.kind) {
         CodingStepKind.ANSWER -> {
             Spacer(Modifier.height(4.dp))
@@ -764,7 +873,7 @@ private fun CodingStepRow(step: CodingStep, live: Boolean) {
         CodingStepKind.INFO -> Text(
             "◷ ${step.title}",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 2.dp),
         )
         CodingStepKind.TOOL, CodingStepKind.EXEC -> ToolStepRow(step, live)
@@ -972,9 +1081,26 @@ private fun AgentStatusPanel(draft: CodingDraft, running: Boolean) {
 }
 
 @Composable
+internal fun ComposerModeButton(planning: Boolean, onPlanning: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }, enabled = !planning, modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+            Text(if (planning) "🔀 Планирование" else "Обычный ▾",
+                style = MaterialTheme.typography.labelMedium)
+        }
+        DropdownMenu(expanded && !planning, { expanded = false }) {
+            DropdownMenuItem(text = { Text("Обычный ✓") }, onClick = { expanded = false })
+            DropdownMenuItem(text = { Text("🔀 Планирование") }, onClick = { expanded = false; onPlanning() })
+        }
+    }
+}
+
+@Composable
 private fun CodingComposer(
     enabled: Boolean,
     busy: Boolean,
+    controls: (@Composable () -> Unit)? = null,
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
@@ -987,46 +1113,37 @@ private fun CodingComposer(
         text = ""
         attachments = emptyList()
     }
-    Column(modifier = Modifier.fillMaxWidth()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        PendingAttachmentsRow(
-            attachments = attachments,
-            onRemove = { target -> attachments = attachments.filterNot { it.id == target.id } },
-            modifier = Modifier.padding(top = 8.dp),
+    Column(Modifier.fillMaxWidth().padding(12.dp)
+        .clip(MaterialTheme.shapes.large)
+        .background(MaterialTheme.colorScheme.surface)
+        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
+        .padding(8.dp)) {
+        PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
+        BasicTextField(
+            value = text, onValueChange = { text = it },
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 36.dp),
+            maxLines = 6,
+            decorationBox = { inner ->
+                Box {
+                    if (text.isEmpty()) Text("Поручение агенту в папке проекта…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    inner()
+                }
+            },
         )
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(
-                onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text("📎", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
+                modifier = Modifier.size(36.dp).semantics { contentDescription = "Прикрепить файлы" },
+                contentPadding = PaddingValues(0.dp)) { Text("📎", style = MaterialTheme.typography.labelMedium) }
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                controls?.invoke()
             }
-            Spacer(Modifier.width(4.dp))
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Поручение агенту в папке проекта…") },
-                minLines = 1,
-                maxLines = 5,
-                shape = MaterialTheme.shapes.large,
-            )
-            Spacer(Modifier.width(8.dp))
-            if (busy) {
-                TextButton(onClick = onAbort, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Прервать", fontWeight = FontWeight.Medium)
-                }
-            } else {
-                TextButton(
-                    enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()),
-                    onClick = ::submit,
-                    modifier = Modifier.heightIn(min = 48.dp),
-                ) {
-                    Text(if (enabled) "Отправить" else "Движок не готов")
-                }
+            if (busy) TextButton(onClick = onAbort) { Text("Прервать") }
+            else TextButton(enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit) {
+                Text(if (enabled) "Отправить ↑" else "Движок не готов", style = MaterialTheme.typography.labelMedium)
             }
         }
     }

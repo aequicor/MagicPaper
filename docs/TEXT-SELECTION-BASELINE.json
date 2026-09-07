@@ -1,0 +1,71 @@
+{
+  "capturedAt": "2026-09-07T15:15:54.505482+04:00",
+  "head": "bf474cf337dbd1018d975b4306f5c3a54be129c5",
+  "diagnosisSha256": "34b67589e6bcee08707e0146bec2ed7a9044c40a5670f813c6a3d1928d3b92c2",
+  "files": [
+    {
+      "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ChatScreen.kt",
+      "scope": "expected implementation",
+      "status": "clean",
+      "sha256": "010dfd09f193b813986e641ca21ce839eedb219ce3af3f0cf4f8fa4a82cf75de",
+      "bytes": 13483,
+      "lines": 304,
+      "headBlob": "ab8df3ea2e50b503caf1d66dcf7f8030fc3debc6",
+      "diffStat": ""
+    },
+    {
+      "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ChatMarkdown.kt",
+      "scope": "expected implementation",
+      "status": "clean",
+      "sha256": "234d42f95d197831c97ccd705d26da7067dfc15ea5f80211951f182159202ee5",
+      "bytes": 4117,
+      "lines": 82,
+      "headBlob": "1e0d8b025ca9e71a8d05978cb63eac01b2163dea",
+      "diffStat": ""
+    },
+    {
+      "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "scope": "expected implementation",
+      "status": "M shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "sha256": "b2b5df43356a85db813a1fa661dbc157181f707d2c14082ff8ed3dd2d691a044",
+      "bytes": 46695,
+      "lines": 1060,
+      "headBlob": "47fcfa7f0d52ea7ea849c73330a05a7a812d1173",
+      "diffStat": "70\t43\tshared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt"
+    },
+    {
+      "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt",
+      "scope": "expected implementation",
+      "status": "?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt",
+      "sha256": "84884f0e56327fd4dfac28e2bbf21b40e610f4ce2b0e493016a9146f8125f1ba",
+      "bytes": 7711,
+      "lines": 101,
+      "headBlob": null,
+      "diffStat": "untracked; preserve entire existing file"
+    },
+    {
+      "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ChatScroll.kt",
+      "scope": "conditional: only if selection/autoscroll checks demonstrate need",
+      "status": "clean",
+      "sha256": "6d4277de96a8b4bdc055bfbe0158181a28316bfc5f9509f631f958ba7f820c4a",
+      "bytes": 6734,
+      "lines": 117,
+      "headBlob": "2ddc1812e1cf058a324297589c40047f6283d84d",
+      "diffStat": ""
+    }
+  ],
+  "neighborReport": {
+    "source": "mtr505iq-c739a667-turn-1-action-0, from mtr4uc31-f6253936",
+    "paths": [
+      "docs/UI-settings.md",
+      "docs/settings-ui.html"
+    ],
+    "applicationSourcesChanged": false,
+    "existence": {
+      "docs/UI-settings.md": false,
+      "docs/settings-ui.html": false
+    },
+    "intersection": []
+  },
+  "workspaceStatusBefore": "M shared/src/commonMain/kotlin/io/aequicor/magicpaper/App.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/data/llm/RoutingLlmGateway.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/data/planning/JsonPlanningRepository.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/data/planning/PlanningStore.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/di/Dependencies.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/DecisionPlanner.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/DecisionTree.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanComposer.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Planning.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanningExecutionService.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Ports.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingModelSwitcher.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/DecisionGraph.kt\n M shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt\n M shared/src/commonTest/kotlin/io/aequicor/magicpaper/data/planning/JsonPlanningRepositoryTest.kt\n M shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/CodingRunRecorderTest.kt\n M shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/PlanningExecutionServiceTest.kt\n M shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/llm/CodexAppServerOpenAiSubscription.kt\n?? docs/TEXT-SELECTION-DIAGNOSIS.md\n?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanningChat.kt\n?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanningChatService.kt\n?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt\n?? shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/PlanningChatServiceTest.kt\n?? shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/PlanningConversationTest.kt\n?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/plugins/"
+}
