@@ -794,7 +794,9 @@ internal fun CodingChat(
             items(rows, key = { it.message.id }) { row ->
                 val message = row.message
                 CodingMessageBubble(message) {
-                    if (busy && (message.id == statusMessageId || row.planCard?.id == statusMessageId)) status()
+                    if (busy && statusMessageId != null &&
+                        (message.id == statusMessageId || row.planCard?.id == statusMessageId)
+                    ) status()
                     if (planningService != null && message.planning != null) {
                         Spacer(Modifier.height(6.dp))
                         PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
