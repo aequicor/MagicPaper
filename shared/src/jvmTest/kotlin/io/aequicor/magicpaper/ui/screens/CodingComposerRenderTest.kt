@@ -35,8 +35,9 @@ class CodingComposerRenderTest {
             )
             val output = File("build/reports/coding-status").apply { mkdirs() }
             drafts.forEachIndexed { index, draft ->
+              for (expanded in listOf(false, true)) {
                 ImageComposeScene(680, 180) {
-                    MagicPaperTheme { Surface { AgentMessageStatus(draft, expanded = true, onToggle = {}) } }
+                    MagicPaperTheme { Surface { AgentMessageStatus(draft, expanded = expanded, onToggle = {}) } }
                 }.use { scene ->
                     // Markdown parses on a background dispatcher; allow it to reach the scene.
                     repeat(20) {
@@ -44,8 +45,9 @@ class CodingComposerRenderTest {
                         Thread.sleep(25)
                         runCurrent()
                     }
-                    File(output, "$index.png").writeBytes(scene.render(640_000_000L).use { it.encodeToData()!!.use { data -> data.bytes } })
+                    File(output, "$index-$expanded.png").writeBytes(scene.render(640_000_000L).use { it.encodeToData()!!.use { data -> data.bytes } })
                 }
+              }
             }
         } finally { Dispatchers.resetMain() }
     }

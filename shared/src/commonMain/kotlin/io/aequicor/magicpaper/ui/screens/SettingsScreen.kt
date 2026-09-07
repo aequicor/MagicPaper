@@ -121,6 +121,25 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
             }
             Switch(checked = draft.paperAnimationEnabled, onCheckedChange = null)
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .toggleable(
+                    value = draft.hideSystemSteps,
+                    role = Role.Switch,
+                    onValueChange = { draft = draft.copy(hideSystemSteps = it) },
+                ).padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Скрывать системные шаги", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Скрывает служебные статусы агента. Ответы, рассуждения, действия с инструментами и ошибки остаются видимыми.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = draft.hideSystemSteps, onCheckedChange = null)
+        }
         Spacer(Modifier.height(12.dp))
 
         NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }

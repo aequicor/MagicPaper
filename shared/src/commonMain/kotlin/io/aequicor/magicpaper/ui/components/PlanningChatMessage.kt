@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -33,12 +34,12 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
     val initial = plan.versions.firstOrNull { it.revision == plan.confirmedRevision }
     val display = if (original && initial != null) plan.copy(tree = initial.tree, milestones = initial.milestones, finalAttempt = null) else plan
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(display.goal, style = MaterialTheme.typography.bodyLarge)
+        SelectionContainer { Text(display.goal, style = MaterialTheme.typography.bodyLarge) }
         display.selectedMilestones.forEachIndexed { index, stage ->
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("${index + 1}. ${stage.title}", style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
+                SelectionContainer { Text("${index + 1}. ${stage.title}", style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)) }
                 if (stage.description.isNotBlank()) ChatMarkdown(stage.description)
-                if (stage.acceptance.isNotBlank()) Text("Критерии готовности: ${stage.acceptance}", style = MaterialTheme.typography.bodyLarge)
+                if (stage.acceptance.isNotBlank()) SelectionContainer { Text("Критерии готовности: ${stage.acceptance}", style = MaterialTheme.typography.bodyLarge) }
                 if (stage.dependsOn.isNotEmpty()) Text("После: " + stage.dependsOn.joinToString { id ->
                     display.milestones.firstOrNull { it.id == id }?.title ?: id
                 }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

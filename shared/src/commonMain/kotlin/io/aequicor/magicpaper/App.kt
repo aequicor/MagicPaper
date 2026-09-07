@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,6 +43,7 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.Screen
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ModelSwitcherDialog
+import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
 import io.aequicor.magicpaper.ui.components.MagicPaperBackground
 import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
@@ -106,7 +108,9 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
 }
 
 @Composable
-private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
+private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocalProvider(
+    LocalHideSystemSteps provides state.settings.hideSystemSteps,
+) {
     Box(Modifier.fillMaxSize()) {
         if (state.screen == Screen.CHAT || state.screen == Screen.CODING) {
             MagicPaperBackground(state.settings.paperAnimationEnabled, Modifier.matchParentSize())

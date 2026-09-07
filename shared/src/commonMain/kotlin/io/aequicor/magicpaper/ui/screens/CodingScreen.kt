@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
@@ -71,6 +72,12 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
@@ -91,6 +98,7 @@ import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.MilestoneStatus
 import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
+import io.aequicor.magicpaper.ui.components.codingChatRows
 import kotlinx.coroutines.launch
 import io.aequicor.magicpaper.domain.isVisibleActivity
 import io.aequicor.magicpaper.domain.CodingStepKind
@@ -744,6 +752,7 @@ internal fun CodingChat(
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
+    val rows = remember(messages) { codingChatRows(messages) }
     val draft = session.draft
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
     val hasDraft = draft.steps.isNotEmpty() || draft.thinking.isNotBlank() || draft.failedMessage != null
@@ -782,12 +791,23 @@ internal fun CodingChat(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            items(messages, key = { it.id }) { message ->
+            items(rows, key = { it.message.id }) { row ->
+                val message = row.message
                 CodingMessageBubble(message) {
-                    if (busy && message.id == statusMessageId) status()
+                    if (busy && (message.id == statusMessageId || row.planCard?.id == statusMessageId)) status()
                     if (planningService != null && message.planning != null) {
                         Spacer(Modifier.height(6.dp))
                         PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
+                    }
+                    row.planCard?.let { card ->
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(Modifier.height(12.dp))
+                        ChatMarkdown(card.text)
+                        if (planningService != null) {
+                            Spacer(Modifier.height(6.dp))
+                            PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                        }
                     }
                     if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                 }
@@ -844,7 +864,7 @@ private fun CodingMessageBubble(message: CodingMessage, footer: (@Composable () 
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
             if (isUser) {
-                Text(message.text, style = MaterialTheme.typography.bodyLarge)
+                SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
                 // Прикреплённые к запросу файлы (лежат в изолированной папке рантайма).
                 CodingAttachments(message.attachments)
             } else if (message.steps.isNotEmpty()) {
@@ -852,26 +872,30 @@ private fun CodingMessageBubble(message: CodingMessage, footer: (@Composable () 
                 message.steps.forEach { step -> CodingStepRow(step, live = false) }
             } else {
                 // Совместимость со старыми журналами без ленты.
-                Text(
-                    message.text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (message.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                )
-                if (message.activity.isNotEmpty()) {
-                    Spacer(Modifier.height(6.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Действия агента:",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    message.activity.forEach { line ->
+                SelectionContainer {
+                    Column {
                         Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            message.text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (message.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                         )
+                        if (message.activity.isNotEmpty()) {
+                            Spacer(Modifier.height(6.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Действия агента:",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            message.activity.forEach { line ->
+                                Text(
+                                    text = line,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -887,6 +911,7 @@ private fun CodingMessageBubble(message: CodingMessage, footer: (@Composable () 
 @Composable
 internal fun CodingStepRow(step: CodingStep, live: Boolean) {
     if (!step.isVisibleActivity) return
+    if (step.kind == CodingStepKind.INFO && io.aequicor.magicpaper.ui.components.LocalHideSystemSteps.current) return
     when (step.kind) {
         CodingStepKind.ANSWER -> {
             Spacer(Modifier.height(4.dp))
@@ -894,18 +919,22 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
             Spacer(Modifier.height(4.dp))
         }
         CodingStepKind.THINKING -> ThinkingStepRow(step)
-        CodingStepKind.ERROR -> Text(
-            "✕ ${step.title}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(vertical = 3.dp),
-        )
-        CodingStepKind.INFO -> Text(
-            "◷ ${step.title}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(vertical = 2.dp),
-        )
+        CodingStepKind.ERROR -> SelectionContainer {
+            Text(
+                "✕ ${step.title}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(vertical = 3.dp),
+            )
+        }
+        CodingStepKind.INFO -> SelectionContainer {
+            Text(
+                "◷ ${step.title}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 2.dp),
+            )
+        }
         CodingStepKind.TOOL, CodingStepKind.EXEC -> ToolStepRow(step, live)
     }
 }
@@ -920,10 +949,9 @@ private fun ThinkingStepRow(step: CodingStep) {
             .padding(vertical = 2.dp)
             .clip(MaterialTheme.shapes.small)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
-            .clickable { expanded = !expanded }
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "💭",
                 style = MaterialTheme.typography.bodySmall,
@@ -965,10 +993,12 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             .padding(vertical = 2.dp)
             .clip(MaterialTheme.shapes.small)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
-            .then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier)
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 statusGlyph,
                 style = MaterialTheme.typography.bodySmall,
@@ -1002,17 +1032,13 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             )
         }
         if (expanded && hasDetail) {
-            Text(
-                step.result,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = MagicFonts.code,
-                ),
-                color = if (step.ok) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-            )
+            SelectionContainer {
+                Text(
+                    step.result,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
+                    color = if (step.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
@@ -1057,21 +1083,31 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
             Text(activity, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text(
-            text = if (thinking.isBlank()) preview else "$preview ${if (expanded) "▴" else "▾"}",
-            style = MaterialTheme.typography.bodySmall.copy(fontSize = 8.sp, lineHeight = 12.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().clickable(enabled = thinking.isNotBlank(), onClick = onToggle)
-                .semantics { contentDescription = if (thinking.isBlank()) preview else if (expanded) "Свернуть размышления" else "Развернуть размышления" }
-                .padding(vertical = 4.dp),
-        )
-        if (expanded && thinking.isNotBlank()) {
-            val scroll = rememberScrollState()
-            Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
-                ChatMarkdown(thinking)
+        if (thinking.isBlank()) {
+            Text("Модель пока не прислала краткие размышления",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp))
+        } else {
+            Text(
+                "Краткие размышления ${if (expanded) "▴" else "▾"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
+                    .semantics { contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления" }
+                    .padding(vertical = 4.dp),
+            )
+            if (expanded) {
+                val scroll = rememberScrollState()
+                Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
+                    ChatMarkdown(thinking, compact = true)
+                }
+                LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
+            } else {
+                Box(Modifier.fillMaxWidth().heightIn(max = 40.dp).clip(MaterialTheme.shapes.small)) {
+                    ChatMarkdown(preview, compact = true)
+                }
             }
-            LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
         }
     }
 }
@@ -1139,7 +1175,17 @@ private fun CodingComposer(
                     value = text, onValueChange = { text = it },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 4.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.isMetaPressed && event.key == Key.Enter) {
+                                submit()
+                                true
+                            } else {
+                                false
+                            }
+                        },
                     maxLines = 6,
                     decorationBox = { inner ->
                         Box {

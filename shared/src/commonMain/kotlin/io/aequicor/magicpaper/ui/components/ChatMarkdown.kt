@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -25,7 +26,8 @@ import io.aequicor.magicpaper.ui.theme.MagicFonts
  * Парсинг асинхронный и переживает рекомпозицию (помнит состояние по тексту).
  */
 @Composable
-fun ChatMarkdown(text: String, modifier: Modifier = Modifier) {
+fun ChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = false) {
+    val bodyStyle = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge
     val markdownState = rememberMarkdownState(text)
     val highlightsBuilder = remember {
         Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
@@ -56,27 +58,29 @@ fun ChatMarkdown(text: String, modifier: Modifier = Modifier) {
             },
         )
     }
-    Markdown(
-        markdownState = markdownState,
-        modifier = modifier.fillMaxWidth(),
-        // В бабле чата дисплейные заголовки ни к чему — приглушаем до типографики чата.
-        // Код — фирменный моно (иначе библиотека пинит системный моноширинный);
-        // цитаты — курсив, подтянет literata_italic из стека.
-        typography = markdownTypography(
-            h1 = MaterialTheme.typography.titleLarge,
-            h2 = MaterialTheme.typography.titleMedium,
-            h3 = MaterialTheme.typography.titleMedium,
-            h4 = MaterialTheme.typography.bodyLarge,
-            h5 = MaterialTheme.typography.bodyLarge,
-            h6 = MaterialTheme.typography.bodyMedium,
-            text = MaterialTheme.typography.bodyLarge,
-            code = MaterialTheme.typography.bodyMedium.copy(fontFamily = MagicFonts.code),
-            inlineCode = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = MagicFonts.code,
-                fontSize = TextUnit.Unspecified,
+    SelectionContainer {
+        Markdown(
+            markdownState = markdownState,
+            modifier = modifier.fillMaxWidth(),
+            // В бабле чата дисплейные заголовки ни к чему — приглушаем до типографики чата.
+            // Код — фирменный моно (иначе библиотека пинит системный моноширинный);
+            // цитаты — курсив, подтянет literata_italic из стека.
+            typography = markdownTypography(
+                h1 = if (compact) bodyStyle else MaterialTheme.typography.titleLarge,
+                h2 = if (compact) bodyStyle else MaterialTheme.typography.titleMedium,
+                h3 = if (compact) bodyStyle else MaterialTheme.typography.titleMedium,
+                h4 = if (compact) bodyStyle else MaterialTheme.typography.bodyLarge,
+                h5 = if (compact) bodyStyle else MaterialTheme.typography.bodyLarge,
+                h6 = if (compact) bodyStyle else MaterialTheme.typography.bodyMedium,
+                text = bodyStyle,
+                code = MaterialTheme.typography.bodyMedium.copy(fontFamily = MagicFonts.code),
+                inlineCode = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = MagicFonts.code,
+                    fontSize = TextUnit.Unspecified,
+                ),
+                quote = bodyStyle.plus(SpanStyle(fontStyle = FontStyle.Italic)),
             ),
-            quote = MaterialTheme.typography.bodyLarge.plus(SpanStyle(fontStyle = FontStyle.Italic)),
-        ),
-        components = components,
-    )
+            components = components,
+        )
+    }
 }
