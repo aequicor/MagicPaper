@@ -66,7 +66,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -82,6 +87,7 @@ import io.aequicor.magicpaper.domain.PlanningChatService
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.MilestoneStatus
+import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
 import kotlinx.coroutines.launch
 import io.aequicor.magicpaper.domain.isVisibleActivity
@@ -233,23 +239,24 @@ private fun SessionArea(
                     }
                 },
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
-                modelChip = {
+                leadingControls = {
                     if (service != null && active.session.stageId == null) {
                         ComposerModeButton(active.session.planningMode) {
                             scope.launch { service.configure(active.session, planning = true) }
                         }
-                        if (active.session.planningMode) {
-                            var searchMenu by remember { mutableStateOf(false) }
-                            Box {
-                                TextButton(onClick = { searchMenu = true }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Поиск: ${active.session.searchProvider.name} ▾", style = MaterialTheme.typography.labelMedium) }
-                                DropdownMenu(searchMenu, { searchMenu = false }) {
-                                    SearchProvider.entries.forEach { provider -> DropdownMenuItem(text = { Text(provider.name) }, onClick = { searchMenu = false; scope.launch { service.configure(active.session, search = provider) } }) }
-                                }
+                    }
+                },
+                modelChip = {
+                    if (service != null && active.session.planningMode && active.session.stageId == null) {
+                        var searchMenu by remember { mutableStateOf(false) }
+                        Box {
+                            TextButton(onClick = { searchMenu = true }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Поиск: ${active.session.searchProvider.name} ▾", style = MaterialTheme.typography.labelMedium) }
+                            DropdownMenu(searchMenu, { searchMenu = false }) {
+                                SearchProvider.entries.forEach { provider -> DropdownMenuItem(text = { Text(provider.name) }, onClick = { searchMenu = false; scope.launch { service.configure(active.session, search = provider) } }) }
                             }
                         }
                     }
-                    if (active.session.stageId != null) Text(worker?.assignment?.let { "${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}" }.orEmpty(), style = MaterialTheme.typography.labelMedium)
-                    else CodingModelChip(
+                    CodingModelChip(
                         profile = vm.codingProfileOf(active.session),
                         overridden = active.session.llmProfileId != null,
                         onClick = { switcherOpen = true },
@@ -744,6 +751,7 @@ internal fun CodingChat(
     planningService: PlanningChatService? = null,
     onOpenSession: (String) -> Unit = {},
     allowQueue: Boolean = false,
+    leadingControls: (@Composable () -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -751,11 +759,25 @@ internal fun CodingChat(
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
     stickToBottom(listState, session.session.id)
-    Column(modifier = Modifier.fillMaxSize()) {
+    val density = LocalDensity.current
+    var footerHeight by remember { mutableStateOf(0.dp) }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val questionHeight = maxHeight * 0.55f
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            modifier = Modifier.fillMaxSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    // Fade only the messages; keep the paper background continuous.
+                    val edge = size.height - footerHeight.toPx()
+                    drawRect(Brush.verticalGradient(
+                        0f to Color.White, 0.35f to Color.White.copy(alpha = 0.8f),
+                        0.7f to Color.White.copy(alpha = 0.25f), 1f to Color.Transparent,
+                        startY = edge - 16.dp.toPx(), endY = edge + 16.dp.toPx(),
+                    ), blendMode = BlendMode.DstIn)
+                },
+            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = footerHeight + 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
@@ -774,16 +796,23 @@ internal fun CodingChat(
                 item(key = "draft") { DraftBubble(draft) }
             }
         }
-        // Статус работы агента — снизу, над полем ввода: чем занят и о чём думает.
-        AgentStatusPanel(draft = session.draft, running = busy)
-        CodingComposer(
-            enabled = engineReady && (!busy || allowQueue),
-            busy = busy && !allowQueue,
-            controls = modelChip,
-            onSend = onSend,
-            onAbort = onAbort,
-            onPickAttachments = onPickAttachments,
-        )
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
+            AgentStatusPanel(draft = session.draft, running = busy)
+            if (planningService != null) PlanningQuestionsDock(
+                session.session, messages, planningService, busy,
+                Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
+            )
+            CodingComposer(
+                enabled = engineReady && (!busy || allowQueue),
+                busy = busy && !allowQueue,
+                controls = modelChip,
+                leadingControls = leadingControls,
+                onSend = onSend,
+                onAbort = onAbort,
+                onPickAttachments = onPickAttachments,
+            )
+        }
     }
 }
 
@@ -1101,6 +1130,7 @@ private fun CodingComposer(
     enabled: Boolean,
     busy: Boolean,
     controls: (@Composable () -> Unit)? = null,
+    leadingControls: (@Composable () -> Unit)? = null,
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
@@ -1113,37 +1143,48 @@ private fun CodingComposer(
         text = ""
         attachments = emptyList()
     }
-    Column(Modifier.fillMaxWidth().padding(12.dp)
-        .clip(MaterialTheme.shapes.large)
-        .background(MaterialTheme.colorScheme.surface)
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
-        .padding(8.dp)) {
-        PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
-        BasicTextField(
-            value = text, onValueChange = { text = it },
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 36.dp),
-            maxLines = 6,
-            decorationBox = { inner ->
-                Box {
-                    if (text.isEmpty()) Text("Поручение агенту в папке проекта…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    inner()
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val leadingLimit = maxWidth * 0.25f
+        val trailingLimit = maxWidth * 0.45f
+        Column(Modifier.fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 4.dp, vertical = 2.dp)) {
+            PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.widthIn(max = leadingLimit).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
+                        modifier = Modifier.size(32.dp).semantics { contentDescription = "Прикрепить файлы" },
+                        contentPadding = PaddingValues(0.dp)) { Text("📎", style = MaterialTheme.typography.labelMedium) }
+                    leadingControls?.invoke()
                 }
-            },
-        )
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
-                modifier = Modifier.size(36.dp).semantics { contentDescription = "Прикрепить файлы" },
-                contentPadding = PaddingValues(0.dp)) { Text("📎", style = MaterialTheme.typography.labelMedium) }
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                controls?.invoke()
-            }
-            if (busy) TextButton(onClick = onAbort) { Text("Прервать") }
-            else TextButton(enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit) {
-                Text(if (enabled) "Отправить ↑" else "Движок не готов", style = MaterialTheme.typography.labelMedium)
+                BasicTextField(
+                    value = text, onValueChange = { text = it },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 4.dp),
+                    maxLines = 6,
+                    decorationBox = { inner ->
+                        Box {
+                            if (text.isEmpty()) Text("Поручение агенту в папке проекта…",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            inner()
+                        }
+                    },
+                )
+                Row(Modifier.widthIn(max = trailingLimit).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
+                    controls?.invoke()
+                }
+                if (busy) TextButton(onClick = onAbort, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Прервать") }
+                else TextButton(enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
+                    contentPadding = PaddingValues(horizontal = 4.dp)) {
+                    Text(if (enabled) "Отправить ↑" else "Движок не готов", style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }

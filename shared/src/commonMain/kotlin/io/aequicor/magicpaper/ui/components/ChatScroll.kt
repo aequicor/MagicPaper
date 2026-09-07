@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.ui.components
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -47,6 +48,8 @@ fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit) {
         snapshotFlow { listState.wakeUp() }
             .distinctUntilChanged()
             .collect {
+                // Размер ленты может обновиться внутри layout: прокручиваем после его завершения.
+                withFrameNanos { }
                 val atEnd = !listState.canScrollForward
                 val now = listState.anchor()
                 when {

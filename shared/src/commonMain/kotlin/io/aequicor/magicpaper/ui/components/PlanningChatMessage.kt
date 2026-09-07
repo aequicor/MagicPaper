@@ -7,8 +7,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.*
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.Json
 import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -19,14 +17,9 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
     val drafts by service.drafts.collectAsState()
     val source = plans.firstOrNull { it.id == block.planId } ?: return
     if (block.questions.isNotEmpty()) {
-        val answered = history.firstOrNull { it.planning?.replyTo == message.id }
-        QuestionBlock(block.questions, answered?.planning?.answers, drafts[session.id]?.active == true) { answers ->
-            val text = block.questions.joinToString("\n\n") { q ->
-                val answer = answers.first { it.questionId == q.id }
-                "${q.title}\n" + (q.options.filter { it.id in answer.selected }.map { it.label } + listOf(answer.text).filter { it.isNotBlank() }).joinToString("; ")
-            }
-            service.send(session, text, answers, message.id)
-        }
+        val answered = history.any { it.planning?.replyTo == message.id }
+        Text(if (answered) "Ответы на уточнения отправлены" else "Уточнения — в карточке над полем ввода",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (!block.graph) return
     fun preview(a: StageAttempt) = live[a.id]?.takeIf { it.updatedAt > a.updatedAt } ?: a
@@ -67,35 +60,6 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
                     onOpenSession(stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}")
                 }) { Text("Открыть сессию") }
             }
-        }
-    }
-}
-
-@Composable internal fun QuestionBlock(questions: List<PlanningQuestion>, submitted: List<PlanningAnswer>?, busy: Boolean, onSubmit: (List<PlanningAnswer>) -> Unit) {
-    val serializer = ListSerializer(PlanningAnswer.serializer())
-    val saver = androidx.compose.runtime.saveable.Saver<List<PlanningAnswer>, String>(save = { Json.encodeToString(serializer, it) }, restore = { Json.decodeFromString(serializer, it) })
-    var answers by rememberSaveable(questions, stateSaver = saver) { mutableStateOf(questions.map { PlanningAnswer(it.id) }) }
-    val shown = submitted ?: answers
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            questions.forEach { q ->
-                val answer = shown.firstOrNull { it.questionId == q.id } ?: PlanningAnswer(q.id)
-                Text(q.title, style = MaterialTheme.typography.titleSmall)
-                q.options.forEach { option ->
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        val change: (Boolean) -> Unit = { checked ->
-                            answers = answers.map { if (it.questionId != q.id) it else it.copy(selected = if (q.kind == QuestionKind.SINGLE) listOf(option.id) else if (checked) (it.selected + option.id).distinct() else it.selected - option.id) }
-                        }
-                        if (q.kind == QuestionKind.SINGLE) RadioButton(option.id in answer.selected, { change(true) }, enabled = submitted == null && !busy)
-                        else Checkbox(option.id in answer.selected, change, enabled = submitted == null && !busy)
-                        Text(option.label)
-                    }
-                }
-                OutlinedTextField(answer.text, { text -> answers = answers.map { if (it.questionId == q.id) it.copy(text = text) else it } },
-                    label = { Text(if (q.kind == QuestionKind.TEXT) "Ваш ответ" else "Дополнительный комментарий") }, enabled = submitted == null && !busy, modifier = Modifier.fillMaxWidth())
-            }
-            if (submitted == null) Button(enabled = !busy && answers.all { it.selected.isNotEmpty() || it.text.isNotBlank() }, onClick = { onSubmit(answers) }) { Text("Ответить") }
-            else Text("Ответ отправлен", style = MaterialTheme.typography.labelMedium)
         }
     }
 }

@@ -472,7 +472,22 @@ class MagicPaperViewModel(
         if ((!ui.session.planningMode || forProject) && !profile.supportsCoding) return
         val updated = ui.session.copy(modelSelection = selection, llmProfileId = selection.profileId)
         updateCodingSession(sessionId) { it.copy(session = updated) }
-        scope.launch { codingProjects?.saveSession(updated) }
+        scope.launch {
+            if (updated.stageId != null && updated.planId != null) {
+                val effort = EffortSelection.ofOrNull(ModelDefaults.capability(profile).resolveEffort(selection.effort).level)
+                planningChat?.store?.update(updated.planId) { plan ->
+                    plan.copy(milestones = plan.milestones.map { stage ->
+                        if (stage.id != updated.stageId) stage else stage.copy(
+                            agentProfileId = selection.profileId,
+                            agentModelId = selection.modelId,
+                            assignment = StageAssignment(selection.profileId, selection.modelId, effort, effort,
+                                manual = true, displayName = profile.modelName(selection.modelId)),
+                        )
+                    })
+                }
+            }
+            codingProjects?.saveSession(updated)
+        }
         if (forProject) {
             val project = _state.value.coding.projects.firstOrNull { it.id == updated.projectId } ?: return
             val next = project.copy(modelSelection = selection)
