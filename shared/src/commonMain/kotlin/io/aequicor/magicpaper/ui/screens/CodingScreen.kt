@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -70,6 +71,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
@@ -81,7 +85,10 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.domain.Attachment
@@ -1002,10 +1009,10 @@ private fun ThinkingStepRow(step: CodingStep) {
 @Composable
 private fun ToolStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable(step.callId.ifBlank { step.title }) { mutableStateOf(false) }
-    val statusGlyph = when {
-        step.running -> "◷"
-        !step.ok -> "✕"
-        else -> "✔"
+    val statusColor = when {
+        step.running -> MaterialTheme.colorScheme.primary
+        !step.ok -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val hasDetail = step.result.isNotBlank()
     Column(
@@ -1020,15 +1027,36 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             Modifier.then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                statusGlyph,
-                style = MaterialTheme.typography.bodySmall,
-                color = when {
-                    step.running -> MaterialTheme.colorScheme.primary
-                    !step.ok -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+            Canvas(
+                modifier = Modifier.size(14.dp).semantics {
+                    contentDescription = when {
+                        step.running -> "Выполняется"
+                        !step.ok -> "Ошибка выполнения"
+                        else -> "Выполнено"
+                    }
                 },
-            )
+            ) {
+                val stroke = 1.4.dp.toPx()
+                // Draw every status inside the icon bounds, independent of text line height.
+                when {
+                    step.running -> {
+                        drawCircle(statusColor, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
+                        drawLine(statusColor, center, Offset(center.x, size.height * 0.25f), stroke, StrokeCap.Round)
+                        drawLine(statusColor, center, Offset(size.width * 0.72f, center.y), stroke, StrokeCap.Round)
+                    }
+                    step.ok -> {
+                        val bend = Offset(size.width * 0.4f, size.height * 0.76f)
+                        drawLine(statusColor, Offset(size.width * 0.16f, size.height * 0.52f), bend, stroke, StrokeCap.Round)
+                        drawLine(statusColor, bend, Offset(size.width * 0.84f, size.height * 0.24f), stroke, StrokeCap.Round)
+                    }
+                    else -> {
+                        drawLine(statusColor, Offset(size.width * 0.22f, size.height * 0.22f),
+                            Offset(size.width * 0.78f, size.height * 0.78f), stroke, StrokeCap.Round)
+                        drawLine(statusColor, Offset(size.width * 0.78f, size.height * 0.22f),
+                            Offset(size.width * 0.22f, size.height * 0.78f), stroke, StrokeCap.Round)
+                    }
+                }
+            }
             Spacer(Modifier.width(8.dp))
             Text(
                 step.title,
@@ -1088,13 +1116,19 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
     val thinking = fragments.joinToString("\n\n").trim()
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
     val progress = draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.INFO && it.running }
+    val currentThinking = draft.thinking.ifBlank {
+        draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.THINKING }?.title.orEmpty()
+    }
     val activity = when {
+        draft.failedMessage != null -> "Работа остановлена из-за ошибки"
+        !draft.active -> "Работа завершена"
         draft.awaitingApproval -> "Ожидает подтверждения…"
         progress != null -> progress.title
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
         draft.awaitingModel -> "Ожидает ответа модели…"
-        thinking.isNotBlank() -> "Размышление…"
+        currentThinking.isNotBlank() -> currentThinkingSummary(currentThinking)
+        draft.steps.lastOrNull()?.kind == CodingStepKind.ANSWER -> "Готовит ответ…"
         else -> "Агент работает…"
     }
     val hasThinking = thinking.isNotBlank()
@@ -1110,14 +1144,21 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
             }
         }
     }
-    val label = if (isWorking) activity.trimEnd('.', '…', ' ') + ".".repeat(dots) else activity
+    val label = buildAnnotatedString {
+        if (isWorking) {
+            append(activity.trimEnd('.', '…', ' '))
+            append(".".repeat(dots))
+            // Keep the status width stable throughout the animation.
+            withStyle(SpanStyle(color = Color.Transparent)) {
+                append(".".repeat(3 - dots))
+            }
+        } else {
+            append(activity)
+        }
+    }
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth()
-                .then(if (hasThinking) Modifier.clickable(onClick = onToggle).semantics {
-                    contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
-                } else Modifier)
-                .padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ActivityDot(
@@ -1126,23 +1167,60 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                 size = 6,
             )
             Spacer(Modifier.width(6.dp))
+            Text("Сейчас:", style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(4.dp))
             Text(label, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false))
-            if (hasThinking) {
-                Spacer(Modifier.width(6.dp))
-                Text(if (expanded) "▴" else "▾", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
-        if (hasThinking && expanded) {
-            val scroll = rememberScrollState()
-            Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
-                ChatMarkdown(thinking, compact = true)
+        if (hasThinking) {
+            Column(Modifier.fillMaxWidth().padding(top = 6.dp)
+                .clip(MaterialTheme.shapes.small)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClick = onToggle).semantics {
+                        contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
+                    }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Размышления агента", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (expanded) "▴" else "▾", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (expanded) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        if (draft.active) {
+                            Text("Текст обновляется по мере ответа агента", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(6.dp))
+                        }
+                        val scroll = rememberScrollState()
+                        Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
+                            ChatMarkdown(thinking, compact = true)
+                        }
+                        LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
+                    }
+                }
             }
-            LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
         }
     }
+}
+
+/** Use the latest heading supplied by the agent as the short activity label. */
+private fun currentThinkingSummary(thinking: String): String {
+    val heading = Regex("(?m)^\\s*(?:#{1,6}\\s+([^\\n]+)|\\*\\*([^*\\n]+)\\*\\*)")
+        .findAll(thinking).lastOrNull()
+        ?.let { it.groupValues[1].ifBlank { it.groupValues[2] } }
+    val summary = heading ?: thinking.trim().substringAfterLast("\n\n").lineSequence().firstOrNull().orEmpty()
+    return summary.replace(Regex("[*_`#]"), "").replace(Regex("\\s+"), " ").trim().take(120)
+        .ifBlank { "Обдумывает задачу" }
 }
 
 @Composable

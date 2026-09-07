@@ -24,24 +24,31 @@ class AgentMessageStatusTest {
             } }
         }.use { scene ->
             var frame = 0L
+            var toggleY = 0f
             fun render() { repeat(20) { scene.render(++frame * 32_000_000L).close(); Thread.sleep(25) } }
             fun toggle() {
-                scene.sendPointerEvent(PointerEventType.Press, Offset(100f, 32f))
-                scene.sendPointerEvent(PointerEventType.Release, Offset(100f, 32f))
+                scene.sendPointerEvent(PointerEventType.Press, Offset(100f, toggleY))
+                scene.sendPointerEvent(PointerEventType.Release, Offset(100f, toggleY))
                 render()
             }
             render()
             val collapsedHeight = height
+            // The activity summary is separate from the disclosure below it.
+            scene.sendPointerEvent(PointerEventType.Press, Offset(100f, 12f))
+            scene.sendPointerEvent(PointerEventType.Release, Offset(100f, 12f))
+            render()
+            assertFalse(expanded.value, "Краткий статус не раскрывает размышления")
+            toggleY = collapsedHeight - 12f
             toggle()
             assertTrue(expanded.value)
             assertTrue(height > collapsedHeight)
             val firstHeight = height
-            draft.value = draft.value.copy(thinking = "**Проверяю интерфейс**\n\nПроверяю расположение кнопки.\n\nНашёл обработчик клика.\n\nСопоставляю его с текущим состоянием панели.")
+            draft.value = draft.value.copy(thinking = "**Проверяю интерфейс**\n\nПроверяю расположение кнопки.\n\n**Проверяю обработчик клика**\n\nСопоставляю его с текущим состоянием панели.")
             render()
             assertTrue(expanded.value)
             assertTrue(height > firstHeight)
             val output = File("build/reports/agent-status").apply { mkdirs() }
-            File(output, "expanded.png").writeBytes(scene.render(++frame * 16_000_000L).use { it.encodeToData()!!.use { data -> data.bytes } })
+            File(output, "expanded.png").writeBytes(scene.render(++frame * 32_000_000L).use { it.encodeToData()!!.use { data -> data.bytes } })
             toggle()
             assertFalse(expanded.value)
             assertTrue(height < firstHeight)
