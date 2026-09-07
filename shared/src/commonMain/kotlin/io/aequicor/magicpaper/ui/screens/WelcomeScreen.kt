@@ -301,18 +301,14 @@ private fun WelcomeSearch(draft: AppSettings, onDraft: (AppSettings) -> Unit) {
         Text("Шаг 2 — поиск", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
         Text(
-            "«Авто» пробует Wikipedia, Querit и Google по очереди; ключи можно добавить позже.",
+            "«Авто» пробует настроенные Google и Querit, затем Wikipedia; ключи можно добавить позже.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(12.dp))
         SearchProviderPicker(draft.searchProvider) { onDraft(draft.copy(searchProvider = it)) }
         Spacer(Modifier.height(8.dp))
-        Field("Querit API-ключ (необязательно)", draft.queritApiKey) { onDraft(draft.copy(queritApiKey = it)) }
-        Field("Google API-ключ (необязательно)", draft.googleApiKey) { onDraft(draft.copy(googleApiKey = it)) }
-        Field("Google Search Engine ID", draft.googleSearchEngineId) {
-            onDraft(draft.copy(googleSearchEngineId = it))
-        }
+        SearchApiSettings(draft, onDraft)
     }
 }
 

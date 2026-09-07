@@ -29,11 +29,11 @@ class GoogleSearchEngine(
 
     override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> {
         if (!isConfigured(settings)) return emptyList()
-        val response = client.get("https://www.googleapis.com/customsearch/v1") {
+        val response = client.get(settings.googleSearchUrl.trim()) {
             parameter("q", query)
             parameter("key", settings.googleApiKey)
             parameter("cx", settings.googleSearchEngineId)
-            parameter("num", limit)
+            parameter("num", limit.coerceIn(1, 10))
         }
         val body = response.bodyAsText()
         return runCatching {

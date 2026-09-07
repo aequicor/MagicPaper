@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -10,17 +11,19 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 
 @Composable
 fun CodingModelChip(profile: LlmProfile?, overridden: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    TextButton(onClick, modifier.height(32.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-        Text(androidx.compose.ui.text.buildAnnotatedString {
-            append(profile?.let { it.modelName(it.selectionKey).ifBlank { it.name } } ?: "Выбрать модель")
+    TextButton(onClick, modifier.heightIn(min = 32.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(profile?.let { it.modelName(it.selectionKey).ifBlank { it.name } } ?: "Выбрать модель",
+                style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             if (profile != null) {
-                pushStyle(androidx.compose.ui.text.SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant))
-                append("  ${profile.effortLabel(ModelDefaults.capability(profile))}")
-                pop()
+                Text(profile.effortLabel(ModelDefaults.capability(profile)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
-            append(" ▾")
-        }, style = MaterialTheme.typography.labelMedium, maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        }
+        Text(" ▾", style = MaterialTheme.typography.labelMedium)
     }
 }
 

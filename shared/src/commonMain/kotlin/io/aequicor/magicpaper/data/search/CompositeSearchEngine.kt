@@ -19,27 +19,22 @@ class CompositeSearchEngine(
     override fun isConfigured(settings: AppSettings) = true
 
     override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> {
-        val target = when (settings.searchProvider) {
-            SearchProvider.AUTO -> pickAuto(settings)
-            else -> settings.searchProvider
+        if (limit <= 0 || query.isBlank()) return emptyList()
+        val candidates = if (settings.searchProvider == SearchProvider.AUTO) {
+            listOf(SearchProvider.GOOGLE, SearchProvider.QUERIT, SearchProvider.WIKIPEDIA)
+                .mapNotNull(::engineFor).filter { it.isConfigured(settings) }
+        } else listOfNotNull(engineFor(settings.searchProvider))
+        for (engine in candidates) {
+            val hits = try { engine.search(query, settings, limit).take(limit) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { emptyList() }
+            if (hits.isNotEmpty()) {
+                val reader = engines.filterIsInstance<QueritSearchEngine>().firstOrNull()
+                return reader?.enrich(hits, settings) ?: hits
+            }
         }
-        val engine = engines.firstOrNull { it.provider == target } ?: fallback()
-        return try { engine.search(query, settings, limit) }
-        catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (e: Exception) { emptyList() }
+        return emptyList()
     }
-
-    private fun pickAuto(settings: AppSettings): SearchProvider {
-        val google = engines.firstOrNull { it.provider == SearchProvider.GOOGLE }
-        if (google != null && google.isConfigured(settings)) return SearchProvider.GOOGLE
-        val querit = engines.firstOrNull { it.provider == SearchProvider.QUERIT }
-        if (querit != null && querit.isConfigured(settings)) return SearchProvider.QUERIT
-        return SearchProvider.WIKIPEDIA
-    }
-
-    private fun fallback(): SearchEngine =
-        engines.firstOrNull { it.provider == SearchProvider.WIKIPEDIA }
-            ?: engines.first()
 
     fun engineFor(provider: SearchProvider): SearchEngine? =
         engines.firstOrNull { it.provider == provider }

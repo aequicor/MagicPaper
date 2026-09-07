@@ -55,7 +55,13 @@ data class AppSettings(
     val defaultModel: ModelSelection? = null,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val queritApiKey: String = "",
+    val queritBaseUrl: String = "https://api.querit.ai/v1",
+    val queritWebpageTextEnabled: Boolean = false,
+    val queritContentEnabled: Boolean = false,
+    val queritContentApiKey: String = "",
+    val queritContentBaseUrl: String = "https://api.querit.ai/v1",
     val googleApiKey: String = "",
+    val googleSearchUrl: String = "https://www.googleapis.com/customsearch/v1",
     val googleSearchEngineId: String = "",
     /** Завершён ли ознакомительный тур (welcome-screen). */
     val onboardingDone: Boolean = false,

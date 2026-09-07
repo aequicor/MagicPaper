@@ -16,7 +16,6 @@ import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.screens.CodingChat
-import io.aequicor.magicpaper.ui.screens.ComposerModeButton
 import io.aequicor.magicpaper.ui.screens.ProjectsPanel
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.components.CodingModelChip
@@ -122,7 +121,7 @@ class PlanningChatRenderTest {
                 ImageComposeScene(width, 1100) {
                     MagicPaperTheme { Surface(Modifier.fillMaxSize()) {
                         CodingChat(project, CodingSessionUi(session, messages = listOf(message)), false, true, { _, _ -> }, {}, { _, _ -> },
-                            planningService = service, modelChip = { ComposerModeButton(true) {}; CodingModelChip(LlmProfile("model", "GPT-5.6-Terra", modelId = "gpt-5.6-terra"), false, {}); TextButton({}) { Text("Поиск: AUTO ▾") } })
+                            planningService = service, onPlanning = {}, modelChip = { CodingModelChip(LlmProfile("model", "GPT-5.6-Terra", modelId = "gpt-5.6-terra"), false, {}); TextButton({}) { Text("AUTO ▾") } })
                     } }
                 }.use { scene ->
                     repeat(5) { scene.render(it * 16_000_000L).close(); runCurrent() }

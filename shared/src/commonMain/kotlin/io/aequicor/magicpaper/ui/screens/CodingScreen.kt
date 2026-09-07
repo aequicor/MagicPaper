@@ -240,18 +240,14 @@ private fun SessionArea(
                     }
                 },
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
-                leadingControls = {
-                    if (service != null && active.session.stageId == null) {
-                        ComposerModeButton(active.session.planningMode) {
-                            scope.launch { service.configure(active.session, planning = true) }
-                        }
-                    }
-                },
+                onPlanning = if (service != null && active.session.stageId == null) {
+                    { scope.launch { service.configure(active.session, planning = true) } }
+                } else null,
                 modelChip = {
                     if (service != null && active.session.planningMode && active.session.stageId == null) {
                         var searchMenu by remember { mutableStateOf(false) }
                         Box {
-                            TextButton(onClick = { searchMenu = true }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Поиск: ${active.session.searchProvider.name} ▾", style = MaterialTheme.typography.labelMedium) }
+                            TextButton(onClick = { searchMenu = true }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("${active.session.searchProvider.name} ▾", style = MaterialTheme.typography.labelMedium) }
                             DropdownMenu(searchMenu, { searchMenu = false }) {
                                 SearchProvider.entries.forEach { provider -> DropdownMenuItem(text = { Text(provider.name) }, onClick = { searchMenu = false; scope.launch { service.configure(active.session, search = provider) } }) }
                             }
@@ -752,7 +748,7 @@ internal fun CodingChat(
     planningService: PlanningChatService? = null,
     onOpenSession: (String) -> Unit = {},
     allowQueue: Boolean = false,
-    leadingControls: (@Composable () -> Unit)? = null,
+    onPlanning: (() -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -818,7 +814,8 @@ internal fun CodingChat(
                 enabled = engineReady && (!busy || allowQueue),
                 busy = busy && !allowQueue,
                 controls = modelChip,
-                leadingControls = leadingControls,
+                planning = session.session.planningMode,
+                onPlanning = onPlanning,
                 onSend = onSend,
                 onAbort = onAbort,
                 onPickAttachments = onPickAttachments,
@@ -1085,27 +1082,12 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
 }
 
 @Composable
-internal fun ComposerModeButton(planning: Boolean, onPlanning: () -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }, enabled = !planning, modifier = Modifier.height(32.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-            Text(if (planning) "🔀 Планирование" else "Обычный ▾",
-                style = MaterialTheme.typography.labelMedium)
-        }
-        DropdownMenu(expanded && !planning, { expanded = false }) {
-            DropdownMenuItem(text = { Text("Обычный ✓") }, onClick = { expanded = false })
-            DropdownMenuItem(text = { Text("🔀 Планирование") }, onClick = { expanded = false; onPlanning() })
-        }
-    }
-}
-
-@Composable
 private fun CodingComposer(
     enabled: Boolean,
     busy: Boolean,
     controls: (@Composable () -> Unit)? = null,
-    leadingControls: (@Composable () -> Unit)? = null,
+    planning: Boolean = false,
+    onPlanning: (() -> Unit)? = null,
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
@@ -1119,7 +1101,6 @@ private fun CodingComposer(
         attachments = emptyList()
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val leadingLimit = maxWidth * 0.25f
         val trailingLimit = maxWidth * 0.45f
         Column(Modifier.fillMaxWidth()
             .clip(MaterialTheme.shapes.large)
@@ -1127,12 +1108,34 @@ private fun CodingComposer(
             .padding(horizontal = 4.dp, vertical = 2.dp)) {
             PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.widthIn(max = leadingLimit).horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
-                        modifier = Modifier.size(32.dp).semantics { contentDescription = "Прикрепить файлы" },
-                        contentPadding = PaddingValues(0.dp)) { Text("📎", style = MaterialTheme.typography.labelMedium) }
-                    leadingControls?.invoke()
+                Box {
+                    var addMenuOpen by remember { mutableStateOf(false) }
+                    TextButton(onClick = { addMenuOpen = true },
+                        modifier = Modifier.size(32.dp).semantics { contentDescription = "Добавить" },
+                        contentPadding = PaddingValues(0.dp)) {
+                        Text("+", style = MaterialTheme.typography.titleLarge)
+                    }
+                    DropdownMenu(addMenuOpen, { addMenuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Прикрепить файлы") },
+                            leadingIcon = { Text("📎") },
+                            onClick = {
+                                addMenuOpen = false
+                                onPickAttachments(attachments.size) { attachments = attachments + it }
+                            },
+                        )
+                        if (onPlanning != null) {
+                            DropdownMenuItem(
+                                text = { Text("Режим планирования") },
+                                leadingIcon = { Text("🔀") },
+                                trailingIcon = if (planning) { { Text("✓") } } else null,
+                                onClick = {
+                                    addMenuOpen = false
+                                    if (!planning) onPlanning()
+                                },
+                            )
+                        }
+                    }
                 }
                 BasicTextField(
                     value = text, onValueChange = { text = it },
