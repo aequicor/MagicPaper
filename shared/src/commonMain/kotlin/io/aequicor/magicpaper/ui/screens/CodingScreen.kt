@@ -99,6 +99,7 @@ import io.aequicor.magicpaper.domain.MilestoneStatus
 import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
 import io.aequicor.magicpaper.ui.components.codingChatRows
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.aequicor.magicpaper.domain.isVisibleActivity
 import io.aequicor.magicpaper.domain.CodingStepKind
@@ -1067,49 +1068,60 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
     val fragments = if (draft.thinking.isNotBlank() && recorded.lastOrNull() != draft.thinking)
         recorded + draft.thinking else recorded
     val thinking = fragments.joinToString("\n\n").trim()
-    val latest = fragments.lastOrNull { it.isNotBlank() }?.lineSequence()?.lastOrNull { it.isNotBlank() }
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
-    val preview = latest ?: "Движок пока не прислал размышления"
     val progress = draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.INFO && it.running }
     val activity = when {
         progress != null -> progress.title
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
         draft.awaitingModel -> "Ожидает ответа модели…"
+        thinking.isNotBlank() -> "Размышление…"
         else -> "Агент работает…"
     }
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ActivityDot(CodingSessionStatus.WORKING, size = 6)
-            Spacer(Modifier.width(6.dp))
-            Text(activity, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (thinking.isBlank()) {
-            Text("Модель пока не прислала краткие размышления",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 4.dp))
-        } else {
-            Text(
-                "Краткие размышления ${if (expanded) "▴" else "▾"}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
-                    .semantics { contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления" }
-                    .padding(vertical = 4.dp),
-            )
-            if (expanded) {
-                val scroll = rememberScrollState()
-                Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
-                    ChatMarkdown(thinking, compact = true)
-                }
-                LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
-            } else {
-                Box(Modifier.fillMaxWidth().heightIn(max = 40.dp).clip(MaterialTheme.shapes.small)) {
-                    ChatMarkdown(preview, compact = true)
-                }
+    val hasThinking = thinking.isNotBlank()
+    val isWorking = draft.active && draft.failedMessage == null &&
+        (progress != null || tool != null || !draft.awaitingModel)
+    var dots by remember { mutableStateOf(3) }
+    LaunchedEffect(isWorking) {
+        dots = 3
+        if (isWorking) {
+            while (true) {
+                delay(500)
+                dots = if (dots == 1) 3 else dots - 1
             }
+        }
+    }
+    val label = if (isWorking) activity.trimEnd('.', '…', ' ') + ".".repeat(dots) else activity
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .then(if (hasThinking) Modifier.clickable(onClick = onToggle).semantics {
+                    contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
+                } else Modifier)
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ActivityDot(
+                if (isWorking) CodingSessionStatus.WORKING
+                else if (draft.active) CodingSessionStatus.WAITING else CodingSessionStatus.IDLE,
+                size = 6,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f, fill = false))
+            if (hasThinking) {
+                Spacer(Modifier.width(6.dp))
+                Text(if (expanded) "▴" else "▾", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (hasThinking && expanded) {
+            val scroll = rememberScrollState()
+            Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
+                ChatMarkdown(thinking, compact = true)
+            }
+            LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
         }
     }
 }
