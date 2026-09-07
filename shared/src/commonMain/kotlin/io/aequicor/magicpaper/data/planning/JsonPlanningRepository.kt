@@ -4,8 +4,10 @@ import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.ModelDossier
 import io.aequicor.magicpaper.domain.Plan
 import io.aequicor.magicpaper.domain.PlanningRepository
+import io.aequicor.magicpaper.domain.DecisionCompiler
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 
 /** Хранилище планов и досье моделей поверх KeyValueStore (та же схема, что у чатов). */
 class JsonPlanningRepository(
@@ -15,11 +17,25 @@ class JsonPlanningRepository(
 
     private val plansSerializer = ListSerializer(Plan.serializer())
     private val dossiersSerializer = ListSerializer(ModelDossier.serializer())
+    @Serializable private data class Checkpoint(val projectId: String, val plan: Plan?)
+    private fun checkpointKey(projectId: String) = "coding-plan-checkpoint-$projectId"
 
     override suspend fun plans(): List<Plan> {
-        val raw = store.read(KEY_PLANS) ?: return emptyList()
-        return runCatching { json.decodeFromString(plansSerializer, raw) }
-            .getOrDefault(emptyList())
+        val checkpointKeys = store.keys("coding-plan-checkpoint-")
+        val checkpoints = checkpointKeys.mapNotNull { key ->
+            store.read(key)?.let { raw -> runCatching { json.decodeFromString<Checkpoint>(raw) }.getOrNull() }
+        }
+        val raw = store.read(KEY_PLANS)
+        val decoded = raw?.let { runCatching { json.decodeFromString(plansSerializer, it) }.getOrNull() }
+            ?: store.read("$KEY_PLANS-backup")?.let { runCatching { json.decodeFromString(plansSerializer, it) }.getOrNull() }
+            ?: if (raw == null || checkpoints.isNotEmpty()) emptyList() else error("Повреждены снимки планов; требуется восстановление данных")
+        val restored = decoded.associateBy { it.projectId }.toMutableMap()
+        val known = restored.keys + checkpoints.map { it.projectId }
+        require(checkpointKeys.all { it.removePrefix("coding-plan-checkpoint-") in known }) {
+            "Повреждён журнал проекта, для которого нет резервного снимка"
+        }
+        checkpoints.forEach { if (it.plan == null) restored.remove(it.projectId) else restored[it.projectId] = it.plan }
+        return restored.values.map(DecisionCompiler::migrate)
             .sortedByDescending { it.updatedAt }
     }
 
@@ -29,11 +45,16 @@ class JsonPlanningRepository(
     override suspend fun save(plan: Plan) {
         // На проект — один актуальный план: новый заменяет прежний.
         val current = plans().filterNot { it.projectId == plan.projectId } + plan
+        val previous = json.encodeToString(plansSerializer, plans())
+        // Write-ahead checkpoint includes the operation journal; index/snapshot can be rebuilt.
+        store.write(checkpointKey(plan.projectId), json.encodeToString(Checkpoint.serializer(), Checkpoint(plan.projectId, plan)))
+        store.write("$KEY_PLANS-backup", previous)
         store.write(KEY_PLANS, json.encodeToString(plansSerializer, current))
     }
 
     override suspend fun deletePlan(projectId: String) {
         val current = plans().filterNot { it.projectId == projectId }
+        store.write(checkpointKey(projectId), json.encodeToString(Checkpoint.serializer(), Checkpoint(projectId, null)))
         store.write(KEY_PLANS, json.encodeToString(plansSerializer, current))
     }
 
@@ -45,12 +66,14 @@ class JsonPlanningRepository(
 
     override suspend fun saveDossier(dossier: ModelDossier) {
         // Досье привязано к профилю 1:1 — перезаписываем по профилю.
-        val current = dossiers().filterNot { it.profileId == dossier.profileId } + dossier
+        val current = dossiers().filterNot { it.profileId == dossier.profileId && it.modelId == dossier.modelId } + dossier
         store.write(KEY_DOSSIERS, json.encodeToString(dossiersSerializer, current))
     }
 
     override suspend fun wipe() {
+        store.keys("coding-plan-checkpoint-").forEach { store.delete(it) }
         store.delete(KEY_PLANS)
+        store.delete("$KEY_PLANS-backup")
         store.delete(KEY_DOSSIERS)
     }
 

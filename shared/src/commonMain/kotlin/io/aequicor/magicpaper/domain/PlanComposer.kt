@@ -22,6 +22,29 @@ class PlanComposer(
     private val gateway: LlmGateway,
     private val json: Json = DEFAULT_JSON,
 ) {
+    private val decisions = DecisionPlanner(gateway, json)
+
+    suspend fun refine(plan: Plan, message: String, profile: LlmProfile?, candidates: List<LlmProfile>, dossiers: List<ModelDossier>) =
+        decisions.refine(plan, message, profile, candidates, dossiers)
+
+    suspend fun generateAlternatives(plan: Plan, profile: LlmProfile?, candidates: List<LlmProfile>, dossiers: List<ModelDossier>) =
+        refine(plan, "Разработай и оцени альтернативы по сохранённым уточнениям.", profile, candidates, dossiers)
+
+    suspend fun recalculate(plan: Plan, nodeId: String, profile: LlmProfile?, candidates: List<LlmProfile>, dossiers: List<ModelDossier>): Plan {
+        val nodes = plan.tree.associateBy { it.id }
+        require(nodeId in nodes) { "Узел не найден" }
+        val affected = mutableSetOf<String>()
+        fun visit(id: String) { if (affected.add(id)) nodes[id]?.children?.forEach(::visit) }
+        visit(nodeId)
+        val stageIds = plan.tree.filter { it.id in affected && it.kind == DecisionKind.STAGE }.map { it.stageId ?: it.id }.toSet()
+        val proposal = refine(plan, "Пересчитай участок «${nodes.getValue(nodeId).title}», сохрани остальные решения.", profile, candidates, dossiers)
+        val updated = proposal.copy(tree = plan.tree.filterNot { it.id in affected } + proposal.tree.filter { it.id in affected || it.id !in nodes },
+            milestones = plan.milestones.filterNot { it.id in stageIds } + proposal.milestones.filter { it.id in stageIds || plan.milestones.none { old -> old.id == it.id } })
+        DecisionCompiler.validateEdit(plan, updated)
+        return updated
+    }
+
+    fun recommendChoices(plan: Plan) = decisions.recommendChoices(plan)
 
     @Serializable
     private data class RawMilestone(

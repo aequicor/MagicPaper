@@ -60,6 +60,9 @@ class PiCodingRuntime(
     private val piCli = File(prefix, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
 
     private val installLock = Mutex()
+    private val ownedProcesses = OwnedCodingProcess(File(root, "owned-processes"))
+    override suspend fun reconcile(sessionId: String) = withContext(Dispatchers.IO) { ownedProcesses.reconcile(sessionId) }
+    private fun sessionHome(id: String) = File(root, "session-configs/" + id.replace(Regex("[^a-zA-Z0-9_-]"), "_"))
     private var cachedNode: File? = null
 
     /**
@@ -172,7 +175,7 @@ class PiCodingRuntime(
         // Кодинг-контур: модель и всё, что из неё выводится (models.json,
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = profile.forCoding()
-        writePiConfig(codingProfile)
+        writePiConfig(codingProfile, sessionHome(session.id))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
@@ -250,7 +253,7 @@ class PiCodingRuntime(
         // Windows ломается при сборке командной строки ProcessBuilder: аргумент
         // распадается на части, и обрывки уходят в «сообщения» — агент видит
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
-        args += listOf("--append-system-prompt", File(pihome, HINTS_FILE).absolutePath)
+        args += listOf("--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
         // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит
         // (PI_REASONING_LEVEL — то, что pi отдаёт инструментам, а не вход запуска),
         // а без него включается дефолт pi, и рассуждающая модель молча съедает maxTokens.
@@ -269,8 +272,10 @@ class PiCodingRuntime(
             process = ProcessBuilder(args)
                 .directory(dir)
                 .redirectError(stderrFile)
-                .apply { environment().putAll(piEnv(node)) }
+                .apply { environment().putAll(piEnv(node, sessionHome(session.id))) }
                 .start()
+            // Persist ownership before sending a prompt that can change files.
+            ownedProcesses.record(session.id, process)
             // Запрос пользователя передаём пайп-стандарт-вводом (пи читает пайп как
             // UTF-8 и берёт его первоначальным промптом, --mode json неинтерактивен).
             // Байтовый канал невосприимчив к кавычкам/пробелам/переводам строк, в
@@ -337,6 +342,7 @@ class PiCodingRuntime(
                     running.destroy()
                     if (!running.waitFor(3, TimeUnit.SECONDS)) running.destroyForcibly()
                 }
+                if (!running.isAlive) ownedProcesses.clear(session.id)
             }
         }
     }
@@ -779,8 +785,8 @@ class PiCodingRuntime(
         }
     }
 
-    private fun writePiHomeDefaults() {
-        pihome.mkdirs()
+    private fun writePiHomeDefaults(home: File = pihome) {
+        home.mkdirs()
         // На Windows без bash агент не может выполнять команды вообще:
         // переключаем набор инструментов на powershell (нативный, есть в каждой Windows).
         val bash = windowsBashProbe()
@@ -790,12 +796,12 @@ class PiCodingRuntime(
             ""
         }
         val shellField = if (bash != null) "\"shellPath\":\"${jsonEscape(bash)}\"," else ""
-        File(pihome, "settings.json").writeText(
+        File(home, "settings.json").writeText(
             """{"defaultProjectTrust":"never",${shellField}${toolsField}"telemetry":false}"""
         )
         // Подсказка модели про точное совпадение текста правок: путь к этому
         // файлу уходит в --append-system-prompt (файл читает сам пи, см. run).
-        File(pihome, HINTS_FILE).writeText(
+        File(home, HINTS_FILE).writeText(
             """
             Files may contain Russian typography: em dashes (—), guillemets («»…«»), the letter ё.
             In edit tools, copy oldText/newText EXACTLY as read() returned them: do not replace
@@ -807,15 +813,15 @@ class PiCodingRuntime(
     }
 
     /** Модель из профиля подключения мостится в конфиг пи изолированно. */
-    private fun writePiConfig(profile: LlmProfile) {
-        pihome.mkdirs()
-        writePiHomeDefaults()
+    private fun writePiConfig(profile: LlmProfile, home: File) {
+        home.mkdirs()
+        writePiHomeDefaults(home)
         sessionsDir.mkdirs()
         // Сборка конфига — в общем коде (PiModelsConfig: лимиты из профиля,
         // reasoning и thinkingLevelMap согласованы с возможностями модели), там же
         // и тестируется. Атомарная замена (tmp+rename): параллельные прогоны сессий
         // не должны прочитать наполовину записанный models.json.
-        writeAtomically(File(pihome, "models.json"), PiModelsConfig.json(profile))
+        writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile))
     }
 
     private fun writeAtomically(target: File, content: String) {
@@ -833,8 +839,8 @@ class PiCodingRuntime(
         }
     }
 
-    private fun piEnv(node: File): Map<String, String> = mapOf(
-        "PI_CODING_AGENT_DIR" to pihome.absolutePath,
+    private fun piEnv(node: File, home: File = pihome): Map<String, String> = mapOf(
+        "PI_CODING_AGENT_DIR" to home.absolutePath,
         "PI_OFFLINE" to "1",
         "PI_SKIP_VERSION_CHECK" to "1",
         "PI_TELEMETRY" to "0",

@@ -109,7 +109,8 @@ class PlanRunner(
         val bound = profiles.firstOrNull { it.id == milestone.agentProfileId && it.configured }
         // Закреплённая модель шага (из избранного профиля) важнее дефолтной модели профиля.
         val profile = when {
-            bound != null && milestone.agentModelId.isNotBlank() -> bound.copy(modelId = milestone.agentModelId)
+            milestone.assignment != null -> milestone.assignment.executionProfile(profiles)
+            bound != null && milestone.agentModelId.isNotBlank() -> bound.copy(modelId = milestone.agentModelId, codingModelId = milestone.agentModelId)
             else -> bound ?: profiles.firstOrNull { it.configured }
         }
 

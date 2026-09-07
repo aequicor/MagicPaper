@@ -11,13 +11,20 @@ import io.aequicor.magicpaper.domain.DesktopProfileBridge
 actual fun createMagicPaperDependencies(): MagicPaperDependencies {
     val store = FileKeyValueStore()
     val subscription = CodexAppServerOpenAiSubscription(appJson)
-    return buildDependencies(
+    val runtime = DesktopCodingRuntime(PiCodingRuntime(), subscription)
+    val dependencies = buildDependencies(
         store = store,
         bridge = DesktopProfileBridge(),
-        codingRuntime = DesktopCodingRuntime(PiCodingRuntime(), subscription),
+        codingRuntime = runtime,
         codingProjects = codingProjectRepository(store, appJson),
         dirPicker = DesktopProjectDirPicker(),
         filePicker = DesktopFilePicker(),
         openAiSubscription = subscription,
+        planningWorkspace = io.aequicor.magicpaper.data.planning.GitPlanningWorkspace(),
     )
+    Runtime.getRuntime().addShutdownHook(Thread({
+        try { kotlinx.coroutines.runBlocking { dependencies.planning.shutdown() } }
+        finally { runtime.abortAll(); subscription.close() }
+    }, "magicpaper-planning-shutdown"))
+    return dependencies
 }

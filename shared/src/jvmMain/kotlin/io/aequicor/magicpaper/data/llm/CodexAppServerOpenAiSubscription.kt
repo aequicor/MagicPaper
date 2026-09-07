@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -77,6 +78,25 @@ class CodexAppServerOpenAiSubscription(
     private val codingRuns = ConcurrentHashMap<String, CodingAccumulator>()
     private val codingSessions = ConcurrentHashMap<String, String>()
     private val stderrTail = ArrayDeque<String>()
+    private val ownedCoding = io.aequicor.magicpaper.data.coding.OwnedCodingProcess(appHome.resolve("coding-processes").toFile())
+    suspend fun reconcileCoding(sessionId: String) = withContext(Dispatchers.IO) {
+        if (ownedCoding.belongsTo(sessionId, process)) {
+            // Interrupt just the owned turn and await its acknowledgement; other projects keep running.
+            val threadId = codingSessions[sessionId]
+            val run = threadId?.let { codingRuns[it] }
+                ?: error("Предыдущий Codex-прогон ещё не подтвердил завершение; требуется восстановление сессии")
+            if (!run.done.isCompleted) {
+                check(run.turnId != null) { "Codex ещё не подтвердил идентификатор прерванной операции" }
+                abortCoding(sessionId)
+            }
+            withTimeout(10_000) { run.done.await() }
+            ownedCoding.clear(sessionId)
+            codingSessions.remove(sessionId)
+            codingRuns.remove(threadId)
+            return@withContext
+        }
+        ownedCoding.reconcile(sessionId)
+    }
 
     @Volatile private var process: Process? = null
     @Volatile private var writer: BufferedWriter? = null
@@ -207,6 +227,7 @@ class CodexAppServerOpenAiSubscription(
         profile: LlmProfile,
         attachments: List<io.aequicor.magicpaper.domain.Attachment>,
     ): Flow<CodingEvent> = channelFlow {
+        var confirmedFinished = false
         try {
             check(File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
             check(profile.configured) { "Не настроена модель OpenAI по подписке." }
@@ -242,6 +263,7 @@ class CodexAppServerOpenAiSubscription(
             val accumulator = CodingAccumulator()
             codingRuns[threadId] = accumulator
             codingSessions[session.id] = threadId
+            ownedCoding.record(session.id, process ?: error("Codex process unavailable"))
             val effort = codingProfile.resolveEffort(ModelDefaults.capability(codingProfile)).level?.wire
             val turn = request(
                 "turn/start",
@@ -260,13 +282,23 @@ class CodexAppServerOpenAiSubscription(
                 },
             ).jsonObject
             accumulator.turnId = turn["turn"]?.jsonObject?.string("id")
-            for (event in accumulator.events) send(event)
+            for (event in accumulator.events) {
+                if (event is CodingEvent.Finished) confirmedFinished = accumulator.confirmed
+                send(event)
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            abortCoding(session.id)
+            throw error
         } catch (error: Throwable) {
             send(CodingEvent.Failed(error.message ?: "Codex coding завершился с ошибкой."))
             send(CodingEvent.Finished)
         } finally {
-            val threadId = codingSessions.remove(session.id)
-            if (threadId != null) codingRuns.remove(threadId)?.events?.close()
+            // Keep ownership after interruption: recovery must reconcile an uncertain turn.
+            if (confirmedFinished) {
+                val threadId = codingSessions.remove(session.id)
+                if (threadId != null) codingRuns.remove(threadId)?.events?.close()
+                ownedCoding.clear(session.id)
+            }
         }
     }
 
@@ -379,7 +411,7 @@ class CodexAppServerOpenAiSubscription(
         pending[id] = deferred
         try {
             send(buildJsonObject { put("id", id); put("method", method); put("params", params) })
-            return deferred.await()
+            return withTimeout(30_000) { deferred.await() }
         } finally {
             pending.remove(id)
         }
@@ -498,6 +530,10 @@ class CodexAppServerOpenAiSubscription(
                     resultPreview = params.string("delta").orEmpty(),
                 ),
             )
+            "turn/started" -> {
+                val threadId = params.string("threadId") ?: return
+                codingRuns[threadId]?.turnId = (params["turn"] as? JsonObject)?.string("id")
+            }
             "turn/completed" -> {
                 val threadId = params.string("threadId") ?: return
                 val turn = params["turn"] as? JsonObject
@@ -523,7 +559,7 @@ class CodexAppServerOpenAiSubscription(
         pending.values.forEach { it.completeExceptionally(error) }
         pending.clear()
         turns.values.forEach { it.done.completeExceptionally(error) }
-        codingRuns.values.forEach { it.finish(message) }
+        codingRuns.values.forEach { it.finish(message, confirmed = false) }
     }
 
     private fun stderrMessage(): String = synchronized(stderrTail) {
@@ -550,6 +586,8 @@ class CodexAppServerOpenAiSubscription(
 
     private class CodingAccumulator {
         val events = Channel<CodingEvent>(Channel.UNLIMITED)
+        val done = CompletableDeferred<Unit>()
+        @Volatile var confirmed = false
         @Volatile var turnId: String? = null
 
         fun emit(event: CodingEvent) {
@@ -596,11 +634,13 @@ class CodexAppServerOpenAiSubscription(
             }
         }
 
-        fun finish(error: String?) {
+        fun finish(error: String?, confirmed: Boolean = true) {
+            this.confirmed = confirmed
             if (!error.isNullOrBlank()) emit(CodingEvent.Failed(error))
             emit(CodingEvent.AgentEnd)
             emit(CodingEvent.Finished)
             events.close()
+            if (confirmed) done.complete(Unit) else done.completeExceptionally(AppServerException(error ?: "Соединение прервано"))
         }
 
         private fun fileSummary(item: JsonObject): String =

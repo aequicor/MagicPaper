@@ -51,7 +51,7 @@ import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
 
 /** Корень композиции: всё приложение собирается в одном месте. */
-class MagicPaperDependencies(val viewModel: MagicPaperViewModel)
+class MagicPaperDependencies(val viewModel: MagicPaperViewModel, val planning: io.aequicor.magicpaper.domain.PlanningExecutionService)
 
 /** Платформы поставляют хранилище и мост профиля. */
 expect fun createMagicPaperDependencies(): MagicPaperDependencies
@@ -69,6 +69,7 @@ internal fun buildDependencies(
     dirPicker: ProjectDirPicker? = null,
     filePicker: FilePicker = NoopFilePicker,
     openAiSubscription: OpenAiSubscriptionService? = null,
+    planningWorkspace: io.aequicor.magicpaper.domain.PlanningWorkspace = io.aequicor.magicpaper.domain.LocalPlanningWorkspace(),
 ): MagicPaperDependencies {
     val json = appJson
     val client = HttpClient()
@@ -121,11 +122,15 @@ internal fun buildDependencies(
     // Планирование: свой стор поверх того же хранилища (как у навыков);
     // исполнитель — поверх кодинг-рантайма, проверка — моделью через шлюз.
     val planningStore = PlanningStore(JsonPlanningRepository(store, json))
+    val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
+        planningStore, codingRuntime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
+        LlmMilestoneVerifier(gateway, json), planningWorkspace,
+    )
     val planner = CodingPlanningPlugin(
         store = planningStore,
         composer = PlanComposer(gateway, json),
         researcher = DossierResearcher(gateway, search, json),
-        runner = PlanRunner(codingRuntime ?: NoopCodingRuntime, LlmMilestoneVerifier(gateway, json), codingProjects),
+        execution = planningExecution,
         runtime = codingRuntime ?: NoopCodingRuntime,
         projectsRepo = codingProjects,
         profileRepo = profileRepo,
@@ -158,7 +163,8 @@ internal fun buildDependencies(
         filePicker = filePicker,
         openAiSubscription = openAiSubscription,
     )
-    return MagicPaperDependencies(viewModel)
+    planningExecution.bootstrap()
+    return MagicPaperDependencies(viewModel, planningExecution)
 }
 
 /**

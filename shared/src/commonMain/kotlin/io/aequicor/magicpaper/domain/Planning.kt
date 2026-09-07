@@ -38,6 +38,10 @@ data class Milestone(
     val agentProfileId: String = "",
     /** Избранная модель закреплённого агента; пусто — дефолтная модель профиля. */
     val agentModelId: String = "",
+    val assignment: StageAssignment? = null,
+    val assessment: StageAssessment = StageAssessment(),
+    val acceptance: String = "",
+    val attempts: List<StageAttempt> = emptyList(),
     /** Идентификаторы шагов-предшественников: шаг ждёт их завершения. */
     val dependsOn: List<String> = emptyList(),
     /** Отчёт агента о выполнении (итоговый текст прогона). */
@@ -87,11 +91,28 @@ data class Plan(
     val sessionId: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+    val schemaVersion: Int = 2,
+    val revision: Long = 0,
+    val tree: List<DecisionNode> = emptyList(),
+    val dialogue: List<PlanningMessage> = emptyList(),
+    val priorities: PlanningPriorities = PlanningPriorities(),
+    val intent: ExecutionIntent = ExecutionIntent.STOP,
+    val phase: ExecutionPhase = ExecutionPhase.IDLE,
+    val parallelism: Int = 2,
+    val runId: String = "",
+    val workspace: PlanWorkspace? = null,
+    val finalAttempt: StageAttempt? = null,
+    val issue: PlanningIssue? = null,
+    val journal: List<PlanJournalEntry> = emptyList(),
 ) {
-    val doneCount: Int get() = milestones.count { it.completed }
+    val selectedMilestones: List<Milestone> get() = if (tree.isEmpty()) milestones else {
+        val selected = DecisionCompiler.compile(this).stageIds.toSet()
+        milestones.filter { it.id in selected }
+    }
+    val doneCount: Int get() = selectedMilestones.count { it.completed }
 
     /** Прогресс 0..1 для индикатора. */
-    val progress: Float get() = if (milestones.isEmpty()) 0f else doneCount.toFloat() / milestones.size
+    val progress: Float get() = if (selectedMilestones.isEmpty()) 0f else doneCount.toFloat() / selectedMilestones.size
 
     /** Ближайший мэилстоун, требующий выполнения (включая повтор после сбоя). */
     val nextPending: Milestone? get() = milestones.firstOrNull {
@@ -134,6 +155,8 @@ data class ModelDossier(
     val id: String,
     /** Профиль подключения, к которому относится досье (1:1). */
     val profileId: String,
+    val modelId: String = "",
+    val assessment: StageAssessment = StageAssessment(),
     /** Свободное описание сильных сторон модели. */
     val strengths: String = "",
     /** Оценка силы/универсальности 0..5; 0 = не оценивалась. */
@@ -204,7 +227,8 @@ object AgentMatcher {
 
     /** Оценка пригодности кандидата: 0..1. */
     fun score(profile: LlmProfile, milestoneText: String, dossiers: List<ModelDossier>): Double {
-        val dossier = dossiers.firstOrNull { it.profileId == profile.id }
+        val dossier = dossiers.firstOrNull { it.profileId == profile.id && it.modelId == profile.modelId }
+            ?: dossiers.firstOrNull { it.profileId == profile.id && it.modelId.isBlank() }
         val similarity = if (dossier != null && dossier.strengths.isNotBlank()) {
             stemmedScore(milestoneText, dossier.strengths)
         } else {

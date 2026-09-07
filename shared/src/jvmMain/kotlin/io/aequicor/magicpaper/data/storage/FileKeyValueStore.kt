@@ -1,6 +1,9 @@
 package io.aequicor.magicpaper.data.storage
 
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Десктопное хранилище: папка ~/.MagicPaper в домашнем каталоге пользователя.
@@ -14,12 +17,12 @@ class FileKeyValueStore(rootName: String = ".MagicPaper") : KeyValueStore {
     private val keySet: MutableSet<String> = LinkedHashSet(loadManifest())
 
     override fun read(key: String): String? = synchronized(this) {
-        if (key !in keySet) return null
+        // A crash between the data rename and manifest update must not hide a committed key.
         file(key).takeIf { it.isFile }?.readText()
     }
 
     override fun write(key: String, value: String) = synchronized(this) {
-        file(key).writeText(value)
+        atomicWrite(file(key), value)
         if (keySet.add(key)) saveManifest()
     }
 
@@ -29,7 +32,8 @@ class FileKeyValueStore(rootName: String = ".MagicPaper") : KeyValueStore {
     }
 
     override fun keys(prefix: String): List<String> = synchronized(this) {
-        keySet.filter { it.startsWith(prefix) }.toList()
+        (keySet + root.listFiles().orEmpty().filter { it.isFile && it.extension == "json" }.map { it.nameWithoutExtension })
+            .filter { it.startsWith(prefix) }.distinct()
     }
 
     override fun clear() = synchronized(this) {
@@ -50,6 +54,18 @@ class FileKeyValueStore(rootName: String = ".MagicPaper") : KeyValueStore {
         runCatching { manifest.readLines().filter { it.isNotBlank() } }.getOrDefault(emptyList())
 
     private fun saveManifest() {
-        manifest.writeText(keySet.joinToString("\n"))
+        atomicWrite(manifest, keySet.joinToString("\n"))
+    }
+
+    private fun atomicWrite(target: File, value: String) {
+        val tmp = File.createTempFile(target.name, ".pending", root)
+        try {
+            FileOutputStream(tmp).use { output -> output.write(value.toByteArray(Charsets.UTF_8)); output.fd.sync() }
+            try {
+                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally { tmp.delete() }
     }
 }

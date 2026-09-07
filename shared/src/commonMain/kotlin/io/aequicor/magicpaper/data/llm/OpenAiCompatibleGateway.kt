@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
+import io.aequicor.magicpaper.domain.LlmTransportException
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -30,7 +31,8 @@ internal suspend fun HttpClient.postJson(
     headers: Map<String, String>,
     body: String,
     timeoutSeconds: Int,
-): String = withTimeout(timeoutSeconds.toLong() * 1000) {
+): String {
+    suspend fun request(): String {
     val response = post(url) {
         contentType(ContentType.Application.Json)
         headers.forEach { (key, value) -> header(key, value) }
@@ -38,9 +40,11 @@ internal suspend fun HttpClient.postJson(
     }
     val text = response.bodyAsText()
     if (!response.status.isSuccess()) {
-        error("HTTP ${response.status.value}: ${text.take(300).ifBlank { "пустой ответ" }}")
+        throw LlmTransportException(response.status.value, response.headers["Retry-After"], text.take(300).ifBlank { "пустой ответ" })
     }
-    text
+    return text
+    }
+    return if (timeoutSeconds <= 0) request() else withTimeout(timeoutSeconds.toLong() * 1000) { request() }
 }
 
 /** OpenAI-совместимый /chat/completions (OpenAI, Ollama, LM Studio, vLLM, OpenRouter…). */

@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class JsonPlanningRepositoryTest {
 
@@ -66,11 +67,56 @@ class JsonPlanningRepositoryTest {
     }
 
     @Test
-    fun corruptedDataFallsBackToEmpty() = runTest {
+    fun corruptedPlanIsNotSilentlyLost() = runTest {
         store.write("coding-plans", "{broken")
-        assertTrue(repo.plans().isEmpty())
+        assertFailsWith<IllegalStateException> { repo.plans() }
         store.write("model-dossiers", "{broken")
         assertTrue(repo.dossiers().isEmpty())
+    }
+
+    @Test fun previousSnapshotRecoversCorruptCurrent() = runTest {
+        repo.save(plan("p1"))
+        repo.save(plan("p1", updated = 2))
+        store.write("coding-plans", "{broken")
+        assertEquals("p1", repo.plans().single().projectId)
+    }
+
+    @Test fun dossiersAreSpecificToModel() = runTest {
+        repo.saveDossier(ModelDossier("a", "provider", modelId = "one"))
+        repo.saveDossier(ModelDossier("b", "provider", modelId = "two"))
+        assertEquals(2, repo.dossiers().size)
+    }
+
+    @Test fun checkpointsRebuildBothLostSnapshotsAndRetainDeletion() = runTest {
+        repo.save(plan("p1")); repo.save(plan("p2")); repo.deletePlan("p1")
+        store.write("coding-plans", "{broken"); store.write("coding-plans-backup", "{broken")
+        assertEquals(listOf("p2"), repo.plans().map { it.projectId })
+    }
+
+    @Test fun corruptOnlyCheckpointIsNotAnEmptyWorkspace() = runTest {
+        store.write("coding-plan-checkpoint-lost", "{broken")
+        assertFailsWith<IllegalArgumentException> { repo.plans() }
+    }
+
+    @Test fun lostWriteFreezesCommandsUntilDurableStateIsRecovered() = runTest {
+        var unavailable = false
+        val failing = object : io.aequicor.magicpaper.domain.PlanningRepository by repo {
+            override suspend fun save(plan: Plan) {
+                if (unavailable) error("Disk full")
+                repo.save(plan)
+            }
+        }
+        val observed = PlanningStore(failing)
+        observed.save(plan("p1"))
+        unavailable = true
+        assertFailsWith<PlanningPersistenceException> { observed.update("p1") { it.copy(goal = "must not appear") } }
+        assertEquals("цель p1", observed.plans.value.single().goal)
+        unavailable = false
+        assertFailsWith<PlanningPersistenceException> { observed.update("p1") { it.copy(goal = "too soon") } }
+        observed.recover()
+        observed.update("p1") { it.copy(goal = "recovered") }
+        assertEquals("recovered", observed.plans.value.single().goal)
+        assertNull(observed.failure.value)
     }
 
     @Test

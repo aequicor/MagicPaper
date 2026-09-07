@@ -433,6 +433,10 @@ interface CodingProjectRepository {
  * Все зависимости изолированы в папке данных приложения и удаляются вместе с ним.
  */
 interface CodingRuntime {
+    /** Verify engine prerequisites without starting a stage executor. */
+    suspend fun preflight(profile: LlmProfile) = Unit
+    /** Reconcile a prior run before reusing its workspace after application restart. */
+    suspend fun reconcile(sessionId: String) = Unit
     /** Поддерживается ли бэкенд на этой платформе (веб и Android — нет). */
     val supported: Boolean
 
