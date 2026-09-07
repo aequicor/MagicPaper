@@ -37,6 +37,14 @@ class ModelsSettingsRenderTest {
                         scene.render(96_000_000L).use { File(output, "models-details.png").writeBytes(it.encodeToData()!!.use { data -> data.bytes }) }
                     }
                 }
+                ImageComposeScene(width, height, density = Density(density)) {
+                    MagicPaperTheme { Surface { ProfileEditor(vm, state.llmProfiles.first(), state) } }
+                }.use { scene ->
+                    repeat(4) { scene.render(it * 16_000_000L).close() }
+                    scene.render(80_000_000L).use {
+                        File(output, "connection-${width}x$height.png").writeBytes(it.encodeToData()!!.use { data -> data.bytes })
+                    }
+                }
             }
         } finally { Dispatchers.resetMain() }
     }

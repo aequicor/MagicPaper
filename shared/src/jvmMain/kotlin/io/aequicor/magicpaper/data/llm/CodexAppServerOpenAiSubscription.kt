@@ -655,7 +655,7 @@ class CodexAppServerOpenAiSubscription(
     private data class LoginEvent(val loginId: String?, val success: Boolean, val error: String?)
     private class AppServerException(message: String) : IllegalStateException(message)
 
-    private companion object {
+    internal companion object {
         const val LOGIN_TIMEOUT_MS = 10 * 60 * 1_000L
         const val CHAT_INSTRUCTIONS =
             "Ты отвечаешь в чате MagicPaper. Не используй инструменты, файлы или команды. Верни только полезный ответ пользователю."
@@ -664,7 +664,10 @@ class CodexAppServerOpenAiSubscription(
 
         fun defaultAppHome(): Path = Paths.get(System.getProperty("user.home"), ".MagicPaper", "codex")
 
-        fun resolveCodexCommand(override: String?): String {
+        internal fun resolveCodexCommand(
+            override: String?,
+            macAppRoots: List<Path> = defaultMacAppRoots(),
+        ): String {
             override?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
             val local = System.getenv("LOCALAPPDATA")?.let { Paths.get(it, "OpenAI", "Codex", "bin") }
             if (local != null && Files.isDirectory(local)) {
@@ -678,7 +681,51 @@ class CodexAppServerOpenAiSubscription(
                         ?.let { return it.toAbsolutePath().toString() }
                 }
             }
+            macAppRoots.asSequence()
+                .mapNotNull(::findCodexInAppBundle)
+                .firstOrNull()
+                ?.let { return it.toAbsolutePath().toString() }
+            if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
+                listOf(
+                    Paths.get("/opt/homebrew/bin/codex"),
+                    Paths.get("/usr/local/bin/codex"),
+                    Paths.get(System.getProperty("user.home"), ".local", "bin", "codex"),
+                    Paths.get(System.getProperty("user.home"), ".codex", "bin", "codex"),
+                ).firstOrNull { Files.isRegularFile(it) && Files.isExecutable(it) }
+                    ?.let { return it.toAbsolutePath().toString() }
+            }
             return if (File.separatorChar == '\\') "codex.exe" else "codex"
+        }
+
+        private fun defaultMacAppRoots(): List<Path> {
+            if (!System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) return emptyList()
+            val home = Paths.get(System.getProperty("user.home"))
+            // Codex can be installed as a standalone app or bundled with the
+            // ChatGPT desktop app. Both distribute the same app-server CLI.
+            return listOf(
+                Paths.get("/Applications/Codex.app"),
+                home.resolve("Applications/Codex.app"),
+                Paths.get("/Applications/ChatGPT.app"),
+                home.resolve("Applications/ChatGPT.app"),
+            )
+        }
+
+        /**
+         * The Codex or ChatGPT desktop app intentionally does not have to add
+         * its CLI to PATH.
+         * Locate the bundled executable instead, including versioned resource
+         * directories whose exact layout changes between Codex releases.
+         */
+        private fun findCodexInAppBundle(app: Path): Path? {
+            if (!Files.isDirectory(app)) return null
+            return runCatching {
+                Files.walk(app, 12).use { paths ->
+                    paths.filter { candidate ->
+                        candidate.fileName.toString() == "codex" &&
+                            Files.isRegularFile(candidate) && Files.isExecutable(candidate)
+                    }.findFirst().orElse(null)
+                }
+            }.getOrNull()
         }
     }
 }

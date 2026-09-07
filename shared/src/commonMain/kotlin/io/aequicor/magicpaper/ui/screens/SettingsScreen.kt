@@ -13,11 +13,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
@@ -170,6 +178,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
     var chooseProvider by remember { mutableStateOf(!profile.connectionConfigured) }
     val subscription = draft.provider == ProviderType.OPENAI_SUBSCRIPTION
     val subscriptionAvailable = state.openAiSubscription.available
+    var modelQuery by remember(profile.id) { mutableStateOf("") }
     val uriHandler = LocalUriHandler.current
     LaunchedEffect(state.openAiSubscription.login?.url) {
         state.openAiSubscription.login?.url?.let(uriHandler::openUri)
@@ -179,19 +188,32 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             vm.refreshOpenAiSubscription()
         }
     }
-    LaunchedEffect(state.editorModels) {
-        if (state.editorModels.isNotEmpty() && state.editorModelsFor == "${draft.id}:${draft.provider}:${draft.baseUrl}") draft = draft.withCatalog(state.editorModels)
+    LaunchedEffect(subscription, state.openAiSubscription.account?.signedIn) {
+        if (subscription && state.openAiSubscription.account?.signedIn == true && draft.modelCatalog.isEmpty()) {
+            vm.fetchModels(draft)
+        }
     }
+    LaunchedEffect(state.editorModels, state.editorModelsFor, draft.id, draft.provider, draft.baseUrl) {
+        if (state.editorModels.isNotEmpty() && state.editorModelsFor == "${draft.id}:${draft.provider}:${draft.baseUrl}") {
+            val loaded = draft.withCatalog(state.editorModels)
+            // The provider's catalog is authoritative. Do not leave a preset
+            // model selected when the account cannot actually use it.
+            draft = loaded.copy(modelId = draft.modelId.takeIf { id -> loaded.modelCatalog.any { it.id == id } }
+                ?: loaded.modelCatalog.first().id)
+        }
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .widthIn(max = 720.dp)
+            .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(24.dp),
     ) {
-        Text("Магический источник", style = MaterialTheme.typography.titleLarge)
+        Text(if (profile.configured) "Настройки подключения" else "Подключить модели", style = MaterialTheme.typography.titleLarge)
         Text(
-            if (profile.configured) "Правка подключения «${profile.name}»" else "Новое подключение",
-            style = MaterialTheme.typography.bodyMedium,
+            "Подключение → избранное → готово",
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(12.dp))
@@ -213,6 +235,8 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                         baseUrl = if (candidate.usesSubscription) "" else candidate.defaultBaseUrl.ifBlank { draft.baseUrl },
                         apiKey = if (candidate.usesSubscription) "" else draft.apiKey,
                         modelId = candidate.models.firstOrNull()?.id.orEmpty().ifBlank { draft.modelId },
+                        modelCatalog = emptyList(), favoriteModels = emptyList(),
+                        modelReasoning = emptyMap(), variants = emptyList(), codingModelId = "",
                     )
                 },
             )
@@ -229,20 +253,78 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        TextButton(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured) {
-            Text(if (state.editorModelsLoading) "Загрузка…" else "Получить модели")
+        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Избранные модели", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            TextButton(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
+                Text(if (state.editorModelsLoading) "Загрузка…" else if (draft.modelCatalog.isEmpty()) "Загрузить" else "Обновить", style = MaterialTheme.typography.labelSmall)
+            }
         }
         state.editorModelsError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Text("Моделей: ${draft.modelCatalog.size}", style = MaterialTheme.typography.bodySmall)
-        if (draft.modelCatalog.isEmpty()) Field("Модель вручную (если каталога нет)", draft.modelId) { draft = draft.copy(modelId = it) }
-        TextButton(onClick = {
-            val first = draft.modelId.ifBlank { draft.modelCatalog.firstOrNull()?.id.orEmpty() }
+        Text("Выбрано ${draft.favoriteModels.size} · для быстрого выбора в чате и проектах", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (draft.modelCatalog.isEmpty()) {
+            Text("Загрузите доступные модели, чтобы добавить их в избранное.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            OutlinedTextField(modelQuery, { modelQuery = it }, label = { Text("Найти модель") },
+                singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            val filtered = draft.modelCatalog.filter { it.id.contains(modelQuery, true) || it.name.contains(modelQuery, true) }
+            if (filtered.isEmpty()) Text("Модели не найдены", style = MaterialTheme.typography.bodySmall)
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+                items(filtered, key = { it.id }) { model ->
+                    val checked = model.id in draft.favoriteModels
+                    Row(Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Checkbox,
+                        onValueChange = { draft = draft.withFavoriteModel(model.id) }).heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = checked, onCheckedChange = null)
+                        Text(model.name, Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+        if (spec?.allowsManualModelId == true) {
+            Field("Модель вручную", draft.modelId) { draft = draft.copy(modelId = it) }
+            TextButton(onClick = { draft = draft.withFavoriteModel(draft.modelId) }, enabled = draft.modelId.isNotBlank()) {
+                Text(if (draft.modelId in draft.favoriteModels) "Убрать из избранного" else "Добавить в избранное")
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = {
+            val first = draft.modelId.takeIf { it in draft.favoriteModels } ?: draft.favoriteModels.firstOrNull()
+                ?: draft.modelId.ifBlank { draft.modelCatalog.firstOrNull()?.id.orEmpty() }
             vm.saveLlmProfile(draft.copy(modelId = first, modelLibraryVersion = 1))
-        }, enabled = draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) { Text("Сохранить поставщика") }
+        }, enabled = draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) { Text("Сохранить") }
         TextButton(onClick = vm::closeLlmProfileEditor) { Text("Отмена") }
+        }
+    }
     }
 
+}
+
+/** Direct providers expose a catalog, so a model id should not have to be typed. */
+@Composable
+private fun CatalogModelPicker(
+    models: List<ProviderModel>,
+    selectedId: String,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = models.firstOrNull { it.id == selectedId }
+    Text("Модель", style = MaterialTheme.typography.labelMedium)
+    TextButton(onClick = { expanded = true }, enabled = models.isNotEmpty()) {
+        Text(selected?.name ?: selectedId.ifBlank { "Каталог моделей пока пуст" })
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        models.forEach { model ->
+            DropdownMenuItem(
+                text = { Text(if (model.name == model.id) model.id else "${model.name} · ${model.id}") },
+                onClick = {
+                    onSelected(model.id)
+                    expanded = false
+                },
+            )
+        }
+    }
 }
 
 /** Строка выбора провайдера из каталога. */
@@ -284,6 +366,7 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
 @Composable
 private fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
     val auth = state.openAiSubscription
+    var showDetails by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     if (!auth.available) {
         Text(
@@ -304,14 +387,26 @@ private fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
             }
             else -> "Войдите в ChatGPT: запросы будут расходовать лимит вашей подписки, API-ключ не нужен."
         },
-        style = MaterialTheme.typography.bodyMedium,
+        style = MaterialTheme.typography.bodySmall,
         color = if (account?.signedIn == true) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    account?.rateLimits?.forEach { limit ->
+    if (account?.signedIn == true) TextButton(onClick = { showDetails = !showDetails }) {
+        Text(if (showDetails) "Скрыть лимиты ▴" else "Лимиты подписки ▾", style = MaterialTheme.typography.labelSmall)
+    }
+    if (showDetails) account?.rateLimits?.forEach { limit ->
+        val reset = limit.resetsAtEpochSeconds?.let {
+            val minutes = ((it - Id.now() / 1000).coerceAtLeast(0) + 59) / 60
+            when {
+                minutes == 0L -> "обновление ожидается"
+                minutes < 60 -> "обновление через $minutes мин"
+                minutes < 1440 -> "обновление через ${minutes / 60} ч ${minutes % 60} мин"
+                else -> "обновление через ${minutes / 1440} д ${minutes % 1440 / 60} ч"
+            }
+        }
         Text(
-            "${limit.name} · ${limit.window}: использовано ${limit.usedPercent}%" +
-                (limit.resetsAtEpochSeconds?.let { " · сброс $it" } ?: ""),
-            style = MaterialTheme.typography.bodySmall,
+            "${limit.name} · ${if (limit.window == "primary") "основной лимит" else if (limit.window == "secondary") "дополнительный лимит" else limit.window}: осталось ${(100 - limit.usedPercent).coerceIn(0, 100)}%" +
+                (reset?.let { " · $it" } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

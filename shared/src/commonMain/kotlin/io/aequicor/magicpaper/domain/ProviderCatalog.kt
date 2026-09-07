@@ -22,6 +22,12 @@ data class ProviderSpec(
     val desktopOnly: Boolean = false,
     /** Авторизация через ChatGPT, без Base URL и API-ключа. */
     val usesSubscription: Boolean = false,
+    /**
+     * У маршрутизаторов каталог не является исчерпывающим договором: пользователь
+     * может указать id модели, доступный только в его маршруте. У прямых
+     * провайдеров модель всегда выбирается из их каталога.
+     */
+    val allowsManualModelId: Boolean = false,
 )
 
 /**
@@ -158,6 +164,7 @@ object ProviderCatalog {
                 ModelInfo("google/gemini-2.5-flash", ReasoningPresets.GEMINI_BUDGET),
                 ModelInfo("deepseek/deepseek-v4-pro", ReasoningPresets.COMPAT_EFFORT),
             ),
+            allowsManualModelId = true,
         ),
         ProviderSpec(
             type = ProviderType.OPENAI_COMPATIBLE,

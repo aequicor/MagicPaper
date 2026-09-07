@@ -14,7 +14,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
-import io.aequicor.magicpaper.ui.components.EffortControl
+import io.aequicor.magicpaper.ui.components.ModelSettingsButton
 import io.aequicor.magicpaper.ui.components.FavoriteModelPicker
 import io.aequicor.magicpaper.util.Id
 import kotlinx.serialization.json.*
@@ -33,8 +33,13 @@ fun ModelsSettings(vm: MagicPaperViewModel, state: UiState) {
         Spacer(Modifier.height(4.dp))
         Text("По умолчанию", style = MaterialTheme.typography.titleSmall)
         Text("Операции приложения, настройка и планирование.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        TextButton(onClick = { pickingDefault = true }) { Text(operational?.shortLabel ?: "Выбрать модель") }
-        operational?.let { p -> if (default != null) EffortControl(ModelDefaults.capability(p), default.effort, { vm.setDefaultModel(default.copy(effort = it)) }) }
+        ModelSettingsButton(
+            profile = operational,
+            selection = default,
+            onChoose = { pickingDefault = true },
+            onEffort = { effort -> default?.let { vm.setDefaultModel(it.copy(effort = effort)) } },
+            onParameters = { default?.let { variantEditor = it.profileId to it.modelId } },
+        )
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Избранное · ${favorites.size}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
