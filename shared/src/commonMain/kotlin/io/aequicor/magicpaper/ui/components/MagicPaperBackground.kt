@@ -74,10 +74,11 @@ internal expect fun rememberPaperRenderer(): PaperRenderer?
 @Composable
 internal expect fun rememberPaperEnvironment(): State<PaperEnvironment>
 
-/** Shared AGSL/SkSL source. Stationary grain, slow ink clouds and faint gilded contours. */
+/** Shared AGSL/SkSL: fixed paper fibres and relief, lit by travelling ripples and grazing light. */
 internal val PaperShaderSource = """
     uniform float2 resolution;
     uniform float time;
+    uniform float density;
 
     float hash(float2 p) {
         p = fract(p * float2(123.34, 456.21));
@@ -91,20 +92,65 @@ internal val PaperShaderSource = """
         return mix(mix(hash(i), hash(i + float2(1.0, 0.0)), f.x),
                    mix(hash(i + float2(0.0, 1.0)), hash(i + float2(1.0)), f.x), f.y);
     }
+    // Value noise with analytic derivatives: relief normals without extra texture samples.
+    float3 relief(float2 p) {
+        float2 i = floor(p);
+        float2 f = fract(p);
+        float a = hash(i);
+        float b = hash(i + float2(1.0, 0.0));
+        float c = hash(i + float2(0.0, 1.0));
+        float d = hash(i + float2(1.0));
+        float2 u = f * f * (3.0 - 2.0 * f);
+        float2 du = 6.0 * f * (1.0 - f);
+        return float3(mix(mix(a, b, u.x), mix(c, d, u.x), u.y),
+                      du.x * mix(b - a, d - c, u.y),
+                      du.y * mix(c - a, d - b, u.x));
+    }
     half4 main(float2 fragCoord) {
         float2 uv = fragCoord / max(resolution, float2(1.0));
         float2 p = fragCoord / max(min(resolution.x, resolution.y), 1.0);
-        float t = time * 0.035;
-        float warp = noise(p * 2.0 + float2(t, -t * 0.7));
-        float cloud = noise(p * 2.7 + float2(warp, t * 0.5));
-        float glow = noise(p * 1.8 + float2(-t * 0.8, warp));
-        float3 paper = mix(float3(0.984, 0.969, 0.933), float3(0.941, 0.910, 0.851), uv.y);
-        paper = mix(paper, float3(0.77, 0.72, 0.85), smoothstep(0.38, 0.85, cloud) * 0.19);
-        paper = mix(paper, float3(0.70, 0.78, 0.66), smoothstep(0.45, 0.92, glow) * 0.10);
-        float contour = 1.0 - smoothstep(0.012, 0.04, abs(sin((cloud + p.y * 0.15) * 16.0)));
-        paper = mix(paper, float3(0.76, 0.63, 0.37), contour * 0.055);
-        float grain = hash(floor(fragCoord)) - 0.5;
-        paper += grain * 0.018;
-        return half4(half3(paper), 1.0);
+        float2 q = fragCoord / max(density, 1.0);
+
+        // The material stays attached to the sheet. Fibre size is consistent in dp.
+        float2 paperCoords = float2(q.x * 0.866 + q.y * 0.5, -q.x * 0.5 + q.y * 0.866);
+        float3 pulp = relief(paperCoords * 0.045);
+        float3 tooth = relief(q * 0.19 + float2(17.0));
+        // Short, randomly oriented cellulose strands; no regular woven/horizontal pattern.
+        float2 cell = floor(q / 7.0);
+        float2 local = (fract(q / 7.0) - 0.5) * 7.0;
+        local -= (float2(hash(cell + 5.0), hash(cell + 11.0)) - 0.5) * 2.0;
+        float2 axis = normalize(float2(hash(cell + 19.0), hash(cell + 29.0)) - 0.499);
+        float along = dot(local, axis);
+        float across = dot(local, float2(-axis.y, axis.x));
+        float length = 0.7 + hash(cell + 41.0) * 1.3;
+        float taper = 1.0 - smoothstep(length * 0.45, length, abs(along));
+        float strand = (1.0 - smoothstep(0.12, 0.55, abs(across))) * taper;
+        float fleck = noise(q * 0.8);
+        float grain = hash(floor(q * 1.5)) - 0.5;
+        float3 paper = mix(float3(0.978, 0.953, 0.897), float3(0.953, 0.915, 0.838), uv.y);
+        paper += (pulp.x - 0.5) * 0.035 + (tooth.x - 0.5) * 0.022 + grain * 0.014;
+        paper -= float3(0.041, 0.036, 0.026) * strand;
+        paper += float3(0.021, 0.019, 0.014) * (fleck - 0.5);
+
+        // A shallow bend travels diagonally across the sheet; its paired light/shadow
+        // advances through the image instead of expanding around a stationary centre.
+        float phase = dot(p, float2(0.86, 0.51)) * 7.5 - time * 0.52;
+        float bend = sin(phase + sin(p.y * 3.0 - time * 0.12) * 0.35);
+        float secondary = sin(dot(p, float2(-0.4, 0.92)) * 10.0 - time * 0.31);
+        float2 slope = float2(pulp.y * 0.866 - pulp.z * 0.5, pulp.y * 0.5 + pulp.z * 0.866) * 0.12;
+        slope += tooth.yz * 0.065;
+        slope += float2(0.86, 0.51) * bend * 0.24;
+        slope += float2(-0.4, 0.92) * secondary * 0.065;
+        float3 normal = normalize(float3(-slope, 1.0));
+        float3 light = normalize(float3(-0.65 + sin(time * 0.13) * 0.25, -0.55, 0.75));
+        float lighting = dot(normal, light) - light.z;
+        paper += lighting * 0.24;
+
+        // Warm raking light picks out raised fibres as it sweeps over the paper.
+        float sweep = pow(max(0.0, cos(phase * 0.5 - 0.7)), 10.0);
+        paper += float3(0.030, 0.025, 0.014) * sweep * (0.35 + strand + tooth.x * 0.4);
+        float edge = pow(abs(uv.x * 2.0 - 1.0), 6.0) + pow(abs(uv.y * 2.0 - 1.0), 6.0);
+        paper -= float3(0.016, 0.019, 0.022) * edge;
+        return half4(half3(clamp(paper, 0.0, 1.0)), 1.0);
     }
 """.trimIndent()

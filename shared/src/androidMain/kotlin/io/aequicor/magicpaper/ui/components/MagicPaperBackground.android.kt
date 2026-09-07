@@ -76,6 +76,7 @@ private class AndroidPaperRenderer : PaperRenderer {
     override fun draw(scope: DrawScope, timeSeconds: Float) {
         shader.setFloatUniform("resolution", scope.size.width, scope.size.height)
         shader.setFloatUniform("time", timeSeconds)
+        shader.setFloatUniform("density", scope.density)
         with(scope) { drawRect(brush) }
     }
 }

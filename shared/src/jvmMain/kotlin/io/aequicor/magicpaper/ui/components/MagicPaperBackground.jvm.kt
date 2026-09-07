@@ -79,6 +79,7 @@ internal class DesktopPaperRenderer : PaperRenderer, AutoCloseable {
     override fun draw(scope: DrawScope, timeSeconds: Float) {
         builder.uniform("resolution", scope.size.width, scope.size.height)
         builder.uniform("time", timeSeconds)
+        builder.uniform("density", scope.density)
         // Skia shaders are immutable snapshots of uniforms; release each native snapshot after recording.
         builder.makeShader().use { shader ->
             paint.shader = shader
