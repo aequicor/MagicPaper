@@ -138,7 +138,6 @@ fun CodingScreen(
                 onAddSession = vm::addCodingSession,
                 onDeleteSession = vm::deleteCodingSession,
                 onAbortSession = vm::abortCodingSession,
-                onReply = { id, text -> vm.sendCodingPromptTo(id, text) },
                 modifier = panelModifier,
             )
         }) {
@@ -417,7 +416,7 @@ fun ActivityDot(
 
 /**
  * Левое меню раздела: список проектов, а под выбранным — его кодинг-сессии.
- * У каждой сессии свой кружок статуса, быстрый ответ и меню (прервать, удалить).
+ * У каждой сессии свой кружок статуса и меню (прервать, удалить).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -430,7 +429,6 @@ internal fun ProjectsPanel(
     onAddSession: () -> Unit,
     onDeleteSession: (String) -> Unit,
     onAbortSession: (String) -> Unit,
-    onReply: (String, String) -> Unit,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
     onDeleteAllSessions: (String) -> Unit = {},
@@ -469,7 +467,7 @@ internal fun ProjectsPanel(
                         val sessionRow: @Composable () -> Unit = {
                             SessionRow(sessionUi, sessionUi.session.id == activeId,
                                 { onSelectSession(sessionUi.session.id) }, { onDeleteSession(sessionUi.session.id) },
-                                { onAbortSession(sessionUi.session.id) }, { onReply(sessionUi.session.id, it) },
+                                { onAbortSession(sessionUi.session.id) },
                                 childCount = children.size, expanded = showChildren,
                                 onToggleChildren = { collapsed[sessionUi.session.id] = showChildren })
                         }
@@ -487,7 +485,7 @@ internal fun ProjectsPanel(
                             item(key = "session-${child.session.id}") {
                                 SessionRow(child, child.session.id == activeId,
                                     { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
-                                    { onAbortSession(child.session.id) }, { onReply(child.session.id, it) }, nested = true)
+                                    { onAbortSession(child.session.id) }, nested = true)
                             }
                             position++
                         }
@@ -570,7 +568,6 @@ private fun SessionRow(
     onSelect: () -> Unit,
     onDelete: () -> Unit,
     onAbort: () -> Unit,
-    onReply: (String) -> Unit,
     nested: Boolean = false,
     childCount: Int = 0,
     expanded: Boolean = false,
@@ -609,7 +606,7 @@ private fun SessionRow(
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            if (nested || item.running || status == CodingSessionStatus.WAITING) Text(
+            if (status != CodingSessionStatus.WAITING && (nested || item.running)) Text(
                 (if (nested) "Этап · " else "") + status.label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
@@ -617,12 +614,6 @@ private fun SessionRow(
         }
         if (childCount > 0) Text(childCount.toString(), style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
-        // Быстрый ответ агенту без перехода в сессию.
-        if (status == CodingSessionStatus.WAITING && !item.running) {
-            TextButton(onClick = { onReply("Продолжай") }, modifier = Modifier.heightIn(min = 28.dp)) {
-                Text("↩", style = MaterialTheme.typography.labelMedium)
-            }
-        }
         RowMenu(
             key = "session-${item.session.id}",
             entries = buildList<Pair<String, () -> Unit>> {
