@@ -86,6 +86,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingDraft
+import io.aequicor.magicpaper.domain.CodingApproval
+import io.aequicor.magicpaper.domain.CodingApprovalDecision
+import io.aequicor.magicpaper.ui.components.CodingApprovalDock
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
@@ -153,7 +156,7 @@ fun CodingScreen(
         }) {
                 val project = ui.current
                 val activeId = project?.let { ui.activeSessionIdOf(it.id) }
-                val active = ui.sessions.firstOrNull { it.session.id == activeId }
+                val active = project?.let { ui.sessionsOf(it.id) }?.firstOrNull { it.session.id == activeId }
                 if (project == null || active == null) {
                     ProjectsEmptyHint(hasProject = project != null)
                 } else {
@@ -228,10 +231,14 @@ private fun SessionArea(
         val workerLive = attempt?.let { live[it.id] ?: it }
         val workerRunning = worker != null && worker.status == MilestoneStatus.ACTIVE && workerPlan.intent == ExecutionIntent.RUN && workerLive?.error?.requiresUser != true
         val draft = serviceDrafts[active.session.id] ?: if (workerRunning) CodingDraft(steps = readableStageActivity(workerLive?.steps.orEmpty()), active = true) else active.draft
-        val effective = active.copy(messages = if (workerRunning && attempt != null) active.messages.filterNot { it.id == "${attempt.id}-response" } else active.messages, draft = draft, running = workerRunning || draft.active || active.running)
+        val effective = active.copy(messages = if (workerRunning && attempt != null) active.messages.filterNot { it.id == "${attempt.id}-response" } else active.messages,
+            draft = draft.copy(awaitingApproval = active.draft.awaitingApproval), running = workerRunning || draft.active || active.running)
             CodingChat(
                 project = project,
                 session = effective,
+                approvals = ui.approvals.filter { it.projectId == project.id },
+                onApproval = vm::respondCodingApproval,
+                onStopApproval = vm::abortCodingSession,
                 busy = effective.running,
                 allowQueue = active.session.stageId != null,
                 planningService = service,
@@ -755,6 +762,9 @@ internal fun CodingChat(
     onOpenSession: (String) -> Unit = {},
     allowQueue: Boolean = false,
     onPlanning: (() -> Unit)? = null,
+    approvals: List<CodingApproval> = emptyList(),
+    onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
+    onStopApproval: (String) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -826,7 +836,9 @@ internal fun CodingChat(
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
-            if (planningService != null) PlanningQuestionsDock(
+            CodingApprovalDock(approvals, onApproval, onStopApproval,
+                Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 12.dp, vertical = 4.dp))
+            if (planningService != null && approvals.isEmpty()) PlanningQuestionsDock(
                 planningQuestionsSession.session, planningQuestionsSession.messages, planningService,
                 planningService.drafts.collectAsState().value[planningQuestionsSession.session.id]?.active == true,
                 Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
@@ -1077,6 +1089,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
     val progress = draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.INFO && it.running }
     val activity = when {
+        draft.awaitingApproval -> "Ожидает подтверждения…"
         progress != null -> progress.title
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
@@ -1085,7 +1098,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
         else -> "Агент работает…"
     }
     val hasThinking = thinking.isNotBlank()
-    val isWorking = draft.active && draft.failedMessage == null &&
+    val isWorking = draft.active && !draft.awaitingApproval && draft.failedMessage == null &&
         (progress != null || tool != null || !draft.awaitingModel)
     var dots by remember { mutableStateOf(3) }
     LaunchedEffect(isWorking) {

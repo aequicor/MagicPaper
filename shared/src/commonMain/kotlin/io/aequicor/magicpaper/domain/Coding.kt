@@ -113,6 +113,8 @@ data class CodingDraft(
     val awaitingModel: Boolean = false,
     /** Живой текст текущего рассуждения модели (ещё не зафиксированный в ленту). */
     val thinking: String = "",
+    /** The engine is paused until the user answers an approval request. */
+    val awaitingApproval: Boolean = false,
 )
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
@@ -449,6 +451,8 @@ interface CodingProjectRepository {
  * Все зависимости изолированы в папке данных приложения и удаляются вместе с ним.
  */
 interface CodingRuntime {
+    val approvals: kotlinx.coroutines.flow.StateFlow<List<CodingApproval>> get() = noCodingApprovals
+    suspend fun respondApproval(id: String, decision: CodingApprovalDecision) = Unit
     /** Verify engine prerequisites without starting a stage executor. */
     suspend fun preflight(profile: LlmProfile) = Unit
     /** Reconcile a prior run before reusing its workspace after application restart. */

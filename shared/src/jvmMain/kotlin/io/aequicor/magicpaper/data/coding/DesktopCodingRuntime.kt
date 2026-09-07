@@ -17,6 +17,9 @@ class DesktopCodingRuntime(
     private val pi: PiCodingRuntime,
     private val subscription: CodexAppServerOpenAiSubscription,
 ) : CodingRuntime {
+    override val approvals = subscription.codingApprovals
+    override suspend fun respondApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) =
+        subscription.respondCodingApproval(id, decision)
     override val supported: Boolean = true
     override suspend fun preflight(profile: LlmProfile) {
         if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {

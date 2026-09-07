@@ -78,6 +78,14 @@ class CodexAppServerOpenAiSubscription(
     private val turns = ConcurrentHashMap<String, TurnAccumulator>()
     private val codingRuns = ConcurrentHashMap<String, CodingAccumulator>()
     private val codingSessions = ConcurrentHashMap<String, String>()
+    private val codingContexts = ConcurrentHashMap<String, CodingSession>()
+    private val approvalBroker = CodexApprovalBroker { threadId, message ->
+        codingRuns[threadId]?.emit(CodingEvent.Notice(message))
+    }
+    val codingApprovals = approvalBroker.requests
+
+    suspend fun respondCodingApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) =
+        approvalBroker.respond(id, decision)
     private val stderrTail = ArrayDeque<String>()
     private val ownedCoding = io.aequicor.magicpaper.data.coding.OwnedCodingProcess(appHome.resolve("coding-processes").toFile())
     suspend fun reconcileCoding(sessionId: String) = withContext(Dispatchers.IO) {
@@ -94,6 +102,8 @@ class CodexAppServerOpenAiSubscription(
             ownedCoding.clear(sessionId)
             codingSessions.remove(sessionId)
             codingRuns.remove(threadId)
+            codingContexts.remove(threadId)
+            approvalBroker.clearTurn(threadId)
             return@withContext
         }
         ownedCoding.reconcile(sessionId)
@@ -272,8 +282,10 @@ class CodexAppServerOpenAiSubscription(
                 ?: error("Codex не вернул идентификатор coding-сессии.")
             send(CodingEvent.SessionStarted(threadId))
             val accumulator = CodingAccumulator()
+            approvalBroker.clearTurn(threadId)
             codingRuns[threadId] = accumulator
             codingSessions[session.id] = threadId
+            codingContexts[threadId] = session
             ownedCoding.record(session.id, process ?: error("Codex process unavailable"))
             val effort = codingProfile.resolveEffort(ModelDefaults.capability(codingProfile)).level?.wire
             val turn = request(
@@ -306,6 +318,10 @@ class CodexAppServerOpenAiSubscription(
             if (confirmedFinished) {
                 val threadId = codingSessions.remove(session.id)
                 if (threadId != null) codingRuns.remove(threadId)?.events?.close()
+                if (threadId != null) {
+                    codingContexts.remove(threadId)
+                    approvalBroker.clearTurn(threadId)
+                }
                 ownedCoding.clear(session.id)
             }
         }
@@ -314,6 +330,7 @@ class CodexAppServerOpenAiSubscription(
     fun abortCoding(sessionId: String) {
         val threadId = codingSessions[sessionId] ?: return
         val run = codingRuns[threadId] ?: return
+        approvalBroker.clearTurn(threadId)
         val turnId = run.turnId ?: return
         scope.launch {
             runCatching {
@@ -325,6 +342,7 @@ class CodexAppServerOpenAiSubscription(
     fun abortAllCoding() = codingSessions.keys.toList().forEach(::abortCoding)
 
     override fun close() {
+        approvalBroker.clear()
         pending.values.forEach { it.cancel() }
         turns.values.forEach { it.done.cancel() }
         codingRuns.values.forEach { it.events.close() }
@@ -461,9 +479,11 @@ class CodexAppServerOpenAiSubscription(
         send(buildJsonObject { put("method", "initialized"); put("params", buildJsonObject { }) })
     }
 
-    private suspend fun send(value: JsonObject) = writeMutex.withLock {
+    private suspend fun send(value: JsonObject, expectedWriter: BufferedWriter? = null, valid: () -> Boolean = { true }) = writeMutex.withLock {
         withContext(Dispatchers.IO) {
             val target = writer ?: error("Codex app-server не запущен.")
+            check(expectedWriter == null || target === expectedWriter) { "Соединение Codex уже изменилось." }
+            check(valid()) { "Запрос подтверждения уже завершён." }
             target.write(json.encodeToString(JsonObject.serializer(), value))
             target.newLine()
             target.flush()
@@ -475,7 +495,8 @@ class CodexAppServerOpenAiSubscription(
             while (true) {
                 val line = withContext(Dispatchers.IO) { reader.readLine() } ?: break
                 val message = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
-                val id = message["id"]?.jsonPrimitive?.longOrNull
+                val wireId = message["id"] as? JsonPrimitive
+                val id = wireId?.longOrNull
                 if (id != null && ("result" in message || "error" in message)) {
                     val deferred = pending.remove(id) ?: continue
                     val error = message["error"] as? JsonObject
@@ -483,13 +504,14 @@ class CodexAppServerOpenAiSubscription(
                     else deferred.complete(message["result"] ?: JsonNull)
                     continue
                 }
-                if (id != null && message.string("method") != null) {
+                if (wireId != null && wireId != JsonNull && message.string("method") != null) {
+                    if (handleServerRequest(wireId, message.string("method")!!, message["params"] as? JsonObject)) continue
                     send(
                         buildJsonObject {
-                            put("id", id)
+                            put("id", wireId)
                             put("error", buildJsonObject {
                                 put("code", -32601)
-                                put("message", "MagicPaper chat does not expose tools")
+                                put("message", "MagicPaper does not support this request outside an active coding turn")
                             })
                         },
                     )
@@ -506,9 +528,30 @@ class CodexAppServerOpenAiSubscription(
         }
     }
 
+    internal fun handleServerRequest(id: JsonPrimitive, method: String, params: JsonObject?): Boolean {
+        if (params == null) return false
+        val threadId = params.string("threadId") ?: return false
+        val run = codingRuns[threadId]?.takeUnless { it.done.isCompleted } ?: return false
+        val session = codingContexts[threadId] ?: return false
+        val turnId = params.string("turnId") ?: return false
+        if (run.turnId != null && run.turnId != turnId) return false
+        if (run.turnId == null) run.turnId = turnId
+        val connection = writer ?: return false
+        return approvalBroker.receive(id, method, params, session, run.items[params.string("itemId")]) { response ->
+            send(response, expectedWriter = connection) {
+                codingRuns[threadId] === run && !run.done.isCompleted && (run.turnId == null || run.turnId == turnId) &&
+                    approvalBroker.contains(threadId, id)
+            }
+        }
+    }
+
     private fun handleNotification(method: String?, params: JsonObject?) {
         if (params == null) return
         when (method) {
+            "serverRequest/resolved" -> {
+                val threadId = params.string("threadId") ?: return
+                params["requestId"]?.let { approvalBroker.resolved(threadId, it) }
+            }
             "guardianWarning" -> {
                 val threadId = params.string("threadId") ?: return
                 val warning = params.string("message") ?: return
@@ -526,6 +569,7 @@ class CodexAppServerOpenAiSubscription(
                     turns[threadId]?.accept(item.string("text").orEmpty(), item.string("phase"))
                 }
                 codingRuns[threadId]?.completeItem(item)
+                item.string("id")?.let { approvalBroker.completeItem(threadId, it) }
             }
             "item/started" -> {
                 val threadId = params.string("threadId") ?: return
@@ -553,7 +597,10 @@ class CodexAppServerOpenAiSubscription(
             )
             "turn/started" -> {
                 val threadId = params.string("threadId") ?: return
-                codingRuns[threadId]?.turnId = (params["turn"] as? JsonObject)?.string("id")
+                val run = codingRuns[threadId] ?: return
+                val turnId = (params["turn"] as? JsonObject)?.string("id") ?: return
+                if (run.turnId != null && run.turnId != turnId) approvalBroker.clearTurn(threadId)
+                run.turnId = turnId
             }
             "turn/completed" -> {
                 val threadId = params.string("threadId") ?: return
@@ -561,6 +608,7 @@ class CodexAppServerOpenAiSubscription(
                 val error = (turn?.get("error") as? JsonObject)?.string("message")
                 turns[threadId]?.finish(error)
                 codingRuns[threadId]?.finish(error)
+                approvalBroker.clearTurn(threadId, turn?.string("id"))
             }
         }
     }
@@ -576,6 +624,7 @@ class CodexAppServerOpenAiSubscription(
     }
 
     private fun failAll(message: String) {
+        approvalBroker.clear()
         val error = AppServerException(message)
         pending.values.forEach { it.completeExceptionally(error) }
         pending.clear()
@@ -652,6 +701,7 @@ class CodexAppServerOpenAiSubscription(
     }
 
     private class CodingAccumulator {
+        val items = ConcurrentHashMap<String, JsonObject>()
         val events = Channel<CodingEvent>(Channel.UNLIMITED)
         val done = CompletableDeferred<Unit>()
         @Volatile var confirmed = false
@@ -663,6 +713,7 @@ class CodexAppServerOpenAiSubscription(
 
         fun startItem(item: JsonObject) {
             val id = item.string("id").orEmpty()
+            if (id.isNotBlank()) items[id] = item
             when (item.string("type")) {
                 "agentMessage", "reasoning" -> emit(CodingEvent.MessageStarted)
                 "commandExecution" -> emit(
@@ -674,6 +725,7 @@ class CodexAppServerOpenAiSubscription(
 
         fun completeItem(item: JsonObject) {
             val id = item.string("id").orEmpty()
+            items.remove(id)
             when (item.string("type")) {
                 "agentMessage" -> item.string("text")?.takeIf { it.isNotBlank() }?.let { emit(CodingEvent.FinalText(it)) }
                 "reasoning" -> {
@@ -685,7 +737,7 @@ class CodexAppServerOpenAiSubscription(
                 "commandExecution" -> emit(
                     CodingEvent.ToolFinished(
                         tool = "command",
-                        isError = item.string("status") == "failed",
+                        isError = item.string("status") in listOf("failed", "declined"),
                         callId = id,
                         resultPreview = item.string("aggregatedOutput").orEmpty(),
                     ),
@@ -693,7 +745,7 @@ class CodexAppServerOpenAiSubscription(
                 "fileChange" -> emit(
                     CodingEvent.ToolFinished(
                         tool = "edit",
-                        isError = item.string("status") == "failed",
+                        isError = item.string("status") in listOf("failed", "declined"),
                         callId = id,
                         resultPreview = fileSummary(item),
                     ),
@@ -702,6 +754,7 @@ class CodexAppServerOpenAiSubscription(
         }
 
         fun finish(error: String?, confirmed: Boolean = true) {
+            items.clear()
             this.confirmed = confirmed
             if (!error.isNullOrBlank()) emit(CodingEvent.Failed(error))
             emit(CodingEvent.AgentEnd)
@@ -729,8 +782,8 @@ class CodexAppServerOpenAiSubscription(
                 "Для сборки используй установленный toolchain и обычный кеш Gradle (GRADLE_USER_HOME из окружения или ~/.gradle); " +
                 "не переноси кеш в проект ради обхода ограничений и не добавляй --offline без необходимости. " +
                 "Если сборке нужны сеть, зависимости или доступ за пределами песочницы, запроси разрешение штатным механизмом Codex: " +
-                "запросы проверяются автоматически. Не останавливайся после первого отказа песочницы. " +
-                "Если автоматическая проверка отклонила запрос, не обходи отказ; сообщи конкретную операцию и причину."
+                "MagicPaper покажет пользователю операцию и причину для подтверждения. Не останавливайся после первого отказа песочницы. " +
+                "Дождись решения через штатный механизм подтверждения. Если пользователь отклонил действие, не обходи отказ; выбери безопасный вариант или сообщи ограничение."
 
         fun defaultAppHome(): Path = Paths.get(System.getProperty("user.home"), ".MagicPaper", "codex")
 

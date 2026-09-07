@@ -35,6 +35,7 @@ data class CodingSessionUi(
     /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */
     val status: CodingSessionStatus
         get() {
+            if (draft.awaitingApproval) return CodingSessionStatus.WAITING
             val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
             if (stage != null) return when {
                 stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.WAITING
@@ -60,6 +61,7 @@ data class CodingSessionUi(
 
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
+    val approvals: List<io.aequicor.magicpaper.domain.CodingApproval> = emptyList(),
     val projects: List<CodingProject> = emptyList(),
     val current: CodingProject? = null,
     /** Сессии текущего проекта с журналами и живыми прогонами. */
@@ -76,6 +78,7 @@ data class CodingUi(
         get() = sessions.firstOrNull { it.session.id == currentSessionId } ?: sessions.firstOrNull()
 
     fun statusOf(projectId: String, fallback: CodingSessionStatus = CodingSessionStatus.IDLE): CodingSessionStatus {
+        if (approvals.any { it.projectId == projectId }) return CodingSessionStatus.WAITING
         val own = sessions.filter { it.session.projectId == projectId }
         return if (own.isNotEmpty()) {
             aggregateCodingStatus(own.map { it.status })
@@ -86,7 +89,11 @@ data class CodingUi(
 
     /** Сессии проекта (в состоянии лежат и фоновые сессии других проектов). */
     fun sessionsOf(projectId: String): List<CodingSessionUi> =
-        sessions.filter { it.session.projectId == projectId }
+        sessions.filter { it.session.projectId == projectId }.map { item ->
+            val waiting = approvals.any { it.projectId == projectId &&
+                (it.sessionId == item.session.id || it.sessionId == "${item.session.id}-merge" || it.sessionId == "${item.session.id}-delivery") }
+            item.copy(draft = item.draft.copy(awaitingApproval = waiting))
+        }
 
     /**
      * Активная сессия проекта: выбранная либо первая, если id сбросился

@@ -13,7 +13,7 @@ class CodexCodingPermissionsTest {
         assertEquals(policy.sandboxPolicy()["writableRoots"], policy.threadConfig()["sandbox_workspace_write.writable_roots"])
         val approvals = buildJsonObject { with(policy) { approvals() } }
         assertEquals(JsonPrimitive("on-request"), approvals["approvalPolicy"])
-        assertEquals(JsonPrimitive("auto_review"), approvals["approvalsReviewer"])
+        assertEquals(JsonPrimitive("user"), approvals["approvalsReviewer"])
     }
 
     @Test fun customGradleCacheIsReused() = withHome { home ->

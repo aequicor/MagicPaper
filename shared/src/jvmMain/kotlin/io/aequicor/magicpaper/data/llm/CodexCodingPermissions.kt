@@ -4,7 +4,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlinx.serialization.json.*
 
-/** Build caches are pre-granted; additional access is reviewed by Codex, never blindly accepted. */
+/** Build caches are pre-granted; engine approval requests are routed to the user. */
 internal class CodexCodingPermissions(
     project: Path,
     userHome: Path = Paths.get(System.getProperty("user.home")),
@@ -23,7 +23,7 @@ internal class CodexCodingPermissions(
 
     fun JsonObjectBuilder.approvals() {
         put("approvalPolicy", "on-request")
-        put("approvalsReviewer", "auto_review")
+        put("approvalsReviewer", "user")
     }
 
     fun sandboxPolicy(): JsonObject = buildJsonObject {

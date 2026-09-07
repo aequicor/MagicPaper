@@ -98,6 +98,11 @@ class MagicPaperViewModel(
 
     init {
         scope.launch { bootstrap() }
+        codingRuntime?.let { runtime -> scope.launch {
+            runtime.approvals.collect { requests ->
+                _state.update { state -> state.copy(coding = state.coding.copy(approvals = requests)) }
+            }
+        } }
         planningChat?.let { service -> scope.launch {
             service.changes.collect {
                 val repo = codingProjects ?: return@collect
@@ -1163,6 +1168,10 @@ class MagicPaperViewModel(
         // Процесс убивает рантайм; поток событий сам выдаст Failed+Finished,
         // и прогон корректно закроет журнал (статус станет жёлтым).
         codingRuntime?.abort(sessionId)
+    }
+
+    fun respondCodingApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) {
+        scope.launch { codingRuntime?.respondApproval(id, decision) }
     }
 
     /** Точечное обновление сессии в состоянии (по id, где бы она ни лежала). */
