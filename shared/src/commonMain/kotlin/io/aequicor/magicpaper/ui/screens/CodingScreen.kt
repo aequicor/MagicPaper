@@ -1158,10 +1158,14 @@ private fun CodingComposer(
                     horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
                     controls?.invoke()
                 }
+                VerticalDivider(
+                    modifier = Modifier.padding(horizontal = 6.dp).height(24.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
                 if (busy) TextButton(onClick = onAbort, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Прервать") }
                 else TextButton(enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
                     contentPadding = PaddingValues(horizontal = 4.dp)) {
-                    Text(if (enabled) "Отправить ↑" else "Движок не готов", style = MaterialTheme.typography.labelMedium)
+                    Text(if (enabled) "Отправить" else "Движок не готов", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }

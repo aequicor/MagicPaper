@@ -12,7 +12,7 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 @Composable
 fun CodingModelChip(profile: LlmProfile?, overridden: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     TextButton(onClick, modifier.heightIn(min = 32.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
-        Column(modifier = Modifier.weight(1f, fill = false)) {
+        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
             Text(profile?.let { it.modelName(it.selectionKey).ifBlank { it.name } } ?: "Выбрать модель",
                 style = MaterialTheme.typography.labelMedium, maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -23,7 +23,6 @@ fun CodingModelChip(profile: LlmProfile?, overridden: Boolean, onClick: () -> Un
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }
-        Text(" ▾", style = MaterialTheme.typography.labelMedium)
     }
 }
 

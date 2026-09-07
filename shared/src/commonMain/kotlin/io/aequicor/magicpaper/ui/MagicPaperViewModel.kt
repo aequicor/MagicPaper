@@ -82,7 +82,12 @@ class MagicPaperViewModel(
     private val filePicker: FilePicker? = null,
     private val openAiSubscription: OpenAiSubscriptionService? = null,
     val planningChat: PlanningChatService? = null,
+    private val searchConnectionChecker: SearchConnectionChecker? = null,
 ) : ViewModel() {
+
+    suspend fun checkSearchConnection(connection: SearchConnection, draft: AppSettings): SearchConnectionResult =
+        searchConnectionChecker?.check(connection, draft)
+            ?: SearchConnectionResult(false, "Проверка подключения недоступна.")
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(UiState())

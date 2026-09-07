@@ -127,8 +127,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
 
         Spacer(Modifier.height(12.dp))
         Section("Поисковый движок")
-        SearchProviderPicker(draft.searchProvider) { draft = draft.copy(searchProvider = it) }
-        SearchApiSettings(draft) { draft = it }
+        SearchApiSettings(draft, vm::checkSearchConnection) { draft = it }
 
         Spacer(Modifier.height(16.dp))
         TextButton(
@@ -472,49 +471,4 @@ internal fun Field(label: String, value: String, secret: Boolean = false, onChan
         visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         singleLine = true,
     )
-}
-
-@Composable
-internal fun SearchProviderPicker(selected: SearchProvider, onSelect: (SearchProvider) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        SearchProvider.entries.forEach { provider ->
-            val label = when (provider) {
-                SearchProvider.AUTO -> "Авто"
-                SearchProvider.WIKIPEDIA -> "Wikipedia"
-                SearchProvider.QUERIT -> "Querit"
-                SearchProvider.GOOGLE -> "Google"
-            }
-            TextButton(onClick = { onSelect(provider) }) {
-                Text(
-                    label,
-                    color = if (provider == selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        }
-    }
-}
-
-/** Shared by settings and onboarding so both persist the same API configuration. */
-@Composable
-internal fun SearchApiSettings(draft: AppSettings, onDraft: (AppSettings) -> Unit) {
-    Field("Querit Search — хост / базовый URL", draft.queritBaseUrl) { onDraft(draft.copy(queritBaseUrl = it)) }
-    Field("Querit Search — API-ключ", draft.queritApiKey, secret = true) { onDraft(draft.copy(queritApiKey = it)) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(draft.queritWebpageTextEnabled, { onDraft(draft.copy(queritWebpageTextEnabled = it)) })
-        Text("Webpage Text — текст в результатах Querit", modifier = Modifier.weight(1f))
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(draft.queritContentEnabled, { onDraft(draft.copy(queritContentEnabled = it)) })
-        Text("Content API — читать найденные страницы", modifier = Modifier.weight(1f))
-    }
-    Text("Content API дополняет результаты любого движка. Чтение страниц расходует запросы API. Для включения заполните отдельный ключ.", style = MaterialTheme.typography.bodySmall)
-    Field("Querit Content — хост / базовый URL", draft.queritContentBaseUrl) { onDraft(draft.copy(queritContentBaseUrl = it)) }
-    Field("Querit Content — API-ключ", draft.queritContentApiKey, secret = true) { onDraft(draft.copy(queritContentApiKey = it)) }
-    Field("Google Search — URL API", draft.googleSearchUrl) { onDraft(draft.copy(googleSearchUrl = it)) }
-    Field("Google Search — API-ключ", draft.googleApiKey, secret = true) { onDraft(draft.copy(googleApiKey = it)) }
-    Field("Google Search Engine ID", draft.googleSearchEngineId) { onDraft(draft.copy(googleSearchEngineId = it)) }
 }

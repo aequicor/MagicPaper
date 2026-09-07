@@ -128,7 +128,7 @@ fun WelcomeScreen(
                         when (p) {
                             0 -> WelcomeIntro()
                             1 -> WelcomeModel(vm, state, profileDraft) { profileDraft = it }
-                            2 -> WelcomeSearch(draft) { draft = it }
+                            2 -> WelcomeSearch(vm, draft) { draft = it }
                             else -> WelcomePlugins(plugins, states) { id, on -> vm.togglePlugin(id, on) }
                         }
                     }
@@ -296,7 +296,7 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
 }
 
 @Composable
-private fun WelcomeSearch(draft: AppSettings, onDraft: (AppSettings) -> Unit) {
+private fun WelcomeSearch(vm: MagicPaperViewModel, draft: AppSettings, onDraft: (AppSettings) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text("Шаг 2 — поиск", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
@@ -306,9 +306,7 @@ private fun WelcomeSearch(draft: AppSettings, onDraft: (AppSettings) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(12.dp))
-        SearchProviderPicker(draft.searchProvider) { onDraft(draft.copy(searchProvider = it)) }
-        Spacer(Modifier.height(8.dp))
-        SearchApiSettings(draft, onDraft)
+        SearchApiSettings(draft, vm::checkSearchConnection, onDraft)
     }
 }
 

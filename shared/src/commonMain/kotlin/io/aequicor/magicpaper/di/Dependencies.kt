@@ -165,6 +165,7 @@ internal fun buildDependencies(
         modelDirectory = modelDirectory,
         gateway = gateway,
         dossierResearcher = DossierResearcher(gateway, search, json),
+        searchConnectionChecker = io.aequicor.magicpaper.data.search.HttpSearchConnectionChecker(client, json),
         filePicker = filePicker,
         openAiSubscription = openAiSubscription,
     )
