@@ -952,11 +952,7 @@ private fun ThinkingStepRow(step: CodingStep) {
         }
         if (expanded) {
             Spacer(Modifier.height(4.dp))
-            Text(
-                step.title,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            ChatMarkdown(step.title)
         }
     }
 }
@@ -1078,10 +1074,9 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
         )
         if (expanded && thinking.isNotBlank()) {
             val scroll = rememberScrollState()
-            Text(thinking,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll))
+            Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
+                ChatMarkdown(thinking)
+            }
             LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
         }
     }
