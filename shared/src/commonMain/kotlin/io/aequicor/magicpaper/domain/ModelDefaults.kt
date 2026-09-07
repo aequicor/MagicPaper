@@ -67,7 +67,8 @@ object ModelDefaults {
 
     private fun heuristic(provider: ProviderType, id: String): ReasoningCapability =
         when (provider) {
-            ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER -> openAiCapability(id)
+            ProviderType.OPENAI_SUBSCRIPTION, ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER ->
+                openAiCapability(id)
             ProviderType.ANTHROPIC -> anthropicCapability(id)
             ProviderType.GOOGLE -> googleCapability(id)
         }

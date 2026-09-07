@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 /** Тип провайдера: определяет, какой транспорт и какой формат запроса использовать. */
 @Serializable
 enum class ProviderType {
+    /** Модели Codex, оплачиваемые подпиской ChatGPT. Доступны только в desktop-сборке. */
+    OPENAI_SUBSCRIPTION,
+
     /** Любой сервер с /chat/completions: OpenAI, Ollama, LM Studio, vLLM, OpenRouter… */
     OPENAI_COMPATIBLE,
 
@@ -103,8 +106,10 @@ data class LlmProfile(
     /** Когда профиль создан; 0 — наследие ранних версий. */
     val createdAt: Long = 0,
 ) {
-    val configured: Boolean get() = modelId.isNotBlank() && baseUrl.isNotBlank()
-    val codingConfigured: Boolean get() = codingModelId.isNotBlank() && baseUrl.isNotBlank()
+    val configured: Boolean
+        get() = modelId.isNotBlank() && (provider == ProviderType.OPENAI_SUBSCRIPTION || baseUrl.isNotBlank())
+    val codingConfigured: Boolean
+        get() = codingModelId.isNotBlank() && (provider == ProviderType.OPENAI_SUBSCRIPTION || baseUrl.isNotBlank())
 
     /** Модель кодинг-контура: своя, если отмечена, иначе общая модель профиля. */
     val codingModel: String get() = codingModelId.ifBlank { modelId }

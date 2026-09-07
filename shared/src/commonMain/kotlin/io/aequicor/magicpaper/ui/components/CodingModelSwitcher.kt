@@ -92,7 +92,7 @@ fun CodingModelSwitcherDialog(
                 Text("Источник агента", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Выбор действует для этой кодинг-сессии; «основной» — для всех. " +
-                        "Кодинг-агент работает с OpenAI-совместимыми серверами.",
+                        "На desktop кодинг-агент работает с OpenAI-совместимыми серверами и подпиской ChatGPT.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -110,14 +110,15 @@ fun CodingModelSwitcherDialog(
                 }
 
                 profiles.forEach { profile ->
-                    val incompatible = profile.provider != ProviderType.OPENAI_COMPATIBLE
+                    val incompatible = profile.provider != ProviderType.OPENAI_COMPATIBLE &&
+                        profile.provider != ProviderType.OPENAI_SUBSCRIPTION
                     ProfileRow(
                         profile = profile,
                         selected = profile.id == resolvedId,
                         isMain = profile.id == activeProfileId,
                         onClick = { vm.selectCodingProfile(sessionId, profile.id) },
                         onMakeMain = { vm.setActiveProfile(profile.id) },
-                        note = if (incompatible) "⚠ не подходит: агент принимает только OpenAI-совместимые" else null,
+                        note = if (incompatible) "⚠ не подходит для desktop coding-агента" else null,
                     )
                     if (sessionProfileId == profile.id) {
                         TextButton(onClick = { vm.selectCodingProfile(sessionId, null) }) {

@@ -18,6 +18,10 @@ data class ProviderSpec(
     val keyHint: String,
     val requiresKey: Boolean,
     val models: List<ModelInfo>,
+    /** Провайдер физически реализован только JVM desktop-адаптером. */
+    val desktopOnly: Boolean = false,
+    /** Авторизация через ChatGPT, без Base URL и API-ключа. */
+    val usesSubscription: Boolean = false,
 )
 
 /**
@@ -32,6 +36,16 @@ object ProviderCatalog {
     private val none = ReasoningCapability.None
 
     val all: List<ProviderSpec> = listOf(
+        ProviderSpec(
+            type = ProviderType.OPENAI_SUBSCRIPTION,
+            displayName = "OpenAI (подписка ChatGPT)",
+            defaultBaseUrl = "",
+            keyHint = "вход через ChatGPT",
+            requiresKey = false,
+            models = listOf(ModelInfo("gpt-5.6-terra", ReasoningPresets.OPENAI_EFFORT)),
+            desktopOnly = true,
+            usesSubscription = true,
+        ),
         ProviderSpec(
             type = ProviderType.OPENAI_COMPATIBLE,
             displayName = "Ollama (локально)",
@@ -169,7 +183,7 @@ object ProviderCatalog {
     }
 
     val popularModels: List<ModelInfo> = all
-        .filter { it.requiresKey }
+        .filter { it.requiresKey || it.usesSubscription }
         .flatMap { it.models }
         .distinctBy { it.id }
 

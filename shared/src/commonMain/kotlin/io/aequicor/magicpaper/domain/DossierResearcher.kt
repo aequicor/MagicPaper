@@ -99,6 +99,7 @@ class DossierResearcher(
     }
 
     private fun providerName(profile: LlmProfile): String = when (profile.provider) {
+        ProviderType.OPENAI_SUBSCRIPTION -> "OpenAI по подписке ChatGPT"
         ProviderType.OPENAI_COMPATIBLE -> "OpenAI-совместимый сервер (${profile.name})"
         ProviderType.OPENROUTER -> "OpenRouter"
         ProviderType.ANTHROPIC -> "Anthropic"

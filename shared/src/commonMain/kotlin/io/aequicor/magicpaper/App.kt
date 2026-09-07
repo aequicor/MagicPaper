@@ -75,7 +75,7 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
             val titleBarTop = LocalWindowTitleBarInsets.current.calculateTopPadding()
             Column(modifier = Modifier.fillMaxSize().padding(top = titleBarTop)) {
                 if (state.showWelcome) {
-                    WelcomeScreen(deps.viewModel, state.settings, state.plugins, state.pluginStates)
+                    WelcomeScreen(deps.viewModel, state)
                 } else {
                     Column(modifier = Modifier.fillMaxSize()) {
                         TopBar(deps.viewModel, state.screen)
@@ -92,7 +92,7 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
                     if (state.modelSwitcherOpen && state.screen == Screen.CHAT) {
                         ModelSwitcherDialog(
                             vm = deps.viewModel,
-                            profiles = state.llmProfiles,
+                            profiles = state.availableLlmProfiles,
                             activeProfileId = state.settings.activeLlmProfileId,
                             sessionProfileId = state.current?.llmProfileId,
                             onDismiss = { deps.viewModel.toggleModelSwitcher(false) },
@@ -124,7 +124,7 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) {
                         vm,
                         state.coding,
                         state.codingPanelPlugin,
-                        profiles = state.llmProfiles,
+                        profiles = state.availableLlmProfiles,
                         activeProfileId = state.settings.activeLlmProfileId,
                     )
                     Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {

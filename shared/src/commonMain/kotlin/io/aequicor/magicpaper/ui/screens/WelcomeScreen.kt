@@ -39,14 +39,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.ProviderCatalog
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 import io.aequicor.magicpaper.util.Id
 
@@ -57,10 +60,11 @@ import io.aequicor.magicpaper.util.Id
 @Composable
 fun WelcomeScreen(
     vm: MagicPaperViewModel,
-    settings: AppSettings,
-    plugins: List<MagicPlugin>,
-    states: Map<String, PluginState>,
+    state: UiState,
 ) {
+    val settings = state.settings
+    val plugins = state.plugins
+    val states = state.pluginStates
     var page by remember { mutableIntStateOf(0) }
     var draft by remember(settings) { mutableStateOf(settings) }
     // Черновик профиля подключения: шаг 1 собирает его, завершение тура сохраняет.
@@ -111,7 +115,7 @@ fun WelcomeScreen(
                 ) {
                     when (p) {
                         0 -> WelcomeIntro()
-                        1 -> WelcomeModel(profileDraft) { profileDraft = it }
+                        1 -> WelcomeModel(vm, state, profileDraft) { profileDraft = it }
                         2 -> WelcomeSearch(draft) { draft = it }
                         else -> WelcomePlugins(plugins, states) { id, on -> vm.togglePlugin(id, on) }
                     }
@@ -185,8 +189,18 @@ private fun WelcomeIntro() {
 }
 
 @Composable
-private fun WelcomeModel(draft: LlmProfile, onDraft: (LlmProfile) -> Unit) {
+private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProfile, onDraft: (LlmProfile) -> Unit) {
     val spec = ProviderCatalog.all.firstOrNull { it.displayName == draft.name }
+    val subscription = draft.provider == ProviderType.OPENAI_SUBSCRIPTION
+    val uriHandler = LocalUriHandler.current
+    androidx.compose.runtime.LaunchedEffect(state.openAiSubscription.login?.url) {
+        state.openAiSubscription.login?.url?.let(uriHandler::openUri)
+    }
+    androidx.compose.runtime.LaunchedEffect(subscription) {
+        if (subscription && state.openAiSubscription.account == null && state.openAiSubscription.error == null) {
+            vm.refreshOpenAiSubscription()
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth()) {
         Text("Шаг 1 — источник магии", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(4.dp))
@@ -198,16 +212,18 @@ private fun WelcomeModel(draft: LlmProfile, onDraft: (LlmProfile) -> Unit) {
         )
         Spacer(Modifier.height(12.dp))
         ProviderCatalog.all.forEach { candidate ->
+            val enabled = !candidate.desktopOnly || state.openAiSubscription.available
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(MaterialTheme.shapes.small)
-                    .clickable(onClick = {
+                    .clickable(enabled = enabled, onClick = {
                         onDraft(
                             draft.copy(
                                 provider = candidate.type,
                                 name = candidate.displayName,
-                                baseUrl = candidate.defaultBaseUrl.ifBlank { draft.baseUrl },
+                                baseUrl = if (candidate.usesSubscription) "" else candidate.defaultBaseUrl.ifBlank { draft.baseUrl },
+                                apiKey = if (candidate.usesSubscription) "" else draft.apiKey,
                                 modelId = candidate.models.firstOrNull()?.id.orEmpty().ifBlank { draft.modelId },
                             ),
                         )
@@ -226,17 +242,41 @@ private fun WelcomeModel(draft: LlmProfile, onDraft: (LlmProfile) -> Unit) {
                     },
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(candidate.displayName, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    candidate.displayName + if (!enabled) " · только desktop" else "",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                )
             }
         }
         Spacer(Modifier.height(10.dp))
-        Field("Base URL", draft.baseUrl) { onDraft(draft.copy(baseUrl = it)) }
-        Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
-            onDraft(draft.copy(apiKey = it))
+        if (subscription) {
+            val auth = state.openAiSubscription
+            Text(
+                if (auth.account?.signedIn == true) "✓ Вход выполнен: ${auth.account.email.orEmpty()}"
+                else "API-ключ не нужен — войдите с аккаунтом ChatGPT.",
+                color = if (auth.account?.signedIn == true) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            auth.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (auth.signingIn) {
+                    TextButton(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { Text("Открыть вход") }
+                    TextButton(onClick = vm::cancelOpenAiSubscriptionLogin) { Text("Отмена") }
+                } else if (auth.account?.signedIn == true) {
+                    TextButton(onClick = { vm.refreshOpenAiSubscription(true) }) { Text("Обновить аккаунт") }
+                } else {
+                    TextButton(onClick = vm::startOpenAiSubscriptionLogin) { Text("Войти через ChatGPT") }
+                }
+            }
+        } else {
+            Field("Base URL", draft.baseUrl) { onDraft(draft.copy(baseUrl = it)) }
+            Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
+                onDraft(draft.copy(apiKey = it))
+            }
         }
         Field("Имя модели", draft.modelId) { onDraft(draft.copy(modelId = it)) }
         Spacer(Modifier.height(8.dp))
-        if (draft.configured) {
+        if (draft.configured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
             Text("✓ Источник готов", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
         }
     }

@@ -44,4 +44,21 @@ class ProviderCatalogTest {
         assertNotNull(ollama)
         assertTrue(!ollama.requiresKey)
     }
+
+    @Test
+    fun chatGptSubscriptionNeedsNeitherUrlNorApiKey() {
+        val spec = ProviderCatalog.all.first { it.type == ProviderType.OPENAI_SUBSCRIPTION }
+        assertTrue(spec.desktopOnly)
+        assertTrue(spec.usesSubscription)
+        assertTrue(!spec.requiresKey)
+        assertTrue(spec.defaultBaseUrl.isBlank())
+        assertTrue(
+            LlmProfile(
+                id = "subscription",
+                name = spec.displayName,
+                provider = ProviderType.OPENAI_SUBSCRIPTION,
+                modelId = spec.models.first().id,
+            ).configured,
+        )
+    }
 }

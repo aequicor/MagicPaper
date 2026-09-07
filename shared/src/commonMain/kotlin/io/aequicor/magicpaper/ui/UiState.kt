@@ -10,6 +10,8 @@ import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.DocArticle
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.PluginState
+import io.aequicor.magicpaper.domain.OpenAiSubscriptionAccount
+import io.aequicor.magicpaper.domain.OpenAiSubscriptionLogin
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
@@ -119,4 +121,21 @@ data class UiState(
     val editorModelsLoading: Boolean = false,
     val editorModelsError: String? = null,
     val connectionTesting: Boolean = false,
+    val openAiSubscription: OpenAiSubscriptionUi = OpenAiSubscriptionUi(),
+) {
+    /** Источники, которые можно реально выбрать на текущей платформе. */
+    val availableLlmProfiles: List<LlmProfile>
+        get() = llmProfiles.filter {
+            it.provider != io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION || openAiSubscription.available
+        }
+}
+
+/** Состояние desktop-входа через ChatGPT; available=false на Android/Web. */
+data class OpenAiSubscriptionUi(
+    val available: Boolean = false,
+    val loading: Boolean = false,
+    val signingIn: Boolean = false,
+    val account: OpenAiSubscriptionAccount? = null,
+    val login: OpenAiSubscriptionLogin? = null,
+    val error: String? = null,
 )

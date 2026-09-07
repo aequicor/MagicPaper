@@ -28,6 +28,7 @@ import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.LlmProfileRepository
 import io.aequicor.magicpaper.domain.MagicAgent
 import io.aequicor.magicpaper.domain.ModelDirectory
+import io.aequicor.magicpaper.domain.OpenAiSubscriptionService
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.PlanningRepository
 import io.aequicor.magicpaper.domain.ProfileBundle
@@ -35,6 +36,7 @@ import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.domain.ProfileMigrator
 import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.ProjectDirPicker
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.SettingsRepository
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
@@ -76,6 +78,7 @@ class MagicPaperViewModel(
     private val modelDirectory: ModelDirectory? = null,
     private val gateway: LlmGateway? = null,
     private val filePicker: FilePicker? = null,
+    private val openAiSubscription: OpenAiSubscriptionService? = null,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -108,6 +111,7 @@ class MagicPaperViewModel(
                 storageInfo = store.description,
                 showWelcome = !migratedSettings.onboardingDone,
                 llmProfiles = profiles,
+                openAiSubscription = it.openAiSubscription.copy(available = openAiSubscription != null),
                 codingPanelPlugin = resolveCodingPanel(states),
                 coding = it.coding.copy(
                     projects = projects,
@@ -119,6 +123,9 @@ class MagicPaperViewModel(
         projects.firstOrNull()?.let { project -> openCodingProject(project.id) }
         codingRuntime?.let { runtime ->
             _state.update { it.copy(coding = it.coding.copy(runtime = runtime.status())) }
+        }
+        if (openAiSubscription != null && profiles.any { it.provider == ProviderType.OPENAI_SUBSCRIPTION }) {
+            refreshOpenAiSubscription()
         }
     }
 
@@ -177,7 +184,7 @@ class MagicPaperViewModel(
      */
     fun codingProfileOf(session: CodingSession): LlmProfile? {
         val s = _state.value
-        return ProfileResolver.resolve(session.llmProfileId, s.settings, s.llmProfiles)
+        return ProfileResolver.resolve(session.llmProfileId, s.settings, s.availableLlmProfiles)
     }
 
     /** Переопределить профиль кодинг-сессии (или снять переопределение: profileId = null). */
@@ -298,7 +305,7 @@ class MagicPaperViewModel(
                     busy = true,
                 )
             }
-            val profile = ProfileResolver.resolve(updated, settings, _state.value.llmProfiles)
+            val profile = ProfileResolver.resolve(updated, settings, _state.value.availableLlmProfiles)
             val answer = agent.answer(historyBefore, trimmed, settings, profile, attachments = visible)
             val agentMessage = ChatMessage(
                 id = Id.new(),
@@ -328,7 +335,8 @@ class MagicPaperViewModel(
      * [onboardingProfile] — профиль, созданный на шаге «источник магии» (если настроен). */
     fun finishOnboarding(settings: AppSettings, onboardingProfile: LlmProfile? = null) {
         scope.launch {
-            val withProfile = onboardingProfile != null && onboardingProfile.configured
+            val withProfile = onboardingProfile != null && onboardingProfile.configured &&
+                (onboardingProfile.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscriptionSignedIn())
             if (withProfile) profileRepo.save(onboardingProfile)
             val done = settings.copy(
                 onboardingDone = true,
@@ -508,6 +516,85 @@ class MagicPaperViewModel(
         it.copy(editingLlmProfileId = null, editorModels = emptyList(), editorModelsError = null)
     }
 
+    /** Перечитать аккаунт и лимиты подписки из desktop Codex app-server. */
+    fun refreshOpenAiSubscription(refreshToken: Boolean = false) {
+        val service = openAiSubscription ?: return
+        if (_state.value.openAiSubscription.loading) return
+        _state.update {
+            it.copy(openAiSubscription = it.openAiSubscription.copy(loading = true, error = null))
+        }
+        scope.launch {
+            val result = runCatching { service.account(refreshToken) }
+            _state.update {
+                it.copy(
+                    openAiSubscription = it.openAiSubscription.copy(
+                        loading = false,
+                        account = result.getOrNull(),
+                        error = result.exceptionOrNull()?.message,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Запустить OAuth в браузере; URL открывает UI через LocalUriHandler. */
+    fun startOpenAiSubscriptionLogin() {
+        val service = openAiSubscription ?: return
+        if (_state.value.openAiSubscription.signingIn) return
+        _state.update {
+            it.copy(openAiSubscription = it.openAiSubscription.copy(signingIn = true, login = null, error = null))
+        }
+        scope.launch {
+            val started = runCatching { service.startLogin() }
+            val login = started.getOrNull()
+            _state.update {
+                it.copy(openAiSubscription = it.openAiSubscription.copy(
+                    signingIn = login != null,
+                    login = login,
+                    error = started.exceptionOrNull()?.message,
+                ))
+            }
+            if (login != null) {
+                val completed = runCatching { service.awaitLogin(login.id) }
+                _state.update {
+                    it.copy(openAiSubscription = it.openAiSubscription.copy(
+                        signingIn = false,
+                        login = null,
+                        account = completed.getOrNull() ?: it.openAiSubscription.account,
+                        error = completed.exceptionOrNull()?.message,
+                    ))
+                }
+            }
+        }
+    }
+
+    fun cancelOpenAiSubscriptionLogin() {
+        val service = openAiSubscription ?: return
+        val login = _state.value.openAiSubscription.login ?: return
+        scope.launch {
+            runCatching { service.cancelLogin(login.id) }
+            _state.update {
+                it.copy(openAiSubscription = it.openAiSubscription.copy(signingIn = false, login = null))
+            }
+        }
+    }
+
+    fun logoutOpenAiSubscription() {
+        val service = openAiSubscription ?: return
+        scope.launch {
+            val result = runCatching { service.logout() }
+            _state.update {
+                it.copy(openAiSubscription = it.openAiSubscription.copy(
+                    account = if (result.isSuccess) null else it.openAiSubscription.account,
+                    error = result.exceptionOrNull()?.message,
+                ))
+            }
+        }
+    }
+
+    fun openAiSubscriptionSignedIn(): Boolean =
+        _state.value.openAiSubscription.account?.signedIn == true
+
     /** Загрузить список моделей, доступных у провайдера черновика профиля. */
     fun fetchModels(draft: LlmProfile) {
         val directory = modelDirectory
@@ -516,7 +603,10 @@ class MagicPaperViewModel(
             return
         }
         if (!draft.configured) {
-            _state.update { it.copy(editorModelsError = "Укажите Base URL и имя модели, затем повторите.") }
+            val message = if (draft.provider == io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION) {
+                "Войдите в ChatGPT и укажите модель."
+            } else "Укажите Base URL и имя модели, затем повторите."
+            _state.update { it.copy(editorModelsError = message) }
             return
         }
         if (_state.value.editorModelsLoading) return
@@ -543,7 +633,10 @@ class MagicPaperViewModel(
             return
         }
         if (!draft.configured) {
-            _state.update { it.copy(editorModelsError = "Укажите Base URL и имя модели, затем повторите.") }
+            val message = if (draft.provider == io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION) {
+                "Войдите в ChatGPT и укажите модель."
+            } else "Укажите Base URL и имя модели, затем повторите."
+            _state.update { it.copy(editorModelsError = message) }
             return
         }
         if (_state.value.connectionTesting) return
@@ -957,5 +1050,10 @@ class MagicPaperViewModel(
                 ),
             )
         }
+    }
+
+    override fun onCleared() {
+        openAiSubscription?.close()
+        super.onCleared()
     }
 }

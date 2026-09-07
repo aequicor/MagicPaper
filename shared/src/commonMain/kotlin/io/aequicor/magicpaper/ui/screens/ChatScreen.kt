@@ -63,7 +63,7 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
         Composer(
             enabled = !state.busy,
             session = state.current,
-            profiles = state.llmProfiles,
+            profiles = state.availableLlmProfiles,
             activeProfileId = state.settings.activeLlmProfileId,
             onSend = { text, attachments -> vm.send(text, attachments) },
             onOpenSwitcher = { vm.toggleModelSwitcher(true) },

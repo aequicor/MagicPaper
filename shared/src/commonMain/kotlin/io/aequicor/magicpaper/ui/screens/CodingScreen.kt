@@ -59,6 +59,7 @@ import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import io.aequicor.magicpaper.plugins.CodingSessionPanel
@@ -172,7 +173,10 @@ private fun SessionArea(
                 project = project,
                 session = active,
                 busy = active.running,
-                engineReady = ui.runtime.ready,
+                engineReady = ui.runtime.ready || (
+                    vm.codingProfileOf(active.session)?.provider == ProviderType.OPENAI_SUBSCRIPTION &&
+                        vm.openAiSubscriptionSignedIn()
+                    ),
                 onSend = { text, attachments -> vm.sendCodingPromptTo(active.session.id, text, attachments) },
                 onAbort = { vm.abortCodingSession(active.session.id) },
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },

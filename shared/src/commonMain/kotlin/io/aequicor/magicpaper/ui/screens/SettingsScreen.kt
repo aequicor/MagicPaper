@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.AdvancedLlmOptions
@@ -40,6 +41,7 @@ import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel
 import io.aequicor.magicpaper.domain.ProviderCatalog
 import io.aequicor.magicpaper.domain.ProviderSpec
+import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.components.EffortControl
@@ -132,6 +134,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
                 onClick = { vm.setActiveProfile(profile.id) },
                 onEdit = { vm.editLlmProfile(profile.id) },
                 onDelete = { vm.deleteLlmProfile(profile.id) },
+                available = profile.provider != ProviderType.OPENAI_SUBSCRIPTION || state.openAiSubscription.available,
             )
         }
         TextButton(
@@ -181,13 +184,14 @@ private fun ProfileRowEntry(
     onClick: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    available: Boolean,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
             .clip(MaterialTheme.shapes.medium)
-            .clickable(onClick = onClick)
+            .clickable(enabled = available, onClick = onClick)
             .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -199,6 +203,7 @@ private fun ProfileRowEntry(
                     append(profile.shortLabel)
                     if (isActive) append("  · основной")
                     if (!profile.configured) append("  · не настроен")
+                    if (!available) append("  · только desktop")
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -237,6 +242,17 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         mutableStateOf(initial?.displayName.orEmpty())
     }
     val spec = ProviderCatalog.all.firstOrNull { it.displayName == specName }
+    val subscription = draft.provider == ProviderType.OPENAI_SUBSCRIPTION
+    val subscriptionAvailable = state.openAiSubscription.available
+    val uriHandler = LocalUriHandler.current
+    LaunchedEffect(state.openAiSubscription.login?.url) {
+        state.openAiSubscription.login?.url?.let(uriHandler::openUri)
+    }
+    LaunchedEffect(subscription) {
+        if (subscription && state.openAiSubscription.account == null && state.openAiSubscription.error == null) {
+            vm.refreshOpenAiSubscription()
+        }
+    }
     // Объявления провайдера об уровнях мышления — сразу в черновик: ручка усилия
     // должна показывать словарь модели, а не догадку по имени.
     LaunchedEffect(state.editorModels) {
@@ -277,15 +293,18 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
 
         Section("Провайдер")
         ProviderCatalog.all.forEach { candidate ->
+            val enabled = !candidate.desktopOnly || subscriptionAvailable
             ProviderRow(
                 spec = candidate,
                 selected = candidate.displayName == specName,
+                enabled = enabled,
                 onClick = {
                     specName = candidate.displayName
                     draft = draft.copy(
                         provider = candidate.type,
                         name = candidate.displayName,
-                        baseUrl = candidate.defaultBaseUrl.ifBlank { draft.baseUrl },
+                        baseUrl = if (candidate.usesSubscription) "" else candidate.defaultBaseUrl.ifBlank { draft.baseUrl },
+                        apiKey = if (candidate.usesSubscription) "" else draft.apiKey,
                         modelId = candidate.models.firstOrNull()?.id.orEmpty().ifBlank { draft.modelId },
                     )
                 },
@@ -294,9 +313,13 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
         Spacer(Modifier.height(10.dp))
 
         Field("Название источника", draft.name) { draft = draft.copy(name = it) }
-        Field("Base URL", draft.baseUrl) { draft = draft.copy(baseUrl = it) }
-        Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
-            draft = draft.copy(apiKey = it)
+        if (subscription) {
+            SubscriptionAccount(vm, state)
+        } else {
+            Field("Base URL", draft.baseUrl) { draft = draft.copy(baseUrl = it) }
+            Field("API-ключ (${spec?.keyHint ?: "пусто для локальных серверов"})", draft.apiKey) {
+                draft = draft.copy(apiKey = it)
+            }
         }
 
         Spacer(Modifier.height(10.dp))
@@ -441,9 +464,11 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
 
         Spacer(Modifier.height(10.dp))
         Section("Тонкие настройки (пусто = по умолчанию провайдера)")
-        Field("Температура (0–2)", temperature) { temperature = it }
-        Field("Макс. токенов ответа", maxTokens) { maxTokens = it }
-        Field("Top-p (0–1)", topP) { topP = it }
+        if (!subscription) {
+            Field("Температура (0–2)", temperature) { temperature = it }
+            Field("Макс. токенов ответа", maxTokens) { maxTokens = it }
+            Field("Top-p (0–1)", topP) { topP = it }
+        }
         Field("Таймаут, секунд", timeout) { timeout = it }
         Field("Глубина истории (сообщений)", contextMessages) { contextMessages = it }
         Field("Свой системный промпт (пусто = штатный)", adv.systemPromptOverride) {
@@ -473,7 +498,9 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
                         ),
                     )
                 },
-                enabled = draft.baseUrl.isNotBlank() && draft.modelId.isNotBlank(),
+                enabled = draft.configured && (
+                    !subscription || (subscriptionAvailable && state.openAiSubscription.account?.signedIn == true)
+                    ),
                 modifier = Modifier.heightIn(min = 48.dp),
             ) { Text("Сохранить источник") }
             TextButton(
@@ -544,12 +571,12 @@ private fun DiscoveredModelRow(
 
 /** Строка выбора провайдера из каталога. */
 @Composable
-private fun ProviderRow(spec: ProviderSpec, selected: Boolean, onClick: () -> Unit) {
+private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .heightIn(min = 40.dp)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -560,7 +587,12 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, onClick: () -> Un
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.width(10.dp))
-        Text(spec.displayName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Text(
+            spec.displayName + if (!enabled) " · только desktop" else "",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+            modifier = Modifier.weight(1f),
+        )
         if (spec.defaultBaseUrl.isNotBlank()) {
             Text(
                 spec.defaultBaseUrl,
@@ -568,6 +600,57 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, onClick: () -> Un
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
+        }
+    }
+}
+
+/** Авторизация и квоты OpenAI-подписки. URL OAuth открывается вызывающим composable. */
+@Composable
+private fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
+    val auth = state.openAiSubscription
+    val uriHandler = LocalUriHandler.current
+    if (!auth.available) {
+        Text(
+            "OpenAI по подписке поддерживается только в desktop-приложении.",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        return
+    }
+    val account = auth.account
+    Text(
+        when {
+            auth.loading -> "Проверяю аккаунт…"
+            account?.signedIn == true -> buildString {
+                append("✓ ChatGPT")
+                account.email?.let { append(" · ").append(it) }
+                account.planType?.let { append(" · план ").append(it) }
+            }
+            else -> "Войдите в ChatGPT: запросы будут расходовать лимит вашей подписки, API-ключ не нужен."
+        },
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (account?.signedIn == true) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    account?.rateLimits?.forEach { limit ->
+        Text(
+            "${limit.name} · ${limit.window}: использовано ${limit.usedPercent}%" +
+                (limit.resetsAtEpochSeconds?.let { " · сброс $it" } ?: ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    auth.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        when {
+            auth.signingIn -> {
+                TextButton(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { Text("Открыть страницу входа") }
+                TextButton(onClick = vm::cancelOpenAiSubscriptionLogin) { Text("Отмена") }
+            }
+            account?.signedIn == true -> {
+                TextButton(onClick = { vm.refreshOpenAiSubscription(true) }) { Text("Обновить") }
+                TextButton(onClick = vm::logoutOpenAiSubscription) { Text("Выйти") }
+            }
+            else -> TextButton(onClick = vm::startOpenAiSubscriptionLogin) { Text("Войти через ChatGPT") }
         }
     }
 }

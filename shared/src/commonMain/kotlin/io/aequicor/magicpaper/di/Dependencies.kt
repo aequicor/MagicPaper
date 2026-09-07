@@ -31,6 +31,7 @@ import io.aequicor.magicpaper.domain.DossierResearcher
 import io.aequicor.magicpaper.domain.FilePicker
 import io.aequicor.magicpaper.domain.LlmMilestoneVerifier
 import io.aequicor.magicpaper.domain.MagicAgent
+import io.aequicor.magicpaper.domain.OpenAiSubscriptionService
 import io.aequicor.magicpaper.domain.PlanComposer
 import io.aequicor.magicpaper.domain.PlanRunner
 import io.aequicor.magicpaper.domain.ProfileBridge
@@ -67,6 +68,7 @@ internal fun buildDependencies(
     codingProjects: CodingProjectRepository? = null,
     dirPicker: ProjectDirPicker? = null,
     filePicker: FilePicker = NoopFilePicker,
+    openAiSubscription: OpenAiSubscriptionService? = null,
 ): MagicPaperDependencies {
     val json = appJson
     val client = HttpClient()
@@ -84,22 +86,32 @@ internal fun buildDependencies(
     // Шлюз-роутер: формат запроса выбирается по типу провайдера в профиле.
     // Новый провайдер = новый транспорт + запись в карте (OCP).
     val gateway = RoutingLlmGateway(
-        mapOf(
-            ProviderType.OPENAI_COMPATIBLE to OpenAiCompatibleGateway(client, json),
-            ProviderType.ANTHROPIC to AnthropicGateway(client, json),
-            ProviderType.GOOGLE to GoogleGateway(client, json),
-        )
+        buildMap {
+            openAiSubscription?.let { put(ProviderType.OPENAI_SUBSCRIPTION, it) }
+            putAll(
+                mapOf(
+                    ProviderType.OPENAI_COMPATIBLE to OpenAiCompatibleGateway(client, json),
+                    ProviderType.ANTHROPIC to AnthropicGateway(client, json),
+                    ProviderType.GOOGLE to GoogleGateway(client, json),
+                ),
+            )
+        },
     )
     // Каталог моделей у провайдеров — тем же роутером.
     val modelDirectory = RoutingModelDirectory(
-        mapOf(
-            ProviderType.OPENAI_COMPATIBLE to OpenAiModelDirectory(client, json),
-            // OpenRouter — тот же OpenAI-совместимый /models, но с объявлениями
-            // об уровнях мышления (supported_parameters / reasoning).
-            ProviderType.OPENROUTER to OpenAiModelDirectory(client, json),
-            ProviderType.ANTHROPIC to AnthropicModelDirectory(client, json),
-            ProviderType.GOOGLE to GoogleModelDirectory(client, json),
-        )
+        buildMap {
+            openAiSubscription?.let { put(ProviderType.OPENAI_SUBSCRIPTION, it) }
+            putAll(
+                mapOf(
+                    ProviderType.OPENAI_COMPATIBLE to OpenAiModelDirectory(client, json),
+                    // OpenRouter — тот же OpenAI-совместимый /models, но с объявлениями
+                    // об уровнях мышления (supported_parameters / reasoning).
+                    ProviderType.OPENROUTER to OpenAiModelDirectory(client, json),
+                    ProviderType.ANTHROPIC to AnthropicModelDirectory(client, json),
+                    ProviderType.GOOGLE to GoogleModelDirectory(client, json),
+                ),
+            )
+        },
     )
     // Система навыков: библиотека (порт агента) и каталог (лавка) — одно хранилище,
     // за которым наблюдают оба плагина.
@@ -144,6 +156,7 @@ internal fun buildDependencies(
         modelDirectory = modelDirectory,
         gateway = gateway,
         filePicker = filePicker,
+        openAiSubscription = openAiSubscription,
     )
     return MagicPaperDependencies(viewModel)
 }
