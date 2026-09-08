@@ -53,6 +53,9 @@ data class Milestone(
     val durationHours: Double? = null,
     /** Relative complexity; independent of elapsed time. */
     val complexityPoints: Double? = null,
+    val displayNumber: Int? = null,
+    val displayName: String? = null,
+    val continuationOf: String? = null,
 ) {
     /** Завершён ли мэилстоун (выполнен или осознанно пропущен). */
     val completed: Boolean get() = status == MilestoneStatus.DONE || status == MilestoneStatus.SKIPPED
@@ -98,6 +101,8 @@ data class Plan(
     val pendingRequest: String = "",
     val requestId: String = "",
     val coordination: List<CoordinationRecord> = emptyList(),
+    val proposal: PlanProposal? = null,
+    val runHistory: List<PlanRunSnapshot> = emptyList(),
 
     val status: PlanStatus = PlanStatus.DRAFT,
     /**
@@ -208,9 +213,9 @@ interface PlanningRepository {
 }
 
 /**
- * Черновик мэилстоуна от планировщика (до закрепления агента).
+ * Черновик мэилстоуна от оркестратора (до закрепления агента).
  * [depends] — номера предшествующих шагов этого же черновика (считаются с 1,
- * как их нумерует планировщик в промпте); пустой список — шаг стартует сразу,
+ * как их нумерует оркестратор в промпте); пустой список — шаг стартует сразу,
  * ветви без взаимных зависимостей считаются параллельными.
  */
 @Serializable

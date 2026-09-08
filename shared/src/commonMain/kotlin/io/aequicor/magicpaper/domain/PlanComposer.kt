@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Планировщик: превращает цель в график мэилстоунов (связанные шаги с
+ * Оркестратор: превращает цель в график мэилстоунов (связанные шаги с
  * зависимостями и параллельными ветвями) и закрепляет за каждого оптимального
  * агента с оптимальной моделью. Два пути (как у [SkillEducator]):
  *  1. модель подключена — модель разбивает цель на шаги;
@@ -14,7 +14,7 @@ import kotlinx.serialization.json.Json
  *     честно помеченный причиной сбоя.
  * Имена агентов, предложенные моделью, сопоставляются с реальными профилями
  * по косинусной близости ([AgentMatcher]); несовпавшие получают лучшего из
- * свободных кандидатов. Без ответа планировщика compose пробует других
+ * свободных кандидатов. Без ответа оркестратора compose пробует других
  * настроенных агентов — молчаливый откат в «один шаг» был главным источником
  * жалоб на планы.
  */
@@ -29,7 +29,7 @@ class PlanComposer(
         plan: Plan, message: String, profile: LlmProfile?, candidates: List<LlmProfile>, dossiers: List<ModelDossier>,
         settings: AppSettings? = null, onActivity: (CodingStep) -> Unit = {}, onProgress: (String) -> Unit = {},
     ): Plan {
-        require(profile?.configured == true) { "Выберите подключённую модель планировщика в настройках плана." }
+        require(profile?.configured == true) { "Выберите подключённую модель оркестратора в настройках плана." }
         val context = if (settings != null && searchEngine != null) {
             onProgress("Поиск контекста для плана…")
             val effective = settings.copy(searchProvider = plan.searchProvider)
@@ -42,7 +42,7 @@ class PlanComposer(
             }
             searchEngine.search(plan.goal, effective, 5).joinToString("\n\n") { "${it.title}\n${it.snippet}\n${it.url}" }
         } else ""
-        onProgress(if (settings != null && context.isBlank()) "Источники не найдены. Планировщик готовит ответ…" else "Планировщик анализирует цель и готовит ответ…")
+        onProgress(if (settings != null && context.isBlank()) "Источники не найдены. Оркестратор готовит ответ…" else "Оркестратор анализирует цель и готовит ответ…")
         return decisions.refine(plan, message, profile, candidates, dossiers, context, onActivity)
     }
 
@@ -89,7 +89,7 @@ class PlanComposer(
         candidates: List<LlmProfile>,
     ): PlanDraft {
         if (goal.isBlank()) return heuristicDraft(goal)
-        // Порядок планировщиков: разрешённый judge, затем остальные настроенные —
+        // Порядок оркестраторов: разрешённый judge, затем остальные настроенные —
         // сбой одного (таймаут, пустой ответ, неподдерживаемый транспорт) не должен
         // превращать план в молчаливую одну веху.
         val planners = buildList {
@@ -217,7 +217,7 @@ class PlanComposer(
             milestones = listOf(MilestoneDraft(title = task, description = "Выполни задачу целиком: $task")),
             note = buildString {
                 append("План составлен без модели: один шаг на всю цель")
-                if (!reason.isNullOrBlank()) append(" — сбой планировщика: $reason")
+                if (!reason.isNullOrBlank()) append(" — сбой оркестратора: $reason")
                 append(". При рабочем источнике план разбивается на шаги с зависимостями.")
             },
         )
@@ -227,7 +227,7 @@ class PlanComposer(
         val DEFAULT_JSON = Json { ignoreUnknownKeys = true }
 
         val COMPOSE_PROMPT = """
-            Ты — планировщик инженерной задачи. Разбей цель на ГРАФИК из 2–6
+            Ты — оркестратор инженерной задачи. Разбей цель на ГРАФИК из 2–6
             мэилстоунов: каждый — проверяемый результат (файл, работающая функция,
             тест). Никогда не отдавай весь план одним шагом, кроме тривиально
             коротких целей.

@@ -248,7 +248,7 @@ class CodingSessionStatusTest {
     @Test
     fun aggregatePicksMostUrgent() {
         assertEquals(
-            CodingSessionStatus.WORKING,
+            CodingSessionStatus.WAITING,
             aggregateCodingStatus(listOf(CodingSessionStatus.IDLE, CodingSessionStatus.WORKING, CodingSessionStatus.WAITING)),
         )
         assertEquals(

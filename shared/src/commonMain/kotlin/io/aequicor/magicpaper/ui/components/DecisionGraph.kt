@@ -90,7 +90,7 @@ private fun points(value: Double): String {
             val stages = schedule.order.map { id ->
                 val stage = projected.milestones.first { it.id == id }
                 val node = projected.tree.first { it.kind == DecisionKind.STAGE && (it.stageId ?: it.id) == id }
-                node.copy(title = stage.title, children = emptyList(), dependsOn = emptyList())
+                node.copy(title = stage.stageLabel(), children = emptyList(), dependsOn = emptyList())
             }
             projected.copy(tree = listOf(root.copy(children = stages.map { it.id })) + stages,
                 milestones = projected.milestones.map { it.copy(dependsOn = schedule.dependencies[it.id].orEmpty().toList()) })
@@ -224,7 +224,7 @@ private fun points(value: Double): String {
                             .size(220.dp, 156.dp).background(if (selected == node.id) scheme.primaryContainer else if (!inactive && membership != null) scheme.primaryContainer.copy(alpha = .35f) else scheme.surface, MaterialTheme.shapes.medium)
                             .border(if (selected == node.id) 2.dp else 1.dp, if (selected == node.id || (!inactive && membership != null)) scheme.primary else scheme.outlineVariant, MaterialTheme.shapes.medium)
                             .graphicsLayer { alpha = if (inactive) .72f else 1f }.clickable { onSelect(node.id) }.padding(8.dp)) {
-                            Text(node.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }?.stageLabel() ?: node.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (membership != null) Text(
                                 if (membership.shared) "↔ Общая для вариантов" else
                                     (if (inactive) "◇ " else "● ") + membership.labels.joinToString(" → ") { it.title },

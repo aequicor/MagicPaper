@@ -87,6 +87,7 @@ class PlanningChatRenderTest {
     }
 
     @Test fun projectAndPlanStayVisibleWhenStagesScroll() = runTest {
+        java.io.File("build/reports/planning-chat").mkdirs()
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {
             val project = CodingProject("p", "Закреплённый проект", "/project", 1)

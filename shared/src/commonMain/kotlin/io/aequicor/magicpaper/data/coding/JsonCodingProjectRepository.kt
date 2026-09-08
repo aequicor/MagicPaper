@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingProjectRepository
+import io.aequicor.magicpaper.domain.OrchestrationState
 import io.aequicor.magicpaper.domain.CodingSession
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -26,6 +27,24 @@ class JsonCodingProjectRepository(
     private val sessionsSerializer = ListSerializer(CodingSession.serializer())
     private val messagesSerializer = ListSerializer(CodingMessage.serializer())
 
+    override suspend fun orchestration(sessionId: String): OrchestrationState? {
+        val key = "coding-orchestration-$sessionId"
+        val raw = store.read(key) ?: store.read("$key-backup") ?: return null
+        return runCatching { json.decodeFromString<OrchestrationState>(raw) }.getOrElse {
+            store.read("$key-backup")?.let { json.decodeFromString<OrchestrationState>(it) }
+                ?: error("Повреждено состояние оркестратора; требуется восстановление")
+        }
+    }
+
+    override suspend fun saveOrchestration(state: OrchestrationState) {
+        val key = "coding-orchestration-${state.sessionId}"
+        store.read(key)?.let { previous ->
+            if (runCatching { json.decodeFromString<OrchestrationState>(previous) }.isSuccess)
+                store.write("$key-backup", previous)
+        }
+        store.write(key, json.encodeToString(OrchestrationState.serializer(), state))
+    }
+
     // ---- Проекты ----------------------------------------------------------
 
     override suspend fun all(): List<CodingProject> {
@@ -45,6 +64,8 @@ class JsonCodingProjectRepository(
         store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects))
         allSessions().filter { it.projectId == id }.forEach {
             store.delete(logKey(id, it.id))
+            store.delete("coding-orchestration-${it.id}")
+            store.delete("coding-orchestration-${it.id}-backup")
         }
         saveSessions(allSessions().filterNot { it.projectId == id })
         // Журнал легаси-проекта, если миграция ещё не успела произойти.
@@ -80,6 +101,8 @@ class JsonCodingProjectRepository(
         store.write(clearedKey(projectId), "true")
         saveSessions(allSessions().filterNot { it.id == sessionId })
         store.delete(logKey(projectId, sessionId))
+        store.delete("coding-orchestration-$sessionId")
+        store.delete("coding-orchestration-$sessionId-backup")
     }
 
     // ---- Журналы сессий -----------------------------------------------------
@@ -94,6 +117,7 @@ class JsonCodingProjectRepository(
     }
 
     override suspend fun wipe() {
+        store.keys("coding-orchestration-").forEach { store.delete(it) }
         allSessions().forEach { store.delete(logKey(it.projectId, it.id)) }
         all().forEach { store.delete(legacyLogKey(it.id)); store.delete(clearedKey(it.id)) } // легаси-журналы немигрированных проектов
         store.delete(KEY_SESSIONS)

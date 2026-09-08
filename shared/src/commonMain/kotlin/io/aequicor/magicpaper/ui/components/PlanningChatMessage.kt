@@ -21,8 +21,8 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
     val drafts by service.drafts.collectAsState()
     val source = plans.firstOrNull { it.id == block.planId } ?: return
     if (block.questions.isNotEmpty()) {
-        val answered = history.any { it.planning?.replyTo == message.id }
-        Text(if (answered) "Ответы на уточнения отправлены" else "Ответьте в окне уточнений; его можно открыть над полем ввода",
+        val answered = block.requestStatus == UserRequestStatus.ANSWERED || history.any { it.planning?.replyTo == message.id && it.planning.closesRequest }
+        Text(if (answered) "Ответы на уточнения отправлены" else "Ответьте в карточке уточнения под диалогом",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (!block.graph) return
@@ -35,9 +35,9 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
     val display = if (original && initial != null) plan.copy(tree = initial.tree, milestones = initial.milestones, finalAttempt = null) else plan
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SelectionContainer { Text(display.goal, style = MaterialTheme.typography.bodyLarge) }
-        display.selectedMilestones.forEachIndexed { index, stage ->
+        display.selectedMilestones.forEach { stage ->
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                SelectionContainer { Text("${index + 1}. ${stage.title}", style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)) }
+                SelectionContainer { Text(stage.stageLabel(), style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)) }
                 if (stage.description.isNotBlank()) ChatMarkdown(stage.description)
                 if (stage.acceptance.isNotBlank()) SelectionContainer { Text("Критерии готовности: ${stage.acceptance}", style = MaterialTheme.typography.bodyLarge) }
                 if (stage.dependsOn.isNotEmpty()) Text("После: " + stage.dependsOn.joinToString { id ->
@@ -48,6 +48,21 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+        plan.proposal?.let { proposal ->
+            HorizontalDivider()
+            Text("Предложение доработки", style = MaterialTheme.typography.titleMedium)
+            ChatMarkdown(proposal.explanation)
+            proposal.milestones.filter { proposed -> plan.milestones.none { it.id == proposed.id } }.forEach { stage ->
+                Text(stage.stageLabel(), fontWeight = FontWeight.SemiBold)
+                Text(stage.description, style = MaterialTheme.typography.bodyMedium)
+                Text("Критерии: ${stage.acceptance}", style = MaterialTheme.typography.bodySmall)
+            }
+            val state by service.states.collectAsState()
+            Button({ service.confirm(plan.id, proposal.id) }, enabled = (plan.phase == ExecutionPhase.COMPLETE || plan.canExtendAfterFinalVerification) &&
+                state[session.id]?.openQuestions(plan.id).orEmpty().isEmpty()) { Text("Подтвердить доработку") }
+            if (plan.phase != ExecutionPhase.COMPLETE && !plan.canExtendAfterFinalVerification)
+                Text("Запуск после завершения текущей проверки и переноса результата", style = MaterialTheme.typography.bodySmall)
         }
         if (plan.confirmedRevision != null) {
             Text("${plan.doneCount}/${plan.selectedMilestones.size} этапов · ${when {

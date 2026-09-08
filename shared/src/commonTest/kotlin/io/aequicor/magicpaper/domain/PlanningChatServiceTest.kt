@@ -20,6 +20,7 @@ class PlanningChatServiceTest {
         var gate: CompletableDeferred<Unit>? = null
         var overrideReply: String? = null
         var timeout = false
+        var userDecision = """{"intent":"REFINE"}"""
         var coordinator = """{"reply":"Результат принят","actions":[]}"""
         val coordinatorReplies = mutableListOf<String>()
         val coordinatorCallbacks = mutableListOf<(CodingStep) -> Unit>()
@@ -40,6 +41,7 @@ class PlanningChatServiceTest {
             lastMessages = messages
             if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
+            if (messages.first().content.contains("Ты оркестратор диалога")) return userDecision
             overrideReply?.let { return it }
             if (messages.first().content.contains("Ты координатор"))
                 return if (coordinatorReplies.isEmpty()) coordinator else coordinatorReplies.removeAt(0)
@@ -68,8 +70,7 @@ class PlanningChatServiceTest {
             emit(CodingEvent.Finished)
         }
     }
-    private inner class Fixture(scope: TestScope) {
-        val kv = InMemoryKeyValueStore()
+    private inner class Fixture(scope: TestScope, val kv: KeyValueStore = InMemoryKeyValueStore()) {
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val projects = JsonCodingProjectRepository(kv, json)
         val profiles = JsonLlmProfileRepository(kv, json)
@@ -163,7 +164,7 @@ class PlanningChatServiceTest {
         val waiting = f.store.planFor(plan.id)!!
         val history = f.projects.messages(project.id, parent.id)
         assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, history, plan = waiting).status)
-        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, plan = waiting).status)
+        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(worker, plan = waiting).status)
         val message = assertNotNull(history.pendingPlanningQuestion())
         assertTrue(message.steps.any { it.title == "Сопоставляю результаты этапов" })
         assertTrue(message.steps.none { it.running })
@@ -221,6 +222,7 @@ class PlanningChatServiceTest {
         f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
         val workerId = f.projects.sessions(project.id).single { it.stageId != null }.id
         f.verdict = Verdict(true, "Откат проверен")
+        f.gateway.userDecision = """{"intent":"INSTRUCT","stageId":"stage"}"""
         f.service.send(parent, "Добавь проверку восстановления разрешений"); advanceTimeBy(1000); runCurrent()
         val completed = f.store.planFor(plan.id)!!
         assertEquals(PlanStatus.DONE, completed.status)
@@ -405,12 +407,12 @@ class PlanningChatServiceTest {
         assertEquals("Проверки приняты", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
         assertTrue(f.store.planFor(plan.id)!!.deliveries.isEmpty())
         assertNull(f.store.planFor(plan.id)!!.coordination.single().decision)
-        assertTrue(f.projects.messages(project.id, parent.id).none { it.text == "Планировщик: Проверки приняты" })
+        assertTrue(f.projects.messages(project.id, parent.id).none { it.text == "Оркестратор: Проверки приняты" })
         f.gateway.coordinator = full
         gate.complete(Unit); advanceTimeBy(1000); runCurrent()
         assertNull(f.service.drafts.value[parent.id])
-        val final = f.projects.messages(project.id, parent.id).single { it.text == "Планировщик: Проверки приняты" }
-        assertEquals(listOf("Планировщик: Проверки приняты"), final.steps.filter { it.kind == CodingStepKind.ANSWER }.map { it.title })
+        val final = f.projects.messages(project.id, parent.id).single { it.text == "Оркестратор: Проверки приняты" }
+        assertEquals(listOf("Оркестратор: Проверки приняты"), final.steps.filter { it.kind == CodingStepKind.ANSWER }.map { it.title })
         assertTrue(f.store.planFor(plan.id)!!.coordination.single().activity.none { it.kind == CodingStepKind.ANSWER })
     }
 
@@ -445,7 +447,7 @@ class PlanningChatServiceTest {
         f.service.cancelRequest(parent.id); runCurrent()
         assertNull(f.service.drafts.value[parent.id])
         assertEquals(ExecutionIntent.STOP, f.store.planFor(plan.id)!!.intent)
-        assertTrue(f.projects.messages(project.id, parent.id).any { it.text == "Работа планировщика остановлена." && it.steps.any { step -> step.kind == CodingStepKind.THINKING } })
+        assertTrue(f.projects.messages(project.id, parent.id).any { it.text == "Работа оркестратора остановлена." && it.steps.any { step -> step.kind == CodingStepKind.THINKING } })
     }
 
     @Test fun coordinatorTimeoutClearsActivityAndKeepsTheErrorInHistory() = runTest {
@@ -459,7 +461,7 @@ class PlanningChatServiceTest {
         advanceTimeBy(11); runCurrent()
         assertNull(f.service.drafts.value[parent.id])
         val failure = f.projects.messages(project.id, parent.id).last { it.failed }
-        assertTrue(failure.text.startsWith("Ошибка планировщика:"))
+        assertTrue(failure.text.startsWith("Ошибка оркестратора:"))
         assertTrue(failure.steps.any { it.kind == CodingStepKind.THINKING })
         assertEquals(CodingStepKind.ERROR, failure.steps.last().kind)
     }
@@ -515,7 +517,8 @@ class PlanningChatServiceTest {
         val saved = f.store.planFor(plan.id)!!
         assertEquals(3, f.gateway.coordinatorCallbacks.size)
         assertEquals(ExecutionPhase.WAITING, saved.phase)
-        assertEquals("Ожидается ответ планировщику", saved.issue?.message)
+        assertNull(saved.issue)
+        assertNotNull(saved.milestones.single().attempts.last().waitingForUser)
         assertTrue(saved.deliveries.isEmpty())
         assertNull(f.service.drafts.value[parent.id])
         val history = f.projects.messages(project.id, parent.id)
@@ -729,7 +732,7 @@ class PlanningChatServiceTest {
         assertEquals(1, f.projects.messages(project.id, "parent").count { it.id == "${attempt.id}-turn-0-started" })
         val worker = f.projects.sessions(project.id).single { it.stageId != null }
         f.service.send(worker, "Проверь экспорт"); runCurrent()
-        assertTrue(f.projects.messages(project.id, "parent").any { it.text.contains("очередь этапа") && it.text.contains("Проверь экспорт") })
+        assertTrue(f.projects.messages(project.id, "parent").any { it.route?.deliveryId != null && it.route.target.name == "Stage" && it.text.contains("Проверь экспорт") })
         f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
         val messages = f.projects.messages(project.id, "parent")
         assertTrue(messages.any { it.text.contains("Передано сообщений: 1") })
@@ -750,7 +753,7 @@ class PlanningChatServiceTest {
                     answered = true
                     val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
                     f.service.send(parent, "Экспортировать в PDF", listOf(PlanningAnswer(question.planning!!.questions.single().id, text = "PDF")), question.id)
-                    yield()
+                    repeat(8) { if (f.store.planFor(plan.id)!!.deliveries.none { it.replyTo == question.id }) yield() }
                     assertTrue(f.store.planFor(plan.id)!!.deliveries.any { it.replyTo == question.id })
                     f.gateway.coordinator = """{"reply":"Результат принят"}"""
                 }
@@ -773,7 +776,7 @@ class PlanningChatServiceTest {
         f.gateway.overrideReply = """{"reply":"Добавлен этап проверки","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["stage","extra"]},{"id":"stage","title":"Stage","kind":"STAGE","stageId":"stage"},{"id":"extra","title":"Extra","kind":"STAGE","stageId":"extra"}],"milestones":[{"id":"stage","title":"Stage","acceptance":"Checks pass"},{"id":"extra","title":"Extra","description":"Additional check","acceptance":"Checked","dependsOn":["stage"]}]}"""
         f.service.send(session, "Добавь проверку"); runCurrent()
         val updated = f.store.planFor("p")!!
-        assertEquals(completed, updated.milestones.first { it.id == "stage" })
+        assertEquals(completed, updated.milestones.first { it.id == "stage" }.copy(displayNumber = completed.displayNumber))
         assertTrue(updated.milestones.any { it.id == "extra" })
         assertTrue(f.projects.sessions(project.id).any { it.stageId == "extra" })
         assertTrue(updated.versions.isNotEmpty())
@@ -804,4 +807,318 @@ class PlanningChatServiceTest {
         assertEquals(1, f.projects.messages(project.id, "planning-old").count { it.id == "q" })
         assertFalse(f.store.planFor("old")!!.sharedWorkspace)
     }
+    @Test fun sessionNamesAndNumbersSurviveReorderingArchivalAndRenaming() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val extra = base.milestones.single().copy(id = "extra", title = "Stage")
+        f.store.save(base.copy(confirmedRevision = 1, milestones = base.milestones + extra,
+            tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage", "extra"))) +
+                listOf("stage", "extra").map { DecisionNode(it, "Stage", DecisionKind.STAGE, stageId = it) }))
+        f.service.prepareSessions(f.store.planFor("p")!!)
+        val sessions = f.projects.sessions(project.id).filter { it.stageId != null }
+        assertEquals(listOf("Stage", "Stage"), sessions.map { it.name })
+        assertEquals(setOf(1, 2), sessions.map { it.stageNumber }.toSet())
+        f.store.update("p") { it.copy(milestones = it.milestones.reversed()) }
+        f.service.prepareSessions(f.store.planFor("p")!!)
+        assertEquals(sessions.map { it.id to it.stageNumber }, f.projects.sessions(project.id).filter { it.stageId != null }.map { it.id to it.stageNumber })
+        val first = sessions.first()
+        f.service.renameSession(first.id, "Вход по email"); runCurrent()
+        assertEquals("Вход по email", f.projects.sessions(project.id).first { it.id == first.id }.name)
+        assertContains(f.store.planFor("p")!!.milestones.first { it.id == first.stageId }.stageLabel(), "Вход по email")
+        f.store.update("p") { it.copy(milestones = it.milestones.map { stage -> stage.copy(status = MilestoneStatus.DONE) }) }
+        f.service.archiveSession(first.id); runCurrent()
+        assertTrue(f.projects.sessions(project.id).first { it.id == first.id }.archived)
+        val history = f.projects.messages(project.id, first.id)
+        f.service.prepareSessions(f.store.planFor("p")!!)
+        assertTrue(f.projects.sessions(project.id).first { it.id == first.id }.archived)
+        assertEquals(history, f.projects.messages(project.id, first.id))
+        f.service.restoreSession(first.id); runCurrent()
+        assertFalse(f.projects.sessions(project.id).first { it.id == first.id }.archived)
+        assertEquals(first.stageNumber, f.projects.sessions(project.id).first { it.id == first.id }.stageNumber)
+    }
+
+    @Test fun archiveDoesNotRemoveAnUnfinishedSession() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val base = f.readyPlan("p", f.session("parent"))
+        f.store.save(base.copy(confirmedRevision = 1)); f.service.prepareSessions(f.store.planFor("p")!!)
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        f.service.archiveSession(worker.id); runCurrent()
+        assertFalse(f.projects.sessions(project.id).first { it.id == worker.id }.archived)
+        assertContains(f.service.error.value.orEmpty(), "незавершённого")
+        assertTrue(f.projects.orchestration("parent")!!.sessionCommands.none { it.kind == SessionCommandKind.ARCHIVE })
+    }
+
+    @Test fun discussionDuringAQuestionKeepsTheOriginalRequestOpen() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"PDF сохраняет расположение элементов, DOC подходит для редактирования."}"""
+        f.service.send(parent, "Чем отличаются PDF и DOC?"); runCurrent()
+        assertEquals(question.id, f.projects.messages(project.id, parent.id).pendingPlanningQuestion()?.id)
+        assertTrue(f.projects.messages(project.id, parent.id).none { it.planning?.replyTo == question.id })
+        assertContains(f.projects.messages(project.id, parent.id).last().text, "PDF сохраняет")
+        assertEquals(1, f.store.plans.value.size)
+    }
+
+    @Test fun partialStructuredAnswersStayOpenUntilEveryQuestionHasAnAnswer() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
+        f.service.send(parent, "PDF", listOf(PlanningAnswer("single", listOf("pdf"))), question.id); runCurrent()
+        assertEquals(question.id, f.projects.messages(project.id, parent.id).pendingPlanningQuestion()?.id)
+        val restored = f.projects.orchestration(parent.id)!!
+        assertEquals(listOf("pdf"), restored.questions.first { it.id == question.id }.partialAnswers.single().selected)
+        f.service.send(parent, "Чтение и тесты", listOf(PlanningAnswer("multi", listOf("read")), PlanningAnswer("text", text = "Tests")), question.id); runCurrent()
+        val answered = f.projects.orchestration(parent.id)!!.questions.first { it.id == question.id }
+        assertEquals(UserRequestStatus.ANSWERED, answered.status)
+        assertEquals(3, answered.partialAnswers.size)
+        assertContains(f.gateway.lastMessages.last().content, "Формат?: PDF")
+        assertContains(f.gateway.lastMessages.last().content, "Возможности?: Чтение")
+    }
+
+    @Test fun messagesArrivingDuringAModelTurnAreDurableAndProcessedInOrder() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val gate = CompletableDeferred<Unit>(); f.gateway.gate = gate
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Объяснение форматов"}"""
+        f.service.send(parent, "Объясни форматы"); runCurrent()
+        val queued = f.projects.orchestration(parent.id)!!.inputs
+        assertEquals(listOf(OrchestrationInputStatus.PROCESSING, OrchestrationInputStatus.QUEUED), queued.map { it.status })
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf(OrchestrationInputStatus.DONE, OrchestrationInputStatus.DONE), f.projects.orchestration(parent.id)!!.inputs.map { it.status })
+        assertEquals(listOf("Сделай редактор", "Объясни форматы"), f.projects.messages(project.id, parent.id).filter { it.role == CodingRole.USER }.map { it.text })
+    }
+
+    @Test fun completedPlanCanBeDiscussedAndExtendedOnlyAfterConfirmingTheProposal() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(confirmedRevision = 1, status = PlanStatus.DONE, phase = ExecutionPhase.COMPLETE, runId = "first-run",
+            milestones = base.milestones.map { it.copy(status = MilestoneStatus.DONE, report = "Old result") }))
+        f.service.prepareSessions(f.store.planFor("p")!!); runCurrent()
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Готов предыдущий результат."}"""
+        f.service.send(parent, "Что сделано?"); runCurrent()
+        assertEquals(ExecutionPhase.COMPLETE, f.store.planFor("p")!!.phase)
+        assertNull(f.store.planFor("p")!!.proposal)
+        assertEquals(1, f.store.plans.value.size)
+        f.gateway.userDecision = """{"intent":"REFINE"}"""
+        f.gateway.overrideReply = """{"reply":"Предлагаю обработку ошибок","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["stage","errors"]},{"id":"stage","title":"Stage","kind":"STAGE","stageId":"stage"},{"id":"errors","title":"Обработка ошибок","kind":"STAGE","stageId":"errors"}],"milestones":[{"id":"stage","title":"Stage","acceptance":"Checks pass"},{"id":"errors","title":"Обработка ошибок","acceptance":"Error checks pass","description":"Handle errors","dependsOn":["stage"],"continuationOf":"stage"}]}"""
+        f.service.send(parent, "Добавь обработку ошибок"); runCurrent()
+        val pending = f.store.planFor("p")!!
+        val proposal = assertNotNull(pending.proposal)
+        assertEquals(ExecutionPhase.COMPLETE, pending.phase)
+        assertEquals(1, pending.milestones.size)
+        assertTrue(f.runtime.calls.isEmpty())
+        f.gateway.overrideReply = null
+        f.runtime.gate.complete(Unit)
+        f.service.confirm("p", proposal.id); advanceTimeBy(1000); runCurrent()
+        val done = f.store.planFor("p")!!
+        assertEquals(ExecutionPhase.COMPLETE, done.phase)
+        assertEquals(2, done.milestones.size)
+        assertEquals("Old result", done.milestones.first { it.id == "stage" }.report)
+        assertEquals("first-run", done.runHistory.single().runId)
+        assertNotEquals("first-run", done.runId)
+        assertTrue(f.runtime.calls.none { it.first.stageId == "stage" })
+        val calls = f.runtime.calls.size
+        f.service.confirm("p", proposal.id); runCurrent()
+        assertEquals(calls, f.runtime.calls.size)
+        assertTrue(f.projects.sessions(project.id).first { it.stageId == "stage" }.archived)
+        val continuation = f.projects.sessions(project.id).first { it.stageId == "errors" }
+        assertEquals("Обработка ошибок", continuation.name)
+        assertEquals(1, continuation.continuationOfNumber)
+        assertEquals(2, continuation.stageNumber)
+    }
+
+    @Test fun preparingAPromptDoesNotClaimDeliveryBeforeTheRuntimeStarts() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val base = f.readyPlan("p", f.session("parent"))
+        f.store.save(base.copy(confirmedRevision = 1, intent = ExecutionIntent.PAUSE))
+        f.service.prepareSessions(f.store.planFor("p")!!)
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        f.service.send(worker, "Учти экспорт"); runCurrent()
+        val stage = f.store.planFor("p")!!.milestones.single()
+        val attempt = StageAttempt("a", worker.id, StageAssignment(profile.id, "m"))
+        f.service.instructions(f.store.planFor("p")!!, stage, attempt)
+        assertEquals(DeliveryState.QUEUED, f.store.planFor("p")!!.deliveries.single().state)
+        f.service.started(f.store.planFor("p")!!, stage, attempt)
+        assertEquals(DeliveryState.DELIVERED, f.store.planFor("p")!!.deliveries.single().state)
+        val route = f.projects.messages(project.id, "parent").first { it.route?.deliveryId != null }.route!!
+        assertEquals("Stage", route.target.name)
+        assertContains(route.target.subtitle, "Этап 1")
+        assertEquals(worker.id, route.target.sessionId)
+    }
+
+    @Test fun anAnswerDoesNotResumeAnExplicitlyPausedPlan() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(confirmedRevision = 1, intent = ExecutionIntent.PAUSE))
+        f.service.prepareSessions(f.store.planFor("p")!!)
+        val plan = f.store.planFor("p")!!
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        f.gateway.coordinator = """{"reply":"Какой формат?","askUser":true}"""
+        f.service.finished(plan, plan.milestones.single(), StageAttempt("a", worker.id, StageAssignment(profile.id, "m"),
+            report = """{"kind":"QUESTION","text":"Формат?"}"""))
+        val question = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        f.service.send(parent, "PDF", replyTo = question.id); runCurrent()
+        assertEquals(ExecutionIntent.PAUSE, f.store.planFor("p")!!.intent)
+        assertTrue(f.runtime.calls.isEmpty())
+        assertEquals(DeliveryState.QUEUED, f.store.planFor("p")!!.deliveries.single().state)
+    }
+
+    @Test fun questionScopeAndOriginArePersistedForEachStage() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val second = base.milestones.single().copy(id = "second", title = "Проверка экспорта")
+        f.store.save(base.copy(confirmedRevision = 1, milestones = base.milestones + second,
+            tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage", "second"))) +
+                listOf("stage", "second").map { DecisionNode(it, it, DecisionKind.STAGE, stageId = it) }))
+        f.service.prepareSessions(f.store.planFor("p")!!)
+        val plan = f.store.planFor("p")!!
+        f.gateway.coordinator = """{"reply":"Уточните формат","askUser":true}"""
+        for (stage in plan.milestones) {
+            val worker = f.projects.sessions(project.id).first { it.stageId == stage.id }
+            f.service.finished(plan, stage, StageAttempt("attempt-${stage.id}", worker.id, StageAssignment(profile.id, "m"),
+                report = """{"kind":"QUESTION","text":"Нужен формат"}"""))
+        }
+        val requests = f.projects.orchestration(parent.id)!!.openQuestions()
+        assertEquals(2, requests.size)
+        assertEquals(setOf("stage", "second"), requests.flatMap { it.stageIds }.toSet())
+        assertTrue(requests.all { it.scopeLabel.contains("Этап") && it.sourceSessionId != parent.id })
+        f.service.send(parent, "PDF", replyTo = requests.first().id); runCurrent()
+        assertEquals(listOf(requests.last().id), f.projects.orchestration(parent.id)!!.openQuestions().map { it.id })
+    }
+
+    @Test fun localQuestionAllowsIndependentWorkButGlobalQuestionHoldsIt() = runTest {
+        for (global in listOf(false, true)) {
+            val f = Fixture(this); f.initialize(); runCurrent()
+            val parent = f.session("parent")
+            val base = f.readyPlan("p", parent)
+            val extra = base.milestones.single().copy(id = "extra", title = "Independent")
+            f.store.save(base.copy(parallelism = 1, milestones = base.milestones + extra,
+                tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage", "extra"))) +
+                    listOf("stage", "extra").map { DecisionNode(it, it, DecisionKind.STAGE, stageId = it) }))
+            f.gateway.coordinatorReplies += if (global) """{"reply":"Уточните общую цель","askUser":true,"questionStageIds":[]}"""
+                else """{"reply":"Уточните первый этап","askUser":true}"""
+            f.runtime.gate.complete(Unit)
+            f.service.confirm("p"); advanceTimeBy(1000); runCurrent()
+            val saved = f.store.planFor("p")!!
+            assertEquals(ExecutionPhase.WAITING, saved.phase)
+            assertNull(saved.issue)
+            assertEquals(if (global) 1 else 2, f.runtime.calls.size)
+            assertEquals(if (global) MilestoneStatus.PENDING else MilestoneStatus.DONE, saved.milestones.first { it.id == "extra" }.status)
+        }
+    }
+
+    @Test fun bootReplaysStoredInboxWithoutRepeatingAnAlreadyAppliedReply() = runTest {
+        val f = Fixture(this)
+        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id))
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(dialogue = listOf(PlanningMessage("applied-reply", "assistant", "Уже сохранено"))))
+        f.projects.saveOrchestration(OrchestrationState(parent.id, project.id, activePlanId = "p", inputs = listOf(
+            OrchestrationInput("applied", "Первый вопрос", 1, status = OrchestrationInputStatus.PROCESSING),
+            OrchestrationInput("queued", "Следующий вопрос", 2, decision = UserTurnDecision(UserTurnIntent.DISCUSS, "Сохранённое решение")))))
+        f.service.bootstrap(); runCurrent()
+        assertEquals(listOf(OrchestrationInputStatus.DONE, OrchestrationInputStatus.DONE), f.projects.orchestration(parent.id)!!.inputs.map { it.status })
+        assertTrue(f.gateway.lastMessages.isEmpty())
+        assertEquals(1, f.projects.messages(project.id, parent.id).count { it.id == "queued-reply" })
+        assertEquals(1, f.store.planFor("p")!!.dialogue.count { it.id == "applied-reply" })
+    }
+
+    @Test fun fullAnswerForwardsEverySavedPartToTheAffectedWorker() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(confirmedRevision = base.revision, intent = ExecutionIntent.PAUSE))
+        f.projects.saveOrchestration(OrchestrationState(parent.id, project.id, activePlanId = "p", questions = listOf(
+            OrchestrationQuestion("question", "p", "Формат и срок", listOf(PlanningQuestion("format", "Формат?"),
+                PlanningQuestion("duration", "Срок?")), parent.id, listOf("stage")))))
+        f.service.send(parent, "Нужен PDF", listOf(PlanningAnswer("format", text = "PDF")), "question"); runCurrent()
+        assertTrue(f.store.planFor("p")!!.deliveries.isEmpty())
+        f.service.send(parent, "Пять минут", listOf(PlanningAnswer("duration", text = "5 минут")), "question"); runCurrent()
+        val delivery = f.store.planFor("p")!!.deliveries.single()
+        assertContains(delivery.text, "Формат?: PDF")
+        assertContains(delivery.text, "Срок?: 5 минут")
+        assertEquals("stage", delivery.targetStageId)
+        assertEquals(ExecutionIntent.PAUSE, f.store.planFor("p")!!.intent)
+    }
+
+    @Test fun bootReconstructsMissingDeliveryCardsOnlyOnce() = runTest {
+        val f = Fixture(this)
+        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id))
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(confirmedRevision = base.revision, deliveries = listOf(PlanDelivery("saved", parent.id, "stage", "Сохранённое поручение"))))
+        f.service.bootstrap(); runCurrent()
+        val worker = f.projects.sessions(project.id).first { it.stageId == "stage" }
+        val routed = f.projects.messages(project.id, parent.id).single { it.id == "saved-routed" }
+        assertEquals(worker.id, routed.route?.target?.sessionId)
+        assertEquals("Этап 1 · Stage", routed.route?.stageLabel)
+        assertEquals(1, f.projects.messages(project.id, worker.id).count { it.id == "saved" })
+        f.store.update("p") { it.copy(goal = "Новое имя цели") }; runCurrent()
+        assertEquals(routed, f.projects.messages(project.id, parent.id).single { it.id == "saved-routed" })
+    }
+
+    @Test fun failedInitialSaveKeepsTextVisibleAndRecoveryProcessesIt() = runTest {
+        val backing = InMemoryKeyValueStore()
+        var fail = false
+        val disk = object : KeyValueStore by backing {
+            override fun write(key: String, value: String) {
+                if (fail && key.startsWith("coding-orchestration-")) error("Disk unavailable")
+                backing.write(key, value)
+            }
+        }
+        val f = Fixture(this, disk); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        fail = true
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        assertTrue(f.service.persistenceErrors.value.containsKey(parent.id))
+        assertEquals("Сделай редактор", f.service.unsavedInputs.value[parent.id]!!.single().text)
+        assertTrue(f.gateway.lastMessages.isEmpty())
+        fail = false
+        f.service.recoverOrchestration(parent.id); runCurrent()
+        assertTrue(f.service.persistenceErrors.value.isEmpty())
+        assertTrue(f.service.unsavedInputs.value.isEmpty())
+        assertEquals(OrchestrationInputStatus.DONE, f.projects.orchestration(parent.id)!!.inputs.single().status)
+        assertEquals(1, f.projects.messages(project.id, parent.id).count { it.role == CodingRole.USER })
+    }
+
+    @Test fun damagedOrchestratorDoesNotPreventAnotherFromRestoringItsInbox() = runTest {
+        val f = Fixture(this)
+        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id))
+        val damaged = f.session("damaged"); f.readyPlan("bad", damaged)
+        val healthy = f.session("healthy")
+        val plan = f.readyPlan("good", healthy)
+        f.store.save(plan.copy(dialogue = listOf(PlanningMessage("ready", "assistant", "Готово"))))
+        f.kv.write("coding-orchestration-damaged", "{broken")
+        f.projects.saveOrchestration(OrchestrationState(healthy.id, project.id, activePlanId = "good", inputs = listOf(
+            OrchestrationInput("queued", "Расскажи", 2, decision = UserTurnDecision(UserTurnIntent.DISCUSS, "Ответ")))))
+        f.service.bootstrap(); runCurrent()
+        assertTrue(f.service.persistenceErrors.value.containsKey(damaged.id))
+        assertEquals(OrchestrationInputStatus.DONE, f.projects.orchestration(healthy.id)!!.inputs.single().status)
+        assertEquals(1, f.projects.messages(project.id, healthy.id).count { it.id == "queued-reply" })
+    }
+
+    @Test fun plannerQuestionKeepsItsAffectedStageAndStaysOpenDuringDiscussion() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); f.readyPlan("p", parent)
+        f.gateway.overrideReply = """{"reply":"Уточните срок","questionStageIds":["stage"],"questions":[{"id":"duration","title":"Сколько минут?","kind":"TEXT"}]}"""
+        f.service.send(parent, "Уточни требования"); runCurrent()
+        val question = f.projects.orchestration(parent.id)!!.openQuestions("p").single()
+        assertEquals(listOf("stage"), question.stageIds)
+        assertEquals("Этап 1 · Stage", question.scopeLabel)
+        assertEquals(parent.id, question.sourceSessionId)
+        assertTrue(question.forPlanning)
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Срок определяет время действия кода."}"""
+        f.service.send(parent, "Зачем задавать срок?"); runCurrent()
+        assertEquals(question.id, f.projects.orchestration(parent.id)!!.openQuestions("p").single().id)
+        assertContains(f.gateway.lastMessages.last().content, "stage: Этап 1 · Stage")
+    }
+
 }

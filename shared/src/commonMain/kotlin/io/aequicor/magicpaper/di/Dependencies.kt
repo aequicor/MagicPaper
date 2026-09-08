@@ -1,6 +1,6 @@
 package io.aequicor.magicpaper.di
 
-import io.aequicor.magicpaper.domain.PlanningChatService
+import io.aequicor.magicpaper.domain.OrchestrationService
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
@@ -150,7 +150,7 @@ internal fun buildDependencies(
         .apply { experiencePlugin?.let { register(it(gateway, profileRepo)) } }
         .register(planner)
     platformPlugins.forEach(registry::register)
-    val planningChat = codingProjects?.let { PlanningChatService(planningStore, planningExecution, it, profileRepo, settingsRepo, PlanComposer(gateway, json, search), gateway) }
+    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, PlanComposer(gateway, json, search), gateway) }
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,

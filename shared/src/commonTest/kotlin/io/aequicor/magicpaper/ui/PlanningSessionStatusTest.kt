@@ -72,7 +72,7 @@ class PlanningSessionStatusTest {
         assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, running = true, plan = handedOff).status)
         assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(worker, plan = plan).status)
         val planner = CodingSessionUi(parent, listOf(question), draft = CodingDraft(active = true), running = true, plan = handedOff)
-        assertEquals(CodingSessionStatus.WORKING, planner.status)
+        assertEquals(CodingSessionStatus.WAITING, planner.status)
         assertEquals(CodingSessionStatus.WAITING, planner.copy(running = false, draft = CodingDraft()).status)
     }
 
