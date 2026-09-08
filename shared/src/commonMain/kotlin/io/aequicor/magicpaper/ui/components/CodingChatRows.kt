@@ -58,6 +58,7 @@ private fun CodingMessage.visibleChatContent(indices: List<Int>): CodingMessage?
 }
 
 internal fun CodingStep.isVisibleInChat(hideSystemSteps: Boolean): Boolean = when (kind) {
+    CodingStepKind.SUMMARY -> false // Provider summaries belong to the current status, not the transcript.
     CodingStepKind.INFO -> !hideSystemSteps && isVisibleActivity
     CodingStepKind.ANSWER, CodingStepKind.THINKING -> title.isNotBlank()
     else -> true // Errors and tool calls remain visible, even without a textual result.

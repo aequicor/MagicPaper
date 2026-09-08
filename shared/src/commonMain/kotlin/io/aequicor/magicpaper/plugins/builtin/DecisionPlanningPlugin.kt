@@ -95,7 +95,7 @@ class CodingPlanningPlugin(
             if (plan != null && !running) action { store.update(plan.projectId) { it.copy(wizardStep = target) } }
         }
         fun record(event: CodingStep) {
-            activity = if (event.kind == CodingStepKind.THINKING && activity.lastOrNull()?.let { it.kind == event.kind && it.callId == event.callId } == true)
+            activity = if (event.kind in listOf(CodingStepKind.THINKING, CodingStepKind.SUMMARY) && activity.lastOrNull()?.let { it.kind == event.kind && it.callId == event.callId } == true)
                 activity.dropLast(1) + event else activity + event
         }
         fun doRefine(message: String, nodeId: String? = null, initial: Plan? = null) {

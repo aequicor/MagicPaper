@@ -11,6 +11,35 @@ import kotlin.test.assertTrue
 class PiEventParserTest {
 
     @Test
+    fun subscriptionSummariesAreStatusOnlyInDeltasAndFinalSnapshots() {
+        val delta = PiEventParser.parse("""{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Running final verification","partial":{"api":"openai-codex-responses"}}}""")
+        assertEquals(CodingEvent.ThinkingDelta("Running final verification", summary = true), delta)
+        val final = PiEventParser.parseEvents("""{"type":"message_end","message":{"role":"assistant","api":"openai-codex-responses","content":[{"type":"thinking","thinking":"Running final verification"}],"stopReason":"stop"}}""")
+        assertEquals(listOf(CodingEvent.FinalThinking("Running final verification", summary = true)), final)
+        val withoutMetadata = """{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Checking"}}"""
+        assertEquals(CodingEvent.ThinkingDelta("Checking", summary = true), PiEventParser.parseEvents(withoutMetadata, summaryOnly = true).single())
+    }
+
+    @Test
+    fun nativeThinkingIsNotClassifiedByTextLength() {
+        val delta = PiEventParser.parse("""{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Why?","partial":{"api":"openai-completions"}}}""")
+        assertEquals(CodingEvent.ThinkingDelta("Why?"), delta)
+    }
+
+    @Test
+    fun finalResponsesSignatureKeepsContentSeparateFromSummary() {
+        val events = PiEventParser.parseEvents("""{"type":"message_end","message":{"role":"assistant","api":"openai-responses","content":[{"type":"thinking","thinking":"Checking","thinkingSignature":"{\"summary\":[{\"text\":\"Checking\"}],\"content\":[{\"text\":\"The first condition rules out the initial approach.\"}],\"encrypted_content\":\"opaque\"}"}],"stopReason":"stop"}}""")
+        assertEquals(listOf(CodingEvent.FinalThinking("Checking", summary = true),
+            CodingEvent.FinalThinking("The first condition rules out the initial approach.")), events)
+    }
+
+    @Test
+    fun redactedThinkingDoesNotCreateAnEmptyDisclosure() {
+        val events = PiEventParser.parseEvents("""{"type":"message_end","message":{"role":"assistant","api":"anthropic-messages","content":[{"type":"thinking","thinking":"[redacted]","redacted":true,"thinkingSignature":"opaque"}],"stopReason":"stop"}}""")
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
     fun sessionHeaderGivesSessionId() {
         val line = """{"type":"session","version":3,"id":"3f2a9c41-7b6e-4d8a-9c12-abcdef012345","timestamp":"t","cwd":"/tmp"}"""
         val event = PiEventParser.parse(line)

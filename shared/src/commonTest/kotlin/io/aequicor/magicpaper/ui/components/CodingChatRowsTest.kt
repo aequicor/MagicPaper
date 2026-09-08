@@ -4,6 +4,13 @@ import io.aequicor.magicpaper.domain.*
 import kotlin.test.*
 
 class CodingChatRowsTest {
+    @Test fun summariesStayOutOfChatEvenWhenSystemStepsAreVisible() {
+        val message = CodingMessage("m", CodingRole.AGENT, "", createdAt = 0, steps = listOf(
+            CodingStep(CodingStepKind.SUMMARY, "Running final verification")))
+        assertTrue(codingChatRows(listOf(message), hideSystemSteps = false).isEmpty())
+        val withThinking = message.copy(steps = message.steps + CodingStep(CodingStepKind.THINKING, "Detailed explanation"))
+        assertEquals(listOf(CodingStepKind.THINKING), codingChatRows(listOf(withThinking)).single().message.steps.map { it.kind })
+    }
     private val reply = CodingMessage("reply", CodingRole.AGENT, "Explanation", createdAt = 1,
         planning = PlanningChatBlock("plan"))
     private val card = CodingMessage("card", CodingRole.AGENT, "Ready", createdAt = 2,

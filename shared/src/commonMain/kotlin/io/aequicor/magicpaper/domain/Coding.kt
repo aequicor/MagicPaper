@@ -149,7 +149,19 @@ data class CodingDraft(
     val awaitingApproval: Boolean = false,
     /** Presentation identity shared with the saved response, including interrupted runs. */
     val timelineId: String? = null,
-)
+) {
+    /** Summary and detailed deltas may interleave; an answer or tool ends that reasoning phase. */
+    val reasoningSummary: String get() {
+        for (step in steps.asReversed()) {
+            when (step.kind) {
+                CodingStepKind.SUMMARY -> return step.title
+                CodingStepKind.THINKING -> Unit
+                else -> return ""
+            }
+        }
+        return ""
+    }
+}
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
 class CodingRunRecorder {
@@ -192,6 +204,10 @@ class CodingRunRecorder {
             }
             is CodingEvent.ThinkingDelta -> {
                 awaiting = false
+                if (event.summary) {
+                    updateSource(CodingStepKind.SUMMARY, event.sourceId.ifBlank { "summary:$messageStartIndex" }, event.delta, append = !event.replace)
+                    return false
+                }
                 if (event.sourceId.isNotBlank()) {
                     updateSource(CodingStepKind.THINKING, event.sourceId, event.delta, append = !event.replace)
                     return false
@@ -202,6 +218,10 @@ class CodingRunRecorder {
             }
             is CodingEvent.FinalThinking -> {
                 awaiting = false
+                if (event.summary) {
+                    updateSource(CodingStepKind.SUMMARY, event.sourceId.ifBlank { "summary:$messageStartIndex" }, event.text, append = false)
+                    return false
+                }
                 if (event.sourceId.isNotBlank()) {
                     updateSource(CodingStepKind.THINKING, event.sourceId, event.text, append = false)
                     return false
@@ -382,7 +402,7 @@ class CodingRunRecorder {
             text = answerText.ifBlank {
                 failed?.let { "Заклинание не сработало: $it." } ?: "Агент не оставил текста."
             },
-            activity = steps.filter { it.kind != CodingStepKind.ANSWER }.map { it.displayLine },
+            activity = steps.filter { it.kind !in listOf(CodingStepKind.ANSWER, CodingStepKind.SUMMARY) }.map { it.displayLine },
             steps = steps.toList(),
             failed = failed != null,
             createdAt = createdAt,
@@ -419,10 +439,11 @@ sealed interface CodingEvent {
     data class TextDelta(val delta: String, val sourceId: String = "") : CodingEvent
 
     /** Живая мысль; replace carries a combined snapshot of indexed provider paragraphs. */
-    data class ThinkingDelta(val delta: String, val sourceId: String = "", val replace: Boolean = false) : CodingEvent
+    data class ThinkingDelta(val delta: String, val sourceId: String = "", val replace: Boolean = false,
+        val summary: Boolean = false) : CodingEvent
 
     /** Итоговый текст рассуждения (авторитетный, из блоков thinking сообщения message_end). */
-    data class FinalThinking(val text: String, val sourceId: String = "") : CodingEvent
+    data class FinalThinking(val text: String, val sourceId: String = "", val summary: Boolean = false) : CodingEvent
 
     /** Итоговый текст ассистента (авторитетный, из события message_end). */
     data class FinalText(val text: String, val sourceId: String = "") : CodingEvent
@@ -497,7 +518,7 @@ sealed interface CodingEvent {
 
 /** Роль строки ленты прогона: действие агента, его текст, рассуждение или ошибка. */
 @Serializable
-enum class CodingStepKind { TOOL, EXEC, ANSWER, THINKING, ERROR, INFO }
+enum class CodingStepKind { TOOL, EXEC, ANSWER, THINKING, ERROR, INFO, SUMMARY }
 
 /** Строка ленты прогона кодинг-агента (chronological timeline). */
 @Serializable

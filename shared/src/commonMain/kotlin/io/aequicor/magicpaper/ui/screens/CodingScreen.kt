@@ -1176,6 +1176,7 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
             )
         }
         CodingStepKind.TOOL, CodingStepKind.EXEC -> ToolStepRow(step, live)
+        CodingStepKind.SUMMARY -> Unit
     }
 }
 
@@ -1352,9 +1353,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
     }
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
     val progress = draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.INFO && it.running }
-    val currentThinking = draft.thinking.ifBlank {
-        draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.THINKING }?.title.orEmpty()
-    }
+    val summary = remember(draft.reasoningSummary) { currentThinkingSummary(draft.reasoningSummary) }
     val activity = when {
         waitingForUser -> "Ждём вашего ответа"
         draft.failedMessage != null -> "Работа остановлена из-за ошибки"
@@ -1363,7 +1362,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
         draft.awaitingModel -> "Ожидает ответа модели…"
-        currentThinking.isNotBlank() -> remember(currentThinking) { currentThinkingSummary(currentThinking) }
+        summary.isNotBlank() -> summary
         draft.steps.lastOrNull()?.kind == CodingStepKind.ANSWER -> "Готовит ответ…"
         else -> "Агент работает…"
     }
@@ -1450,7 +1449,8 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
 }
 
 /** Use the latest heading supplied by the agent as the short activity label. */
-private fun currentThinkingSummary(thinking: String): String {
+internal fun currentThinkingSummary(thinking: String): String {
+    if (thinking.isBlank()) return ""
     val heading = Regex("(?m)^\\s*(?:#{1,6}\\s+([^\\n]+)|\\*\\*([^*\\n]+)\\*\\*)")
         .findAll(thinking).lastOrNull()
         ?.let { it.groupValues[1].ifBlank { it.groupValues[2] } }

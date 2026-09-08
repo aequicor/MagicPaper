@@ -46,3 +46,41 @@ test('truncation fails instead of claiming successful completion', async () => w
   const result = await fetch(url + '/responses', { method: 'POST', headers: { Authorization: 'Bearer local-key' }, body: JSON.stringify({ input: 'Hi' }) });
   const text = await result.text(); assert.match(text, /response.failed/); assert.doesNotMatch(text, /response.completed/);
 }, { content: [], usage, stopReason: 'length' }));
+
+for (const [api, expectedEvent, field] of [
+  ['openai-completions', 'response.reasoning_text.delta', 'content'],
+  ['anthropic-messages', 'response.reasoning_text.delta', 'content'],
+  ['google-generative-ai', 'response.reasoning_summary_text.delta', 'summary'],
+  ['openai-codex-responses', 'response.reasoning_summary_text.delta', 'summary'],
+]) {
+  test(`${api} preserves reasoning provenance and streams before completion`, async () => {
+    let release;
+    const finish = new Promise(resolve => { release = resolve; });
+    const part = { type: 'thinking', thinking: 'Checking the first condition. Then the alternative.' };
+    const bridge = createBridge({ key: 'local-key', model: { ...model, api } }, () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'thinking_delta', contentIndex: 0, delta: part.thinking, partial: { content: [part] } };
+        await finish;
+      },
+      result: async () => ({ content: [part], usage, stopReason: 'stop' }),
+    }));
+    bridge.server.listen(0, '127.0.0.1'); await once(bridge.server, 'listening');
+    try {
+      const result = await fetch(`http://127.0.0.1:${bridge.server.address().port}/responses`, {
+        method: 'POST', headers: { Authorization: 'Bearer local-key' }, body: JSON.stringify({ input: 'check' }), signal: AbortSignal.timeout(5000),
+      });
+      const reader = result.body.getReader(); const decoder = new TextDecoder(); let text = '';
+      while (!text.includes(expectedEvent)) {
+        const chunk = await reader.read(); assert.equal(chunk.done, false); text += decoder.decode(chunk.value);
+      }
+      assert.equal(text.includes('response.completed'), false);
+      release();
+      while (true) { const chunk = await reader.read(); if (chunk.done) break; text += decoder.decode(chunk.value); }
+      const events = text.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+      const item = events.find(event => event.type === 'response.output_item.done').item;
+      assert.equal(item[field][0].text, part.thinking);
+      if (field === 'content') assert.deepEqual(item.summary, []);
+      else assert.equal(item.content, undefined);
+    } finally { release(); bridge.close(); }
+  });
+}

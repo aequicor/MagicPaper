@@ -115,19 +115,23 @@ export function createBridge(config, streamSimple) {
       const entries = new Map();
       const catalog = toolCatalog(body.tools);
       const customTools = new Set(catalog.filter(t => t.type === 'custom').map(t => t.bridgeName));
+      // Pi's common event name does not distinguish provider summaries from native reasoning.
+      const summaryOnly = ['openai-responses', 'openai-codex-responses', 'azure-openai-responses', 'google-generative-ai'].includes(config.model.api);
       function ensure(index, part) {
         if (entries.has(index)) return entries.get(index);
         const tool = catalog.find(t => t.bridgeName === part.name);
         const item = part.type === 'text'
           ? { id: id('msg_'), type: 'message', role: 'assistant', status: 'in_progress', content: [{ type: 'output_text', text: '', annotations: [] }] }
-          : part.type === 'thinking' ? { id: id('rs_'), type: 'reasoning', summary: [{ type: 'summary_text', text: '' }] }
+          : part.type === 'thinking' ? { id: id('rs_'), type: 'reasoning',
+            summary: summaryOnly ? [{ type: 'summary_text', text: '' }] : [],
+            ...(!summaryOnly ? { content: [{ type: 'reasoning_text', text: '' }] } : {}) }
           : { id: id('fc_'), type: customTools.has(part.name) ? 'custom_tool_call' : 'function_call', call_id: part.id,
             name: tool?.name || part.name, ...(tool?.namespace ? { namespace: tool.namespace } : {}), status: 'in_progress', ...(customTools.has(part.name) ? { input: '' } : { arguments: '' }) };
         const entry = { item, index: response.output.length };
         response.output.push(item); entries.set(index, entry);
         emit('response.output_item.added', { output_index: entry.index, item });
         if (part.type === 'text') emit('response.content_part.added', { item_id: item.id, output_index: entry.index, content_index: 0, part: item.content[0] });
-        if (part.type === 'thinking') emit('response.reasoning_summary_part.added', { item_id: item.id, output_index: entry.index, summary_index: 0, part: item.summary[0] });
+        if (part.type === 'thinking' && summaryOnly) emit('response.reasoning_summary_part.added', { item_id: item.id, output_index: entry.index, summary_index: 0, part: item.summary[0] });
         return entry;
       }
       const upstream = streamSimple(config.model, context, options);
@@ -135,15 +139,20 @@ export function createBridge(config, streamSimple) {
         if (abort.signal.aborted) break;
         if (event.type === 'error') throw new Error(event.error.errorMessage || 'Ошибка провайдера');
         const part = event.partial?.content?.[event.contentIndex];
-        if (!part || (part.type === 'toolCall' && !part.name)) continue;
+        if (!part || part.redacted || (part.type === 'toolCall' && !part.name)) continue;
         const entry = ensure(event.contentIndex, part);
         const common = { item_id: entry.item.id, output_index: entry.index };
         if (event.type === 'text_delta') {
           entry.item.content[0].text += event.delta;
           emit('response.output_text.delta', { ...common, content_index: 0, delta: event.delta });
         } else if (event.type === 'thinking_delta') {
-          entry.item.summary[0].text += event.delta;
-          emit('response.reasoning_summary_text.delta', { ...common, summary_index: 0, delta: event.delta });
+          if (summaryOnly) {
+            entry.item.summary[0].text += event.delta;
+            emit('response.reasoning_summary_text.delta', { ...common, summary_index: 0, delta: event.delta });
+          } else {
+            entry.item.content[0].text += event.delta;
+            emit('response.reasoning_text.delta', { ...common, content_index: 0, delta: event.delta });
+          }
         } else if (event.type === 'toolcall_delta' && entry.item.type === 'function_call') {
           entry.item.arguments += event.delta;
           emit('response.function_call_arguments.delta', { ...common, delta: event.delta });
@@ -153,6 +162,7 @@ export function createBridge(config, streamSimple) {
       if (final.stopReason === 'error' || final.stopReason === 'aborted') throw new Error(final.errorMessage || 'Запрос остановлен');
       if (final.stopReason === 'length') throw new Error('Ответ провайдера обрезан лимитом токенов. Увеличьте лимит модели.');
       final.content.forEach((part, index) => {
+        if (part.redacted) return;
         const entry = ensure(index, part); const item = entry.item;
         const common = { item_id: item.id, output_index: entry.index };
         if (part.type === 'text') {
@@ -160,9 +170,14 @@ export function createBridge(config, streamSimple) {
           emit('response.output_text.done', { ...common, content_index: 0, text: part.text });
           emit('response.content_part.done', { ...common, content_index: 0, part: item.content[0] });
         } else if (part.type === 'thinking') {
-          item.summary[0].text = part.thinking;
-          emit('response.reasoning_summary_text.done', { ...common, summary_index: 0, text: part.thinking });
-          emit('response.reasoning_summary_part.done', { ...common, summary_index: 0, part: item.summary[0] });
+          if (summaryOnly) {
+            item.summary[0].text = part.thinking;
+            emit('response.reasoning_summary_text.done', { ...common, summary_index: 0, text: part.thinking });
+            emit('response.reasoning_summary_part.done', { ...common, summary_index: 0, part: item.summary[0] });
+          } else {
+            item.content[0].text = part.thinking;
+            emit('response.reasoning_text.done', { ...common, content_index: 0, text: part.thinking });
+          }
         } else {
           const tool = catalog.find(t => t.bridgeName === part.name);
           item.name = tool?.name || part.name; item.call_id = part.id;

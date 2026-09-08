@@ -18,6 +18,7 @@ const upstream = http.createServer(async (req, res) => {
   const hasResult = body.messages.some(m => m.role === 'tool');
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   const send = (delta, reason) => res.write('data: ' + JSON.stringify({ id: 'test', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: reason }] }) + '\n\n');
+  send({ role: 'assistant', reasoning_content: 'The command verifies the provider bridge before reporting success.' }, null);
   if (tool && !hasResult) {
     const keys = Object.keys(tool.function.parameters.properties || {});
     const args = keys.includes('cmd') ? { cmd: 'printf bridge-ok' } : keys.includes('command') ? { command: keys.includes('shell') ? ['sh', '-c', 'printf bridge-ok'] : 'printf bridge-ok' } : {};
@@ -62,5 +63,9 @@ try {
   }
   assert.ok(requests.length >= 3, 'tool result and resumed request reach the provider');
   assert.ok(requests.some(r => r.messages.some(m => m.role === 'tool')), 'tool output returns to model');
+  assert.ok(events.some(e => e.method === 'item/reasoning/textDelta' && e.params?.delta?.includes('verifies the provider bridge')),
+    'native reasoning reaches Codex as detailed deltas, not summaries');
+  assert.ok(events.some(e => e.method === 'item/completed' && e.params?.item?.type === 'reasoning' &&
+    e.params.item.content?.some(text => text.includes('verifies the provider bridge'))), 'final reasoning retains the full text');
   console.log('PASS: real Codex, tool execution, provider bridge, resumed session with new connection. Requests:', requests.length);
 } finally { clearTimeout(timeout); codex.kill('SIGKILL'); bridges.forEach(b => b.close()); upstream.closeAllConnections(); upstream.close(); await rm(root, { recursive: true, force: true }); }

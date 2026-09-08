@@ -763,8 +763,8 @@ class CodexAppServerOpenAiSubscription(
         fun summary(delta: String, messageId: String = itemId, index: Int = 0) {
             heartbeat()
             val text = summaries.getOrPut(messageId) { IndexedText() }.append(index, delta)
-            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.THINKING,
-                text, callId = messageId, id = "$identity:thinking:$messageId"))
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.SUMMARY,
+                text, callId = messageId, id = "$identity:summary:$messageId"))
         }
         val done = CompletableDeferred<String>()
         private var last = ""
@@ -801,17 +801,17 @@ class CodexAppServerOpenAiSubscription(
         private class Reasoning {
             val content = IndexedText()
             val summary = IndexedText()
-            val text: String get() = summary.text.ifBlank { content.text }
         }
         private val reasoning = mutableMapOf<String, Reasoning>()
         fun reasoningDelta(params: JsonObject, summary: Boolean) {
             val id = params.string("itemId").orEmpty()
             val delta = params.string("delta").orEmpty()
-            if (id.isBlank()) { emit(CodingEvent.ThinkingDelta(delta)); return }
+            if (delta.isEmpty()) return
+            if (id.isBlank()) { emit(CodingEvent.ThinkingDelta(delta, summary = summary)); return }
             val fragments = reasoning.getOrPut(id) { Reasoning() }
             val index = params[if (summary) "summaryIndex" else "contentIndex"]?.jsonPrimitive?.intOrNull ?: 0
-            (if (summary) fragments.summary else fragments.content).append(index, delta)
-            emit(CodingEvent.ThinkingDelta(fragments.text, id, replace = true))
+            val text = (if (summary) fragments.summary else fragments.content).append(index, delta)
+            emit(CodingEvent.ThinkingDelta(text, id, replace = true, summary = summary))
         }
 
         val items = ConcurrentHashMap<String, JsonObject>()
@@ -859,9 +859,10 @@ class CodexAppServerOpenAiSubscription(
                     fun text(field: String) = (item[field] as? JsonArray).orEmpty()
                         .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.joinToString("\n\n")
                     val streamed = reasoning.remove(id)
-                    val text = text("summary").ifBlank { streamed?.summary?.text.orEmpty() }
-                        .ifBlank { text("content") }.ifBlank { streamed?.content?.text.orEmpty() }
-                    if (text.isNotBlank()) emit(CodingEvent.FinalThinking(text, id))
+                    val summary = text("summary").ifBlank { streamed?.summary?.text.orEmpty() }
+                    val content = text("content").ifBlank { streamed?.content?.text.orEmpty() }
+                    if (summary.isNotBlank()) emit(CodingEvent.FinalThinking(summary, id, summary = true))
+                    if (content.isNotBlank()) emit(CodingEvent.FinalThinking(content, id))
                 }
                 "commandExecution" -> emit(
                     CodingEvent.ToolFinished(

@@ -8,6 +8,38 @@ import kotlin.test.assertTrue
 
 /** Лента прогона: порядок шагов хронологичен, живость и финал совпадают. */
 class CodingRunRecorderTest {
+
+    @Test
+    fun summaryStatusNeverReplacesDetailedThinkingAndLateFinalDoesNotReplaceToolStatus() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.MessageStarted)
+        recorder.apply(CodingEvent.ThinkingDelta("First explanation", "r"))
+        recorder.apply(CodingEvent.ThinkingDelta("Running ", "r", summary = true))
+        recorder.apply(CodingEvent.ThinkingDelta("verification", "r", summary = true))
+        assertEquals("Running verification", recorder.draft(true).reasoningSummary)
+        recorder.apply(CodingEvent.ThinkingDelta(". Second explanation", "r"))
+        recorder.apply(CodingEvent.FinalThinking("Running final verification", "r", summary = true))
+        assertEquals("First explanation. Second explanation", recorder.timeline().single { it.kind == CodingStepKind.THINKING }.title)
+        recorder.apply(CodingEvent.ToolStarted("test", "verify", "tool"))
+        recorder.apply(CodingEvent.FinalThinking("Late summary", "r", summary = true))
+        assertEquals("", recorder.draft(true).reasoningSummary)
+        val saved = recorder.message("m", 0)
+        assertTrue(saved.activity.none { it.contains("Late summary") })
+        assertEquals("First explanation. Second explanation", saved.steps.single { it.kind == CodingStepKind.THINKING }.title)
+    }
+
+    @Test
+    fun piSummaryFinalReconcilesBeforeAndAfterTextWithoutCreatingThinking() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.MessageStarted)
+        recorder.apply(CodingEvent.ThinkingDelta("Checking", summary = true))
+        recorder.apply(CodingEvent.TextDelta("Done"))
+        recorder.apply(CodingEvent.FinalThinking("Checked", summary = true))
+        recorder.apply(CodingEvent.FinalText("Done"))
+        assertTrue(recorder.timeline().none { it.kind == CodingStepKind.THINKING })
+        assertEquals("Checked", recorder.timeline().single { it.kind == CodingStepKind.SUMMARY }.title)
+        assertEquals("", recorder.draft(true).reasoningSummary)
+    }
     @Test fun silentFlushTicksNeverBecomeTimelineEntries() {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.TextDelta("Начало ответа"))

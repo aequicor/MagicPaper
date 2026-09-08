@@ -31,10 +31,10 @@ object PiEventParser {
      * Разбирает строку протокола в события. Больше одного — финал сообщения,
      * где текст есть, но ответ обрезан: сначала текст, потом предупреждение.
      */
-    fun parseEvents(line: String): List<CodingEvent> {
+    fun parseEvents(line: String, summaryOnly: Boolean = false): List<CodingEvent> {
         val obj = parseObject(line) ?: return emptyList()
-        if (obj.type() == "message_end") return parseMessageEnd(obj)
-        return listOfNotNull(parseEvent(obj))
+        if (obj.type() == "message_end") return parseMessageEnd(obj, summaryOnly)
+        return listOfNotNull(parseEvent(obj, summaryOnly))
     }
 
     private fun parseObject(line: String): JsonObject? {
@@ -43,7 +43,7 @@ object PiEventParser {
         return runCatching { json.parseToJsonElement(trimmed) }.getOrNull()?.jsonObject
     }
 
-    private fun parseEvent(obj: JsonObject): CodingEvent? {
+    private fun parseEvent(obj: JsonObject, summaryOnly: Boolean): CodingEvent? {
         return when (obj.type()) {
             "session" -> CodingEvent.SessionStarted(sessionId = obj.primitive("id").orEmpty())
             // Начало ответа ассистента: прогон перешёл из «ждём модель» в «работает».
@@ -68,7 +68,7 @@ object PiEventParser {
             } else {
                 CodingEvent.Failed(obj.primitive("error") ?: "Провайер отказал после автоповторов")
             }
-            "message_update" -> parseDelta(obj)
+            "message_update" -> parseDelta(obj, summaryOnly)
             // message_end даёт несколько событий — его разбирает parseEvents.
             "message_end" -> null
             "tool_execution_start" -> {
@@ -95,7 +95,7 @@ object PiEventParser {
         }
     }
 
-    private fun parseDelta(obj: JsonObject): CodingEvent? {
+    private fun parseDelta(obj: JsonObject, summaryOnly: Boolean): CodingEvent? {
         val event = obj["assistantMessageEvent"]?.jsonObject ?: return null
         return when (event.type()) {
             "text_delta" -> event.primitive("delta")?.let {
@@ -104,13 +104,17 @@ object PiEventParser {
             // Дельта рассуждения модели: тот же поток, что и текст ответа,
             // но в отдельном блоке thinking — показываем как «о чём думает агент».
             "thinking_delta" -> event.primitive("delta")?.let {
-                if (it.isEmpty()) null else CodingEvent.ThinkingDelta(it)
+                val partial = event["partial"] as? JsonObject
+                val index = (event["contentIndex"] as? JsonPrimitive)?.intOrNull
+                val block = index?.let { i -> (partial?.get("content") as? JsonArray)?.getOrNull(i) as? JsonObject }
+                if (it.isEmpty() || block?.get("redacted") == JsonPrimitive(true)) null
+                else CodingEvent.ThinkingDelta(it, summary = hasSummaryOnlyApi(partial, summaryOnly))
             }
             else -> null
         }
     }
 
-    private fun parseMessageEnd(obj: JsonObject): List<CodingEvent> {
+    private fun parseMessageEnd(obj: JsonObject, summaryOnly: Boolean): List<CodingEvent> {
         val message = obj["message"]?.jsonObject ?: return emptyList()
         if (message.primitive("role") != "assistant") return emptyList()
         val stopReason = message.primitive("stopReason").orEmpty()
@@ -127,13 +131,26 @@ object PiEventParser {
             .orEmpty()
         // Рассуждение модели живёт в блоках thinking: авторитетная полная версия
         // (дельты могли и не дойти — например, в нестримящемся режиме).
-        val thinking = blocks
-            ?.mapNotNull { block ->
-                val blockObj = runCatching { block.jsonObject }.getOrNull() ?: return@mapNotNull null
-                if (blockObj.type() == "thinking") blockObj.primitive("thinking") else null
+        val thinking = mutableListOf<String>()
+        val summaries = mutableListOf<String>()
+        for (block in blocks.orEmpty()) {
+            val part = block as? JsonObject ?: continue
+            if (part.type() != "thinking" || part["redacted"] == JsonPrimitive(true)) continue
+            // Responses carries provenance in its final signature. Never decode encrypted content.
+            val signature = part.primitive("thinkingSignature")?.let { parseObject(it) }
+            fun signatureText(field: String) = (signature?.get(field) as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonObject)?.primitive("text") }.joinToString("\n\n")
+            val summary = signatureText("summary")
+            val content = signatureText("content")
+            if (summary.isNotBlank() || content.isNotBlank()) {
+                if (summary.isNotBlank()) summaries += summary
+                if (content.isNotBlank()) thinking += content
+            } else {
+                part.primitive("thinking")?.takeIf { it.isNotBlank() }?.let {
+                    if (hasSummaryOnlyApi(message, summaryOnly)) summaries += it else thinking += it
+                }
             }
-            ?.joinToString("\n\n")
-            .orEmpty()
+        }
         // Намерение модели видно и по tool-вызовам: «пустой» ход с правкой файла —
         // не пустой ход, автопродолжать его не за чем.
         val hasToolCalls = blocks?.any { block ->
@@ -161,12 +178,20 @@ object PiEventParser {
             else -> listOf(CodingEvent.FinalText(text))
         }
         // Рассуждение идёт перед телом сообщения: оно хронологически раньше текста.
-        return if (thinking.isNotBlank()) {
-            listOf(CodingEvent.FinalThinking(thinking)) + events
-        } else {
-            events
+        return buildList {
+            if (summaries.isNotEmpty()) add(CodingEvent.FinalThinking(summaries.joinToString("\n\n"), summary = true))
+            if (thinking.isNotEmpty()) add(CodingEvent.FinalThinking(thinking.joinToString("\n\n")))
+            addAll(events)
         }
     }
+
+    /** Pi normalizes both native thinking and provider summaries into thinking_delta. */
+    private fun hasSummaryOnlyApi(message: JsonObject?, fallback: Boolean): Boolean =
+        when (message?.primitive("api")) {
+            "openai-codex-responses", "openai-responses", "azure-openai-responses", "google-generative-ai" -> true
+            null, "" -> fallback
+            else -> false
+        }
 
     /** Короткое описание аргументов инструмента для журнала: путь или команда. */
     private fun toolSummary(args: JsonObject?): String {

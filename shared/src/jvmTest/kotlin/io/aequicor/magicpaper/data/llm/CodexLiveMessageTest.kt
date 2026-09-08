@@ -70,18 +70,19 @@ class CodexLiveMessageTest {
         stream.start("a"); stream.text("a", "Ответ")
         stream.thought("r", "Вторая мысль", index = 1)
         stream.thought("r", ".", index = 0)
-        val summaries = stream.planning.filter { it.kind == CodingStepKind.THINKING }
+        val summaries = stream.planning.filter { it.kind == CodingStepKind.SUMMARY }
         assertEquals(setOf("r"), summaries.map { it.callId }.toSet())
         assertEquals("Первая мысль.\n\nВторая мысль", summaries.last().title)
         assertTrue(summaries.first().id.isNotBlank())
         assertEquals(1, summaries.map { it.id }.toSet().size)
     }
 
-    @Test fun fullReasoningAndSummaryAreAlternativeSnapshots() = Stream().use { stream ->
+    @Test fun fullReasoningAndSummaryRemainIndependentStreams() = Stream().use { stream ->
         stream.start("r", "reasoning")
         stream.thought("r", "Подробная мысль", full = true)
         stream.thought("r", "Краткая мысль")
         stream.thought("r", " продолжение", full = true)
-        assertEquals("Краткая мысль", stream.recorder.timeline().single { it.kind == CodingStepKind.THINKING }.title)
+        assertEquals("Подробная мысль продолжение", stream.recorder.timeline().single { it.kind == CodingStepKind.THINKING }.title)
+        assertEquals("Краткая мысль", stream.recorder.draft(true).reasoningSummary)
     }
 }

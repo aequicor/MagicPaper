@@ -362,7 +362,8 @@ class PiCodingRuntime(
                         streamBroken = e.message
                         break
                     } ?: break
-                    for (event in PiEventParser.parseEvents(line)) {
+                    for (event in PiEventParser.parseEvents(line,
+                        summaryOnly = profile.provider in setOf(ProviderType.OPENAI_SUBSCRIPTION, ProviderType.GOOGLE))) {
                         when (event) {
                             is CodingEvent.SessionStarted ->
                                 if (event.sessionId.isNotBlank()) capturedId = event.sessionId
