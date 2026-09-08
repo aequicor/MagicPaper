@@ -55,6 +55,30 @@ class MessageSchedulerTest {
             .advanceScheduledMessages(300).scheduledMessages.single().status)
     }
 
+    @Test fun timerDeliveryCannotRearmItselfEvenWithDifferentTextOrAfterRestart() {
+        val p = register(trigger = MessageTrigger(MessageTriggerKind.AT_TIME, at = 100), target = null).advanceScheduledMessages(200)
+        val restored = Json.decodeFromString<Plan>(Json.encodeToString(Plan.serializer(), p))
+        val source = restored.scheduledMessages.single()
+        for (at in listOf(200L, 50_000L)) {
+            assertFailsWith<IllegalArgumentException> {
+                register(restored, MessageTrigger(MessageTriggerKind.AT_TIME, at = at), source.deliveryId, target = null)
+            }
+        }
+        // User-authored schedules and delivery to a worker remain available.
+        assertEquals(2, register(restored, MessageTrigger(MessageTriggerKind.AT_TIME, at = 300), "new-user-input", null).scheduledMessages.size)
+        assertEquals(2, register(restored, MessageTrigger(MessageTriggerKind.AT_TIME, at = 300), source.deliveryId, "b").scheduledMessages.size)
+        assertEquals(2, register(restored, origin = source.deliveryId, target = null).scheduledMessages.size)
+    }
+
+    @Test fun scheduledInputCannotSubscribeItselfToAnAlreadyObservedStateEvent() {
+        val p = register(plan().copy(messageEvents = listOf(event(at = 90))), target = null).advanceScheduledMessages(100)
+        val source = p.scheduledMessages.single()
+        assertFailsWith<IllegalArgumentException> { register(p, origin = source.deliveryId, target = null) }
+        val awaitingNextResult = register(p, MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.RESULT_RETURNED, taskId = "a"),
+            source.deliveryId, target = null)
+        assertEquals(ScheduledMessageStatus.WAITING, awaitingNextResult.advanceScheduledMessages(100).scheduledMessages.last().status)
+    }
+
     @Test fun questionAndAttemptSelectorsAreExact() {
         val p = register(trigger = MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.QUESTION_ANSWERED, questionId = "question"))
         assertEquals(ScheduledMessageStatus.WAITING, p.copy(messageEvents = listOf(event(MessageEventKind.QUESTION_ANSWERED, task = null, question = "other")))

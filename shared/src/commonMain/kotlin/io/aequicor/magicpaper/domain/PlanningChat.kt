@@ -14,7 +14,9 @@ import kotlinx.serialization.Serializable
 @Serializable data class PlanDelivery(val id: String, val sourceSessionId: String, val targetStageId: String, val text: String, val state: DeliveryState = DeliveryState.QUEUED, val attemptId: String = "", val turnIndex: Int = 0, val replyTo: String? = null, val sourceRunId: String? = null)
 @Serializable enum class StageReplyKind { RESULT, QUESTION, BLOCKED, WAIT }
 @Serializable data class StageReply(val kind: StageReplyKind, val text: String, val targetStageId: String = "", val changedFiles: List<String> = emptyList(), val waitFor: MessageTrigger? = null, val resumeMessage: String = "")
-@Serializable data class CoordinatorReply(val reply: String, val actions: List<CoordinatorAction> = emptyList(), val askUser: Boolean = false, val replan: Boolean = false, val questions: List<PlanningQuestion> = emptyList(), val questionStageIds: List<String>? = null, val sessionActions: List<CoordinatorSessionAction> = emptyList(), val schedules: List<ScheduleCommand> = emptyList())
+@Serializable enum class CoordinatorResultAction { VERIFY, CONTINUE }
+@Serializable data class CoordinatorReply(val reply: String, val actions: List<CoordinatorAction> = emptyList(), val askUser: Boolean = false, val replan: Boolean = false, val questions: List<PlanningQuestion> = emptyList(), val questionStageIds: List<String>? = null, val sessionActions: List<CoordinatorSessionAction> = emptyList(), val schedules: List<ScheduleCommand> = emptyList(),
+    val resultAction: CoordinatorResultAction? = null, val continuationReason: String = "")
 @Serializable data class CoordinatorSessionAction(val kind: SessionCommandKind, val stageId: String, val name: String = "")
 @Serializable data class CoordinatorAction(val stageId: String, val message: String)
 
@@ -39,7 +41,58 @@ interface PlanningExecutionHooks {
 @Serializable data class HandoffInfo(val eventId: String, val taskId: String, val runId: String, val status: HandoffStatus, val nextStep: String = "")
 @Serializable data class CoordinationRecord(val id: String, val stageId: String, val reply: StageReply, val decision: CoordinatorReply? = null, val activity: List<CodingStep> = emptyList(),
     val runId: String = "", val attemptId: String = "", val sourceSessionId: String = "", val turnIndex: Int = 0, val createdAt: Long = 0,
-    val status: HandoffStatus = HandoffStatus.QUEUED, val nextStep: String = "")
+    val status: HandoffStatus = HandoffStatus.QUEUED, val nextStep: String = "", val verification: StageVerification? = null,
+    val actionRevision: Int = 0)
+@Serializable data class StageVerification(val passed: Boolean, val note: String)
+
+/** A RESULT hands control to verification. Sending it back requires an explicit unfinished task. */
+internal fun CoordinatorReply.resultProblem(record: CoordinationRecord?): String? {
+    if (record?.reply?.kind != StageReplyKind.RESULT || askUser || questions.isNotEmpty()) return null
+    val selfActions = actions.filter { it.stageId == record.stageId }
+    return when {
+        resultAction == CoordinatorResultAction.CONTINUE && (selfActions.isEmpty() || continuationReason.isBlank()) ->
+            "Для CONTINUE нужны continuationReason с невыполненным критерием и конкретное задание текущему этапу."
+        selfActions.isNotEmpty() && resultAction != CoordinatorResultAction.CONTINUE ->
+            "RESULT уже возвращает результат приложению. Для проверки укажи resultAction=VERIFY и убери actions текущему этапу; поручение «отметить завершённым» снова запускает исполнителя. Для реальной доработки нужны CONTINUE и continuationReason."
+        else -> null
+    }
+}
+
+internal fun Plan.coordinatorResultProblem(eventId: String, decision: CoordinatorReply): String? {
+    val record = coordination.firstOrNull { it.id == eventId } ?: return null
+    decision.resultProblem(record)?.let { return it }
+    if (record.reply.kind != StageReplyKind.RESULT || decision.resultAction != CoordinatorResultAction.CONTINUE ||
+        decision.askUser || decision.questions.isNotEmpty()) return null
+    val attemptId = record.attemptId.ifBlank { record.id.substringBeforeLast("-turn-") }
+    val unverified = coordination.filter { it.stageId == record.stageId && (it.runId.isBlank() || it.runId == runId) &&
+        it.attemptId.ifBlank { it.id.substringBeforeLast("-turn-") } == attemptId }
+        .takeLastWhile { it.verification == null }.count { it.reply.kind == StageReplyKind.RESULT }
+    return if (unverified >= 3) "Исполнитель уже вернул три RESULT без проверки. Передай сохранённые отчёты на проверку через VERIFY; если требуется решение пользователя, задай вопрос. Ещё один автоматический CONTINUE создаёт цикл." else null
+}
+
+internal fun CoordinationRecord.actionOrigin(): String = if (actionRevision == 0) id else "$id-revision-$actionRevision"
+
+/** Scope evidence by attempt and run, including checkpoints written before those fields existed. */
+internal fun Plan.stageRecords(stageId: String, attempt: StageAttempt): List<CoordinationRecord> = coordination.filter {
+    it.stageId == stageId && (it.runId.isBlank() || it.runId == runId) &&
+        it.attemptId.ifBlank { it.id.substringBeforeLast("-turn-") } == attempt.id &&
+        it.id.substringAfterLast("-turn-").toIntOrNull().let { turn -> (turn ?: it.turnIndex) <= attempt.turnIndex }
+}.sortedBy { it.id.substringAfterLast("-turn-").toIntOrNull() ?: it.turnIndex }
+
+internal fun List<CoordinationRecord>.evidenceText(): String = joinToString("\n\n") { record ->
+    buildString {
+        appendLine("Ход ${record.id} (${record.reply.kind}): ${record.reply.text}")
+        if (record.reply.changedFiles.isNotEmpty()) appendLine("Файлы: ${record.reply.changedFiles.joinToString()}")
+        record.verification?.let { appendLine("Проверка приложения: ${if (it.passed) "PASS" else "FAILED"}. ${it.note}") }
+    }.trimEnd()
+}
+
+internal fun Plan.stageVerificationReport(stageId: String, attempt: StageAttempt): String {
+    val records = stageRecords(stageId, attempt)
+    if (records.size <= 1) return attempt.report
+    return "История отчётов текущей попытки по порядку (прежние проверки не означают принятие нового результата):\n" +
+        records.evidenceText() + "\n\nПоследний отчёт исполнителя:\n${attempt.report}"
+}
 
 /** An unanswered question stays visible even when orchestration adds newer messages. */
 fun List<CodingMessage>.pendingPlanningQuestion(planIds: Set<String>? = null): CodingMessage? {
@@ -65,6 +118,15 @@ fun readableStageActivity(steps: List<CodingStep>): List<CodingStep> = steps.map
 
 /** Project old checkpoints without inventing a new pending transfer for an already resolved turn. */
 internal fun Plan.handoffForDisplay(record: CoordinationRecord): CoordinationRecord {
+    val normalized = normalizeHandoff(record)
+    record.verification?.let { verdict ->
+        return normalized.copy(status = HandoffStatus.RESOLVED,
+            nextStep = if (verdict.passed) "Проверка результата пройдена. ${verdict.note}" else "Проверка результата не пройдена. ${verdict.note}")
+    }
+    return normalized
+}
+
+private fun Plan.normalizeHandoff(record: CoordinationRecord): CoordinationRecord {
     if (record.runId.isNotBlank()) return record
     val attemptId = record.attemptId.ifBlank { record.id.substringBeforeLast("-turn-") }
     val turn = record.id.substringAfterLast("-turn-", "0").toIntOrNull() ?: record.turnIndex

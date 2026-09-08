@@ -120,7 +120,17 @@ internal fun Plan.applyScheduleCommands(
             ScheduledMessage(id, p.id, p.runId, author, trigger,
                 command.targetTaskId?.let { p.taskSessionId(it) } ?: p.parentSessionId,
                 command.targetTaskId, command.text.trim(), now, p.messageEvents.map { it.id }.toSet(),
-                command.waitTaskId ?: old?.waitTaskId, deliveryId = deliveryId)
+                command.waitTaskId ?: old?.waitTaskId, deliveryId = deliveryId).also { next ->
+                    val source = p.scheduledMessages.firstOrNull { it.deliveryId == origin && it.runId == p.runId }
+                    if (source != null && next.targetTaskId == null) {
+                        require(source.trigger.kind != MessageTriggerKind.AT_TIME || next.trigger.kind != MessageTriggerKind.AT_TIME) {
+                            "Доставка по времени не может назначать оркестратору следующий таймер: это цикл сообщений. Обработай поручение сейчас через INSTRUCT, REFINE или DISCUSS; для ожидания укажи новое событие."
+                        }
+                        require(p.messageEvents.none { it.at <= now && it.matches(next) }) {
+                            "Событие уже произошло. Обработай его сейчас, не создавай новое сообщение самому себе по тому же событию."
+                        }
+                    }
+                }
         }
         p = p.copy(scheduledMessages = p.scheduledMessages.filterNot { it.id == next.id } + next,
             scheduleReceipts = p.scheduleReceipts + (key to next.id))

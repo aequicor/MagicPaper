@@ -575,7 +575,8 @@ class PlanningExecutionService(
                 saveAttempt(id, stageId, attempt)
             }
             if (attempt.phase == AttemptPhase.VERIFYING) {
-                val verdict = verifier.verify(stage, store.planFor(id)!!.goal, attempt.report, judge)
+                val verificationPlan = store.planFor(id)!!
+                val verdict = verifier.verify(stage, verificationPlan.goal, verificationPlan.stageVerificationReport(stageId, attempt), judge)
                 if (verdict.issue != null) {
                     val issue = if (verdict.issue.kind == IssueKind.TRANSIENT && attempt.transportRetries < 3) {
                         attempt = attempt.copy(transportRetries = attempt.transportRetries + 1)
@@ -586,6 +587,12 @@ class PlanningExecutionService(
                     block(id, issue)
                     return
                 }
+                store.update(id) { p -> p.copy(
+                    milestones = p.milestones.map { if (it.id == stageId) it.copy(checkNote = safeText(verdict.note)) else it },
+                    coordination = p.coordination.map { record ->
+                        if (record.id == "${attempt.id}-turn-${attempt.turnIndex - 1}")
+                            record.copy(verification = StageVerification(verdict.passed, safeText(verdict.note))) else record
+                    }) }
                 if (!verdict.passed) {
                     if (attempt.repairRetries < 2) {
                         attempt = attempt.copy(phase = AttemptPhase.FAILED, repairRetries = attempt.repairRetries + 1,
@@ -597,7 +604,6 @@ class PlanningExecutionService(
                     attempt = attempt.copy(error = PlanningIssue(IssueKind.VERIFICATION, verdict.note, requiresUser = true))
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
-                store.update(id) { p -> p.copy(milestones = p.milestones.map { if (it.id == stageId) it.copy(checkNote = safeText(verdict.note)) else it }) }
                 journal(id, "capture-intent", stageId, attempt.id)
                 attempt = attempt.copy(resultCommit = workspaces.capture(attempt), phase = AttemptPhase.INTEGRATING)
                 saveAttempt(id, stageId, attempt)

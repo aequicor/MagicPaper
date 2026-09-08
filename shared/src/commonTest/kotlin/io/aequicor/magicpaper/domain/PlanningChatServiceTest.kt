@@ -25,6 +25,7 @@ class PlanningChatServiceTest {
         var timeout = false
         var failure: String? = null
         var userDecision = """{"intent":"REFINE"}"""
+        val userDecisions = mutableListOf<String>()
         var coordinator = """{"reply":"Результат принят","actions":[]}"""
         val coordinatorReplies = mutableListOf<String>()
         val coordinatorCallbacks = mutableListOf<(CodingStep) -> Unit>()
@@ -47,7 +48,8 @@ class PlanningChatServiceTest {
             if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
             failure?.let { error(it) }
-            if (messages.first().content.contains("Ты оркестратор диалога")) return userDecision
+            if (messages.first().content.contains("Ты оркестратор диалога"))
+                return if (userDecisions.isEmpty()) userDecision else userDecisions.removeAt(0)
             overrideReply?.let { return it }
             if (messages.first().content.contains("Ты координатор"))
                 return if (coordinatorReplies.isEmpty()) coordinator else coordinatorReplies.removeAt(0)
@@ -84,8 +86,13 @@ class PlanningChatServiceTest {
         val gateway = Gateway()
         val runtime = Runtime()
         var verdict = Verdict(true, "Checked")
+        val verificationReports = mutableListOf<Pair<String, String>>()
+        var verifyReport: ((Milestone, String) -> Verdict)? = null
         val execution = PlanningExecutionService(store, runtime, projects, profiles, settings, object : MilestoneVerifier {
-            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = verdict
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                verificationReports += milestone.id to report
+                return verifyReport?.invoke(milestone, report) ?: verdict
+            }
         }, scope = scope.backgroundScope)
         val service = PlanningChatService(store, execution, projects, profiles, settings, PlanComposer(gateway), gateway, scope.backgroundScope)
         suspend fun initialize() {
@@ -367,6 +374,156 @@ class PlanningChatServiceTest {
         assertEquals(1, completed.milestones.size)
         assertEquals(2, completed.milestones.single().attempts.single().repairRetries)
         assertTrue(completed.blockingIssues(f.projects.messages(project.id, parent.id)).isEmpty())
+    }
+
+    @Test fun acceptedResultGoesToVerifierWithoutCompletionHandshakeWithWorker() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.runtime.turnReplies += """{"kind":"RESULT","text":"Links checked: PASS; git diff --check: PASS; backend: NOT_RUN"}"""
+        f.gateway.coordinatorReplies += listOf(
+            """{"reply":"Результат принят","actions":[{"stageId":"stage","message":"Отметь этап завершённым без повторных проверок"}]}""",
+            """{"reply":"Передаю результат на проверку приложения","resultAction":"VERIFY"}""",
+        )
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val saved = f.store.planFor(plan.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(1, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        assertTrue(saved.deliveries.isEmpty())
+        assertContains(f.verificationReports.single { it.first == "stage" }.second, "Links checked: PASS")
+        assertEquals(true, saved.coordination.single().verification?.passed)
+        assertEquals(2, f.gateway.coordinatorCallbacks.size)
+    }
+
+    @Test fun realContinuationKeepsEarlierEvidenceAndLatestCorrectionsForVerification() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.runtime.turnReplies += listOf(
+            """{"kind":"RESULT","text":"Links: PASS; code references: PASS; backend: NOT_RUN","changedFiles":["docs/contract.md"]}""",
+            """{"kind":"RESULT","text":"Rollback test: PASS; prior link checks still apply. Backend remains NOT_RUN."}""",
+        )
+        f.gateway.coordinatorReplies += listOf(
+            """{"reply":"Нужна проверка отката","resultAction":"CONTINUE","continuationReason":"Нет проверки отката","actions":[{"stageId":"stage","message":"Проверь откат"}]}""",
+            """{"reply":"Передаю на проверку","resultAction":"VERIFY"}""",
+        )
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
+        assertEquals(2, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        val report = f.verificationReports.single { it.first == "stage" }.second
+        assertContains(report, "Links: PASS")
+        assertContains(report, "Rollback test: PASS")
+        assertContains(report, "backend: NOT_RUN")
+        assertContains(report, "docs/contract.md")
+        val coordinatorContext = f.gateway.requests.last { it.first().content.contains("Ты координатор") }.joinToString { it.content }
+        assertContains(coordinatorContext, "Links: PASS")
+        assertContains(coordinatorContext, "Rollback test: PASS")
+    }
+
+    @Test fun failedVerificationRemainsInCoordinatorContextAfterRepairClearsAttemptError() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        val reason = "Ссылка contract.md не подтверждена"
+        var checks = 0
+        f.verifyReport = { milestone, _ -> if (milestone.id == "stage" && checks++ == 0) Verdict(false, reason) else Verdict(true, "Checked") }
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val saved = f.store.planFor(plan.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(listOf(false, true), saved.coordination.map { it.verification?.passed })
+        val request = f.gateway.requests.last { it.first().content.contains("Ты координатор") }.joinToString { it.content }
+        assertContains(request, reason)
+        assertContains(request, "FAILED")
+        val messages = f.projects.messages(project.id, "parent")
+        assertTrue(messages.any { it.handoff?.nextStep?.contains(reason) == true })
+    }
+
+    @Test fun restartVerifiesOriginalEvidenceInsteadOfRerunningWorkerForShortAcknowledgement() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        val attempt = StageAttempt("a", "plan-p-stage-stage", StageAssignment("model", "m"), phase = AttemptPhase.VERIFYING,
+            path = "/shared", turnIndex = 2, report = "Этап отмечен успешно. Повторные проверки не выполнялись.")
+        f.store.save(plan.copy(confirmedRevision = 1, runId = "run", intent = ExecutionIntent.RUN,
+            milestones = plan.milestones.map { it.copy(status = MilestoneStatus.ACTIVE, attempts = listOf(attempt)) },
+            coordination = listOf(
+                CoordinationRecord("a-turn-0", "stage", StageReply(StageReplyKind.RESULT, "Links and code references: PASS; backend: NOT_RUN"), CoordinatorReply("Accepted")),
+                CoordinationRecord("a-turn-1", "stage", StageReply(StageReplyKind.RESULT, attempt.report), CoordinatorReply("Accepted")),
+            )))
+        f.execution.shutdown(); runCurrent()
+        val restored = Fixture(this, f.kv)
+        restored.service.bootstrap(); restored.execution.bootstrap()
+        restored.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        val report = restored.verificationReports.single { it.first == "stage" }.second
+        assertContains(report, "Links and code references: PASS")
+        assertContains(report, "Повторные проверки не выполнялись")
+        assertTrue(restored.runtime.calls.none { it.first.id == attempt.sessionId })
+        assertEquals(PlanStatus.DONE, restored.store.planFor(plan.id)!!.status)
+        restored.execution.shutdown()
+    }
+
+    @Test fun scheduledTakeoverCannotCreateAnEndlessChainOfImmediateSelfMessages() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.store.save(plan.copy(confirmedRevision = 1, runId = "run", intent = ExecutionIntent.RUN, phase = ExecutionPhase.EXECUTING))
+        val recursive = """{"intent":"SCHEDULE","reply":"Оркестратор принимает обязанности","schedules":[{"trigger":{"kind":"AT_TIME","afterMillis":0},"text":"Возьми обязанности этапа на себя"}]}"""
+        // A finite bad-model script also makes the regression terminate on the broken implementation.
+        f.gateway.userDecisions += List(4) { recursive }
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Ожидаю уточнения"}"""
+        f.service.send(parent, "Возьми обязанности этапа на себя"); advanceTimeBy(1000); runCurrent()
+        val saved = f.store.planFor(plan.id)!!
+        assertEquals(1, saved.scheduledMessages.size)
+        val state = f.projects.orchestration(parent.id)!!
+        val delivery = state.inputs.single { it.scheduledRuleId != null }
+        assertEquals(OrchestrationInputStatus.FAILED, delivery.status)
+        assertContains(delivery.error, "цикл сообщений")
+        assertTrue(saved.deliveries.isEmpty())
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(1, f.store.planFor(plan.id)!!.scheduledMessages.size)
+    }
+
+    @Test fun repeatedExplicitContinuationsMustReachVerificationWithinThreeResults() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.gateway.coordinatorReplies += List(3) {
+            """{"reply":"Ещё раз заверши этап","resultAction":"CONTINUE","continuationReason":"Нужен успешный статус","actions":[{"stageId":"stage","message":"Отметь результат принятым"}]}"""
+        }
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val saved = f.store.planFor(plan.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(3, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        assertEquals(4, f.gateway.coordinatorCallbacks.size)
+        assertEquals(2, saved.deliveries.size)
+        assertTrue(saved.deliveries.all { it.state == DeliveryState.ANSWERED })
+        assertEquals(1, f.verificationReports.count { it.first == "stage" })
+    }
+
+    @Test fun cachedCompletionInstructionIsCancelledBeforeWorkerCanRunAgain() = runTest {
+        for (realRepair in listOf(false, true)) {
+            val f = Fixture(this); f.initialize(); runCurrent()
+            val plan = f.readyPlan("p", f.session("parent"))
+            val attempt = StageAttempt("a", "plan-p-stage-stage", StageAssignment("model", "m"), phase = AttemptPhase.EXECUTING,
+                path = "/shared", report = "Saved checks: PASS", coordinationPending = true, awaitingPlanner = true)
+            val oldAction = CoordinatorAction("stage", "Отметь этап завершённым")
+            f.store.save(plan.copy(confirmedRevision = 1, runId = "run", intent = ExecutionIntent.RUN,
+                milestones = plan.milestones.map { it.copy(status = MilestoneStatus.ACTIVE, attempts = listOf(attempt)) },
+                coordination = listOf(CoordinationRecord("a-turn-0", "stage", StageReply(StageReplyKind.RESULT, attempt.report),
+                    CoordinatorReply("Accepted", actions = listOf(oldAction)))),
+                deliveries = listOf(PlanDelivery("a-turn-0-action-0", "parent", "stage", oldAction.message))))
+            f.execution.shutdown(); runCurrent()
+            val restored = Fixture(this, f.kv)
+            if (realRepair) restored.gateway.coordinatorReplies +=
+                """{"reply":"Нужна проверка отката","resultAction":"CONTINUE","continuationReason":"Нет проверки отката","actions":[{"stageId":"stage","message":"Проверь откат"}]}"""
+            restored.service.bootstrap(); restored.execution.bootstrap()
+            restored.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+            val saved = restored.store.planFor(plan.id)!!
+            assertEquals(PlanStatus.DONE, saved.status)
+            assertEquals(DeliveryState.CANCELLED, saved.deliveries.first { it.id == "a-turn-0-action-0" }.state)
+            assertEquals(if (realRepair) 1 else 0, restored.runtime.calls.count { it.first.id == attempt.sessionId })
+            if (realRepair) assertEquals(DeliveryState.ANSWERED, saved.deliveries.single { it.text == "Проверь откат" }.state)
+            restored.execution.shutdown(); restored.service.shutdown()
+        }
     }
 
     @Test fun instructionAfterFailedVerificationReturnsToOriginalWorkerInsteadOfBlockedFollowup() = runTest {

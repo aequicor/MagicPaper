@@ -51,7 +51,7 @@ internal fun HandoffDetails(info: HandoffInfo) {
     Text(when (info.status) {
         HandoffStatus.QUEUED -> "Ожидает обработки оркестратором"
         HandoffStatus.PROCESSING -> "Оркестратор обрабатывает"
-        HandoffStatus.RESOLVED -> "Решение принято"
+        HandoffStatus.RESOLVED -> "Обращение обработано"
         HandoffStatus.FAILED -> "Ошибка обработки оркестратором"
     }, style = MaterialTheme.typography.labelMedium,
         color = if (info.status == HandoffStatus.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)

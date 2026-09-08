@@ -40,12 +40,28 @@ class MessageScheduler(
         questionIds: Set<String>, waitingTask: String? = null): Plan = lock.withLock {
         val p = store.planFor(planId) ?: error("План не найден")
         if (commands.indices.all { "$origin-schedule-$it" in p.scheduleReceipts }) return@withLock p
-        commands.filter { it.operation != ScheduleOperation.CREATE }.forEach { command ->
+        val problem = deliveryProblem(p, commands, origin)
+        require(problem == null) { problem!! }
+        store.update(planId) { it.applyScheduleCommands(commands, origin, author, questionIds, now(), waitingTask) }
+    }
+
+    /** Check the same durable inbox boundary as apply, without saving rules or delivering messages. */
+    suspend fun validationProblem(planId: String, commands: List<ScheduleCommand>, origin: String, author: String,
+        questionIds: Set<String>, waitingTask: String? = null): String? = lock.withLock {
+        val p = store.planFor(planId) ?: error("План не найден")
+        deliveryProblem(p, commands, origin)?.let { return@withLock it }
+        runCatching { p.applyScheduleCommands(commands, origin, author, questionIds, now(), waitingTask) }
+            .exceptionOrNull()?.let { it.message ?: "Некорректное правило будущего сообщения" }
+    }
+
+    private suspend fun deliveryProblem(p: Plan, commands: List<ScheduleCommand>, origin: String): String? {
+        commands.forEachIndexed { index, command ->
+            if ("$origin-schedule-$index" in p.scheduleReceipts || command.operation == ScheduleOperation.CREATE) return@forEachIndexed
             p.scheduledMessages.firstOrNull { it.id == command.ruleId }?.let {
-                require(!hasReceipt(p, it)) { "Сообщение уже поставлено в очередь; изменять его правило нельзя" }
+                if (hasReceipt(p, it)) return "Сообщение уже поставлено в очередь; изменять его правило нельзя"
             }
         }
-        store.update(planId) { it.applyScheduleCommands(commands, origin, author, questionIds, now(), waitingTask) }
+        return null
     }
 
     suspend fun tick() = lock.withLock {
