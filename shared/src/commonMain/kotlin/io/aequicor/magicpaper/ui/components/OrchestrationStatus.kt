@@ -116,6 +116,9 @@ internal fun OrchestrationStatus(
                 state?.inputs?.filter { it.status in listOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING,
                     OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED) }?.forEach { input ->
                     Text("${input.status.inputLabel()}: ${input.text}", style = MaterialTheme.typography.bodySmall)
+                    if (input.status == OrchestrationInputStatus.QUEUED && input.scheduledRuleId == null) {
+                        TextButton({ service.cancelQueuedInput(session.session.id, input.id) }) { Text("Отменить отправку") }
+                    }
                     if (input.status in listOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED)) {
                         if (input.error.isNotBlank()) Text(input.error, color = MaterialTheme.colorScheme.error)
                         TextButton({ service.retryInput(session.session.id, input.id) }) { Text("Повторить обработку") }
@@ -255,6 +258,21 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
     }
 }
 
+@Composable
+internal fun OrchestrationMessageInputStatus(message: CodingMessage, sessionId: String, service: OrchestrationService?) {
+    if (message.inputStatus == null) return
+    val states = service?.states?.collectAsState()?.value
+    val input = states?.get(sessionId)?.inputs?.firstOrNull { it.id == message.id }
+    val status = input?.status ?: message.inputStatus
+    Column {
+        Text(status.inputLabel(), style = MaterialTheme.typography.labelSmall)
+        if (service != null && message.role == CodingRole.USER && status == OrchestrationInputStatus.QUEUED &&
+            message.scheduledRuleId == null && input?.scheduledRuleId == null) {
+            TextButton({ service.cancelQueuedInput(sessionId, message.id) }) { Text("Отменить отправку") }
+        }
+    }
+}
+
 internal fun DeliveryState.deliveryLabel(): String = when (this) {
     DeliveryState.QUEUED -> "В очереди"
     DeliveryState.DELIVERED -> "Передано исполнителю"
@@ -267,4 +285,5 @@ internal fun OrchestrationInputStatus.inputLabel(): String = when (this) {
     OrchestrationInputStatus.DONE -> "Сообщение обработано"
     OrchestrationInputStatus.FAILED -> "Нужна повторная обработка"
     OrchestrationInputStatus.CANCELLED -> "Обработка остановлена"
+    OrchestrationInputStatus.WITHDRAWN -> "Отправка отменена"
 }

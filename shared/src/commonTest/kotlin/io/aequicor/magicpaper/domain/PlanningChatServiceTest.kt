@@ -17,6 +17,7 @@ class PlanningChatServiceTest {
     private val project = CodingProject("project", "Project", "/shared", 1)
     private class Gateway : LlmGateway {
         var lastMessages = emptyList<LlmMessage>()
+        val requests = mutableListOf<List<LlmMessage>>()
         var gate: CompletableDeferred<Unit>? = null
         var overrideReply: String? = null
         var timeout = false
@@ -40,6 +41,7 @@ class PlanningChatServiceTest {
         }
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
             lastMessages = messages
+            requests += messages
             if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
             failure?.let { error(it) }
@@ -1037,6 +1039,116 @@ class PlanningChatServiceTest {
         gate.complete(Unit); runCurrent()
         assertEquals(listOf(OrchestrationInputStatus.DONE, OrchestrationInputStatus.DONE), f.projects.orchestration(parent.id)!!.inputs.map { it.status })
         assertEquals(listOf("Сделай редактор", "Объясни форматы"), f.projects.messages(project.id, parent.id).filter { it.role == CodingRole.USER }.map { it.text })
+    }
+
+    @Test fun withdrawingAMiddleMessagePreservesTheActiveTurnAndRemainingQueue() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val gate = CompletableDeferred<Unit>(); f.gateway.gate = gate
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        f.service.send(parent, "Отменённое поручение про экспорт"); runCurrent()
+        f.service.send(parent, "Объясни форматы"); runCurrent()
+        val inputs = f.projects.orchestration(parent.id)!!.inputs
+
+        f.service.cancelQueuedInput(parent.id, inputs.first().id) // Already processing.
+        f.service.cancelQueuedInput(parent.id, inputs[1].id)
+        f.service.cancelQueuedInput(parent.id, inputs[1].id) // Double click is harmless.
+        f.service.cancelQueuedInput(parent.id, "missing")
+        runCurrent()
+        assertEquals(listOf(OrchestrationInputStatus.PROCESSING, OrchestrationInputStatus.WITHDRAWN,
+            OrchestrationInputStatus.QUEUED), f.projects.orchestration(parent.id)!!.inputs.map { it.status })
+        assertTrue(f.service.drafts.value[parent.id]?.active == true)
+        val cancelled = f.projects.messages(project.id, parent.id).single { it.id == inputs[1].id }
+        assertEquals(OrchestrationInputStatus.WITHDRAWN, cancelled.inputStatus)
+        assertEquals(inputs[1].text, cancelled.text)
+
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Объяснение форматов"}"""
+        gate.complete(Unit); runCurrent()
+        f.service.cancelQueuedInput(parent.id, inputs.last().id); runCurrent() // Already done.
+        assertEquals(listOf(OrchestrationInputStatus.DONE, OrchestrationInputStatus.WITHDRAWN,
+            OrchestrationInputStatus.DONE), f.projects.orchestration(parent.id)!!.inputs.map { it.status })
+        val history = f.projects.messages(project.id, parent.id)
+        assertEquals(3, history.count { it.role == CodingRole.USER })
+        assertTrue(history.none { it.id == "${inputs[1].id}-reply" })
+        assertTrue(history.any { it.id == "${inputs.last().id}-reply" })
+        assertTrue(f.gateway.requests.flatten().none { inputs[1].text in it.content })
+        assertTrue(f.service.persistenceErrors.value.isEmpty())
+        assertNull(f.service.error.value)
+    }
+
+    @Test fun withdrawnInputSurvivesRestartAndIsExcludedFromTheFirstPlanContext() = runTest {
+        val f = Fixture(this)
+        val parent = f.session("parent")
+        val input = OrchestrationInput("withdrawn", "Поручение, которое нельзя отправить", 2,
+            status = OrchestrationInputStatus.WITHDRAWN, resumeAfter = true)
+        f.projects.saveOrchestration(OrchestrationState(parent.id, project.id, inputs = listOf(input)))
+        // Simulate stopping after the inbox was saved but before its chat projection was updated.
+        f.projects.saveMessages(project.id, parent.id, listOf(CodingMessage(input.id, CodingRole.USER,
+            input.text, createdAt = input.createdAt, inputStatus = OrchestrationInputStatus.QUEUED)))
+        f.initialize(); runCurrent()
+        assertEquals(OrchestrationInputStatus.WITHDRAWN,
+            f.projects.messages(project.id, parent.id).single().inputStatus)
+        f.service.retryInput(parent.id, input.id)
+        f.service.resume(parent)
+        runCurrent()
+        assertTrue(f.gateway.requests.isEmpty())
+        assertTrue(f.store.plans.value.isEmpty())
+
+        f.service.send(parent, "Создай новый редактор"); runCurrent()
+        assertEquals(OrchestrationInputStatus.WITHDRAWN, f.projects.orchestration(parent.id)!!.inputs.first().status)
+        assertTrue(f.store.plans.value.single().dialogue.none { input.text in it.text })
+        assertTrue(f.gateway.requests.flatten().none { input.text in it.content })
+    }
+
+    @Test fun withdrawingAQueuedAnswerDoesNotAnswerTheQuestionOrConfirmAPlan() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        val question = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        val gate = CompletableDeferred<Unit>(); f.gateway.gate = gate
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Объяснение форматов"}"""
+        f.service.send(parent, "Какие есть варианты?"); runCurrent()
+        f.service.send(parent, "PDF", listOf(PlanningAnswer("single", listOf("pdf"))), question.id,
+            resumeAfter = true); runCurrent()
+        val answer = f.projects.orchestration(parent.id)!!.inputs.last()
+        f.service.cancelQueuedInput(parent.id, answer.id); runCurrent()
+        gate.complete(Unit); runCurrent()
+
+        val saved = f.projects.orchestration(parent.id)!!
+        assertEquals(OrchestrationInputStatus.WITHDRAWN, saved.inputs.last().status)
+        assertEquals(question, saved.openQuestions().single())
+        assertTrue(saved.messageEvents.none { it.kind == MessageEventKind.QUESTION_ANSWERED })
+        assertNull(f.store.plans.value.single().confirmedRevision)
+        assertTrue(f.store.plans.value.single().deliveries.isEmpty())
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun failedWithdrawalSaveDoesNotPretendTheMessageWasCancelled() = runTest {
+        val backing = InMemoryKeyValueStore()
+        var fail = false
+        val disk = object : KeyValueStore by backing {
+            override fun write(key: String, value: String) {
+                if (fail && key.startsWith("coding-orchestration-")) error("Disk unavailable")
+                backing.write(key, value)
+            }
+        }
+        val f = Fixture(this, disk); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val gate = CompletableDeferred<Unit>(); f.gateway.gate = gate
+        f.service.send(parent, "Сделай редактор"); runCurrent()
+        f.service.send(parent, "Отменить этот запрос"); runCurrent()
+        val input = f.projects.orchestration(parent.id)!!.inputs.last()
+        fail = true
+        f.service.cancelQueuedInput(parent.id, input.id); runCurrent()
+        assertTrue(f.service.persistenceErrors.value.containsKey(parent.id))
+        assertEquals(OrchestrationInputStatus.QUEUED, f.projects.orchestration(parent.id)!!.inputs.last().status)
+        assertEquals(OrchestrationInputStatus.QUEUED,
+            f.projects.messages(project.id, parent.id).single { it.id == input.id }.inputStatus)
+        fail = false
+        f.service.cancelQueuedInput(parent.id, input.id); runCurrent()
+        assertEquals(OrchestrationInputStatus.WITHDRAWN, f.projects.orchestration(parent.id)!!.inputs.last().status)
+        gate.complete(Unit); runCurrent()
+        assertTrue(f.gateway.requests.flatten().none { input.text in it.content })
     }
 
     @Test fun completedPlanCanBeDiscussedAndExtendedOnlyAfterConfirmingTheProposal() = runTest {

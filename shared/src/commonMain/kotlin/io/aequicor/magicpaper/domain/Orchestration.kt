@@ -3,7 +3,7 @@ package io.aequicor.magicpaper.domain
 import kotlinx.serialization.Serializable
 
 @Serializable enum class CodingSessionRole { CHAT, ORCHESTRATOR, WORKER }
-@Serializable enum class OrchestrationInputStatus { QUEUED, PROCESSING, DONE, FAILED, CANCELLED }
+@Serializable enum class OrchestrationInputStatus { QUEUED, PROCESSING, DONE, FAILED, CANCELLED, WITHDRAWN }
 @Serializable enum class UserTurnIntent { DISCUSS, REFINE, ANSWER, INSTRUCT, CONTROL, SCHEDULE }
 @Serializable enum class UserRequestStatus { OPEN, ANSWERED, CANCELLED }
 @Serializable enum class SessionCommandKind { CREATE, ARCHIVE, RESTORE, RENAME }

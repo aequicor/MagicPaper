@@ -108,13 +108,13 @@ import io.aequicor.magicpaper.domain.effectiveRole
 import io.aequicor.magicpaper.domain.CodingSessionRole
 import io.aequicor.magicpaper.ui.components.OrchestrationStatus
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
+import io.aequicor.magicpaper.ui.components.OrchestrationMessageInputStatus
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
 import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
 import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.domain.eventWaitLabel
-import io.aequicor.magicpaper.ui.components.inputLabel
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.CodingDraft
@@ -965,7 +965,7 @@ internal fun CodingChat(
                                     PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
                                 }
                             }
-                            message.inputStatus?.let { Text(it.inputLabel(), style = MaterialTheme.typography.labelSmall) }
+                            OrchestrationMessageInputStatus(message, session.session.id, planningService)
                             if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                         }
                     }
