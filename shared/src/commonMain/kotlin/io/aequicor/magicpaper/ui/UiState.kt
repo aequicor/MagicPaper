@@ -22,6 +22,7 @@ import io.aequicor.magicpaper.domain.codingStatusOf
 import io.aequicor.magicpaper.domain.Plan
 import io.aequicor.magicpaper.domain.isStageWorking
 import io.aequicor.magicpaper.domain.pendingPlanningQuestion
+import io.aequicor.magicpaper.domain.proposalReadyForConfirmation
 import io.aequicor.magicpaper.domain.isPlannerAnswerWait
 import io.aequicor.magicpaper.domain.OrchestrationInputStatus
 import io.aequicor.magicpaper.plugins.MagicPlugin
@@ -46,7 +47,7 @@ data class CodingSessionUi(
             if (interruptedRequest || failedRequest) return messages.pendingPlanningQuestion() == null
             val current = plan
             if (current != null) {
-                if (current.confirmedRevision == null || current.phase == ExecutionPhase.COMPLETE || current.proposal != null ||
+                if (current.confirmedRevision == null || current.phase == ExecutionPhase.COMPLETE || current.proposalReadyForConfirmation ||
                     messages.pendingPlanningQuestion(setOf(current.id)) != null ||
                     current.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForUser != null }) return false
                 if (current.intent == ExecutionIntent.RUN && current.issue == null && current.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null }) return false
@@ -81,12 +82,13 @@ data class CodingSessionUi(
         }
         if (plan != null && session.id == plan.parentSessionId) return when {
             messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
-            plan.proposal != null -> CodingSessionStatus.WAITING
+            plan.proposalReadyForConfirmation -> CodingSessionStatus.CONFIRMATION
             running -> CodingSessionStatus.WORKING
             plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
             plan.issue?.requiresUser == true || plan.finalAttempt?.error?.requiresUser == true ||
                 plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.BLOCKED
             plan.issue != null -> CodingSessionStatus.QUEUED
+            plan.intent == ExecutionIntent.RUN && plan.phase in listOf(ExecutionPhase.RECOVERING, ExecutionPhase.VERIFYING, ExecutionPhase.APPLYING) -> CodingSessionStatus.WORKING
             plan.scheduledMessages.any { it.status == io.aequicor.magicpaper.domain.ScheduledMessageStatus.WAITING } ||
                 plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> CodingSessionStatus.SCHEDULED
             plan.confirmedRevision != null -> CodingSessionStatus.IDLE

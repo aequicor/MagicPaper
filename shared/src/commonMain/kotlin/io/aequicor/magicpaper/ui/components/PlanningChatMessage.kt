@@ -49,20 +49,12 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
                 }
             }
         }
-        plan.proposal?.let { proposal ->
+        if (plan.proposal != null) {
             HorizontalDivider()
-            Text("Предложение доработки", style = MaterialTheme.typography.titleMedium)
-            ChatMarkdown(proposal.explanation)
-            proposal.milestones.filter { proposed -> plan.milestones.none { it.id == proposed.id } }.forEach { stage ->
-                Text(stage.stageLabel(), fontWeight = FontWeight.SemiBold)
-                Text(stage.description, style = MaterialTheme.typography.bodyMedium)
-                Text("Критерии: ${stage.acceptance}", style = MaterialTheme.typography.bodySmall)
-            }
             val state by service.states.collectAsState()
-            Button({ service.confirm(plan.id, proposal.id) }, enabled = (plan.phase == ExecutionPhase.COMPLETE || plan.canExtendAfterFinalVerification) &&
-                state[session.id]?.openQuestions(plan.id).orEmpty().isEmpty()) { Text("Подтвердить доработку") }
-            if (plan.phase != ExecutionPhase.COMPLETE && !plan.canExtendAfterFinalVerification)
-                Text("Запуск после завершения текущей проверки и переноса результата", style = MaterialTheme.typography.bodySmall)
+            PlanningProposalDetails(plan, state[plan.parentSessionId]?.openQuestions(plan.id).orEmpty().isNotEmpty()) {
+                service.confirm(plan.id, it)
+            }
         }
         if (plan.confirmedRevision != null) {
             Text("${plan.doneCount}/${plan.selectedMilestones.size} этапов · ${when {
