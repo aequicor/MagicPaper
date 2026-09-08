@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -68,6 +69,10 @@ class ProjectsPanelStickyTest {
             scene.sendPointerEvent(PointerEventType.Release, point)
             render(20)
         }
+        fun hover(point: Offset) {
+            scene.sendPointerEvent(PointerEventType.Move, point, type = PointerType.Mouse)
+            render()
+        }
         fun wheel(point: Offset) {
             scene.sendPointerEvent(PointerEventType.Scroll, point, scrollDelta = Offset(0f, 3f))
             render(30)
@@ -90,14 +95,14 @@ class ProjectsPanelStickyTest {
         assertEquals(height, p.projectInfo().size, "Pinning must preserve row height")
         val title = p.text("magicpaper").boundsInRoot
         val session = p.text("Plan 0").boundsInRoot
-        assertTrue(title.top >= 49f)
-        assertTrue(session.top >= 49f + height, "Session must be below its project")
+        assertTrue(title.top >= 0f)
+        assertTrue(session.top >= height, "Session must be below its project")
         p.snapshot("two-level-pinned")
         p.click(session.center)
-        assertEquals("plan-0", p.ui.value.currentSessionId)
+        assertEquals("plan-0", p.ui.value.activeSessionIdOf(p.project.id))
         p.click(title.center)
         assertTrue(p.list.layoutInfo.visibleItemsInfo.none { it.key.toString().startsWith("session-") })
-        assertEquals("plan-0", p.ui.value.currentSessionId, "Collapsing preserves the active session")
+        assertEquals("plan-0", p.ui.value.activeSessionIdOf(p.project.id), "Collapsing preserves the active session")
     }
 
     @Test fun sessionChangesAtGroupBoundaryWithoutMovingProject() = Panel().use { p ->
@@ -108,7 +113,6 @@ class ProjectsPanelStickyTest {
         p.click(p.text("Plan 1").boundsInRoot.center)
         assertEquals("plan-1", p.ui.value.currentSessionId)
         p.snapshot("second-session")
-        p.click(p.text("Plan 1").boundsInRoot.center)
         // After both 17-row groups, a normal session must not inherit Plan 1's overlay.
         p.item(35, -p.projectInfo().size)
         p.click(p.text("Ordinary session").boundsInRoot.center)
@@ -145,6 +149,7 @@ class ProjectsPanelStickyTest {
         p.wheel(p.text("Plan 0").boundsInRoot.center)
         assertNotEquals(before, p.list.firstVisibleItemIndex to p.list.firstVisibleItemScrollOffset,
             "The overlay must forward scrolling to the list")
+        p.hover(p.text("Plan 0").boundsInRoot.center)
         p.click(p.disclosure().boundsInRoot.center)
         assertTrue(p.list.layoutInfo.visibleItemsInfo.none { it.key.toString().startsWith("session-child-0-") })
         assertEquals(0, p.projectInfo().offset)

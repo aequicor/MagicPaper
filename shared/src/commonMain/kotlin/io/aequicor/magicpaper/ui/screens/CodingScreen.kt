@@ -690,12 +690,11 @@ private fun SessionRow(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClickLabel = if (childCount > 0) {
+                onClickLabel = if (selected && childCount > 0) {
                     if (expanded) "Свернуть этапы" else "Раскрыть этапы"
                 } else null,
             ) {
-                onSelect()
-                if (childCount > 0) onToggleChildren()
+                if (selected && childCount > 0) onToggleChildren() else onSelect()
             }
             .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -725,7 +724,13 @@ private fun SessionRow(
             )
         }
         if (showActions && childCount > 0) {
-            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" },
+            Box(Modifier.size(24.dp)
+                .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onToggleChildren,
+                ),
                 contentAlignment = Alignment.Center) {
                 Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
             }

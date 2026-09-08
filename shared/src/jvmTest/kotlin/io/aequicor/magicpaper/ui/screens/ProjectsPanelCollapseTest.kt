@@ -2,9 +2,14 @@ package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingSession
@@ -15,6 +20,7 @@ import java.io.File
 import kotlin.test.*
 
 /** Real panel/pointer events; controlled UI state, no process, provider or project filesystem. */
+@OptIn(ExperimentalComposeUiApi::class)
 class ProjectsPanelCollapseTest {
     private class Panel : AutoCloseable {
         val a = CodingProject("a", "Project A", "/fixture/a", 0)
@@ -44,8 +50,21 @@ class ProjectsPanelCollapseTest {
         fun keys() = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
         fun click(key: String, x: Float = 100f) {
             val item = list.layoutInfo.visibleItemsInfo.single { it.key == key }
-            // Panel heading: titleMedium line 24 + vertical padding 24 + divider 1.
-            val point = Offset(x, 49f + item.offset + item.size / 2f)
+            // The list starts at the scene origin; there is no panel heading above it.
+            click(Offset(x, item.offset + item.size / 2f))
+        }
+        fun clickDisclosure(key: String, label: String) {
+            val item = list.layoutInfo.visibleItemsInfo.single { it.key == key }
+            scene.sendPointerEvent(PointerEventType.Move, Offset(100f, item.offset + item.size / 2f),
+                type = PointerType.Mouse)
+            render()
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            val arrow = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.single {
+                it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(label) == true
+            }
+            click(arrow.boundsInRoot.center)
+        }
+        private fun click(point: Offset) {
             scene.sendPointerEvent(PointerEventType.Press, point)
             scene.sendPointerEvent(PointerEventType.Release, point)
             render()
@@ -63,7 +82,7 @@ class ProjectsPanelCollapseTest {
         assertTrue("session-child" in p.keys())
         p.click("session-parent")
         assertFalse("session-child" in p.keys(), "Child disclosure must hide the stage")
-        assertEquals(1, p.sessionClicks, "Clicking the row selects the parent and toggles its stages")
+        assertEquals(0, p.sessionClicks, "An already-selected parent only toggles its stages")
         p.ui.value = p.ui.value.copy(sessions = p.ui.value.sessions.map { it.copy(running = it.session.id == "child") })
         p.render()
         assertFalse("session-child" in p.keys(), "Live status must not reopen the collapsed group")
@@ -74,11 +93,21 @@ class ProjectsPanelCollapseTest {
         assertFalse("session-parent" in p.keys())
         p.click("project-a")
         assertFalse("session-child" in p.keys(), "Returning to the project preserves collapsed children")
-        p.click("session-parent", 335f)
+        p.click("session-parent")
+        assertEquals("parent", p.ui.value.currentSessionId)
+        assertFalse("session-child" in p.keys(), "Selecting a parent must preserve its collapsed state")
+        p.click("session-parent")
         assertTrue("session-child" in p.keys())
-        assertEquals("parent", p.ui.value.currentSessionId, "The arrow uses the same action as the whole row")
         p.click("session-child")
         assertEquals("child", p.ui.value.currentSessionId)
+        p.clickDisclosure("session-parent", "Свернуть этапы")
+        assertFalse("session-child" in p.keys())
+        assertEquals("child", p.ui.value.currentSessionId, "The arrow must not select its parent")
+        p.clickDisclosure("session-parent", "Раскрыть этапы")
+        assertTrue("session-child" in p.keys())
+        assertEquals("child", p.ui.value.currentSessionId)
+        p.click("session-parent")
+        assertTrue("session-child" in p.keys(), "Selecting an expanded parent must keep its stages visible")
         p.snapshot("children-reopened")
     }
 
