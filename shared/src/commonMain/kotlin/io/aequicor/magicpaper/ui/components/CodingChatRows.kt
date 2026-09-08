@@ -2,14 +2,19 @@ package io.aequicor.magicpaper.ui.components
 
 import io.aequicor.magicpaper.domain.*
 
-internal data class CodingChatRow(val message: CodingMessage, val planCard: CodingMessage? = null)
+internal data class CodingChatRow(
+    val message: CodingMessage,
+    val planCard: CodingMessage? = null,
+    /** Derived from the source timeline before visibility filters change positions. */
+    val stepKeys: List<String> = message.steps.mapIndexed { index, step -> step.id.ifBlank { "legacy:$index" } },
+)
 
 /** A run can contain thousands of steps; each one must be its own lazy-list item. */
 internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int? = null) {
     val first: Boolean get() = stepIndex == null || stepIndex == 0
     val last: Boolean get() = stepIndex == null || stepIndex == row.message.steps.lastIndex
-    // Keep the original message key on its first fragment for request-pin navigation.
-    val key: String = if (first) row.message.id else "${row.message.id}:step:$stepIndex"
+    val key: String = if (stepIndex == null) row.message.id else
+        "${row.message.timelineId ?: row.message.id}:step:${row.stepKeys[stepIndex]}"
     val step: CodingStep? get() = stepIndex?.let { row.message.steps[it] }
 }
 
@@ -22,9 +27,12 @@ internal fun codingHistoryItems(rows: List<CodingChatRow>): List<CodingHistoryIt
 }
 
 /** Join the saved plan card to its preceding explanation, including existing conversations. */
-internal fun codingChatRows(messages: List<CodingMessage>, hideSystemSteps: Boolean = true): List<CodingChatRow> = buildList {
+internal fun codingChatRows(messages: List<CodingMessage>, hideSystemSteps: Boolean = true,
+    hideThinking: Boolean = false): List<CodingChatRow> = buildList {
     for (stored in messages) {
-        val message = stored.visibleChatContent(hideSystemSteps) ?: continue
+        val indices = stored.steps.indices.filter { stored.steps[it].isVisibleInChat(hideSystemSteps) &&
+            (!hideThinking || stored.steps[it].kind != CodingStepKind.THINKING) }
+        val message = stored.visibleChatContent(indices) ?: continue
         val previous = lastOrNull()
         if (message.role == CodingRole.AGENT && message.planning?.graph == true &&
             previous != null && previous.planCard == null &&
@@ -33,13 +41,13 @@ internal fun codingChatRows(messages: List<CodingMessage>, hideSystemSteps: Bool
         ) {
             removeAt(lastIndex)
             add(previous.copy(planCard = message))
-        } else add(CodingChatRow(message))
+        } else add(CodingChatRow(message, stepKeys = indices.map { stored.steps[it].id.ifBlank { "legacy:$it" } }))
     }
 }
 
 /** Filter before creating lazy-list items, so hidden records leave neither bubbles nor gaps. */
-private fun CodingMessage.visibleChatContent(hideSystemSteps: Boolean): CodingMessage? {
-    val visible = steps.filter { it.isVisibleInChat(hideSystemSteps) }
+private fun CodingMessage.visibleChatContent(indices: List<Int>): CodingMessage? {
+    val visible = indices.map { steps[it] }
     // Modern activity is a plain-text copy of the timeline, not a second source of content.
     val legacyActivity = if (steps.isEmpty()) activity.filter { it.isNotBlank() } else emptyList()
     val fallback = text.ifBlank { if (failed && visible.isEmpty()) "Не удалось завершить работу агента." else "" }
@@ -63,3 +71,18 @@ internal fun CodingDraft.visibleChatContent(hideSystemSteps: Boolean): CodingDra
             add(CodingStep(CodingStepKind.THINKING, thinking))
     },
 )
+
+/** Saved state wins when repository and draft updates arrive in separate frames. */
+internal fun codingDraftRow(draft: CodingDraft, messages: List<CodingMessage>, fallbackId: String,
+    hideSystemSteps: Boolean, busy: Boolean): CodingChatRow? {
+    val identity = draft.timelineId ?: fallbackId
+    if (draft.timelineId != null && messages.any { (it.timelineId ?: it.id) == identity }) return null
+    val steps = draft.steps.toMutableList().apply {
+        if (!draft.failedMessage.isNullOrBlank() && none { it.kind == CodingStepKind.ERROR })
+            add(CodingStep(CodingStepKind.ERROR, draft.failedMessage, ok = false, id = "draft-error"))
+        if (draft.thinking.isNotBlank() && none { it.kind == CodingStepKind.THINKING && it.title == draft.thinking })
+            add(CodingStep(CodingStepKind.THINKING, draft.thinking, id = "draft-thinking"))
+    }
+    return codingChatRows(listOf(CodingMessage(identity, CodingRole.AGENT, "", steps = steps,
+        createdAt = 0, timelineId = identity)), hideSystemSteps, hideThinking = busy).singleOrNull()
+}

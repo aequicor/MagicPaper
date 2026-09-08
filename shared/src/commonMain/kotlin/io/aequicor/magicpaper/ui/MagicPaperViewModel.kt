@@ -1365,7 +1365,10 @@ class MagicPaperViewModel(
             if (history.none { it.id == message.id }) repo.saveMessages(session.projectId, session.id, history + message)
         }
         val history = repo.messages(session.projectId, session.id)
-        updateCodingSession(session.id) { it.copy(messages = history) }
+        updateCodingSession(session.id) {
+            val savedDraft = message.timelineId != null && message.timelineId == it.draft.timelineId
+            it.copy(messages = history, draft = if (savedDraft) CodingDraft() else it.draft)
+        }
     }
 
     private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null) {

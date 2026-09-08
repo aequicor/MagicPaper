@@ -4,13 +4,24 @@ import io.aequicor.magicpaper.domain.*
 import kotlin.test.*
 
 class CodingHistoryItemsTest {
-    @Test fun eachRunStepIsLazyAndTheMessageKeyStillLocatesItsStart() {
+    @Test fun savedToolKeysSurviveSystemStepFiltering() {
+        val response = CodingMessage("response", CodingRole.AGENT, "", createdAt = 0,
+            steps = listOf(CodingStep(CodingStepKind.INFO, "System"),
+                CodingStep(CodingStepKind.TOOL, "read", callId = "a"),
+                CodingStep(CodingStepKind.INFO, "More activity"),
+                CodingStep(CodingStepKind.TOOL, "read", callId = "b")))
+        fun keys(hidden: Boolean) = codingHistoryItems(codingChatRows(listOf(response), hidden))
+            .filter { it.step?.kind == CodingStepKind.TOOL }.associate { it.step!!.callId to it.key }
+        assertEquals(keys(false), keys(true), "Visibility must not rename surviving tool rows")
+    }
+
+    @Test fun eachRunStepIsLazyAndItsMessageStillLocatesTheFirstFragment() {
         val steps = List(1000) { CodingStep(CodingStepKind.TOOL, "read $it", callId = "call-$it") }
         val request = CodingMessage("request", CodingRole.USER, "Проверь проект", createdAt = 0)
         val response = CodingMessage("response", CodingRole.AGENT, "", steps = steps, createdAt = 1)
         val items = codingHistoryItems(codingChatRows(listOf(request, response)))
         assertEquals(1001, items.size)
-        assertEquals(listOf("request", "response"), items.filter { it.first }.map { it.key })
+        assertEquals(listOf("request", "response"), items.filter { it.first }.map { it.row.message.id })
         assertEquals(steps, items.drop(1).map { it.step })
         assertEquals(items.size, items.map { it.key }.toSet().size)
         assertEquals(2, items.count { it.first })

@@ -131,6 +131,7 @@ import io.aequicor.magicpaper.domain.CodingApprovalDecision
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
+import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.PlanningChatService
@@ -145,7 +146,7 @@ import io.aequicor.magicpaper.ui.components.codingChatRows
 import io.aequicor.magicpaper.ui.components.codingHistoryItems
 import io.aequicor.magicpaper.ui.components.codingToolPreview
 import io.aequicor.magicpaper.ui.components.isVisibleInChat
-import io.aequicor.magicpaper.ui.components.visibleChatContent
+import io.aequicor.magicpaper.ui.components.codingDraftRow
 import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -906,13 +907,17 @@ internal fun CodingChat(
     val pinIndices = remember(history) {
         buildMap { history.forEachIndexed { index, item -> if (item.first) put(item.row.message.id, index + 1) } }
     }
-    val draft = session.draft
-    val visibleDraft = remember(draft, hideSystemSteps) { draft.visibleChatContent(hideSystemSteps) }
-    var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
-    val hasDraft = visibleDraft.steps.isNotEmpty()
-    val draftSteps = remember(visibleDraft.steps, busy) {
-        visibleDraft.steps.filter { !busy || it.kind != CodingStepKind.THINKING }
+    val pinKeys = remember(history) {
+        history.filter { it.first }.associate { it.row.message.id to it.key }
     }
+    val draft = session.draft
+    val draftRow = remember(draft, messages, hideSystemSteps, busy, session.session.id) {
+        codingDraftRow(draft, messages, "draft:${session.session.id}", hideSystemSteps, busy)
+    }
+    val draftHistory = remember(draftRow) { codingHistoryItems(listOfNotNull(draftRow)) }
+    val timeline = remember(history, draftHistory) { history + draftHistory }
+    var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
+    val hasDraft = draftHistory.isNotEmpty()
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
     val status: @Composable () -> Unit = {
         key(session.session.id) {
@@ -957,65 +962,35 @@ internal fun CodingChat(
                     end = 16.dp, bottom = footerHeight + 16.dp),
                 verticalArrangement = Arrangement.Top,
             ) {
-                item {
+                item(key = "project-header", contentType = "header") {
                     Text(
                         "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${project.path}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                items(history, key = { it.key }, contentType = { it.step?.kind ?: it.row.message.role }) { item ->
+                items(timeline, key = { it.key }, contentType = { it.step?.kind ?: it.row.message.role }) { item ->
                     val row = item.row
                     val message = row.message
-                    ChatScrollItem(scroll, item.key) {
-                        CodingMessageBubble(message, step = item.step, first = item.first, last = item.last,
-                            pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
-                            header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
-                            if (busy && statusMessageId != null &&
-                                (message.id == statusMessageId || row.planCard?.id == statusMessageId)
-                            ) status()
-                            if (planningService != null && message.planning != null) {
-                                Spacer(Modifier.height(6.dp))
-                                PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
-                            }
-                            row.planCard?.let { card ->
-                                Spacer(Modifier.height(12.dp))
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                Spacer(Modifier.height(12.dp))
-                                ChatMarkdown(card.text)
-                                if (planningService != null) {
-                                    Spacer(Modifier.height(6.dp))
-                                    PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
-                                }
-                            }
-                            OrchestrationMessageInputStatus(message, session.session.id, planningService)
-                            if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
+                    val isDraft = message.id == draftRow?.message?.id
+                    val rowStatus = status.takeIf { busy && statusMessageId != null &&
+                        (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
+                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
+                        pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
+                        live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
+                        continued = isDraft && busy)
                 }
-                if (hasDraft || (busy && statusMessageId == null)) {
-                    items(draftSteps.size, key = { "draft-step:$it:${draftSteps[it].kind}" },
-                        contentType = { draftSteps[it].kind }) { index ->
-                        val step = draftSteps[index]
-                        val itemKey = "draft-step:$index:${step.kind}"
-                        ChatScrollItem(scroll, itemKey) {
-                            key(session.session.id) {
-                                DraftFragment(first = index == 0, last = !busy && index == draftSteps.lastIndex) {
-                                    CodingStepRow(step, live = draft.active &&
-                                        (index == draftSteps.lastIndex || step.kind == CodingStepKind.TOOL || step.kind == CodingStepKind.EXEC))
-                                }
-                            }
-                        }
-                    }
-                    if (busy) item(key = "draft", contentType = "status") {
-                        ChatScrollItem(scroll, "draft") {
-                            key(session.session.id) { DraftFragment(first = draftSteps.isEmpty(), last = true) { status() } }
+                if (busy && (hasDraft || statusMessageId == null)) {
+                    val statusKey = "draft-status:${draft.timelineId ?: session.session.id}"
+                    item(key = statusKey, contentType = "status") {
+                        ChatScrollItem(scroll, statusKey) {
+                            key(session.session.id) { DraftFragment(first = !hasDraft, last = true) { status() } }
                         }
                     }
                 }
             }
             RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd),
-                browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
+                browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null }, itemKeys = pinKeys)
             ChatScrollToBottomButton(scroll,
                 Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = footerHeight + 12.dp))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -1046,6 +1021,48 @@ internal fun CodingChat(
     }
 }
 
+/** Saved and streaming steps share the same composition, including disclosure state. */
+@Composable
+private fun SavedCodingHistoryItem(
+    item: io.aequicor.magicpaper.ui.components.CodingHistoryItem,
+    scroll: io.aequicor.magicpaper.ui.components.ChatScrollState,
+    session: CodingSession,
+    messages: List<CodingMessage>,
+    planningService: PlanningChatService?,
+    onOpenSession: (String) -> Unit,
+    status: (@Composable () -> Unit)?,
+    pinNumber: Int?,
+    onShowPins: () -> Unit,
+    live: Boolean = false,
+    continued: Boolean = false,
+) {
+    val row = item.row
+    val message = row.message
+    ChatScrollItem(scroll, item.key) {
+        CodingMessageBubble(message, step = item.step, first = item.first, last = item.last && !continued, live = live,
+            pinNumber = pinNumber, onShowPins = onShowPins,
+            header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
+            status?.invoke()
+            if (planningService != null && message.planning != null) {
+                Spacer(Modifier.height(6.dp))
+                PlanningChatMessage(message, session, messages, planningService, onOpenSession)
+            }
+            row.planCard?.let { card ->
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(Modifier.height(12.dp))
+                ChatMarkdown(card.text)
+                if (planningService != null) {
+                    Spacer(Modifier.height(6.dp))
+                    PlanningChatMessage(card, session, messages, planningService, onOpenSession)
+                }
+            }
+            OrchestrationMessageInputStatus(message, session.id, planningService)
+            if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
 /** Бабл записи журнала: лента прогона в хронологическом порядке либо просто текст. */
 @Composable
 private fun CodingMessageBubble(
@@ -1053,6 +1070,7 @@ private fun CodingMessageBubble(
     step: CodingStep? = null,
     first: Boolean = true,
     last: Boolean = true,
+    live: Boolean = false,
     pinNumber: Int? = null,
     onShowPins: () -> Unit = {},
     header: (@Composable () -> Unit)? = null,
@@ -1089,7 +1107,7 @@ private fun CodingMessageBubble(
             if (isUser) {
                 ChatPlainText(message.text)
             } else if (step != null) {
-                CodingStepRow(step, live = false)
+                CodingStepRow(step, live = live)
             } else {
                 // Совместимость со старыми журналами без ленты.
                 SelectionContainer {
@@ -1164,7 +1182,7 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
 /** Свёрнутая строка рассуждения в ленте: весь текст — по клику (нижняя панель и так его показывает). */
 @Composable
 private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
-    var expanded by rememberSaveable("thinking-" + step.title.take(24).hashCode()) { mutableStateOf(false) }
+    var expanded by rememberSaveable(step.id) { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     Column(
         modifier = Modifier
@@ -1204,7 +1222,7 @@ private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
 /** Команда или действие: часы до завершения, полный текст и вывод по тапу. */
 @Composable
 private fun ToolStepRow(step: CodingStep, live: Boolean) {
-    var expanded by rememberSaveable(step.callId.ifBlank { step.title }) { mutableStateOf(false) }
+    var expanded by rememberSaveable(step.id, step.callId) { mutableStateOf(false) }
     val preview = remember(step.title) { codingToolPreview(step.title) }
     // Output can grow on every event. A closed card has the same small set of
     // display inputs, so Compose can skip its content while that output streams.

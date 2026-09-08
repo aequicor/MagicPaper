@@ -62,6 +62,7 @@ internal fun RequestPinsOverlay(
     modifier: Modifier = Modifier,
     browserMessageId: String? = null,
     onCloseBrowser: () -> Unit = {},
+    itemKeys: Map<String, Any> = emptyMap(),
 ) {
     val visible by remember(groups, itemIndices, listState) {
         derivedStateOf {
@@ -83,13 +84,14 @@ internal fun RequestPinsOverlay(
     } }
     val fade = with(LocalDensity.current) { 16.dp.toPx() }
     val currentIndices by rememberUpdatedState(itemIndices)
+    val currentKeys by rememberUpdatedState(itemKeys)
     val entries = remember(groups, itemIndices) { requestPinEntries(groups, itemIndices.keys) }
     SideEffect { if (visible == null) scroll.requestPinsBounds = null }
     val navigate: (RequestPin) -> Unit = { pin ->
         onCloseBrowser()
         navigation?.cancel()
         navigation = scope.launch {
-            scroll.navigateToMessage(pin.messageId,
+            scroll.navigateToMessage({ currentKeys[pin.messageId] ?: pin.messageId },
                 index = { currentIndices[pin.messageId] },
                 topInset = { scroll.requestPinsBounds?.let { (it.bottom + fade).roundToInt() } ?: 0 })
         }

@@ -12,7 +12,7 @@ class CodingRunRecorderTest {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.TextDelta("Начало ответа"))
         repeat(600) { recorder.apply(CodingEvent.Notice(if (it % 2 == 0) "" else "  \n")) }
-        assertEquals(listOf(CodingStep(CodingStepKind.ANSWER, "Начало ответа")), recorder.timeline())
+        assertEquals(listOf(CodingStep(CodingStepKind.ANSWER, "Начало ответа")), recorder.timeline().map { it.copy(id = "") })
         recorder.apply(CodingEvent.Notice("Ожидание инструмента"))
         assertTrue(recorder.timeline().any { it.kind == CodingStepKind.INFO && it.title == "Ожидание инструмента" })
         assertFalse(CodingStep(CodingStepKind.INFO, " ").isVisibleActivity)
@@ -64,10 +64,10 @@ class CodingRunRecorderTest {
             CodingStep(CodingStepKind.THINKING, "Полное рассуждение"),
             CodingStep(CodingStepKind.ANSWER, "Полный ответ"),
         )
-        assertEquals(expected, recorder.draft(true).steps)
+        assertEquals(expected, recorder.draft(true).steps.map { it.copy(id = "") })
         recorder.apply(CodingEvent.AgentEnd)
         val saved = recorder.message("response", 1)
-        assertEquals(expected, saved.steps)
+        assertEquals(expected, saved.steps.map { it.copy(id = "") })
         assertEquals("Полный ответ", saved.text)
     }
 

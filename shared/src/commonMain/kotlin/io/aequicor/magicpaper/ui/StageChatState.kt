@@ -21,7 +21,7 @@ internal fun CodingSessionUi.withStageChat(
     return copy(
         messages = if (streaming) projected.filterNot { it.id == currentId } else projected,
         draft = CodingDraft(steps = if (streaming) current?.steps.orEmpty() else emptyList(),
-            active = running, awaitingApproval = draft.awaitingApproval),
+            active = running, awaitingApproval = draft.awaitingApproval, timelineId = currentId),
         running = running,
     )
 }

@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
@@ -146,10 +147,17 @@ data class CodingDraft(
     val thinking: String = "",
     /** The engine is paused until the user answers an approval request. */
     val awaitingApproval: Boolean = false,
+    /** Presentation identity shared with the saved response, including interrupted runs. */
+    val timelineId: String? = null,
 )
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
 class CodingRunRecorder {
+    private val timelineId = Id.new()
+    private var sequence = 0
+    private fun nextStepId(): String = "$timelineId:${sequence++}"
+    private var textId = nextStepId()
+    private var thinkingId = nextStepId()
     /** Накопленный текст текущего (ещё не зафиксированного в ленту) фрагмента ответа. */
     private val text = StringBuilder()
     /** Накопленный текст рассуждения модели (thinking) до его фиксации в ленту. */
@@ -204,6 +212,7 @@ class CodingRunRecorder {
                     tool = event.tool,
                     callId = event.callId,
                     running = true,
+                    id = nextStepId(),
                 )
             }
             is CodingEvent.ToolProgress -> {
@@ -235,6 +244,7 @@ class CodingRunRecorder {
                         tool = event.tool,
                         result = event.resultPreview,
                         ok = false,
+                        id = nextStepId(),
                     )
                 }
             }
@@ -243,15 +253,15 @@ class CodingRunRecorder {
                 flushThinking()
                 flushText()
                 failed = event.message
-                steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false)
+                steps += CodingStep(kind = CodingStepKind.ERROR, title = event.message, ok = false, id = nextStepId())
             }
-            is CodingEvent.Notice -> if (event.message.isNotBlank()) steps += CodingStep(kind = CodingStepKind.INFO, title = event.message)
+            is CodingEvent.Notice -> if (event.message.isNotBlank()) steps += CodingStep(kind = CodingStepKind.INFO, title = event.message, id = nextStepId())
             is CodingEvent.OutputTruncated -> {
                 // Модель отвечала, но не успела: фиксируем фазу и поясняем в ленте.
                 awaiting = false
                 flushThinking()
                 flushText()
-                steps += CodingStep(kind = CodingStepKind.INFO, title = event.summary, ok = false)
+                steps += CodingStep(kind = CodingStepKind.INFO, title = event.summary, ok = false, id = nextStepId())
             }
             is CodingEvent.AgentEnd -> {
                 awaiting = false
@@ -277,6 +287,8 @@ class CodingRunRecorder {
             buffer.append(value)
         } else {
             steps[first] = steps[first].copy(title = value.trim())
+            // The live fragment was absorbed into the earlier one; never reuse its identity.
+            if (kind == CodingStepKind.ANSWER) textId = nextStepId() else thinkingId = nextStepId()
             for (index in steps.lastIndex downTo first + 1) {
                 if (steps[index].kind == kind) steps.removeAt(index)
             }
@@ -286,23 +298,25 @@ class CodingRunRecorder {
     /** Переносит накопленный текст в ленту как шаг ответа. */
     private fun flushText() {
         if (text.isBlank()) return
-        steps += CodingStep(kind = CodingStepKind.ANSWER, title = text.toString().trim())
+        steps += CodingStep(kind = CodingStepKind.ANSWER, title = text.toString().trim(), id = textId)
         text.setLength(0)
+        textId = nextStepId()
     }
 
     /** Переносит накопленное рассуждение в ленту как шаг THINKING. */
     private fun flushThinking() {
         if (thinking.isBlank()) return
-        steps += CodingStep(kind = CodingStepKind.THINKING, title = thinking.toString().trim())
+        steps += CodingStep(kind = CodingStepKind.THINKING, title = thinking.toString().trim(), id = thinkingId)
         thinking.setLength(0)
+        thinkingId = nextStepId()
     }
 
     /** Лента прогона: зафиксированные шаги плюс живые рассуждение и текст в конце. */
     fun timeline(): List<CodingStep> {
         val snapshot = steps.toList()
         val live = buildList {
-            if (thinking.isNotBlank()) add(CodingStep(CodingStepKind.THINKING, thinking.toString()))
-            if (text.isNotBlank()) add(CodingStep(CodingStepKind.ANSWER, text.toString()))
+            if (thinking.isNotBlank()) add(CodingStep(CodingStepKind.THINKING, thinking.toString(), id = thinkingId))
+            if (text.isNotBlank()) add(CodingStep(CodingStepKind.ANSWER, text.toString(), id = textId))
         }
         return snapshot + live
     }
@@ -314,6 +328,7 @@ class CodingRunRecorder {
             active = active,
             awaitingModel = active && awaiting,
             thinking = thinking.toString(),
+            timelineId = timelineId,
         )
 
     fun message(id: String, createdAt: Long): CodingMessage {
@@ -331,6 +346,7 @@ class CodingRunRecorder {
             steps = steps.toList(),
             failed = failed != null,
             createdAt = createdAt,
+            timelineId = timelineId,
         )
     }
 }
@@ -454,6 +470,8 @@ data class CodingStep(
     val result: String = "",
     val ok: Boolean = true,
     val running: Boolean = false,
+    /** Stable across streaming, final reconciliation and persistence; empty in old logs. */
+    val id: String = "",
 )
 
 /** Роли в журнале проекта. */
@@ -480,6 +498,7 @@ data class CodingMessage(
     val inputStatus: OrchestrationInputStatus? = null,
     val handoff: HandoffInfo? = null,
     val scheduledRuleId: String? = null,
+    val timelineId: String? = null,
 
 )
 

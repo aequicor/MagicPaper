@@ -72,12 +72,18 @@ internal class ChatScrollState(private val listState: LazyListState) {
         disclosureRevision++
     }
 
-    suspend fun navigateToMessage(key: Any, index: () -> Int?, topInset: () -> Int) {
+    fun onUserScroll(deltaY: Float) {
+        interruptNavigation()
+        // A real upward gesture also wins when new rows arrive in the same frame.
+        if (deltaY > 0f) disclosureRevision++
+    }
+
+    suspend fun navigateToMessage(key: () -> Any, index: () -> Int?, topInset: () -> Int) {
         if (index() == null) return
         val navigation = ++navigationId
         disclosureRevision++ // Explicit navigation must win over streaming/bottom following.
         navigating = true
-        highlightedKey = key
+        highlightedKey = key()
         try {
             listState.scrollToItem(index() ?: return, -topInset())
             // The preceding panel and streamed Markdown can finish measuring after the jump.
@@ -91,7 +97,9 @@ internal class ChatScrollState(private val listState: LazyListState) {
                 // After the first layout, only grow clearance to avoid short adjacent requests
                 // repeatedly showing/hiding their panel as its height changes the scroll position.
                 clearance = maxOf(clearance, topInset())
-                val target = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+                val currentKey = key()
+                highlightedKey = currentKey
+                val target = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == currentKey }
                 if (target == null) {
                     listState.scrollToItem(index() ?: return, -clearance)
                     stableFrames = 0
@@ -133,7 +141,7 @@ internal fun Modifier.chatScrollInput(scroll: ChatScrollState): Modifier = compo
     nestedScroll(remember(scroll) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && available != Offset.Zero) scroll.interruptNavigation()
+                if (source == NestedScrollSource.UserInput && available != Offset.Zero) scroll.onUserScroll(available.y)
                 return Offset.Zero
             }
         }
@@ -196,8 +204,8 @@ internal fun Modifier.chatDisclosure(
  *    пикселями; на дне слежение **всегда** включается, поэтому ошибочно
  *    «отпущенная» лента не остаётся без слежения навсегда (именно так и терялось
  *    автоскролл, когда черновик прогона заменялся сообщением журнала);
- *  - пользователь — якорь прокрутки уехал *назад*. Мы докручиваем только вперёд,
- *    так что назад якорь мог уйти только с руки пользователя;
+ *  - пользователь — явный жест вверх или смещение якоря назад при неизменной
+ *    структуре ленты. Удаление строк и изменение высоты самого якоря не являются жестами;
  *  - пока читатель держит ленту (`isScrollInProgress`: перетаскивание, инерция,
  *    колесо мыши) — с докруткой не спорим.
  *
@@ -256,12 +264,20 @@ private suspend fun LazyListState.pinToEnd(keepFollowing: () -> Boolean) {
 }
 
 /** Якорь прокрутки: первый видимый элемент и его смещение. При движении вперёд не убывает. */
-private data class Anchor(val index: Int, val offset: Int) {
-    fun before(other: Anchor): Boolean =
-        index < other.index || (index == other.index && offset < other.offset)
+private data class Anchor(val index: Int, val offset: Int, val count: Int, val key: Any?, val size: Int?) {
+    fun before(other: Anchor): Boolean {
+        // Key retention can change the index without scrolling. A resized first row can
+        // also clamp its offset. Neither should stop following a concurrently growing tail.
+        if (count != other.count || (key == other.key && (index != other.index || size != other.size))) return false
+        return index < other.index || (index == other.index && offset < other.offset)
+    }
 }
 
-private fun LazyListState.anchor(): Anchor = Anchor(firstVisibleItemIndex, firstVisibleItemScrollOffset)
+private fun LazyListState.anchor(): Anchor {
+    val info = layoutInfo
+    val item = info.visibleItemsInfo.firstOrNull { it.index == firstVisibleItemIndex }
+    return Anchor(firstVisibleItemIndex, firstVisibleItemScrollOffset, info.totalItemsCount, item?.key, item?.size)
+}
 
 /**
  * Будильник: любое изменение ленты — новый элемент, доросший ответ, прокрутка,
