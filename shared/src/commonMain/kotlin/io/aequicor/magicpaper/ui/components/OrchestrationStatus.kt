@@ -12,6 +12,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -63,36 +65,44 @@ internal fun OrchestrationStatus(
         else -> "Ожидание следующего этапа"
     }
     val elevation by animateDpAsState(if (scrolled) 6.dp else 0.dp)
-    Surface(modifier.fillMaxWidth().semantics { contentDescription = "Состояние оркестратора" },
+    Surface(modifier.fillMaxWidth().padding(horizontal = 8.dp).drawWithContent {
+        // Keep the scrolling shadow below the navigation bar.
+        val shadowInset = elevation.toPx() * 3
+        clipRect(left = -shadowInset, top = 0f, right = size.width + shadowInset, bottom = size.height + shadowInset) {
+            this@drawWithContent.drawContent()
+        }
+    }.semantics { contentDescription = "Состояние оркестратора" },
         shape = MaterialTheme.shapes.medium.copy(topStart = CornerSize(0.dp), topEnd = CornerSize(0.dp)),
         color = MaterialTheme.colorScheme.surfaceContainerLow, shadowElevation = elevation) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            Text("${session.session.subtitle()} · ${session.session.name}",
+                style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${session.session.subtitle()} · ${session.session.name}", Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(phase, style = MaterialTheme.typography.bodyMedium)
+                    persistenceErrors[session.session.id]?.let { message ->
+                        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        unsavedInputs[session.session.id].orEmpty().forEach { input ->
+                            Text("Не сохранено: ${input.text}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton({ service.recoverOrchestration(session.session.id) }) { Text("Проверить хранилище и восстановить очередь") }
+                    }
+                    if (stages.isNotEmpty()) Text("Текущий запуск: $done/${stages.size} этапов", style = MaterialTheme.typography.labelMedium)
+                    questions.take(2).forEach { q -> Text("Ответ для: ${q.scopeLabel}", color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall) }
+                    if (questions.size > 2) Text("Ещё ожидают ответа: ${questions.size - 2}", style = MaterialTheme.typography.bodySmall)
+                    if (active.isNotEmpty()) Text("Сейчас: ${active.take(2).joinToString { it.stageLabel() }}" +
+                        if (active.size > 2) " и ещё ${active.size - 2}" else "", style = MaterialTheme.typography.bodySmall)
+                    if (blockers.isNotEmpty()) Text(blockers.joinToString("\n") { it.title },
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 Text(if (expanded) "Свернуть ▴" else "Подробнее ▾",
                     modifier = Modifier.clip(MaterialTheme.shapes.small)
                         .clickable(role = Role.Button) { expanded = !expanded }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
-            Text(phase, style = MaterialTheme.typography.bodyMedium)
-            persistenceErrors[session.session.id]?.let { message ->
-                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                unsavedInputs[session.session.id].orEmpty().forEach { input ->
-                    Text("Не сохранено: ${input.text}", style = MaterialTheme.typography.bodySmall)
-                }
-                TextButton({ service.recoverOrchestration(session.session.id) }) { Text("Проверить хранилище и восстановить очередь") }
-            }
-            if (stages.isNotEmpty()) Text("Текущий запуск: $done/${stages.size} этапов", style = MaterialTheme.typography.labelMedium)
-            questions.take(2).forEach { q -> Text("Ответ для: ${q.scopeLabel}", color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodySmall) }
-            if (questions.size > 2) Text("Ещё ожидают ответа: ${questions.size - 2}", style = MaterialTheme.typography.bodySmall)
-            if (active.isNotEmpty()) Text("Сейчас: ${active.take(2).joinToString { it.stageLabel() }}" +
-                if (active.size > 2) " и ещё ${active.size - 2}" else "", style = MaterialTheme.typography.bodySmall)
-            if (blockers.isNotEmpty()) Text(blockers.joinToString("\n") { it.title },
-                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             if (expanded) Column(Modifier.heightIn(max = 270.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SessionActions(session.session, service, onOpenSession, allowArchive = false)
