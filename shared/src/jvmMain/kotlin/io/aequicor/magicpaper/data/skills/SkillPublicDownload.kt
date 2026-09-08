@@ -35,8 +35,7 @@ class SkillPublicDownload(approvedOrigins: Set<String>) {
                         serverNames = listOf(SNIHostName(uri.host))
                     }
                     socket.startHandshake()
-                    val path = uri.rawPath.ifEmpty { "/" }
-                    socket.outputStream.write("GET $path HTTP/1.1\r\nHost: ${uri.host}\r\nAccept: application/zip\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                    socket.outputStream.write(requestBytes(uri))
                     socket.outputStream.flush()
                     val input = socket.inputStream.buffered()
                     val status = line(input).split(' ').getOrNull(1)?.toIntOrNull() ?: error("Invalid HTTP status")
@@ -83,6 +82,13 @@ class SkillPublicDownload(approvedOrigins: Set<String>) {
             } finally { deadline.cancel(); raw.close() }
         }
         error("Too many redirects")
+    }
+
+    /** Complete application-level outbound payload, shared by the socket and byte-exact tests. */
+    internal fun requestBytes(uri: URI): ByteArray {
+        validateUrl(uri)
+        val path = uri.rawPath.ifEmpty { "/" }
+        return "GET $path HTTP/1.1\r\nHost: ${uri.host}\r\nUser-Agent: MagicPaper-Skill-Catalog/1\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII)
     }
 
     internal fun validateUrl(uri: URI) {

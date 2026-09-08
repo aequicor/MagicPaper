@@ -1,0 +1,57 @@
+{
+  "counts": {
+    "tests": 161,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "changedDuringBuild": [],
+  "xml": ".gradle/skills-catalog-handoff/xml",
+  "log": ".gradle/skills-catalog-handoff/regression.log",
+  "selected": {
+    "io.aequicor.magicpaper.data.skills.SkillCatalogUpdateEvidenceTest": {
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0,
+      "cases": [
+        "updateDisplaysOldAndNewChecksumsInstructionsAndResourceDiffBeforeImport[jvm]"
+      ]
+    },
+    "io.aequicor.magicpaper.data.skills.GithubSkillCatalogTest": {
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0,
+      "cases": [
+        "failureAndCancellationNeverInstallAndUnapprovedRequestsAreNotSent[jvm]",
+        "selectionDedupeQuarantineReviewAndOfflineRestart[jvm]",
+        "newChecksumKeepsProjectPinAndRequiresNewReviewAndOptIn[jvm]",
+        "cancellationDuringBlockingFetchDiscardsLateDownload[jvm]"
+      ]
+    },
+    "io.aequicor.magicpaper.data.skills.SkillCatalogLiveUiTest": {
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0,
+      "cases": [
+        "searchAndEnteredLinkThroughProjectCatalog[jvm]"
+      ]
+    },
+    "io.aequicor.magicpaper.data.skills.SkillDownloadPrivacyTest": {
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "cases": [
+        "completeOutboundPayloadHasOnlyPublicPathAndFixedHeadersEvenWithAmbientCredentials[jvm]",
+        "credentialQueryAndFragmentChannelsRejectedBeforeSerialization[jvm]"
+      ]
+    },
+    "io.aequicor.magicpaper.data.skills.ProjectSkillRollbackUiTest": {
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0,
+      "cases": [
+        "explicitRollbackCancellationStaleAndUnavailableReleaseThenRestartAndProjectRoundTrip[jvm]"
+      ]
+    }
+  }
+}

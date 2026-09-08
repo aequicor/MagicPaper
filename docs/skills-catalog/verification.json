@@ -1,0 +1,220 @@
+{
+  "latest": {
+    "commandLog": ".gradle/skills-catalog-final/regression.log",
+    "xml": ".gradle/skills-catalog-final/xml",
+    "counts": {"tests": 161, "failures": 0, "errors": 0, "skipped": 0},
+    "liveNetworkEnabled": true,
+    "desktopCompilation": "BUILD SUCCESSFUL; UP-TO-DATE",
+    "changedDuringBuild": [],
+    "snapshotBefore": ".gradle/skills-catalog-final/before.json",
+    "snapshotAfter": ".gradle/skills-catalog-final/after.json",
+    "targetedEvidence": {"SkillCatalogUpdateEvidenceTest": 1, "SkillDownloadPrivacyTest": 2},
+    "historicalFailures": ["93/15: docs/skills-project/final-matrix.md", "155/86: shared/build/skills-catalog/evidence-regression.log"],
+    "limits": "Headless production Compose UI; fixture update and exact outbound serialization tests; real GitHub imports separately. No live Pi/Codex or packet capture. Historical failure root cause not established."
+  },
+  "commandLog": "shared/build/skills-catalog/final.log",
+  "counts": {
+    "tests": 136,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "sourceFilesCompared": 326,
+  "changedDuringBuild": [],
+  "liveNetworkEnabled": true,
+  "xml": "shared/build/skills-catalog/final-xml",
+  "scope": "Desktop/JVM headless Compose semantics with live GitHub imports; not manual desktop window or live coding backend",
+  "suites": {
+    "io.aequicor.magicpaper.data.skills.GithubSkillCatalogTest": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.CodingDraftUpdatesTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillStoreTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.CodingToolPreviewRenderTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.GithubSkillCatalogLiveTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.CodingChatScrollTest": {
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.RequestPinsRenderTest": {
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.ChatScrollToBottomTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.llm.CodexCodingPermissionsTest": {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest": {
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillPackageContractTest": {
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.JsonSkillRepositoryTest": {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillCatalogLiveUiTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillRuntimeIntegrationTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillInstallerTest": {
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillSelectorTest": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.LocalSkillsPanelTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.LocalExperiencePanelTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillCatalogPanelTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.ProjectSkillsTest": {
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.CodingComposerRenderTest": {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.components.CodingToolPreviewTest": {
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.SkillsAcceptanceTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.LocalSkillExperienceTest": {
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.ActiveCodingChatRenderTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.skills.ProjectSkillRollbackUiTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.AgentUiThreadTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "recheck": {
+    "commandLog": "shared/build/skills-catalog/recheck.log",
+    "counts": {
+      "tests": 158,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "sourceFilesCompared": 326,
+    "changedDuringBuild": [],
+    "liveNetworkEnabled": true,
+    "xml": "shared/build/skills-catalog/recheck-xml",
+    "additionalTests": [
+      "*CodingRunRecorderTest",
+      "*CodingResumeTest"
+    ]
+  }
+}

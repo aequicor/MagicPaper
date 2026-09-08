@@ -9,6 +9,33 @@ import java.util.zip.ZipInputStream
 /** Local metadata must have been previewed by the caller; no inferred license or publisher. */
 data class SkillLocalMetadata(val id: String, val version: String, val name: String, val description: String, val compatibility: SkillCompatibility)
 
+/**
+ * The small, deliberately non-authoritative YAML header understood by the text
+ * editor.  It is parsed for preview only: package identity and compatibility
+ * always come from [SkillLocalMetadata], which the local host owns.
+ */
+data class SkillMarkdownFrontmatter(val fields: Map<String, String>)
+
+/**
+ * The sole hand-off from every untrusted source to the package repository.
+ *
+ * `entries` are exact package bytes (including the exact manifest bytes used for
+ * [pkg.checksum]), not a reconstructed archive. They are copied at both sides
+ * of the boundary: a preview/editor cannot mutate bytes after validation, and
+ * the repository never retains caller-owned arrays. Preparing this value is
+ * side-effect free; it cannot review, activate or bind a skill to a project.
+ */
+class ValidatedSkillImport internal constructor(
+    val pkg: ValidatedSkillPackage,
+    val source: SkillObservedSource,
+    private val packageEntries: List<SkillArchiveEntry>,
+) {
+    /** Defensive copy for preview consumers and the future text editor. */
+    val entries: List<SkillArchiveEntry> get() = packageEntries.map { it.copy(bytes = it.bytes.copyOf()) }
+
+    internal fun entriesForPersistence(): List<SkillArchiveEntry> = entries
+}
+
 class SkillPackageImporter internal constructor(
     private val repository: LocalSkillRepository,
     private val host: SkillPackageHost,
@@ -19,21 +46,45 @@ class SkillPackageImporter internal constructor(
         this(repository, host, approvedOrigins, SkillPublicDownload(approvedOrigins)::fetch)
     private val download = SkillPublicDownload(approvedOrigins)
 
-    suspend fun directory(path: Path, metadata: SkillLocalMetadata? = null): SkillReleaseSnapshot {
+    fun prepareDirectory(path: Path, metadata: SkillLocalMetadata? = null): ValidatedSkillImport {
         val entries = readDirectory(path)
-        return repository.install(withManifest(entries, metadata, SkillImportKind.LOCAL_DIRECTORY), SkillObservedSource(SkillImportKind.LOCAL_DIRECTORY, path.toAbsolutePath().normalize().toString()))
+        return prepare(withManifest(entries, metadata, SkillImportKind.LOCAL_DIRECTORY),
+            SkillObservedSource(SkillImportKind.LOCAL_DIRECTORY, path.toAbsolutePath().normalize().toString()))
     }
 
-    suspend fun zip(path: Path): SkillReleaseSnapshot = repository.install(
+    fun prepareZip(path: Path): ValidatedSkillImport = prepare(
         unzip(LocalSkillRepository.readLimited(path, SkillPublicDownload.MAX_DOWNLOAD)),
         SkillObservedSource(SkillImportKind.ZIP, path.toAbsolutePath().normalize().toString()),
     )
+
+    /**
+     * Reduces user-provided SKILL.md text to the same inert package contract as
+     * every other source. This prepares only; a later UI must explicitly call
+     * repository.install, then the existing review/bind flows.
+     */
+    fun prepareSkillMarkdown(markdown: String, metadata: SkillLocalMetadata): ValidatedSkillImport {
+        require(markdown.isNotBlank()) { "SKILL.md must not be blank" }
+        val bytes = markdown.encodeToByteArray()
+        require(bytes.size <= SkillPackageFormat.MAX_PAYLOAD_BYTES) { "SKILL.md is too large" }
+        // A JVM String can contain an unpaired surrogate.  Do not silently turn
+        // it into U+FFFD while claiming to retain the submitted bytes exactly.
+        require(bytes.decodeToString(throwOnInvalidSequence = true) == markdown) { "SKILL.md must be valid UTF-8" }
+        parseSkillMarkdownFrontmatter(markdown)
+        val fingerprint = SkillPackageValidator.sha256(bytes)
+        return prepare(withManifest(listOf(SkillArchiveEntry("SKILL.md", bytes)), metadata, SkillImportKind.READY_TEXT),
+            SkillObservedSource(SkillImportKind.READY_TEXT, "inline:sha256=$fingerprint"))
+    }
+
+    suspend fun directory(path: Path, metadata: SkillLocalMetadata? = null): SkillReleaseSnapshot =
+        repository.install(prepareDirectory(path, metadata))
+
+    suspend fun zip(path: Path): SkillReleaseSnapshot = repository.install(prepareZip(path))
 
     suspend fun https(url: String, manifestSha256: String, networkConfirmed: Boolean): SkillReleaseSnapshot {
         require(networkConfirmed && SkillPackageFormat.validHash(manifestSha256)) { "Confirm network import and exact manifest checksum" }
         download.validateUrl(java.net.URI(url))
         val response = fetch(url)
-        return repository.install(unzip(response.bytes), SkillObservedSource(SkillImportKind.HTTPS_PACKAGE, response.finalUrl), manifestSha256)
+        return repository.install(prepare(unzip(response.bytes), SkillObservedSource(SkillImportKind.HTTPS_PACKAGE, response.finalUrl), manifestSha256))
     }
 
     suspend fun https(release: SkillCatalogRelease, networkConfirmed: Boolean): SkillReleaseSnapshot {
@@ -42,8 +93,9 @@ class SkillPackageImporter internal constructor(
         download.validateUrl(java.net.URI(release.download))
         val response = fetch(release.download)
         val entries = unzip(response.bytes)
-        SkillPackageValidator(host).validateRelease(entries, release)
-        return repository.install(entries, SkillObservedSource(SkillImportKind.HTTPS_PACKAGE, response.finalUrl), release.manifestSha256)
+        return repository.install(prepare(entries, SkillObservedSource(SkillImportKind.HTTPS_PACKAGE, response.finalUrl), release.manifestSha256).also {
+            require(it.pkg.manifest == release.manifest) { "Catalog metadata does not match package" }
+        })
     }
 
     /** Public GitHub HTTPS repositories only. No git process, checkout, hooks, credentials or filters.
@@ -59,7 +111,8 @@ class SkillPackageImporter internal constructor(
         download.validateUrl(java.net.URI(archiveUrl))
         val response = fetch(archiveUrl)
         val entries = unzip(response.bytes, stripRoot = true)
-        return repository.install(withManifest(entries, metadata, SkillImportKind.GIT), SkillObservedSource(SkillImportKind.GIT, "https://github.com$repositoryPath", commit))
+        return repository.install(prepare(withManifest(entries, metadata, SkillImportKind.GIT),
+            SkillObservedSource(SkillImportKind.GIT, "https://github.com$repositoryPath", commit)))
     }
 
     private fun withManifest(entries: List<SkillArchiveEntry>, metadata: SkillLocalMetadata?, kind: SkillImportKind): List<SkillArchiveEntry> {
@@ -71,7 +124,59 @@ class SkillPackageImporter internal constructor(
         return entries + SkillArchiveEntry(SkillPackageFormat.MANIFEST, SkillPackageFormat.json.encodeToString(manifest).encodeToByteArray())
     }
 
+    /** Shared source reducer. The future ready-text importer must call this too. */
+    fun prepare(entries: List<SkillArchiveEntry>, source: SkillObservedSource, expectedManifestSha256: String? = null): ValidatedSkillImport =
+        validated(host, entries, source, expectedManifestSha256)
+
     companion object {
+        /**
+         * Parses the safe YAML subset used by SKILL.md headers (a flat mapping
+         * of scalar values).  A header is optional, but if it starts with `---`
+         * it must be closed and well formed so an editor can report the error
+         * before any repository write.
+         */
+        fun parseSkillMarkdownFrontmatter(markdown: String): SkillMarkdownFrontmatter? {
+            val lines = markdown.splitToSequence("\n").map { it.removeSuffix("\r") }.toList()
+            if (lines.firstOrNull() != "---") return null
+            val end = lines.drop(1).indexOfFirst { it == "---" }
+            require(end >= 0) { "SKILL.md YAML frontmatter is not closed" }
+            val fields = linkedMapOf<String, String>()
+            lines.subList(1, end + 1).forEachIndexed { index, line ->
+                require(line.isNotBlank() && !line.trimStart().startsWith("#")) { "Invalid YAML frontmatter line ${index + 2}" }
+                val separator = line.indexOf(':')
+                require(separator in 1 until line.lastIndex && !line.startsWith(' ') && !line.startsWith('\t')) {
+                    "Invalid YAML frontmatter line ${index + 2}"
+                }
+                val key = line.substring(0, separator)
+                require(Regex("[A-Za-z][A-Za-z0-9_-]*").matches(key) && key !in fields) {
+                    "Invalid or duplicate YAML frontmatter key '$key'"
+                }
+                val raw = line.substring(separator + 1).trim()
+                require(raw.isNotEmpty() && !raw.startsWith("[") && !raw.startsWith("{") && !raw.startsWith("|") && !raw.startsWith(">")) {
+                    "YAML frontmatter '$key' must be a scalar"
+                }
+                val value = when {
+                    raw.length >= 2 && raw.first() == '"' && raw.last() == '"' -> raw.substring(1, raw.length - 1)
+                    raw.length >= 2 && raw.first() == '\'' && raw.last() == '\'' -> raw.substring(1, raw.length - 1).replace("''", "'")
+                    raw.startsWith("\"") || raw.startsWith("'") -> error("Unclosed YAML frontmatter quote for '$key'")
+                    else -> raw
+                }
+                fields[key] = value
+            }
+            return SkillMarkdownFrontmatter(fields)
+        }
+
+        internal fun validated(
+            host: SkillPackageHost,
+            entries: List<SkillArchiveEntry>,
+            source: SkillObservedSource,
+            expectedManifestSha256: String? = null,
+        ): ValidatedSkillImport {
+            val owned = entries.map { it.copy(bytes = it.bytes.copyOf()) }
+            val pkg = SkillPackageValidator(host).validate(owned, expectedManifestSha256)
+            return ValidatedSkillImport(pkg, source, owned)
+        }
+
         /** Descriptor-relative traversal: fails closed on platforms without SecureDirectoryStream. */
         internal fun readDirectory(root: Path): List<SkillArchiveEntry> {
             require(Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS))

@@ -128,7 +128,8 @@ class PlanRunner(
         // Шаг 2: прогон агента в папке проекта, в сессии плана.
         val prompt = executionPrompt(plan, milestone)
         var collectedSessionId = ""
-        val report = collectReport(runtime.run(project, session, prompt, profile)) { sessionId ->
+        val requestSession = session.copy(pendingRun = CodingRunCheckpoint("${plan.id}-${milestone.id}", ""))
+        val report = collectReport(runtime.run(project, requestSession, prompt, profile)) { sessionId ->
             collectedSessionId = sessionId
         }
         // Пи-агент выдаёт свой идентификатор сессии — продолжаем контекст между шагами.

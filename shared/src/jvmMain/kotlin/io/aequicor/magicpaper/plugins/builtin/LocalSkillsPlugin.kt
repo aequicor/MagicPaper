@@ -60,6 +60,14 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
         var backupPath by remember { mutableStateOf("") }
         var backupHash by remember { mutableStateOf("") }
         var recoveryConfirmed by remember { mutableStateOf(false) }
+        var readyText by remember { mutableStateOf("") }
+        var textSkillId by remember { mutableStateOf("") }
+        var textVersion by remember { mutableStateOf("1.0.0") }
+        var textName by remember { mutableStateOf("") }
+        var textDescription by remember { mutableStateOf("") }
+        var preparedText by remember { mutableStateOf<ValidatedSkillImport?>(null) }
+        var preparedTextDetails by remember { mutableStateOf("") }
+        var textInstallConfirmed by remember { mutableStateOf(false) }
 
         fun action(block: suspend () -> String) {
             if (busy) return
@@ -189,9 +197,9 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
             }) { Text("Сравнить с предыдущим набором…") }
             HorizontalDivider()
             Text("Импорт", style = MaterialTheme.typography.titleMedium)
-            Row { SkillImportKind.entries.forEach { option ->
+            Row { listOf(SkillImportKind.LOCAL_DIRECTORY, SkillImportKind.ZIP, SkillImportKind.GIT, SkillImportKind.HTTPS_PACKAGE).forEach { option ->
                 TextButton(enabled = !busy, onClick = { kind = option; network = false }) {
-                    Text(when (option) { SkillImportKind.LOCAL_DIRECTORY -> "Каталог"; SkillImportKind.ZIP -> "ZIP"; SkillImportKind.GIT -> "GitHub"; SkillImportKind.HTTPS_PACKAGE -> "HTTPS" } + if (kind == option) " ✓" else "")
+                Text(when (option) { SkillImportKind.LOCAL_DIRECTORY -> "Каталог"; SkillImportKind.ZIP -> "ZIP"; SkillImportKind.GIT -> "GitHub"; SkillImportKind.HTTPS_PACKAGE -> "HTTPS"; SkillImportKind.READY_TEXT -> error("Текстовый импорт открывается отдельным редактором") } + if (kind == option) " ✓" else "")
                 }
             } }
             OutlinedTextField(location, { location = it; network = false }, label = { Text(if (kind in setOf(SkillImportKind.GIT, SkillImportKind.HTTPS_PACKAGE)) "URL открытого источника" else "Полный путь к каталогу или ZIP") }, modifier = Modifier.fillMaxWidth())
@@ -217,10 +225,61 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
                         SkillImportKind.ZIP -> importer.zip(Path.of(location))
                         SkillImportKind.GIT -> importer.git(location, revision, network, metadata)
                         SkillImportKind.HTTPS_PACKAGE -> importer.https(location, revision, network)
+                        SkillImportKind.READY_TEXT -> error("Текстовый импорт ещё не подключён к этому экрану")
                     }
                     network = false; "Пакет импортирован в карантин"
                 }
             }) { Text("Импортировать в карантин") }
+            HorizontalDivider()
+            Text("Готовый SKILL.md", style = MaterialTheme.typography.titleMedium)
+            Text("Текст и YAML frontmatter проверяются до записи. Метаданные ниже принадлежат этому устройству и не берутся из текста.")
+            OutlinedTextField(readyText, {
+                readyText = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
+            }, label = { Text("Полный текст SKILL.md") }, minLines = 8, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(textSkillId, {
+                textSkillId = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
+            }, label = { Text("Локальный ID навыка") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(textVersion, {
+                textVersion = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
+            }, label = { Text("Фиксированная версия") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(textName, {
+                textName = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
+            }, label = { Text("Локальное название") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(textDescription, {
+                textDescription = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
+            }, label = { Text("Когда применять") }, modifier = Modifier.fillMaxWidth())
+            TextButton(enabled = !busy && readyText.isNotBlank(), onClick = {
+                action {
+                    val metadata = SkillLocalMetadata(textSkillId, textVersion, textName, textDescription,
+                        SkillCompatibility("1.0.0", "2.0.0", setOf("desktop")))
+                    val prepared = SkillPackageImporter(repo(), host).prepareSkillMarkdown(readyText, metadata)
+                    preparedText = prepared
+                    val frontmatter = SkillPackageImporter.parseSkillMarkdownFrontmatter(readyText)?.fields.orEmpty()
+                    preparedTextDetails = buildString {
+                        appendLine("Пакет: ${prepared.pkg.key}")
+                        appendLine("Checksum манифеста: ${prepared.pkg.checksum}")
+                        appendLine("Источник: ${prepared.source.kind} · ${prepared.source.location}")
+                        appendLine("Файлы: ${prepared.entries.joinToString { "${it.path} (${it.bytes.size} B)" }}")
+                        append("YAML frontmatter: ${if (frontmatter.isEmpty()) "отсутствует" else frontmatter.entries.joinToString { "${it.key}: ${it.value}" }}")
+                    }
+                    "Предпросмотр готов. Импорт ещё не выполнен."
+                }
+            }) { Text("Проверить и показать предпросмотр") }
+            preparedText?.let { prepared ->
+                Text("Предпросмотр готового текста", style = MaterialTheme.typography.titleSmall)
+                Text(preparedTextDetails)
+                Check("Подтверждаю импорт именно этого checksum в карантин", textInstallConfirmed) { textInstallConfirmed = it }
+                TextButton(enabled = !busy && textInstallConfirmed, onClick = {
+                    action {
+                        repo().install(prepared)
+                        preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
+                        "Готовый текст сохранён в карантин. Для применения нужны отдельные review и подключение."
+                    }
+                }) { Text("Сохранить в карантин") }
+                TextButton(enabled = !busy, onClick = {
+                    preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false; notice = "Предпросмотр отменён; пакет не сохранён"
+                }) { Text("Отменить предпросмотр") }
+            }
             HorizontalDivider()
             Text("Резервная копия", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(backupPath, { backupPath = it; recoveryConfirmed = false }, label = { Text("Полный путь к файлу резервной копии") }, modifier = Modifier.fillMaxWidth())
