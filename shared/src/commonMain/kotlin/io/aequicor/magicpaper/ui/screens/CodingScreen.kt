@@ -125,9 +125,11 @@ import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
 import io.aequicor.magicpaper.ui.components.PlanningBlockerDock
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
 import io.aequicor.magicpaper.ui.components.codingChatRows
+import io.aequicor.magicpaper.ui.components.isVisibleInChat
+import io.aequicor.magicpaper.ui.components.visibleChatContent
+import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import io.aequicor.magicpaper.domain.isVisibleActivity
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
@@ -855,11 +857,13 @@ internal fun CodingChat(
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
-    val rows = remember(messages) { codingChatRows(messages) }
+    val hideSystemSteps = LocalHideSystemSteps.current
+    val rows = remember(messages, hideSystemSteps) { codingChatRows(messages, hideSystemSteps) }
     val draft = session.draft
+    val visibleDraft = remember(draft, hideSystemSteps) { draft.visibleChatContent(hideSystemSteps) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
-    val hasDraft = draft.steps.isNotEmpty() || draft.thinking.isNotBlank() || draft.failedMessage != null
-    val statusMessageId = messages.lastOrNull()?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
+    val hasDraft = visibleDraft.steps.isNotEmpty()
+    val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
     val status: @Composable () -> Unit = {
         AgentMessageStatus(draft, thinkingExpanded, { thinkingExpanded = !thinkingExpanded })
     }
@@ -929,7 +933,7 @@ internal fun CodingChat(
                 }
                 if (hasDraft || (busy && statusMessageId == null)) {
                     item(key = "draft") {
-                        ChatScrollItem(scroll, "draft") { DraftBubble(draft, if (busy) status else null) }
+                        ChatScrollItem(scroll, "draft") { DraftBubble(visibleDraft, if (busy) status else null) }
                     }
                 }
             }
@@ -993,8 +997,6 @@ private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () 
             header?.invoke()
             if (isUser) {
                 SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
-                // Прикреплённые к запросу файлы (лежат в изолированной папке рантайма).
-                CodingAttachments(message.attachments)
             } else if (message.steps.isNotEmpty()) {
                 // Лента: текст и действия идут как приходили — в хронологическом порядке.
                 message.steps.forEach { step -> CodingStepRow(step, live = false) }
@@ -1027,6 +1029,7 @@ private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () 
                     }
                 }
             }
+            CodingAttachments(message.attachments)
             footer?.invoke()
         }
     }
@@ -1038,8 +1041,7 @@ private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () 
  */
 @Composable
 internal fun CodingStepRow(step: CodingStep, live: Boolean) {
-    if (!step.isVisibleActivity) return
-    if (step.kind == CodingStepKind.INFO && io.aequicor.magicpaper.ui.components.LocalHideSystemSteps.current) return
+    if (!step.isVisibleInChat(LocalHideSystemSteps.current)) return
     when (step.kind) {
         CodingStepKind.ANSWER -> {
             Spacer(Modifier.height(4.dp))
