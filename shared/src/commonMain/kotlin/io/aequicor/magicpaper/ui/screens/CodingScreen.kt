@@ -445,12 +445,6 @@ internal fun ProjectsPanel(
     onDeleteAllSessions: (String) -> Unit = {},
 ) {
     Column(modifier = modifier.fillMaxSize()) {
-        Text(
-            "Проекты",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-        )
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         val collapsed = remember { mutableStateMapOf<String, Boolean>() }
         // Disclosure is local UI state: never reload a project or reset its active session.
         // Selecting another project opens its list; status updates preserve disclosure.
