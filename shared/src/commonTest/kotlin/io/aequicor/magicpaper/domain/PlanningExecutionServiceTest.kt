@@ -196,6 +196,21 @@ class PlanningExecutionServiceTest {
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
     }
 
+    @Test fun explicitRepairRetryRunsOneAdditionalTurnWithoutResettingAutomaticLimit() = runTest {
+        val fail = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(false, "Restore permissions")
+        }
+        val (store, service, runtime) = fixture(verifier = fail)
+        store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(3, runtime.calls.size)
+        service.retry(project.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(4, runtime.calls.size)
+        val attempt = store.planFor(project.id)!!.milestones.single().attempts.single()
+        assertContains(attempt.prompt, "Restore permissions")
+        assertEquals(2, attempt.repairRetries)
+        assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
     @Test fun transportLimitSurvivesExplicitContinuation() = runTest {
         val (store, service, runtime) = fixture(Runtime(failure = "429 rate limit"))
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(200); runCurrent()

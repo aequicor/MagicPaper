@@ -106,6 +106,7 @@ import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.MilestoneStatus
 import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
+import io.aequicor.magicpaper.ui.components.PlanningBlockerDock
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
 import io.aequicor.magicpaper.ui.components.codingChatRows
 import kotlinx.coroutines.delay
@@ -402,6 +403,7 @@ private val CodingSessionStatus.label: String
     get() = when (this) {
         CodingSessionStatus.WORKING -> "работает"
         CodingSessionStatus.WAITING -> "ждёт ответа или подтверждения"
+        CodingSessionStatus.BLOCKED -> "выполнение остановлено"
         CodingSessionStatus.QUEUED -> "ждёт планировщика"
         CodingSessionStatus.IDLE -> "ждёт запроса"
     }
@@ -416,6 +418,7 @@ fun ActivityDot(
     val color = when (status) {
         CodingSessionStatus.WORKING -> StatusWorking
         CodingSessionStatus.WAITING -> StatusWaiting
+        CodingSessionStatus.BLOCKED -> Color(0xFFC77843)
         CodingSessionStatus.QUEUED -> StatusQueued
         CodingSessionStatus.IDLE -> StatusIdle
     }
@@ -626,9 +629,9 @@ private fun SessionRow(
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            if (status != CodingSessionStatus.WAITING && (nested || item.running)) Text(
+            if (status != CodingSessionStatus.WAITING && (nested || item.running || status == CodingSessionStatus.BLOCKED)) Text(
                 (if (nested) "Этап · " else "") +
-                    if (item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
+                    if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
                         "передан планировщику" else status.label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
@@ -790,6 +793,7 @@ internal fun CodingChat(
     var footerHeight by remember { mutableStateOf(0.dp) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val questionHeight = maxHeight * 0.55f
+        val blockerHeight = maxHeight * 0.4f
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize()
@@ -849,6 +853,10 @@ internal fun CodingChat(
                 planningQuestionsSession.session, planningQuestionsSession.messages, planningService,
                 planningService.drafts.collectAsState().value[planningQuestionsSession.session.id]?.active == true,
                 Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
+            )
+            if (planningService != null && approvals.isEmpty()) PlanningBlockerDock(
+                planningQuestionsSession.session, planningQuestionsSession.messages, planningService, busy,
+                Modifier.fillMaxWidth().heightIn(max = blockerHeight).padding(horizontal = 12.dp, vertical = 4.dp),
             )
             CodingComposer(
                 enabled = engineReady && (!busy || allowQueue),

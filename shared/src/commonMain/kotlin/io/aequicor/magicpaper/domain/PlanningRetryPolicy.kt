@@ -7,6 +7,12 @@ import kotlinx.datetime.toInstant
 class LlmTransportException(val statusCode: Int, val retryAfter: String?, detail: String) :
     IllegalStateException("HTTP $statusCode: $detail" + retryAfter?.let { "\nRetry-After: $it" }.orEmpty())
 
+/** A rejected result needs another worker turn; unavailable verification only needs another check. */
+internal fun StageAttempt.retryAfterUserAction(): StageAttempt = copy(
+    phase = if (error?.kind == IssueKind.VERIFICATION && phase == AttemptPhase.VERIFYING) AttemptPhase.FAILED else phase,
+    error = error?.copy(requiresUser = false),
+)
+
 object PlanningRetryPolicy {
     /** Only recognizable local checks can resume without an external-effect acknowledgement. */
     fun localCheck(command: String): Boolean {

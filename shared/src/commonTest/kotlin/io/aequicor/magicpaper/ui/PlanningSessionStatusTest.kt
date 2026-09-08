@@ -34,8 +34,37 @@ class PlanningSessionStatusTest {
 
     @Test fun stageBlockedForUserIsYellowAndRetryDelayIsGray() {
         fun withIssue(issue: PlanningIssue) = plan.copy(milestones = listOf(stage.copy(attempts = listOf(attempt.copy(error = issue)))))
-        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.CONFIGURATION, "Нужно уточнение", requiresUser = true))).status)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.CONFIGURATION, "Источник недоступен", requiresUser = true))).status)
         assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.TRANSIENT, "Повтор позже", retryAt = 100))).status)
+    }
+
+    @Test fun failedVerificationWithoutQuestionsBlocksBothPlanAndWorker() {
+        val issue = PlanningIssue(IssueKind.VERIFICATION, "Не подтверждено восстановление версии", requiresUser = true)
+        val failed = plan.copy(status = PlanStatus.FAILED, phase = ExecutionPhase.WAITING, issue = issue,
+            milestones = listOf(stage.copy(status = MilestoneStatus.FAILED,
+                attempts = listOf(attempt.copy(phase = AttemptPhase.VERIFYING, error = issue, repairRetries = 2)))))
+        val messages = listOf(CodingMessage("result", CodingRole.AGENT, "Результат передан в приёмку", createdAt = 2))
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, messages, plan = failed).status)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(worker, messages, plan = failed).status)
+        val blocker = failed.blockingIssues(messages).single()
+        assertEquals(issue.message, blocker.issue.message)
+        assertContains(blocker.text, "Автоматические попытки исправления исчерпаны (2)")
+        assertNull(messages.pendingPlanningQuestion())
+        assertEquals(CodingSessionStatus.BLOCKED, CodingUi(projects = listOf(CodingProject("project", "Project", "/project", 1)),
+            sessions = listOf(CodingSessionUi(parent, messages, plan = failed), CodingSessionUi(worker, messages, plan = failed))).statusOf("project"))
+    }
+
+    @Test fun realQuestionStaysWaitingButCoordinatorFailureWithoutQuestionIsBlocked() {
+        val wait = PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true)
+        val waiting = plan.copy(issue = wait, milestones = listOf(stage.copy(attempts = listOf(attempt.copy(awaitingPlanner = true, error = wait)))))
+        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, listOf(question), plan = waiting).status)
+        assertTrue(waiting.blockingIssues(listOf(question)).isEmpty())
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, plan = waiting).status)
+        assertEquals(1, waiting.blockingIssues(emptyList()).size)
+        val failure = PlanningIssue(IssueKind.UNCERTAIN, "Ошибка координатора", requiresUser = true)
+        val failed = waiting.copy(issue = failure, milestones = listOf(stage.copy(attempts = listOf(attempt.copy(awaitingPlanner = true, error = failure)))))
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(worker, plan = failed).status)
+        assertEquals(1, failed.blockingIssues(emptyList()).size)
     }
 
     @Test fun handedOffWorkerIsGreenUntilExecutionResumes() {

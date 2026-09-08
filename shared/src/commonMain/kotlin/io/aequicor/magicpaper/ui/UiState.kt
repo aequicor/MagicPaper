@@ -19,6 +19,7 @@ import io.aequicor.magicpaper.domain.codingStatusOf
 import io.aequicor.magicpaper.domain.Plan
 import io.aequicor.magicpaper.domain.isStageWorking
 import io.aequicor.magicpaper.domain.pendingPlanningQuestion
+import io.aequicor.magicpaper.domain.isPlannerAnswerWait
 import io.aequicor.magicpaper.plugins.MagicPlugin
 
 /** Экраны минималистичной навигации. */
@@ -38,8 +39,8 @@ data class CodingSessionUi(
             if (draft.awaitingApproval) return CodingSessionStatus.WAITING
             val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
             if (stage != null) return when {
-                stage.attempts.lastOrNull()?.awaitingPlanner == true -> CodingSessionStatus.IDLE
-                stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.WAITING
+                stage.attempts.lastOrNull()?.let { it.awaitingPlanner && (it.error == null || it.error.isPlannerAnswerWait) } == true -> CodingSessionStatus.IDLE
+                stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.BLOCKED
                 running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
                 stage.completed -> CodingSessionStatus.IDLE
                 else -> CodingSessionStatus.QUEUED
@@ -48,7 +49,9 @@ data class CodingSessionUi(
                 running -> CodingSessionStatus.WORKING
                 messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
                 plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
-                plan.issue?.requiresUser == true || plan.milestones.any { it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.WAITING
+                plan.issue?.requiresUser == true || plan.finalAttempt?.error?.requiresUser == true ||
+                    plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.BLOCKED
+                plan.issue != null -> CodingSessionStatus.QUEUED
                 plan.confirmedRevision != null -> CodingSessionStatus.IDLE
                 else -> codingStatusOf(messages)
             }

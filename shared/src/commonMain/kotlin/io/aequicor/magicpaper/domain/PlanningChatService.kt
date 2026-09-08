@@ -265,7 +265,9 @@ class PlanningChatService(
             if (p.deliveries.any { it.id == deliveryId }) return@update p
             val stage = p.milestones.firstOrNull { it.id == target } ?: error("Этап не найден")
             val followupId = "$target-followup-$deliveryId"
-            val complete = stage.completed || stage.attempts.lastOrNull()?.phase in listOf(AttemptPhase.VERIFYING, AttemptPhase.INTEGRATING, AttemptPhase.COMPLETE)
+            val attempt = stage.attempts.lastOrNull()
+            val complete = stage.completed || (attempt?.error?.requiresUser != true &&
+                attempt?.phase in listOf(AttemptPhase.VERIFYING, AttemptPhase.INTEGRATING, AttemptPhase.COMPLETE))
             val destination = if (complete) followupId else target
             val followup = stage.copy(id = followupId, title = "Продолжение: ${stage.title}", description = text,
                 status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", dependsOn = listOf(stage.id))
@@ -273,7 +275,9 @@ class PlanningChatService(
                 phase = if (complete) ExecutionPhase.EXECUTING else p.phase,
                 finalAttempt = if (complete) null else p.finalAttempt,
                 workspace = if (complete && p.sharedWorkspace) p.workspace?.copy(applied = false) else p.workspace,
-                milestones = p.milestones.map { m -> if (m.id != target || complete) m else m.copy(attempts = m.attempts.map { it.copy(error = null) }) } + if (complete) listOf(followup) else emptyList(),
+                milestones = p.milestones.map { m -> if (m.id != target || complete) m else m.copy(attempts = m.attempts.map {
+                    if (it.error?.kind == IssueKind.VERIFICATION) it.retryAfterUserAction() else it.copy(error = null)
+                }) } + if (complete) listOf(followup) else emptyList(),
                 tree = if (complete) p.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + followupId) else it } + DecisionNode(followupId, followup.title, DecisionKind.STAGE, stageId = followupId) else p.tree)
         }
         prepareSessions(updated)
@@ -447,6 +451,13 @@ class PlanningChatService(
             "План готов. Проверьте этапы и подтвердите запуск.", createdAt = plan.updatedAt, planning = PlanningChatBlock(plan.id, graph = true)))
         if (plan.phase == ExecutionPhase.COMPLETE && history.none { it.id == "${plan.id}-complete" }) append(plan.projectId, plan.parentSessionId,
             CodingMessage("${plan.id}-complete", CodingRole.AGENT, "План выполнен. ${plan.finalAttempt?.report.orEmpty()}", createdAt = plan.updatedAt))
+        plan.blockingIssues(history).forEach { blocker ->
+            val message = CodingMessage(blocker.messageId, CodingRole.AGENT, blocker.text, failed = true, createdAt = plan.updatedAt)
+            append(plan.projectId, plan.parentSessionId, message)
+            blocker.stage?.let { stage ->
+                append(plan.projectId, blocker.attempt?.sessionId ?: "plan-${plan.id}-stage-${stage.id}", message)
+            }
+        }
         if (plan.confirmedRevision != null) {
             plan.selectedMilestones.forEach { stage ->
                 val sessionId = stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}"

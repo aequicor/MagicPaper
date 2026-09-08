@@ -72,8 +72,9 @@ class PlanningChatServiceTest {
         val settings = JsonSettingsRepository(kv, json)
         val gateway = Gateway()
         val runtime = Runtime()
+        var verdict = Verdict(true, "Checked")
         val execution = PlanningExecutionService(store, runtime, projects, profiles, settings, object : MilestoneVerifier {
-            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "Checked")
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = verdict
         }, scope = scope.backgroundScope)
         val service = PlanningChatService(store, execution, projects, profiles, settings, PlanComposer(gateway), gateway, scope.backgroundScope)
         suspend fun initialize() {
@@ -170,6 +171,60 @@ class PlanningChatServiceTest {
         f.service.send(parent, "PDF", replyTo = message.id); advanceTimeBy(1000); runCurrent()
         assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
         assertFalse(f.store.planFor(plan.id)!!.milestones.single().attempts.last().awaitingPlanner)
+    }
+
+    @Test fun exhaustedVerificationPublishesReasonWithoutInventingQuestionAndRetryRunsRepair() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        val reason = "Не подтверждены удаление индексов, блокировка ухудшений и восстановление разрешений."
+        f.verdict = Verdict(false, reason)
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val blocked = f.store.planFor(plan.id)!!
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        assertEquals(3, f.runtime.calls.size)
+        assertEquals(2, blocked.milestones.single().attempts.single().repairRetries)
+        val history = f.projects.messages(project.id, parent.id)
+        assertNull(history.pendingPlanningQuestion())
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, history, plan = blocked).status)
+        val notice = history.single { it.failed }
+        assertContains(notice.text, reason)
+        assertContains(notice.text, "исчерпаны (2)")
+        assertEquals(notice, f.projects.messages(project.id, worker.id).single { it.id == notice.id })
+        val restored = JsonPlanningRepository(f.kv, json).planFor(plan.id)!!
+        assertEquals(reason, restored.blockingIssues(history).single().issue.message)
+        f.store.update(plan.id) { it }; runCurrent()
+        assertEquals(history, f.projects.messages(project.id, parent.id))
+
+        f.verdict = Verdict(true, "Исправления проверены")
+        f.service.control(plan.id, "retry"); advanceTimeBy(1000); runCurrent()
+        assertEquals(4, f.runtime.calls.count { it.first.id == worker.id })
+        assertContains(f.runtime.calls.last { it.first.id == worker.id }.second, reason)
+        val completed = f.store.planFor(plan.id)!!
+        assertEquals(PlanStatus.DONE, completed.status)
+        assertEquals(1, completed.milestones.size)
+        assertEquals(2, completed.milestones.single().attempts.single().repairRetries)
+        assertTrue(completed.blockingIssues(f.projects.messages(project.id, parent.id)).isEmpty())
+    }
+
+    @Test fun instructionAfterFailedVerificationReturnsToOriginalWorkerInsteadOfBlockedFollowup() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.verdict = Verdict(false, "Нужно проверить откат разрешений")
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val workerId = f.projects.sessions(project.id).single { it.stageId != null }.id
+        f.verdict = Verdict(true, "Откат проверен")
+        f.service.send(parent, "Добавь проверку восстановления разрешений"); advanceTimeBy(1000); runCurrent()
+        val completed = f.store.planFor(plan.id)!!
+        assertEquals(PlanStatus.DONE, completed.status)
+        assertEquals(1, completed.milestones.size)
+        assertEquals("stage", completed.deliveries.single().targetStageId)
+        assertEquals(4, f.runtime.calls.count { it.first.id == workerId })
+        assertContains(f.runtime.calls.last { it.first.id == workerId }.second, "Добавь проверку восстановления разрешений")
+        assertContains(f.runtime.calls.last { it.first.id == workerId }.second, "Нужно проверить откат разрешений")
     }
 
     @Test fun repeatedHandoffKeepsEachReplyAfterItsIncomingMessageAndSurvivesReload() = runTest {

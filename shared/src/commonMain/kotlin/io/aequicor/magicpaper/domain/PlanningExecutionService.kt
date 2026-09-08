@@ -115,10 +115,10 @@ class PlanningExecutionService(
     }
     /** Explicit retry does not erase counters; the caller fixes configuration or acknowledges uncertainty. */
     suspend fun retry(projectId: String) {
-        store.update(projectId) { p -> p.copy(issue = null, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING,
-            finalAttempt = p.finalAttempt?.let { if (p.issue?.kind == IssueKind.UNCERTAIN) it.copy(pendingToolExternal = false, pendingTool = "") else it },
+        store.update(projectId) { p -> p.copy(issue = null, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING, status = PlanStatus.RUNNING,
+            finalAttempt = p.finalAttempt?.retryAfterUserAction()?.let { if (p.issue?.kind == IssueKind.UNCERTAIN) it.copy(pendingToolExternal = false, pendingTool = "") else it },
             milestones = p.milestones.map { m -> m.copy(attempts = m.attempts.map { a ->
-                val acknowledged = a.copy(error = a.error?.copy(requiresUser = false))
+                val acknowledged = a.retryAfterUserAction()
                 if (p.issue?.kind == IssueKind.UNCERTAIN) acknowledged.copy(pendingToolExternal = false, pendingTool = "") else acknowledged
             }) }) }
         launchProject(store.planFor(projectId)!!.id)
