@@ -100,7 +100,8 @@ class OrchestrationService(
                 refreshSessions()
                 _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }.forEach { session ->
                     try {
-                        updateState(session.id, session.projectId) { it }
+                        val saved = updateState(session.id, session.projectId) { it }
+                        saved.inputs.forEach { syncInputMessage(session, it.id) }
                         replaySessionCommands(session)
                         drainInputs(session)
                     } catch (_: OrchestrationPersistenceException) { /* Keep other orchestrators available. */ }
@@ -346,6 +347,7 @@ class OrchestrationService(
         migrate()
         refreshSessions()
         replaySessionCommands(session)
+        state(session.id, session.projectId).inputs.forEach { syncInputMessage(session, it.id) }
         drainInputs(session)
         changed()
     }
@@ -384,11 +386,20 @@ class OrchestrationService(
                 changed()
                 return@launch
             }
-            append(session.projectId, session.id, CodingMessage(input.id, if (input.scheduledRuleId == null) CodingRole.USER else CodingRole.AGENT, input.text,
-                createdAt = input.createdAt, inputStatus = OrchestrationInputStatus.QUEUED))
+            syncInputMessage(session, input.id)
             refreshSessions()
             drainInputs(session)
         }
+    }
+
+    /** Withdrawal is terminal: Continue and recovery must never submit this input again. */
+    fun cancelQueuedInput(sessionId: String, inputId: String) = launch {
+        val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return@launch
+        updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
+            if (it.id == inputId && it.status == OrchestrationInputStatus.QUEUED && it.scheduledRuleId == null)
+                it.copy(status = OrchestrationInputStatus.WITHDRAWN, error = "") else it
+        }) }
+        syncInputMessage(session, inputId)
     }
 
     fun retryInput(sessionId: String, inputId: String) = launch {
@@ -397,6 +408,7 @@ class OrchestrationService(
             if (it.id == inputId && it.status in listOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED))
                 it.copy(status = OrchestrationInputStatus.QUEUED, error = "") else it
         }) }
+        syncInputMessage(session, inputId)
         drainInputs(session)
     }
 
@@ -405,10 +417,16 @@ class OrchestrationService(
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 while (true) {
-                    val input = state(session.id, session.projectId).inputs.firstOrNull {
-                        it.status in listOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING) && inputMayRun(it)
-                    } ?: break
-                    setInputStatus(session, input.id, OrchestrationInputStatus.PROCESSING)
+                    // Claim under the same lock as withdrawal, before reading or sending the text.
+                    var claimed: OrchestrationInput? = null
+                    updateState(session.id, session.projectId) { old ->
+                        claimed = old.inputs.firstOrNull {
+                            it.status in listOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING) && inputMayRun(it)
+                        }?.copy(status = OrchestrationInputStatus.PROCESSING, error = "")
+                        old.copy(inputs = old.inputs.map { if (it.id == claimed?.id) claimed!! else it })
+                    }
+                    val input = claimed ?: break
+                    syncInputMessage(session, input.id)
                     try {
                         processInput(session, input)
                         if (input.resumeAfter) currentPlan(session)?.takeIf { it.confirmedRevision != null && it.proposal == null }?.let { resumePlan(it.id) }
@@ -443,13 +461,25 @@ class OrchestrationService(
     }
 
     private suspend fun setInputStatus(session: CodingSession, id: String, status: OrchestrationInputStatus, error: String = "") {
-        val saved = updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
+        updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
             if (it.id == id) it.copy(status = status, error = error) else it
         }) }
-        val input = saved.inputs.first { it.id == id }
+        syncInputMessage(session, id)
+    }
+
+    private suspend fun syncInputMessage(session: CodingSession, id: String) = stateLock.withLock {
+        val input = state(session.id, session.projectId).inputs.firstOrNull { it.id == id } ?: return@withLock
         val message = projects.messages(session.projectId, session.id).firstOrNull { it.id == id }
-            ?: CodingMessage(id, CodingRole.USER, input.text, createdAt = input.createdAt)
-        append(session.projectId, session.id, message.copy(inputStatus = status))
+            ?: CodingMessage(id, if (input.scheduledRuleId == null) CodingRole.USER else CodingRole.AGENT,
+                input.text, createdAt = input.createdAt, scheduledRuleId = input.scheduledRuleId)
+        append(session.projectId, session.id, message.copy(inputStatus = input.status))
+    }
+
+    private suspend fun inputHistory(session: CodingSession): List<CodingMessage> {
+        val inputs = state(session.id, session.projectId).inputs.associateBy { it.id }
+        return projects.messages(session.projectId, session.id).filter {
+            (inputs[it.id]?.status ?: it.inputStatus) !in setOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.WITHDRAWN)
+        }
     }
 
     private suspend fun failInput(session: CodingSession, input: OrchestrationInput, message: String) {
@@ -470,7 +500,7 @@ class OrchestrationService(
                 sharedWorkspace = true, plannerSelection = session.modelSelection, engine = session.engine, searchProvider = session.searchProvider,
                 createdAt = input.createdAt, updatedAt = input.createdAt,
                 tree = listOf(DecisionNode("$id-root", input.text, DecisionKind.GOAL)),
-                dialogue = projects.messages(session.projectId, session.id).filter { it.id != input.id }.map {
+                dialogue = inputHistory(session).filter { it.id != input.id }.map {
                     PlanningMessage(it.id, if (it.role == CodingRole.USER) "user" else "assistant", it.text)
                 })
             store.save(plan)
@@ -533,7 +563,7 @@ class OrchestrationService(
         val profile = (session.modelSelection ?: plan.plannerSelection)?.let { ProfileResolver.selection(it, roster) }
             ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster) ?: error("Подключите модель оркестратора")
         val requests = state(session.id, session.projectId).openQuestions(plan.id)
-        val history = projects.messages(session.projectId, session.id).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
+        val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
         val messages = mutableListOf(LlmMessage(LlmChatRole.SYSTEM, """
             Ты оркестратор диалога. Определи смысл сообщения и верни JSON:
             {"intent":"DISCUSS|REFINE|ANSWER|INSTRUCT|CONTROL|SCHEDULE","reply":"ответ пользователю","replyTo":null,"completeAnswer":true,"command":"","questions":[]}.
