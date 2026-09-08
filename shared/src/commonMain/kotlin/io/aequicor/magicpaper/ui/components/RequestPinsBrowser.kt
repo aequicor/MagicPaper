@@ -41,13 +41,28 @@ internal fun requestPinNumbers(groups: List<RequestPinGroup>, messageIds: Set<St
     requestPinEntries(groups, messageIds).mapIndexed { index, entry -> entry.pin.messageId to index + 1 }.toMap()
 
 @Composable
+internal fun MessagePinColumn(number: Int?, onClick: () -> Unit, modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit) {
+    Box {
+        Column(modifier, content = content)
+        if (number != null) {
+            // Matching the measured bubble keeps the marker out of content measurement.
+            Box(Modifier.matchParentSize()) {
+                MessagePinButton(number, onClick, Modifier.align(Alignment.BottomEnd).offset(y = (-3).dp))
+            }
+        }
+    }
+}
+
+@Composable
 internal fun MessagePinButton(number: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val ink = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .6f)
     Box(
         modifier = modifier.size(20.dp).clip(CircleShape)
             .clickable(role = Role.Button, onClickLabel = "Открыть список закреплений", onClick = onClick)
             .semantics { contentDescription = "Закреплённое сообщение №$number. Открыть список" },
-        contentAlignment = Alignment.Center,
+        // The glyph fits in the bubble's existing right padding, beside the last line.
+        contentAlignment = Alignment.CenterEnd,
     ) {
         Canvas(Modifier.size(16.dp)) {
             val path = Path().apply {

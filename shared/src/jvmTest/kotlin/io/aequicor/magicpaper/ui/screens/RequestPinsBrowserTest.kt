@@ -108,7 +108,8 @@ class RequestPinsBrowserTest {
             assertTrue(walk(marker).none { text(it).isNotEmpty() }, "The marker is an icon without a number or label")
             assertTrue(walk(chat.history()).any { it.id == marker.id }, "The button must be inside LazyColumn")
             val source = chat.nodes().single { text(it) == body(8) }
-            assertTrue(marker.boundsInRoot.top >= source.boundsInRoot.bottom, "The marker belongs below its message text")
+            assertTrue(marker.boundsInRoot.right > source.boundsInRoot.right && marker.boundsInRoot.bottom >= source.boundsInRoot.bottom,
+                "The marker overlays the existing lower-right padding")
             chat.snapshot("message-indicator")
             val before = chat.position()
             chat.click(marker)
@@ -184,5 +185,21 @@ class RequestPinsBrowserTest {
         assertEquals(listOf(true, false, true), entries.map { it.isRequest })
         assertEquals(mapOf("a" to 1, "b" to 2, "c" to 3), requestPinNumbers(groups, setOf("a", "b", "c")))
         assertTrue(requestPinEntries(groups, emptySet()).isEmpty())
+    }
+
+    @Test fun pinsNeverChangeMessageSizeTextWrappingOrSpacing() {
+        for (coding in listOf(false, true)) for (fontScale in listOf(1f, 1.4f)) Chat(coding, 360, fontScale).use { chat ->
+            fun messageBounds() = (8..9).map { index -> chat.nodes().single { text(it) == body(index) }.boundsInRoot }
+            val withPin = messageBounds()
+            val position = chat.position()
+            val pins = chat.groups.value
+            chat.groups.value = emptyList()
+            chat.render()
+            assertEquals(withPin, messageBounds(), "Removing the icon must not move or reflow either message")
+            assertEquals(position, chat.position(), "The list's measured position stays unchanged")
+            chat.groups.value = pins
+            chat.render()
+            assertEquals(withPin, messageBounds(), "Restoring pins must not add a footer or increase spacing")
+        }
     }
 }

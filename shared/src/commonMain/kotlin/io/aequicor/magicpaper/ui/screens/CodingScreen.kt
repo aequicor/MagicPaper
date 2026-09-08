@@ -110,7 +110,7 @@ import io.aequicor.magicpaper.ui.components.OrchestrationStatus
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageInputStatus
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
-import io.aequicor.magicpaper.ui.components.MessagePinButton
+import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
@@ -1054,7 +1054,9 @@ private fun CodingMessageBubble(
         modifier = Modifier.fillMaxWidth().padding(top = if (first) 10.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        Column(
+        MessagePinColumn(
+            number = pinNumber.takeIf { isUser && last },
+            onClick = onShowPins,
             modifier = Modifier
                 .widthIn(max = 680.dp)
                 .then(if (step != null) Modifier.fillMaxWidth() else Modifier)
@@ -1106,9 +1108,6 @@ private fun CodingMessageBubble(
             if (last) {
                 CodingAttachments(message.attachments)
                 footer?.invoke()
-                if (isUser && pinNumber != null) {
-                    MessagePinButton(pinNumber, onShowPins, Modifier.align(Alignment.End).padding(top = 6.dp))
-                }
             }
         }
     }

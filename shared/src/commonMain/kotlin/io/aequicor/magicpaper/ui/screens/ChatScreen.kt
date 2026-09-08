@@ -68,7 +68,7 @@ import io.aequicor.magicpaper.ui.components.stickToBottom
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
 import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
-import io.aequicor.magicpaper.ui.components.MessagePinButton
+import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
@@ -179,7 +179,9 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        Column(
+        MessagePinColumn(
+            number = pinNumber.takeIf { isUser },
+            onClick = onShowPins,
             modifier = Modifier
                 // На узких экранах бабл не должна занимать всю ширину —
                 // 100% не даёт читаемой строки.
@@ -205,9 +207,6 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                 // Ответ агента рендерим как markdown: заголовки, списки,
                 // блоки кода с подсветкой синтаксиса и кнопкой копирования.
                 ChatMarkdown(message.text)
-            }
-            if (isUser && pinNumber != null) {
-                MessagePinButton(pinNumber, onShowPins, Modifier.align(Alignment.End).padding(top = 6.dp))
             }
             if (message.sources.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
