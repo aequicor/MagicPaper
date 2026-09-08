@@ -20,6 +20,7 @@ class PlanningChatServiceTest {
     private class Gateway : LlmGateway {
         var lastMessages = emptyList<LlmMessage>()
         val requests = mutableListOf<List<LlmMessage>>()
+        val requestGates = mutableListOf<CompletableDeferred<Unit>>()
         var gate: CompletableDeferred<Unit>? = null
         var overrideReply: String? = null
         var timeout = false
@@ -45,6 +46,7 @@ class PlanningChatServiceTest {
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
             lastMessages = messages
             requests += messages
+            requestGates.getOrNull(requests.lastIndex)?.await()
             if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
             failure?.let { error(it) }
@@ -93,6 +95,8 @@ class PlanningChatServiceTest {
                 verificationReports += milestone.id to report
                 return verifyReport?.invoke(milestone, report) ?: verdict
             }
+        }, workspaces = object : PlanningWorkspace by LocalPlanningWorkspace() {
+            override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
         }, scope = scope.backgroundScope)
         val service = PlanningChatService(store, execution, projects, profiles, settings, PlanComposer(gateway), gateway, scope.backgroundScope)
         suspend fun initialize() {
@@ -1680,7 +1684,7 @@ class PlanningChatServiceTest {
         f.store.save(p); f.service.prepareSessions(p); runCurrent()
         f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Срок истёк; продолжение требует решения."}"""
         f.service.messageScheduler.apply("p", listOf(ScheduleCommand(trigger = MessageTrigger(MessageTriggerKind.EVENT,
-            event = MessageEventKind.RESULT_RETURNED, taskId = "stage", deadline = 1), targetTaskId = "stage", waitTaskId = "stage", text = "Продолжить после результата")),
+            event = MessageEventKind.INTERVENTION_REQUIRED, deadline = 1), targetTaskId = "stage", waitTaskId = "stage", text = "Продолжить после результата")),
             "wait", parent.id, emptySet(), "stage")
         runCurrent()
         val current = f.store.planFor("p")!!
@@ -1737,6 +1741,46 @@ class PlanningChatServiceTest {
         f.service.recoverOrchestration(parent.id); runCurrent(); f.service.messageScheduler.tick()
         assertEquals(events, f.store.planFor(p.id)!!.messageEvents.filter { it.kind == MessageEventKind.QUESTION_ANSWERED })
         assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun rejectedInterpretationRetainsVisibleFragmentsAcrossRetryAndSave() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); f.readyPlan("p", parent)
+        val first = CompletableDeferred<Unit>(); val second = CompletableDeferred<Unit>()
+        f.gateway.requestGates += listOf(first, second)
+        f.gateway.userDecisions += """{"intent":"SCHEDULE","schedules":[]}"""
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Исправленный ответ"}"""
+        f.service.send(parent, "Объясни состояние"); runCurrent()
+        f.gateway.requestCallback!!(CodingStep(CodingStepKind.ANSWER, "Предварительный текст", id = "same")); runCurrent()
+        val original = f.service.drafts.value.getValue(parent.id).steps.single { it.kind == CodingStepKind.ANSWER }
+        first.complete(Unit); runCurrent()
+        val retry = f.service.drafts.value.getValue(parent.id)
+        assertTrue(retry.steps.any { it.id == original.id && it.title == original.title })
+        assertTrue(retry.steps.any { it.title.contains("действия из него не выполнены") })
+        f.gateway.requestCallback!!(CodingStep(CodingStepKind.ANSWER, "Исправленный ответ", id = "same")); runCurrent()
+        assertEquals(2, f.service.drafts.value.getValue(parent.id).steps.count { it.kind == CodingStepKind.ANSWER })
+        second.complete(Unit); runCurrent()
+        val saved = f.projects.messages(project.id, parent.id).last { it.text == "Исправленный ответ" }
+        assertTrue(saved.steps.any { it.id == original.id && it.title == original.title })
+        assertEquals(OrchestrationInputStatus.DONE, f.projects.orchestration(parent.id)!!.inputs.single().status)
+    }
+
+    @Test fun transitionFromInterpretationToRefinementRetainsVisibleAnswer() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); f.readyPlan("p", parent)
+        val first = CompletableDeferred<Unit>(); val second = CompletableDeferred<Unit>()
+        f.gateway.requestGates += listOf(first, second)
+        f.gateway.userDecision = """{"intent":"REFINE","reply":"Составлю план"}"""
+        f.service.send(parent, "Уточни план"); runCurrent()
+        f.gateway.requestCallback!!(CodingStep(CodingStepKind.ANSWER, "Составлю план", id = "same")); runCurrent()
+        val original = f.service.drafts.value.getValue(parent.id).steps.single { it.kind == CodingStepKind.ANSWER }
+        first.complete(Unit); runCurrent()
+        f.gateway.requestCallback!!(CodingStep(CodingStepKind.ANSWER, "Уточняю критерии", id = "same")); runCurrent()
+        val planning = f.service.drafts.value.getValue(parent.id)
+        assertTrue(planning.steps.any { it.id == original.id && it.title == original.title })
+        assertEquals(2, planning.steps.count { it.kind == CodingStepKind.ANSWER })
+        second.complete(Unit); runCurrent()
+        assertTrue(f.projects.messages(project.id, parent.id).flatMap { it.steps }.any { it.id == original.id })
     }
 
 }

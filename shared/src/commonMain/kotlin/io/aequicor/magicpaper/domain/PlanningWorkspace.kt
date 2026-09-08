@@ -13,6 +13,8 @@ interface PlanningWorkspace {
     /** Must ensure a previous process cannot still write before another run starts. */
     suspend fun reconcile(attempt: StageAttempt)
     suspend fun validateIntegration(workspace: PlanWorkspace) = Unit
+    /** A content fingerprint collected by the host; null means verification is unavailable. */
+    suspend fun verificationSnapshot(path: String): String? = null
     suspend fun finishDeliveryConflict(path: String): Boolean = false
 }
 class WorkspaceConflict(val workingPath: String, message: String) : IllegalStateException(message)

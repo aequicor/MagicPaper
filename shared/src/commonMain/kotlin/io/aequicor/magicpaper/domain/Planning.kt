@@ -56,6 +56,7 @@ data class Milestone(
     val displayNumber: Int? = null,
     val displayName: String? = null,
     val continuationOf: String? = null,
+    val acceptanceCriteria: List<AcceptanceCriterion> = emptyList(),
 ) {
     /** Завершён ли мэилстоун (выполнен или осознанно пропущен). */
     val completed: Boolean get() = status == MilestoneStatus.DONE || status == MilestoneStatus.SKIPPED

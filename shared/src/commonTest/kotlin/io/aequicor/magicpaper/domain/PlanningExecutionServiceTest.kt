@@ -21,6 +21,7 @@ class PlanningExecutionServiceTest {
         private val gate: CompletableDeferred<Unit>? = null,
         private val failure: String? = null,
         private val commandGate: CompletableDeferred<Unit>? = null,
+        private val report: String = "Verified result",
     ) : CodingRuntime {
         val engines = mutableListOf<CodingEngine?>()
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
@@ -43,11 +44,12 @@ class PlanningExecutionServiceTest {
                 emit(CodingEvent.ToolFinished("command", false, "command-1", "BUILD SUCCESSFUL"))
             }
             gate?.await()
-            if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText("Verified result"))
+            if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText(report))
             emit(CodingEvent.Finished)
         }
     }
     private class Workspaces(private val parallel: Boolean = true, private val base: PlanningWorkspace = LocalPlanningWorkspace()) : PlanningWorkspace by base {
+        override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
         var applied = 0
         var released = 0
         override suspend fun release(project: CodingProject) { released++; base.release(project) }
@@ -478,6 +480,7 @@ class PlanningExecutionServiceTest {
     @Test fun committedDeliveryResumesVerificationBeforeTransfer() = runTest {
         var finished = false
         val port = object : PlanningWorkspace by LocalPlanningWorkspace() {
+            override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
             override suspend fun finishDeliveryConflict(path: String): Boolean { finished = true; return true }
             override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace {
                 assertTrue(finished, "Transfer must wait for the recorded verification")
@@ -486,6 +489,8 @@ class PlanningExecutionServiceTest {
         }
         val (store, service, runtime) = fixture(workspace = port)
         val a = StageAttempt("final", "session", StageAssignment("agent", "m"), phase = AttemptPhase.COMPLETE,
+            acceptanceRecord = AcceptanceRecord("run", "final", "fixture-snapshot", plan(stage("a")).acceptanceCriteria(),
+                plan(stage("a")).acceptanceCriteria().map { AcceptanceFinding(it.id, CheckStatus.PASS, it.description, "Checked") }, status = AcceptanceStatus.ACCEPTED),
             mergePhase = AttemptPhase.VERIFYING, mergePath = "/fake/delivery", mergeRetries = 1, mergeReport = "checked merge")
         store.save(plan(stage("a").copy(status = MilestoneStatus.DONE)).copy(intent = ExecutionIntent.RUN, runId = "run", finalAttempt = a))
         service.bootstrap(); runCurrent(); advanceTimeBy(500); runCurrent()
@@ -493,4 +498,88 @@ class PlanningExecutionServiceTest {
         assertTrue(runtime.calls.isEmpty())
         assertEquals(PlanStatus.DONE, store.planFor(project.id)!!.status)
     }
+    @Test fun modelSuccessCannotAcceptRequiredLiveCheckWithoutHostReceipt() = runTest {
+        val workspace = Workspaces()
+        val (store, service, runtime) = fixture(workspace = workspace)
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("live", "Real backend receives payload", environment = EvidenceEnvironment.REAL_BACKEND)))))
+        service.start(project.id); advanceTimeBy(500); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.FAILED, saved.status)
+        assertEquals(AcceptanceStatus.PARTIAL, saved.milestones.single().attempts.single().acceptanceRecord?.status)
+        assertEquals(0, workspace.applied)
+        val calls = runtime.calls.size
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(calls, runtime.calls.size)
+        assertTrue(saved.messageEvents.none { it.kind == MessageEventKind.RUN_COMPLETED })
+    }
+
+    @Test fun sourceChangeDuringFinalReviewInvalidatesAcceptanceAndPreventsApply() = runTest {
+        var snapshot = "before"
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun verificationSnapshot(path: String) = snapshot
+            override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace = error("Must not apply stale result")
+        }
+        val judge = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                if (milestone.id == "final") snapshot = "after"
+                return Verdict(true, "All accepted")
+            }
+        }
+        val (store, service) = fixture(workspace = workspace, verifier = judge)
+        store.save(plan(stage("a")))
+        service.start(project.id); advanceTimeBy(500); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(AcceptanceStatus.STALE, saved.finalAttempt?.acceptanceRecord?.status)
+        assertEquals(PlanStatus.FAILED, saved.status)
+        assertEquals("before", saved.finalAttempt?.acceptanceRecord?.snapshotId)
+    }
+
+    @Test fun pauseDuringFinalReviewCannotApplyOrCompletePlan() = runTest {
+        lateinit var store: PlanningStore
+        var applied = false
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace { applied = true; return workspace.copy(applied = true) }
+        }
+        val judge = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                if (milestone.id == "final") store.update("plan") { it.copy(intent = ExecutionIntent.PAUSE) }
+                return Verdict(true, "Checked")
+            }
+        }
+        val fixture = fixture(workspace = workspace, verifier = judge); store = fixture.first
+        store.save(plan(stage("a")))
+        fixture.second.start(project.id); advanceTimeBy(500); runCurrent()
+        assertFalse(applied)
+        assertEquals(ExecutionIntent.PAUSE, store.planFor(project.id)?.intent)
+        assertNotEquals(PlanStatus.DONE, store.planFor(project.id)?.status)
+    }
+
+    @Test fun finalReviewGetsEveryApprovedCriterionAndKeepsExactFindings() = runTest {
+        val reviewed = mutableListOf<String>()
+        val judge = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                if (milestone.id == "final") reviewed += milestone.acceptance
+                return Verdict(true, "Checked ${milestone.acceptance}")
+            }
+        }
+        val (store, service) = fixture(verifier = judge)
+        store.save(plan(stage("a").copy(acceptance = "Exact criterion A"), stage("b").copy(acceptance = "Exact criterion B")))
+        service.start(project.id); advanceTimeBy(500); runCurrent()
+        assertEquals(setOf("Exact criterion A", "Exact criterion B"), reviewed.toSet())
+        val saved = store.planFor(project.id)!!
+        assertEquals(AcceptanceStatus.ACCEPTED, saved.finalAttempt?.acceptanceRecord?.status)
+        assertEquals(2, PlanningRequestContext.from(saved).acceptance?.findings?.size)
+    }
+
+    @Test fun finishedBackendWithoutReportCannotCompleteStage() = runTest {
+        val (store, service) = fixture(Runtime(report = ""))
+        store.save(plan(stage("a")))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertNotEquals(PlanStatus.DONE, saved.status)
+        assertNotEquals(MilestoneStatus.DONE, saved.milestones.single().status)
+        assertNull(saved.finalAttempt)
+    }
+
 }

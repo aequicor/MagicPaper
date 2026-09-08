@@ -66,6 +66,10 @@ import kotlinx.serialization.Serializable
     val waitingForEvent: String? = null,
     val chatTurns: List<StageChatTurn> = emptyList(),
     val engine: CodingEngine? = null,
+    val verificationSnapshot: String? = null,
+    val acceptanceRecord: AcceptanceRecord? = null,
+    val mergeAcceptanceRecord: AcceptanceRecord? = null,
+    val mergeVerificationSnapshot: String? = null,
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",
@@ -84,6 +88,11 @@ object DecisionCompiler {
     fun compile(plan: Plan): CompiledDecisionGraph {
         val errors = mutableListOf<String>()
         val stages = plan.milestones.associateBy { it.id }
+        plan.milestones.forEach { stage ->
+            val criteria = stage.acceptanceCriteria
+            if (criteria.any { it.id.isBlank() || it.description.isBlank() } || criteria.map { it.id }.distinct().size != criteria.size)
+                errors += "Некорректные критерии этапа ${stage.title}"
+        }
         if (stages.size != plan.milestones.size) errors += "Повторяющиеся идентификаторы этапов"
         if (plan.tree.isEmpty()) return validate(stages.keys.toList(), stages.mapValues { it.value.dependsOn.toSet() }, errors)
         val nodes = plan.tree.associateBy { it.id }

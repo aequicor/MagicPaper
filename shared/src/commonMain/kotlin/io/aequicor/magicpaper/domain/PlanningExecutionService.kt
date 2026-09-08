@@ -24,6 +24,7 @@ class PlanningExecutionService(
     private val verifier: MilestoneVerifier,
     private val workspaces: PlanningWorkspace = LocalPlanningWorkspace(),
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
 ) {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     val supported: Boolean get() = runtime.supported
@@ -200,6 +201,8 @@ class PlanningExecutionService(
                     active.entries.removeAll { it.value.isCompleted }
                     val compiled = DecisionCompiler.compile(plan)
                     if (!compiled.valid) { block(id, PlanningIssue(IssueKind.CONFIGURATION, compiled.errors.joinToString("\n"), requiresUser = true)); break }
+                    val waitCycle = plan.waitCycleProblem()
+                    if (waitCycle != null) { block(id, PlanningIssue(IssueKind.CONFIGURATION, waitCycle, requiresUser = true)); break }
                     if (plan.intent != ExecutionIntent.RUN || plan.issue != null || store.failure.value != null) {
                         active.values.toList().joinAll(); break
                     }
@@ -230,6 +233,7 @@ class PlanningExecutionService(
             if (plan.intent != ExecutionIntent.RUN || plan.issue != null || closing) return
             if (plan.selectedMilestones.all { it.completed } && chatHooks?.blockedStages(plan).orEmpty().isEmpty()) {
                 if (!verifyIntegration(id, project, workspace, judge!!)) return
+                if (!acceptanceStillValid(id, workspace.integrationPath)) return
                 if (store.planFor(id)!!.selectedMilestones.any { !it.completed }) {
                     store.update(id) { it.copy(finalAttempt = null, finalAttemptHistory = it.finalAttemptHistory + listOfNotNull(it.finalAttempt), phase = ExecutionPhase.EXECUTING) }
                     return
@@ -237,7 +241,13 @@ class PlanningExecutionService(
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
                 journal(id, "apply-intent")
                 val applied = applyResult(id, project, workspace, judge) ?: return
-                store.update(id) { it.copy(workspace = applied, phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE, issue = null) }
+                if (!acceptanceStillValid(id, workspace.integrationPath)) return
+                store.update(id) {
+                    require(it.intent == ExecutionIntent.RUN && it.issue == null &&
+                        it.finalAttempt?.acceptanceRecord?.status == AcceptanceStatus.ACCEPTED &&
+                        it.finalAttempt?.acceptanceRecord?.criteria == it.acceptanceCriteria()) { "Приёмка или намерение запуска изменились" }
+                    it.copy(workspace = applied, phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE, issue = null)
+                }
                 journal(id, "apply-complete")
             }
         } catch (e: CancellationException) { throw e }
@@ -327,9 +337,12 @@ class PlanningExecutionService(
                         attempt = withRetry(attempt, classify(failure ?: "Перенос прерван", uncertain = !ended))
                         persist(); block(id, attempt.error!!); return null
                     }
-                    attempt = attempt.copy(mergePhase = AttemptPhase.VERIFYING); persist()
+                    attempt = attempt.copy(mergePhase = AttemptPhase.VERIFYING,
+                        mergeVerificationSnapshot = workspaces.verificationSnapshot(conflict.workingPath)); persist()
                 }
-                val verdict = verifier.verify(Milestone("delivery", "Проверка переноса", description = plan.goal), plan.goal, attempt.mergeReport, judge)
+                val (check, verdict) = reviewAcceptance(plan, Milestone("delivery", "Проверка переноса", description = plan.goal),
+                    attempt.copy(verificationSnapshot = attempt.mergeVerificationSnapshot), conflict.workingPath, plan.acceptanceCriteria(), attempt.mergeReport, judge)
+                attempt = attempt.copy(mergeAcceptanceRecord = check); persist()
                 if (verdict.issue != null) {
                     attempt = withRetry(attempt, verdict.issue); persist(); block(id, attempt.error!!); return null
                 }
@@ -344,15 +357,20 @@ class PlanningExecutionService(
     private suspend fun verifyIntegration(id: String, project: CodingProject, workspace: PlanWorkspace, judge: LlmProfile): Boolean {
         val workspaces = workspaceFor(id)
         var plan = store.planFor(id)!!
-        if (plan.workspace?.applied == true) return true
         val finalId = "${plan.runId}-final" + if (plan.finalAttemptHistory.isEmpty()) "" else "-${plan.finalAttemptHistory.size + 1}"
         var attempt = plan.finalAttempt ?: StageAttempt(finalId, "$finalId-session",
             assignment(plan.selectedMilestones.first(), profiles.load()), path = workspace.integrationPath, startedAt = Id.now())
         if (attempt.engine == null) attempt = attempt.copy(engine = plan.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())))
-        if (attempt.phase == AttemptPhase.COMPLETE) return true
+        if (attempt.phase == AttemptPhase.COMPLETE && attempt.acceptanceRecord != null) return acceptanceStillValid(id, workspace.integrationPath)
+        if (attempt.phase == AttemptPhase.COMPLETE) attempt = attempt.copy(phase = AttemptPhase.PREPARED)
         suspend fun persist() { store.update(id) { it.copy(finalAttempt = safeAttempt(attempt.copy(updatedAt = Id.now())), phase = ExecutionPhase.VERIFYING) } }
         persist()
         if (attempt.phase != AttemptPhase.VERIFYING) {
+            attempt = attempt.copy(verificationSnapshot = workspaces.verificationSnapshot(workspace.integrationPath))
+            if (attempt.verificationSnapshot.isNullOrBlank()) {
+                block(id, PlanningIssue(IssueKind.CONFIGURATION, "Снимок файлов недоступен; итоговая приёмка не проводилась", requiresUser = true))
+                return false
+            }
             runtime.reconcile(attempt.sessionId)
             if (attempt.pendingToolExternal && attempt.pendingTool.isNotBlank()) {
                 block(id, PlanningIssue(IssueKind.UNCERTAIN,
@@ -394,13 +412,51 @@ class PlanningExecutionService(
             attempt = attempt.copy(phase = AttemptPhase.VERIFYING); persist()
         }
         workspaces.validateIntegration(workspace)
-        val verdict = verifier.verify(Milestone("final", "Итоговая проверка", description = plan.goal), plan.goal, attempt.report, judge)
+        plan = store.planFor(id)!!
+        val (acceptance, verdict) = reviewAcceptance(plan, Milestone("final", "Итоговая проверка", description = plan.goal),
+            attempt, workspace.integrationPath, plan.acceptanceCriteria(), attempt.report, judge)
+        attempt = attempt.copy(acceptanceRecord = acceptance)
+        persist()
         if (!verdict.passed) {
             attempt = withRetry(attempt, verdict.issue ?: PlanningIssue(IssueKind.VERIFICATION, verdict.note, requiresUser = true))
             persist(); block(id, attempt.error!!); return false
         }
         attempt = attempt.copy(phase = AttemptPhase.COMPLETE, error = null); persist()
         return true
+    }
+
+    private suspend fun reviewAcceptance(plan: Plan, stage: Milestone, attempt: StageAttempt, path: String,
+        criteria: List<AcceptanceCriterion>, report: String, judge: LlmProfile): Pair<AcceptanceRecord, Verdict> {
+        val snapshot = attempt.verificationSnapshot ?: workspaces.verificationSnapshot(path)
+        val evidence = if (snapshot.isNullOrBlank()) emptyList() else acceptanceChecks.collect(criteria, path, snapshot)
+        val reviewed = verifier.review(stage, criteria, plan.goal, report + "\nПроверки приложения:\n" +
+            evidence.joinToString("\n") { "${it.criterionId}: ${it.environment}: ${it.status}: ${it.detail}" }, judge)
+        val skipped = if (stage.id == "final") plan.selectedMilestones.filter { it.status == MilestoneStatus.SKIPPED }.flatMap { it.criteria() }.map { it.id }.toSet() else emptySet()
+        val findings = reviewed.findings.map { if (it.criterionId in skipped) it.copy(status = CheckStatus.SKIPPED, observed = "Этап пропущен; проверка не выполнялась") else it }
+        val record = AcceptanceGate.evaluate(AcceptanceRecord(plan.runId, attempt.id, snapshot.orEmpty(), criteria, findings, evidence),
+            criteria, workspaces.verificationSnapshot(path))
+        val issue = reviewed.issue ?: if (record.status in setOf(AcceptanceStatus.BLOCKED, AcceptanceStatus.PARTIAL, AcceptanceStatus.STALE))
+            PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true) else null
+        return record to Verdict(record.status == AcceptanceStatus.ACCEPTED && issue == null,
+            record.findings.singleOrNull()?.observed ?: record.summary(), issue)
+    }
+
+    private suspend fun acceptanceStillValid(id: String, path: String): Boolean {
+        val plan = store.planFor(id) ?: return false
+        if (plan.intent != ExecutionIntent.RUN || plan.issue != null) return false
+        val attempt = plan.finalAttempt ?: return false
+        val record = attempt.acceptanceRecord ?: return false
+        val snapshot = workspaces.verificationSnapshot(path)
+        val saved = store.update(id) { current ->
+            val check = AcceptanceGate.evaluate(record, current.acceptanceCriteria(), snapshot)
+            if (current.runId != record.runId || current.finalAttempt?.id != record.attemptId ||
+                current.finalAttempt.acceptanceRecord != record || current.intent != ExecutionIntent.RUN) current
+            else current.copy(finalAttempt = current.finalAttempt.copy(acceptanceRecord = check),
+                issue = if (check.status == AcceptanceStatus.ACCEPTED) current.issue else PlanningIssue(IssueKind.VERIFICATION, check.summary(), requiresUser = true),
+                status = if (check.status == AcceptanceStatus.ACCEPTED) current.status else PlanStatus.FAILED)
+        }
+        return saved.runId == record.runId && saved.finalAttempt?.id == record.attemptId && saved.intent == ExecutionIntent.RUN &&
+            saved.issue == null && saved.finalAttempt?.acceptanceRecord?.status == AcceptanceStatus.ACCEPTED
     }
 
     private fun assignment(m: Milestone, roster: List<LlmProfile>): StageAssignment {
@@ -551,9 +607,10 @@ class PlanningExecutionService(
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
                 if (chatHooks != null) {
-                    attempt = attempt.copy(awaitingPlanner = true, coordinationPending = true)
+                    attempt = attempt.copy(awaitingPlanner = true, coordinationPending = true,
+                        verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
                     saveAttempt(id, stageId, attempt)
-                }
+                } else attempt = attempt.copy(verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
                 val decision = chatHooks?.finished(store.planFor(id)!!, stage, attempt)
                 if (decision != null) {
                     attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1,
@@ -576,7 +633,10 @@ class PlanningExecutionService(
             }
             if (attempt.phase == AttemptPhase.VERIFYING) {
                 val verificationPlan = store.planFor(id)!!
-                val verdict = verifier.verify(stage, verificationPlan.goal, verificationPlan.stageVerificationReport(stageId, attempt), judge)
+                val (acceptance, verdict) = reviewAcceptance(verificationPlan, stage, attempt, attempt.path,
+                    stage.criteria(), verificationPlan.stageVerificationReport(stageId, attempt), judge)
+                attempt = attempt.copy(acceptanceRecord = acceptance)
+                saveAttempt(id, stageId, attempt)
                 if (verdict.issue != null) {
                     val issue = if (verdict.issue.kind == IssueKind.TRANSIENT && attempt.transportRetries < 3) {
                         attempt = attempt.copy(transportRetries = attempt.transportRetries + 1)
@@ -692,6 +752,7 @@ class PlanningExecutionService(
     private val shared = object : PlanningWorkspace by LocalPlanningWorkspace() {
         override suspend fun acquire(project: CodingProject) = true
         override suspend fun release(project: CodingProject) = Unit
+        override suspend fun verificationSnapshot(path: String) = workspaces.verificationSnapshot(path)
     }
     private suspend fun workspaceFor(id: String) = if (store.planFor(id)?.sharedWorkspace == true) shared else workspaces
     private suspend fun canRun(id: String) = !closing && store.failure.value == null && store.planFor(id)?.intent == ExecutionIntent.RUN
@@ -756,6 +817,9 @@ class PlanningExecutionService(
         }
     }
     private fun safeAttempt(a: StageAttempt) = a.copy(prompt = safeText(a.prompt), report = safeText(a.report), activity = safeText(a.activity),
+        acceptanceRecord = a.acceptanceRecord?.let { record -> record.copy(
+            findings = record.findings.map { it.copy(observed = safeText(it.observed), artifacts = it.artifacts.map(::safeText)) },
+            evidence = record.evidence.map { it.copy(detail = safeText(it.detail), artifacts = it.artifacts.map(::safeText)) }) },
         steps = a.steps.filter { it.isVisibleActivity }.map { it.copy(title = safeText(it.title), result = safeText(it.result), tool = safeText(it.tool), callId = safeText(it.callId)) },
         mergeReport = safeText(a.mergeReport), pendingTool = safeText(a.pendingTool), error = a.error?.let { it.copy(message = safeText(it.message)) })
     private fun classify(message: String, uncertain: Boolean = false): PlanningIssue {

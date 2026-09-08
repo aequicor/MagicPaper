@@ -140,7 +140,33 @@ internal fun Plan.applyScheduleCommands(
             })
         })
     }
+    p.waitCycleProblem()?.let { error(it) }
     return p
+}
+
+/** Include event waits in the execution dependency graph before any command is committed. */
+internal fun Plan.waitCycleProblem(): String? {
+    val graph = DecisionCompiler.compile(this).dependencies.mapValues { (_, deps) ->
+        deps.filter { id -> selectedMilestones.any { it.id == id && !it.completed } }.toMutableSet()
+    }.toMutableMap()
+    selectedMilestones.filterNot { it.completed }.forEach { stage ->
+        val ruleId = stage.attempts.lastOrNull()?.waitingForEvent ?: return@forEach
+        val rule = scheduledMessages.firstOrNull { it.id == ruleId } ?: return@forEach
+        if (rule.status in setOf(ScheduledMessageStatus.CANCELLED, ScheduledMessageStatus.ERROR) || rule.trigger.kind != MessageTriggerKind.EVENT) return@forEach
+        if (messageEvents.any { it.matches(rule) }) return@forEach
+        // A timeout delivers a decision to the orchestrator, not progress for this worker.
+        val targets = if (rule.trigger.event == MessageEventKind.RUN_COMPLETED) selectedMilestones.filterNot { it.completed }.map { it.id }
+            else listOfNotNull(rule.trigger.taskId).filter { id -> selectedMilestones.any { it.id == id && !it.completed } }
+        graph.getOrPut(stage.id) { mutableSetOf() }.addAll(targets)
+    }
+    val visiting = mutableSetOf<String>(); val done = mutableSetOf<String>()
+    fun cycle(id: String): Boolean {
+        if (id in done) return false
+        if (!visiting.add(id)) return true
+        if (graph[id].orEmpty().any(::cycle)) return true
+        visiting.remove(id); done.add(id); return false
+    }
+    return if (graph.keys.any(::cycle)) "Цикл ожидания: этап ожидает событие, для которого необходимо его собственное завершение. Назначь независимое продолжение." else null
 }
 
 internal fun MessageEvent.matches(rule: ScheduledMessage): Boolean {

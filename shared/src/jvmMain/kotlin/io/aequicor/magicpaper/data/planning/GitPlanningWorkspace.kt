@@ -17,6 +17,7 @@ class GitPlanningWorkspace(
     private val dataRoot: File = File(System.getProperty("user.home"), ".MagicPaper/planning"),
     private val checkpoint: (String) -> Unit = {},
 ) : PlanningWorkspace {
+    override suspend fun verificationSnapshot(path: String): String = io.aequicor.magicpaper.data.planning.verificationSnapshot(path)
     private val locks = mutableMapOf<String, Pair<RandomAccessFile, FileLock>>()
     private var storeOwner: Pair<RandomAccessFile, FileLock>? = null
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }

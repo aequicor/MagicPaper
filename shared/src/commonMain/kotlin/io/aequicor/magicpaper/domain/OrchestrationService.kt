@@ -254,6 +254,9 @@ class OrchestrationService(
         Когда исполнитель вернул WAIT, проверь waitFor и создай правило с waitTaskId=его taskId и targetTaskId=его taskId,
         text=конкретное продолжение после события. Не запускай его снова только ради проверки статуса.
         Для относительного времени используй afterMillis/timeoutMillis: срок вычисляет приложение при регистрации. Для абсолютного времени используй UTC в миллисекундах; при неоднозначном часовом поясе уточни.
+        QUEUED означает неизменяемую доставку: UPDATE/CANCEL такого правила запрещены. Обработай доставленное поручение сейчас.
+        Состояние приёмки определяет приложение; текст «всё готово» его не меняет. Для повторной проверки передавай точные сохранённые findings.
+        Автоматическое сообщение не может подтвердить план или отменить пользовательскую остановку.
         Только разовые правила. Изменение scope задачи по-прежнему требует предложения плана и подтверждения.
     """.trimIndent()
 
@@ -593,7 +596,7 @@ class OrchestrationService(
             UserTurnIntent.SCHEDULE -> {
                 require(decision.schedules.isNotEmpty()) { "Нет операций с правилами" }
                 val saved = messageScheduler.apply(current.id, decision.schedules, input.id, session.id,
-                    state(session.id, session.projectId).questions.filter { it.planId == current.id }.map { it.id }.toSet())
+                    state(session.id, session.projectId).questions.filter { it.planId == current.id }.map { it.id }.toSet(), expectedRunId = current.runId)
                 val ids = decision.schedules.indices.mapNotNull { saved.scheduleReceipts["${input.id}-schedule-$it"] }
                 append(session.projectId, session.id, CodingMessage("${input.id}-reply", CodingRole.AGENT,
                     decision.reply.ifBlank { "Правила сохранены." } + "\nПравила: ${ids.joinToString()}", createdAt = clock()))
@@ -613,6 +616,9 @@ class OrchestrationService(
                 publish(saved)
             }
             UserTurnIntent.CONTROL -> {
+                require(input.scheduledRuleId == null || decision.command !in listOf("resume", "confirm")) {
+                    "Автоматическое сообщение не может подтвердить план или отменить пользовательскую остановку"
+                }
                 when (decision.command) {
                     "pause" -> execution.pause(current.id)
                     "stop" -> execution.stop(current.id)
@@ -639,8 +645,12 @@ class OrchestrationService(
         val roster = profiles.load()
         val profile = (session.modelSelection ?: plan.plannerSelection)?.let { ProfileResolver.selection(it, roster) }
             ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster) ?: error("Подключите модель оркестратора")
-        val requests = state(session.id, session.projectId).openQuestions(plan.id)
+        var requests = state(session.id, session.projectId).openQuestions(plan.id)
         val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
+        fun context(current: Plan): String =
+            "Актуальное состояние: runId=${current.runId}; intent=${current.intent}; phase=${current.phase}; status=${current.status}; ошибка=${current.issue?.message.orEmpty()}\n" +
+                "Приёмка: ${current.finalAttempt?.acceptanceRecord?.let { json.encodeToString(AcceptanceRecord.serializer(), it) } ?: "не подтверждена"}\n" +
+                "${schedulingContext(current)}\nОткрытые запросы: ${json.encodeToString(kotlinx.serialization.builtins.ListSerializer(OrchestrationQuestion.serializer()), requests)}"
         val messages = mutableListOf(LlmMessage(LlmChatRole.SYSTEM, """
             Ты оркестратор диалога. Определи смысл сообщения и верни JSON:
             {"intent":"DISCUSS|REFINE|ANSWER|INSTRUCT|CONTROL|SCHEDULE","reply":"ответ пользователю","replyTo":null,"completeAnswer":true,"command":"","questions":[]}.
@@ -665,24 +675,41 @@ class OrchestrationService(
         }
         var lastProblem: String? = savedDecisionProblem
         repeat(3) { index ->
-            _drafts.update { it + (session.id to CodingDraft(active = true, awaitingModel = true, timelineId = "${input.id}-reply")) }
+            val current = store.planFor(plan.id) ?: error("План удалён")
+            require(current.runId == plan.runId) { "Запуск изменился во время ответа; решение не применено" }
+            requests = state(session.id, session.projectId).openQuestions(plan.id)
+            messages[1] = LlmMessage(LlmChatRole.USER, context(current) +
+                "\nЦель: ${current.goal}; утверждён=${current.confirmedRevision != null}; предложение=${current.proposal?.explanation}; этапы=${current.selectedMilestones.joinToString { "${it.id}: ${it.stageLabel()}: ${it.status}; проверка=${it.checkNote}; отчёт=${it.report}" }}\n" +
+                "Источник: ${if (input.scheduledRuleId == null) "пользователь" else "автоматическая доставка ${input.scheduledRuleId}"}\nДиалог (история):\n$history\nСообщение: ${input.text}")
+            _drafts.update { all ->
+                val retained = all[session.id]?.takeIf { it.timelineId == "${input.id}-reply" }?.steps.orEmpty()
+                all + (session.id to CodingDraft(steps = retained.map { it.copy(running = false) }, active = true, awaitingModel = true, timelineId = "${input.id}-reply"))
+            }
             requirePlanningRequestSize(messages)
             val raw = gateway.completeWithActivity(profile, messages.toList()) { step ->
                 _drafts.update { all ->
                     val previous = all[session.id] ?: CodingDraft(timelineId = "${input.id}-reply")
                     all + (session.id to previous.copy(active = true, awaitingModel = false,
-                        steps = previous.steps.withPlanningActivity(step)))
+                            steps = previous.steps.withPlanningActivity(step.inPlanningCall("${input.id}:interpret:$index"))))
                 }
             }
             val result = runCatching { json.decodeFromString<UserTurnDecision>(raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) }.getOrNull()
+            val latest = store.planFor(plan.id) ?: error("План удалён")
+            require(latest.runId == current.runId) { "Запуск изменился во время ответа; решение не применено" }
             val scheduleProblem = result?.takeIf { it.intent == UserTurnIntent.SCHEDULE }?.let { inputScheduleProblem(plan, input, it) }
             lastProblem = scheduleProblem
             val valid = result != null && scheduleProblem == null && (result.intent != UserTurnIntent.ANSWER || requests.any { it.id == result.replyTo }) &&
-                (result.intent != UserTurnIntent.CONTROL || result.command in listOf("pause", "stop", "resume", "confirm")) &&
+                (result.intent != UserTurnIntent.CONTROL || result.command in listOf("pause", "stop", "resume", "confirm") &&
+                    (input.scheduledRuleId == null || result.command !in listOf("resume", "confirm"))) &&
                 (result.intent != UserTurnIntent.DISCUSS || result.reply.isNotBlank()) && result.questions.validQuestions() &&
-                (result.intent != UserTurnIntent.INSTRUCT || (plan.confirmedRevision != null && plan.phase != ExecutionPhase.COMPLETE && plan.selectedMilestones.any { it.id == result.stageId }))
+                (result.intent != UserTurnIntent.INSTRUCT || (current.confirmedRevision != null && current.finalAttempt == null && current.phase != ExecutionPhase.COMPLETE && current.selectedMilestones.any { it.id == result.stageId && !it.completed }))
             if (valid) return if (result!!.intent == UserTurnIntent.CONTROL && result.command == "confirm") result.copy(proposalId = plan.proposal?.id) else result
             if (index < 2) {
+                _drafts.update { all ->
+                    val draft = all[session.id] ?: CodingDraft(timelineId = "${input.id}-reply")
+                    all + (session.id to draft.copy(steps = draft.steps + CodingStep(CodingStepKind.INFO,
+                        "Предыдущий ответ не принят; действия из него не выполнены. Исправляю решение.", id = "${input.id}:rejected:$index")))
+                }
                 messages += LlmMessage(LlmChatRole.ASSISTANT, raw)
                 messages += LlmMessage(LlmChatRole.USER, "Ответ не принят: ${scheduleProblem ?: "Исправь JSON и адресат ответа."} Действия из этого ответа ещё не выполнены. Исправь весь ответ по текущему состоянию плана.")
             }
@@ -762,9 +789,10 @@ class OrchestrationService(
         val pending = store.update(id) { it.copy(pendingRequest = text, requestId = requestId,
             dialogue = if (it.dialogue.any { m -> m.id == requestId }) it.dialogue else it.dialogue + PlanningMessage(requestId, "user", text)) }
         val sessionId = pending.parentSessionId
-        val activity = MutableStateFlow<List<CodingStep>>(emptyList())
+        val activity = MutableStateFlow(_drafts.value[sessionId]?.takeIf { it.timelineId == "$requestId-reply" }
+            ?.steps.orEmpty().map { it.copy(running = false) })
         fun event(rawStep: CodingStep) {
-            activity.update { it.withPlanningActivity(rawStep) }
+            activity.update { it.withPlanningActivity(rawStep.inPlanningCall("$requestId:refine")) }
             _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
         }
         try {
@@ -776,7 +804,8 @@ class OrchestrationService(
                 (pending.finalAttempt != null && !pending.canExtendAfterFinalVerification)
             val effective = pending.copy(plannerSelection = choice, searchProvider = session.searchProvider,
                 tree = pending.proposal?.tree ?: pending.tree, milestones = pending.proposal?.milestones ?: pending.milestones,
-                finalAttempt = if (continuation) null else pending.finalAttempt)
+                finalAttempt = if (continuation) null else pending.finalAttempt,
+                finalAttemptHistory = pending.finalAttemptHistory + if (continuation) listOfNotNull(pending.finalAttempt) else emptyList())
             val firstRequest = projects.messages(pending.projectId, sessionId).count { it.role == CodingRole.USER && it.planning?.planId == pending.id } == 1 && pending.milestones.isEmpty()
             val request = if (continuation) "$text\nПодготовь предложение доработки. Сохрани завершённые этапы и их идентификаторы, добавь новые этапы с критериями. Запуск потребует подтверждения пользователя." else if (firstRequest) "$text\nСначала задай уточняющие вопросы с вариантами в questions и дождись ответов. Пока не строй дерево этапов." else text
             val result = composer.refine(effective, request, profile, roster, store.dossiers.value, settings.load(), ::event) { event(CodingStep(CodingStepKind.INFO, it)) }

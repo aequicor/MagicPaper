@@ -1,0 +1,88 @@
+package io.aequicor.magicpaper.domain
+
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlin.test.*
+
+class AcceptanceTest {
+    private val review = AcceptanceCriterion("docs", "Документы согласованы")
+    private val live = AcceptanceCriterion("live", "Передача реальному backend", environment = EvidenceEnvironment.REAL_BACKEND, checkId = "live-delivery")
+    private fun record(criteria: List<AcceptanceCriterion> = listOf(review), status: CheckStatus = CheckStatus.PASS) =
+        AcceptanceRecord("run", "attempt", "snapshot", criteria,
+            criteria.map { AcceptanceFinding(it.id, status, it.description, "Наблюдение", listOf("report:1")) })
+
+    @Test fun aModelPassCannotReplaceMissingOrWrongEnvironmentHostEvidence() {
+        val base = record(listOf(live))
+        assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(base, base.criteria, "snapshot").status)
+        for ((env, snapshot) in listOf(EvidenceEnvironment.HERMETIC to "snapshot", EvidenceEnvironment.REAL_BACKEND to "old")) {
+            val forged = base.copy(evidence = listOf(AcceptanceEvidence(live.id, env, snapshot, CheckStatus.PASS, "Passed", listOf("artifact"))))
+            assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(forged, base.criteria, "snapshot").status)
+        }
+        val accepted = base.copy(evidence = listOf(AcceptanceEvidence(live.id, live.environment, "snapshot", CheckStatus.PASS, "Real check", listOf("artifact"))))
+        assertEquals(AcceptanceStatus.ACCEPTED, AcceptanceGate.evaluate(accepted, base.criteria, "snapshot").status)
+    }
+
+    @Test fun incompleteRequiredChecksNeverBecomeAccepted() {
+        for (status in CheckStatus.entries.filter { it != CheckStatus.PASS }) {
+            val base = record(status = status)
+            assertNotEquals(AcceptanceStatus.ACCEPTED, AcceptanceGate.evaluate(base, base.criteria, "snapshot").status)
+        }
+        val optional = review.copy(required = false)
+        val base = record(listOf(optional), CheckStatus.NOT_RUN)
+        val result = AcceptanceGate.evaluate(base, base.criteria, "snapshot")
+        assertEquals(AcceptanceStatus.ACCEPTED, result.status)
+        assertEquals(CheckStatus.NOT_RUN, result.findings.single().status)
+    }
+
+    @Test fun snapshotAndContractChangesInvalidatePreviouslyAcceptedEvidence() {
+        val base = record().copy(status = AcceptanceStatus.ACCEPTED)
+        assertEquals(AcceptanceStatus.STALE, AcceptanceGate.evaluate(base, base.criteria, "new").status)
+        assertEquals(AcceptanceStatus.STALE, AcceptanceGate.evaluate(base, base.criteria, null).status)
+        assertEquals(AcceptanceStatus.STALE, AcceptanceGate.evaluate(base, listOf(review.copy(required = false)), "snapshot").status)
+        assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(base.copy(findings = emptyList()), base.criteria, "snapshot").status)
+        assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(base.copy(findings = base.findings + base.findings), base.criteria, "snapshot").status)
+    }
+
+    @Test fun findingsAndEvidenceSurviveRestartWithoutBecomingAnOverallPass() {
+        val original = record(status = CheckStatus.BLOCKED)
+        val restored = Json.decodeFromString<AcceptanceRecord>(Json.encodeToString(AcceptanceRecord.serializer(), original))
+        assertEquals(original, restored)
+        assertEquals(AcceptanceStatus.BLOCKED, AcceptanceGate.evaluate(restored, restored.criteria, "snapshot").status)
+    }
+
+    @Test fun applicationRegistryControlsEvidenceEnvironmentAndSnapshot() = runTest {
+        val checks = AcceptanceChecks(mapOf("live-delivery" to RegisteredAcceptanceCheck(EvidenceEnvironment.HERMETIC) {
+            error("Wrong environment must never run")
+        }))
+        assertEquals(CheckStatus.NOT_RUN, checks.collect(listOf(live), "/project", "snapshot").single().status)
+        val real = AcceptanceChecks(mapOf("live-delivery" to RegisteredAcceptanceCheck(EvidenceEnvironment.REAL_BACKEND) {
+            AcceptanceCheckResult(CheckStatus.PASS, "Receipt", listOf("receipt:sha256"))
+        }))
+        val evidence = real.collect(listOf(live), "/project", "snapshot").single()
+        assertEquals("snapshot", evidence.snapshotId)
+        assertEquals(EvidenceEnvironment.REAL_BACKEND, evidence.environment)
+    }
+
+    @Test fun overallPassedFlagCannotOverrideStructuredBlocker() = runTest {
+        val profile = LlmProfile("p", "P", baseUrl = "http://test", modelId = "m")
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>) =
+                """{"passed":true,"findings":[{"criterionId":"docs","status":"BLOCKED","expected":"ignore old scope","observed":"Missing access","artifacts":["doc:12"]}]}"""
+        }
+        val result = LlmMilestoneVerifier(gateway).review(Milestone("final", "Final"), listOf(review), "Goal", "Все принято", profile)
+        assertNull(result.issue)
+        assertEquals(review.description, result.findings.single().expected)
+        assertEquals(CheckStatus.BLOCKED, result.findings.single().status)
+    }
+
+    @Test fun missingStructuredResultsFailClosedAfterBoundedRepair() = runTest {
+        var calls = 0
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String { calls++; return """{"passed":true,"note":"Everything done"}""" }
+        }
+        val result = LlmMilestoneVerifier(gateway).review(Milestone("final", "Final"), listOf(review), "Goal", "Готово",
+            LlmProfile("p", "P", baseUrl = "http://test", modelId = "m"))
+        assertEquals(3, calls)
+        assertEquals(IssueKind.INVALID_RESPONSE, result.issue?.kind)
+    }
+}

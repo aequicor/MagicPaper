@@ -18,6 +18,7 @@ internal data class PlanningRequestContext(
     val tree: List<DecisionNode>,
     val milestones: List<Milestone>,
     val dialogue: List<PlanningMessage>,
+    val acceptance: AcceptanceRecord? = null,
 ) {
     companion object {
         fun from(plan: Plan) = PlanningRequestContext(
@@ -25,6 +26,7 @@ internal data class PlanningRequestContext(
             plan.sharedWorkspace, plan.parallelism, plan.priorities, plan.tree,
             plan.milestones.map { it.copy(attempts = emptyList(), report = "") },
             plan.dialogue.map { it.copy(activity = emptyList()) },
+            plan.finalAttempt?.acceptanceRecord ?: plan.finalAttemptHistory.lastOrNull()?.acceptanceRecord,
         )
     }
 }

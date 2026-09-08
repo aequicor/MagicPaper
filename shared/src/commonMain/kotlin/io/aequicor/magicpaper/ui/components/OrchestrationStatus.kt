@@ -85,6 +85,16 @@ internal fun OrchestrationStatus(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(phase, style = MaterialTheme.typography.bodyMedium)
+                    plan?.finalAttempt?.acceptanceRecord?.let { record ->
+                        Text(when (record.status) {
+                            AcceptanceStatus.ACCEPTED -> "Обязательные критерии приняты"
+                            AcceptanceStatus.PARTIAL -> "Приёмка частичная: часть проверок не выполнена"
+                            AcceptanceStatus.BLOCKED -> "Приёмка заблокирована"
+                            AcceptanceStatus.FAILED -> "Приёмка не пройдена"
+                            AcceptanceStatus.STALE -> "Результаты проверки устарели"
+                            AcceptanceStatus.UNKNOWN -> "Приёмка не подтверждена"
+                        }, style = MaterialTheme.typography.bodySmall)
+                    }
                     if (session.interactions.isNotEmpty()) Text("Обращений: ${session.interactions.size}", style = MaterialTheme.typography.bodySmall)
                     if (stages.isNotEmpty()) Text("Текущий запуск: $done/${stages.size} этапов", style = MaterialTheme.typography.labelMedium)
                     questions.take(2).forEach { q -> Text("Ответ для: ${q.scopeLabel}", color = MaterialTheme.colorScheme.primary,

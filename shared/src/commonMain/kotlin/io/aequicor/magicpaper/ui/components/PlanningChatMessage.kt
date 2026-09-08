@@ -41,6 +41,9 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
                 SelectionContainer { Text(stage.stageLabel(), style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)) }
                 if (stage.description.isNotBlank()) ChatMarkdown(stage.description)
                 if (stage.acceptance.isNotBlank()) SelectionContainer { Text("Критерии готовности: ${stage.acceptance}", style = MaterialTheme.typography.bodyLarge) }
+                stage.acceptanceCriteria.forEach { criterion ->
+                    Text("${if (criterion.required) "Обязательно" else "Необязательно"}: ${criterion.description} · ${criterion.environment.label()}", style = MaterialTheme.typography.bodySmall)
+                }
                 if (stage.dependsOn.isNotEmpty()) Text("После: " + stage.dependsOn.joinToString { id ->
                     display.milestones.firstOrNull { it.id == id }?.title ?: id
                 }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

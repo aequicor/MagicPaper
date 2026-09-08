@@ -238,4 +238,37 @@ class MessageSchedulerTest {
         assertEquals(record.id, view.id)
     }
 
+    @Test fun workerCannotWaitForOwnRunCompletionOrDependentWorker() {
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("model", "m"))
+        val base = plan().copy(milestones = plan().milestones.map { it.copy(attempts = listOf(attempt)) })
+        fun wait(p: Plan, task: String, trigger: MessageTrigger) = p.applyScheduleCommands(
+            listOf(ScheduleCommand(trigger = trigger, targetTaskId = task, waitTaskId = task, text = "Continue")),
+            "wait-$task", "orchestrator", emptySet(), 100, task)
+        assertContains(assertFailsWith<IllegalStateException> {
+            wait(base, "a", MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.RUN_COMPLETED))
+        }.message.orEmpty(), "Цикл ожидания")
+        val first = wait(base, "a", MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.TASK_SUCCEEDED, taskId = "b"))
+        assertFailsWith<IllegalStateException> {
+            wait(first, "b", MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.TASK_SUCCEEDED, taskId = "a"))
+        }
+        val depends = base.copy(milestones = base.milestones.map { if (it.id == "b") it.copy(dependsOn = listOf("a")) else it })
+        assertFailsWith<IllegalStateException> {
+            wait(depends, "a", MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.RESULT_RETURNED, taskId = "b"))
+        }
+        assertNull(first.waitCycleProblem())
+    }
+
+    @Test fun staleRunCommandsAreRejectedBeforeCreatingAnyReceipt() = runTest {
+        val store = PlanningStore(JsonPlanningRepository(InMemoryKeyValueStore(), Json { encodeDefaults = true }))
+        store.save(plan())
+        val scheduler = MessageScheduler(store, backgroundScope, { _, _ -> true })
+        val failure = assertFailsWith<ScheduleConflict> {
+            scheduler.apply("plan", listOf(ScheduleCommand(trigger = MessageTrigger(MessageTriggerKind.AT_TIME, at = 100), text = "Old")),
+                "request", "orchestrator", emptySet(), expectedRunId = "previous-run")
+        }
+        assertEquals(ScheduleConflictCode.STALE_RUN, failure.code)
+        assertTrue(store.planFor("plan")!!.scheduleReceipts.isEmpty())
+        assertTrue(store.planFor("plan")!!.scheduledMessages.isEmpty())
+    }
+
 }

@@ -63,6 +63,12 @@ internal fun planningReplyPreview(raw: String): String {
 internal fun CodingStep.planningPreview(): CodingStep =
     if (kind == CodingStepKind.ANSWER) copy(title = planningReplyPreview(title)) else this
 
+/** Provider-local identifiers can repeat across interpretation, repairs and refinement. */
+internal fun CodingStep.inPlanningCall(call: String): CodingStep = copy(
+    id = "$call:${id.ifBlank { "$kind:$callId" }}",
+    callId = "$call:$callId",
+)
+
 /** Replace one provider fragment in place; hidden activity must never replace the whole answer. */
 internal fun List<CodingStep>.withPlanningActivity(raw: CodingStep): List<CodingStep> {
     val step = raw.planningPreview()
@@ -79,9 +85,12 @@ internal fun List<CodingStep>.withPlanningActivity(raw: CodingStep): List<Coding
 internal fun CodingMessage.withPlanningDraft(draft: CodingDraft?): CodingMessage {
     if (role != CodingRole.AGENT || draft?.timelineId != id) return this
     val answer = draft.steps.lastOrNull { it.kind == CodingStepKind.ANSWER && it.title.isNotBlank() }
-    val savedSteps = steps.ifEmpty {
+    val persisted = steps.ifEmpty {
         if (answer != null && text.isNotBlank()) listOf(CodingStep(CodingStepKind.ANSWER, text)) else emptyList()
     }
+    val retained = draft.steps.filter { it.kind == CodingStepKind.ANSWER && it.id != answer?.id &&
+        persisted.none { saved -> saved.id == it.id } }.map { it.copy(running = false) }
+    val savedSteps = retained + persisted
     val lastAnswer = savedSteps.indexOfLast { it.kind == CodingStepKind.ANSWER }
     return copy(timelineId = draft.timelineId, steps = savedSteps.mapIndexed { index, step ->
         if (index == lastAnswer && step.id.isBlank() && answer != null) step.copy(id = answer.id) else step

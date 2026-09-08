@@ -59,6 +59,9 @@ internal fun PlanningProposalDetails(plan: Plan, awaitingAnswers: Boolean, onCon
         Text(stage.stageLabel(), fontWeight = FontWeight.SemiBold)
         Text(stage.description, style = MaterialTheme.typography.bodyMedium)
         Text("Критерии: ${stage.acceptance}", style = MaterialTheme.typography.bodySmall)
+        stage.acceptanceCriteria.forEach { criterion ->
+            Text("${if (criterion.required) "Обязательно" else "Необязательно"}: ${criterion.description} · ${criterion.environment.label()}", style = MaterialTheme.typography.bodySmall)
+        }
         stage.assignment?.let { assignment ->
             Text("Исполнитель: ${assignment.displayName.ifBlank { assignment.modelId }} · ${assignment.effort.shortLabel}",
                 style = MaterialTheme.typography.bodySmall)

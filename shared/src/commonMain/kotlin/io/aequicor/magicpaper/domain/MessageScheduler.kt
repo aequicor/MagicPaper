@@ -7,6 +7,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+enum class ScheduleConflictCode { STALE_RUN, ALREADY_DELIVERED }
+class ScheduleConflict(val code: ScheduleConflictCode, val runId: String, val ruleId: String?, message: String) : IllegalArgumentException(message)
+
 /** Application lifetime, independent of session/model turns. The inbox is the durable delivery boundary. */
 class MessageScheduler(
     private val store: PlanningStore,
@@ -37,12 +40,18 @@ class MessageScheduler(
     }
 
     suspend fun apply(planId: String, commands: List<ScheduleCommand>, origin: String, author: String,
-        questionIds: Set<String>, waitingTask: String? = null): Plan = lock.withLock {
+        questionIds: Set<String>, waitingTask: String? = null, expectedRunId: String? = null): Plan = lock.withLock {
         val p = store.planFor(planId) ?: error("План не найден")
+        if (expectedRunId != null && expectedRunId != p.runId)
+            throw ScheduleConflict(ScheduleConflictCode.STALE_RUN, p.runId, null, "Запуск изменился; команда не применена")
         if (commands.indices.all { "$origin-schedule-$it" in p.scheduleReceipts }) return@withLock p
         val problem = deliveryProblem(p, commands, origin)
-        require(problem == null) { problem!! }
-        store.update(planId) { it.applyScheduleCommands(commands, origin, author, questionIds, now(), waitingTask) }
+        if (problem != null) throw ScheduleConflict(ScheduleConflictCode.ALREADY_DELIVERED, p.runId,
+            commands.firstOrNull { it.operation != ScheduleOperation.CREATE }?.ruleId, problem)
+        store.update(planId) {
+            if (it.runId != p.runId) throw ScheduleConflict(ScheduleConflictCode.STALE_RUN, it.runId, null, "Запуск изменился; команда не применена")
+            it.applyScheduleCommands(commands, origin, author, questionIds, now(), waitingTask)
+        }
     }
 
     /** Check the same durable inbox boundary as apply, without saving rules or delivering messages. */
