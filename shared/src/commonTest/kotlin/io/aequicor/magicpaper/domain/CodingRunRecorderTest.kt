@@ -293,24 +293,21 @@ class CodingSessionStatusTest {
     }
 
     @Test
-    fun agentQuestionWaitsForConfirmation() {
-        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Удалить файл?"))))
-        // Вопрос под markdown-обёрткой тоже считается.
-        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Продолжить?**"))))
-        // Вопрос в последней строке многострочного ответа.
-        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Готово.\n\nУдалить черновик?"))))
-        // А вот вопрос в середине — уже не ждущая сессия.
+    fun proseQuestionsDoNotCreateAttention() {
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(agent("Удалить файл?"))))
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(agent("Продолжить?**"))))
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(agent("Готово.\n\nУдалить черновик?"))))
         assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(agent("Спросишь? Вот и всё, закончил."))))
     }
 
     @Test
-    fun unansweredPromptWaits() {
-        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(user("задача"), user("ещё одна"))))
+    fun unansweredPromptDoesNotDefineStatus() {
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(user("задача"), user("ещё одна"))))
     }
 
     @Test
-    fun failedRunWaits() {
-        assertEquals(CodingSessionStatus.WAITING, codingStatusOf(listOf(agent("Упало", failed = true))))
+    fun failureHistoryDoesNotDefineStatus() {
+        assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(agent("Упало", failed = true))))
     }
 
     @Test

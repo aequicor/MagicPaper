@@ -30,6 +30,7 @@ import kotlinx.serialization.Serializable
     val scheduledRuleId: String? = null,
     val sourcePlanId: String? = null,
     val sourceRunId: String? = null,
+    val attempt: Int = 0,
 )
 
 @Serializable data class OrchestrationQuestion(

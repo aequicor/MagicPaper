@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper.data.llm
 
+import io.aequicor.magicpaper.domain.RuntimeQuestionnaires
+import io.aequicor.magicpaper.domain.PlanningAnswer
+import io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge
+import io.aequicor.magicpaper.data.questionnaire.QuestionnaireTool
 import io.aequicor.magicpaper.domain.AttachmentKind
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
@@ -88,6 +92,13 @@ class CodexAppServerOpenAiSubscription(
         codingRuns[threadId]?.emit(CodingEvent.Notice(message))
     }
     val codingApprovals = approvalBroker.requests
+    private val questionnaireRegistry = RuntimeQuestionnaires()
+    val codingQuestionnaires = questionnaireRegistry.requests
+    suspend fun respondCodingQuestionnaire(id: String, answers: List<PlanningAnswer>) { questionnaireRegistry.respond(id, answers) }
+    private val questionnaireBroker = CodexQuestionnaireBroker(scope, questionnaireRegistry,
+        { threadId, message -> codingRuns[threadId]?.emit(CodingEvent.Notice(message)) },
+        { threadId, error -> codingRuns[threadId]?.done?.completeExceptionally(error) })
+
 
     suspend fun respondCodingApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) =
         approvalBroker.respond(id, decision)
@@ -109,6 +120,7 @@ class CodexAppServerOpenAiSubscription(
             codingRuns.remove(threadId)
             codingContexts.remove(threadId)
             approvalBroker.clearTurn(threadId)
+            questionnaireBroker.clearTurn(threadId)
             return@withContext
         }
         ownedCoding.reconcile(sessionId)
@@ -280,6 +292,7 @@ class CodexAppServerOpenAiSubscription(
     ): Flow<CodingEvent> = channelFlow {
         var confirmedFinished = false
         var computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null
+        var questionnaireBridge: QuestionnaireBridge? = null
         try {
             check(File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
             check(profile.configured) { "Не настроено подключение модели." }
@@ -287,8 +300,9 @@ class CodexAppServerOpenAiSubscription(
             val codingProfile = profile.forCoding()
             val permissions = CodexCodingPermissions(Paths.get(project.path))
             computerBridge = computerUse?.bridge(session.id)
-            val threadConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(JsonObject(permissions.threadConfig() + providerConfig), computerBridge)
-            val instructions = listOf(CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride)
+            questionnaireBridge = QuestionnaireBridge(questionnaireRegistry, session)
+            val threadConfig = questionnaireBridge.codexConfig(io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(JsonObject(permissions.threadConfig() + providerConfig), computerBridge))
+            val instructions = listOf(CODING_INSTRUCTIONS, QuestionnaireTool.instructions, codingProfile.advanced.systemPromptOverride)
                 .filter { it.isNotBlank() }.joinToString("\n\n")
             val resumed = session.piSessionId.takeIf { it.isNotBlank() }?.let { oldId ->
                 if (computerUse != null && oldId in codingThreads) {
@@ -328,6 +342,7 @@ class CodexAppServerOpenAiSubscription(
             send(CodingEvent.SessionStarted(threadId))
             val accumulator = CodingAccumulator()
             approvalBroker.clearTurn(threadId)
+            questionnaireBroker.clearTurn(threadId)
             codingRuns[threadId] = accumulator
             codingSessions[session.id] = threadId
             codingContexts[threadId] = session
@@ -359,6 +374,7 @@ class CodexAppServerOpenAiSubscription(
             send(CodingEvent.Failed(error.message ?: "Codex coding завершился с ошибкой."))
             send(CodingEvent.Finished)
         } finally {
+            questionnaireBridge?.close()
             computerBridge?.close()
             // Keep ownership after interruption: recovery must reconcile an uncertain turn.
             if (confirmedFinished) {
@@ -367,6 +383,7 @@ class CodexAppServerOpenAiSubscription(
                 if (threadId != null) {
                     codingContexts.remove(threadId)
                     approvalBroker.clearTurn(threadId)
+                    questionnaireBroker.clearTurn(threadId)
                 }
                 ownedCoding.clear(session.id)
             }
@@ -378,6 +395,7 @@ class CodexAppServerOpenAiSubscription(
         val threadId = codingSessions[sessionId] ?: return
         val run = codingRuns[threadId] ?: return
         approvalBroker.clearTurn(threadId)
+        questionnaireBroker.clearTurn(threadId)
         val turnId = run.turnId ?: return
         scope.launch {
             runCatching {
@@ -391,6 +409,7 @@ class CodexAppServerOpenAiSubscription(
     override fun close() {
         if (ownsComputerUse) computerUse?.disable()
         approvalBroker.clear()
+        questionnaireBroker.clear()
         pending.values.forEach { it.cancel() }
         turns.values.forEach { it.done.cancel() }
         codingRuns.values.forEach { it.events.close() }
@@ -586,6 +605,12 @@ class CodexAppServerOpenAiSubscription(
         if (run.turnId != null && run.turnId != turnId) return false
         if (run.turnId == null) run.turnId = turnId
         val connection = writer ?: return false
+        if (questionnaireBroker.receive(id, method, params, session) { response ->
+            send(response, expectedWriter = connection) {
+                codingRuns[threadId] === run && !run.done.isCompleted && (run.turnId == null || run.turnId == turnId) &&
+                    questionnaireBroker.contains(threadId, id)
+            }
+        }) return true
         return approvalBroker.receive(id, method, params, session, run.items[params.string("itemId")]) { response ->
             send(response, expectedWriter = connection) {
                 codingRuns[threadId] === run && !run.done.isCompleted && (run.turnId == null || run.turnId == turnId) &&
@@ -599,7 +624,7 @@ class CodexAppServerOpenAiSubscription(
         when (method) {
             "serverRequest/resolved" -> {
                 val threadId = params.string("threadId") ?: return
-                params["requestId"]?.let { approvalBroker.resolved(threadId, it) }
+                params["requestId"]?.let { approvalBroker.resolved(threadId, it); questionnaireBroker.resolved(threadId, it) }
             }
             "guardianWarning" -> {
                 val threadId = params.string("threadId") ?: return
@@ -618,7 +643,7 @@ class CodexAppServerOpenAiSubscription(
                     turns[threadId]?.accept(item.string("text").orEmpty(), item.string("phase"), item.string("id").orEmpty())
                 }
                 codingRuns[threadId]?.completeItem(item)
-                item.string("id")?.let { approvalBroker.completeItem(threadId, it) }
+                item.string("id")?.let { approvalBroker.completeItem(threadId, it); questionnaireBroker.completeItem(threadId, it) }
             }
             "item/started" -> {
                 val threadId = params.string("threadId") ?: return
@@ -648,7 +673,7 @@ class CodexAppServerOpenAiSubscription(
                 val threadId = params.string("threadId") ?: return
                 val run = codingRuns[threadId] ?: return
                 val turnId = (params["turn"] as? JsonObject)?.string("id") ?: return
-                if (run.turnId != null && run.turnId != turnId) approvalBroker.clearTurn(threadId)
+                if (run.turnId != null && run.turnId != turnId) { approvalBroker.clearTurn(threadId); questionnaireBroker.clearTurn(threadId) }
                 run.turnId = turnId
             }
             "turn/completed" -> {
@@ -658,6 +683,7 @@ class CodexAppServerOpenAiSubscription(
                 turns[threadId]?.finish(error)
                 codingRuns[threadId]?.finish(error)
                 approvalBroker.clearTurn(threadId, turn?.string("id"))
+                questionnaireBroker.clearTurn(threadId, turn?.string("id"))
             }
         }
     }
@@ -674,6 +700,7 @@ class CodexAppServerOpenAiSubscription(
 
     private fun failAll(message: String) {
         approvalBroker.clear()
+        questionnaireBroker.clear()
         val error = AppServerException(message)
         pending.values.forEach { it.completeExceptionally(error) }
         pending.clear()

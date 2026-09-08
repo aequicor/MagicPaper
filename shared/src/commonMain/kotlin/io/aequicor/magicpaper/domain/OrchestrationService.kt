@@ -332,8 +332,9 @@ class OrchestrationService(
         next
     }
 
-    fun recoverOrchestration(sessionId: String) = launch {
-        val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return@launch
+    fun recoverOrchestration(sessionId: String) = launch { recoverOrchestrationNow(sessionId) }
+    private suspend fun recoverOrchestrationNow(sessionId: String) {
+        val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return
         stateLock.withLock {
             val stored = state(session.id, session.projectId)
             val pending = _unsavedInputs.value[session.id].orEmpty()
@@ -392,6 +393,67 @@ class OrchestrationService(
         }
     }
 
+    /** Typed host actions for the questionnaire; no model interpretation of confirmations. */
+    suspend fun submitInteraction(request: UserInteractionRequest, answers: List<PlanningAnswer>) {
+        validateInteractionAnswers(request.questions, answers)
+        val session = projects.sessions(request.projectId).firstOrNull { it.id == request.ownerSessionId && !it.archived }
+            ?: error("Сессия недоступна")
+        val answer = answers.first()
+        val plan = request.planId?.let { store.planFor(it) }
+        when (request.kind) {
+            InteractionKind.QUESTION -> {
+                val question = state(session.id, session.projectId).questions.firstOrNull { it.id == request.sourceId && it.status == UserRequestStatus.OPEN }
+                    ?: error("Вопрос уже закрыт")
+                require(question.questions == request.questions) { "Вопрос изменился" }
+                val input = OrchestrationInput("questionnaire-${question.id}", interactionAnswerText(question.questions, answers), clock(),
+                    answers = answers, replyTo = question.id, sourcePlanId = question.planId)
+                updateState(session.id, session.projectId) { old ->
+                    if (old.inputs.any { it.id == input.id }) old else old.copy(inputs = old.inputs + input)
+                }
+                syncInputMessage(session, input.id)
+                drainInputs(session)
+            }
+            InteractionKind.CONFIRM_PLAN -> {
+                require(plan != null && plan.parentSessionId == session.id && plan.revision == request.revision) { "План изменился. Проверьте новую редакцию." }
+                if ("yes" in answer.selected) confirmNow(plan.id, request.sourceId.ifBlank { null }, request.revision)
+                else append(session.projectId, session.id, CodingMessage(request.id + "-declined", CodingRole.USER,
+                    "Запуск предложения отклонён. План сохранён без запуска.", createdAt = clock()))
+            }
+            InteractionKind.RECOVER_PLAN -> {
+                require(plan != null && plan.parentSessionId == session.id) { "План недоступен" }
+                val blockers = plan.blockingIssues(projects.messages(session.projectId, session.id))
+                require(request.id == "blocker:${blockers.map { it.messageId }.sorted().joinToString(":")}") { "Причина остановки изменилась" }
+                if ("leave" !in answer.selected && !answer.skipped) {
+                    if (answer.text.isNotBlank()) {
+                        append(session.projectId, session.id, CodingMessage(request.id + "-instructions", CodingRole.USER, answer.text, createdAt = clock()))
+                        plan.selectedMilestones.filterNot { it.completed }.filter { m -> blockers.any { it.stage == null || it.stage.id == m.id } }.forEach { m ->
+                            enqueue(plan.id, session.id, m.id, answer.text, request.id + "-instructions-" + m.id)
+                        }
+                    }
+                    controlNow(plan.id, "retry")
+                } else append(session.projectId, session.id, CodingMessage(request.id + "-left", CodingRole.USER,
+                    "Оставить работу остановленной.\n" + request.details, createdAt = clock()))
+            }
+            InteractionKind.RECOVER_INPUT -> {
+                val input = state(session.id, session.projectId).inputs.firstOrNull { it.id == request.sourceId &&
+                    it.status in setOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED) }
+                    ?: error("Сообщение больше не требует восстановления")
+                if ("leave" !in answer.selected && !answer.skipped) {
+                    updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
+                        if (it.id == input.id) it.copy(status = OrchestrationInputStatus.QUEUED, error = "",
+                            text = it.text + if (answer.text.isBlank()) "" else "\n\nУточнение пользователя: ${answer.text}",
+                            decision = if (answer.text.isBlank()) it.decision else null) else it
+                    }) }
+                    syncInputMessage(session, input.id)
+                    drainInputs(session)
+                }
+            }
+            InteractionKind.RECOVER_STORAGE -> if ("leave" !in answer.selected && !answer.skipped) recoverOrchestrationNow(session.id)
+            else -> error("Это обращение принадлежит движку")
+        }
+        changed()
+    }
+
     /** Withdrawal is terminal: Continue and recovery must never submit this input again. */
     fun cancelQueuedInput(sessionId: String, inputId: String) = launch {
         val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return@launch
@@ -422,7 +484,7 @@ class OrchestrationService(
                     updateState(session.id, session.projectId) { old ->
                         claimed = old.inputs.firstOrNull {
                             it.status in listOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING) && inputMayRun(it)
-                        }?.copy(status = OrchestrationInputStatus.PROCESSING, error = "")
+                        }?.let { it.copy(status = OrchestrationInputStatus.PROCESSING, error = "", attempt = it.attempt + 1) }
                         old.copy(inputs = old.inputs.map { if (it.id == claimed?.id) claimed!! else it })
                     }
                     val input = claimed ?: break
@@ -607,11 +669,13 @@ class OrchestrationService(
         val combined = (question.partialAnswers + input.answers).associateBy { it.questionId }.values.toList()
         require(input.answers.all { a -> question.questions.any { it.id == a.questionId } }) { "Неизвестный вопрос" }
         question.questions.forEach { q -> combined.firstOrNull { it.questionId == q.id }?.let { a ->
-            require(a.selected.all { selected -> q.options.any { it.id == selected } }) { "Неизвестный вариант" }
+            require(a.selected.all { selected -> q.options.any { it.id == selected && it.enabled } }) { "Неизвестный вариант" }
+            require(!a.skipped || q.canSkip && a.selected.isEmpty() && a.text.isBlank()) { "Этот вопрос нельзя пропустить" }
+            require(q.allowCustomInput || a.text.isBlank()) { "Для этого вопроса выберите вариант" }
             require(q.kind != QuestionKind.SINGLE || a.selected.distinct().size <= 1) { "Выберите один вариант" }
         } }
         val complete = decision.completeAnswer && (input.answers.isEmpty() || question.questions.all { q ->
-            combined.any { it.questionId == q.id && (it.selected.isNotEmpty() || it.text.isNotBlank()) }
+            combined.any { it.questionId == q.id && it.isComplete(q) }
         })
         updateState(session.id, session.projectId) { old -> old.copy(questions = old.questions.map {
             if (it.id == id) it.copy(partialAnswers = combined, partialMessages = it.partialMessages + (input.id to input.text), status = if (complete) UserRequestStatus.ANSWERED else UserRequestStatus.OPEN,
@@ -631,7 +695,7 @@ class OrchestrationService(
             appendLine("Ответ на запрос: ${question.text}")
             question.questions.forEach { q -> combined.firstOrNull { it.questionId == q.id }?.let { a ->
                 val selected = a.selected.mapNotNull { option -> q.options.firstOrNull { it.id == option }?.label }
-                appendLine("${q.title}: ${(selected + listOfNotNull(a.text.takeIf { it.isNotBlank() })).joinToString("; ")}")
+                appendLine("${q.title}: " + if (a.skipped) "Пропущено пользователем" else (selected + listOfNotNull(a.text.takeIf { it.isNotBlank() })).joinToString("; "))
             } }
             (question.partialMessages + (input.id to input.text)).values.filter { it.isNotBlank() }.forEach { appendLine(it) }
         }.trim()
@@ -734,8 +798,9 @@ class OrchestrationService(
 
     fun confirm(id: String, proposalId: String? = null) = launch { confirmNow(id, proposalId) }
 
-    private suspend fun confirmNow(id: String, proposalId: String? = null) = confirmation.withLock {
+    private suspend fun confirmNow(id: String, proposalId: String? = null, expectedRevision: Long? = null) = confirmation.withLock {
         var plan = store.planFor(id) ?: return@withLock
+        require(expectedRevision == null || plan.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
         if (proposalId != null) {
             val proposal = plan.proposal ?: return@withLock
             require(proposal.id == proposalId) { "Предложение изменилось. Проверьте актуальную версию." }
@@ -753,6 +818,7 @@ class OrchestrationService(
             val snapshot = PlanRunSnapshot(plan.runId, plan.tree, plan.milestones, plan.workspace, plan.finalAttempt, Id.now())
             val completedRun = plan.phase == ExecutionPhase.COMPLETE
             plan = store.update(id) { latest ->
+                require(expectedRevision == null || latest.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
                 require(latest.proposal?.id == proposalId) { "Предложение изменилось" }
                 extended.copy(revision = latest.revision, runHistory = latest.runHistory + snapshot,
                     proposal = null, runId = if (completedRun) Id.new() else latest.runId,
@@ -774,7 +840,9 @@ class OrchestrationService(
             if (plan.confirmedRevision != null) { prepareSessions(plan); execution.start(id); return@withLock }
             require(plan.wizardStep != PlanningStep.CLARIFY && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid &&
                 state(plan.parentSessionId, plan.projectId).openQuestions(plan.id).isEmpty()) { "План ещё не готов" }
-            plan = store.update(id) { it.copy(confirmedRevision = it.revision, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING,
+            plan = store.update(id) {
+                require(expectedRevision == null || it.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
+                it.copy(confirmedRevision = it.revision, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING,
                 status = PlanStatus.RUNNING, runId = it.runId.ifBlank { Id.new() },
                 versions = it.versions + PlanVersion(it.revision, it.tree, it.milestones.map { m -> m.copy(attempts = emptyList()) }, Id.now())) }
         }
@@ -859,9 +927,10 @@ class OrchestrationService(
         return saved
     }
 
-    fun control(id: String, command: String) = launch {
-        if (id in deletedPlans) return@launch
-        val before = store.planFor(id) ?: return@launch
+    fun control(id: String, command: String) = launch { controlNow(id, command) }
+    private suspend fun controlNow(id: String, command: String) {
+        if (id in deletedPlans) return
+        val before = store.planFor(id) ?: return
         if (command == "retry" && before.canExtendAfterFinalVerification && before.parentSessionId.isNotBlank()) {
             val parent = projects.sessions(before.projectId).firstOrNull { it.id == before.parentSessionId }
                 ?: error("Сессия оркестратора не найдена")
@@ -869,10 +938,10 @@ class OrchestrationService(
                 "Учти последние запросы и ответы пользователя в этом диалоге, включая ещё не применённые изменения плана. " +
                 "Добавь этапы исправления и проверки в рамках текущей цели, сохрани завершённые этапы. " +
                 "Если данных достаточно, продолжи выполнение; иначе задай необходимые вопросы.")
-            return@launch
+            return
         }
         when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id); else -> resumePlan(id) }
-        val plan = store.planFor(id) ?: return@launch
+        val plan = store.planFor(id) ?: return
         val text = when (command) {
             "pause" -> "Оркестратор приостановил выдачу новых заданий. Текущие ходы завершатся."
             "stop" -> "Оркестратор остановил выполнение этапов."

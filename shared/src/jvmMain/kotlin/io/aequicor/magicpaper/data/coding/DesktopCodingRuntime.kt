@@ -17,6 +17,13 @@ class DesktopCodingRuntime(
     private val active = ConcurrentHashMap.newKeySet<String>()
     private val clients = ConcurrentHashMap<String, CodexAppServerOpenAiSubscription>()
     override val approvals = MutableStateFlow<List<CodingApproval>>(emptyList())
+    override val questionnaires = MutableStateFlow<List<UserInteractionRequest>>(emptyList())
+    override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) {
+        if (pi.questionnaires.value.any { it.id == id }) pi.respondQuestionnaire(id, answers)
+        else (clients.values.firstOrNull { it.codingQuestionnaires.value.any { q -> q.id == id } } ?: error("Обращение уже закрыто"))
+            .respondCodingQuestionnaire(id, answers)
+    }
+
     override suspend fun respondApproval(id: String, decision: CodingApprovalDecision) {
         clients.values.firstOrNull { client -> client.codingApprovals.value.any { it.id == id } }?.respondCodingApproval(id, decision)
     }
@@ -72,12 +79,26 @@ class DesktopCodingRuntime(
             emit(CodingEvent.Notice("SKILLS run=$runId project=${project.id} session=${session.id} adapter=$adapter: подключённых пакетов нет; пакету не предоставлены полномочия."))
             preflight(engine, profile)
             when (engine) {
-                CodingEngine.PI -> pi.run(project, session, prompt, profile, attachments).collect { emit(it) }
+                CodingEngine.PI -> coroutineScope {
+                    val questionsJob = launch { pi.questionnaires.collect { requests ->
+                        questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } + requests.filter { it.sessionId == session.id } }
+                    } }
+                    try { pi.run(project, session, prompt, profile, attachments).collect { emit(it) } }
+                    finally { withContext(NonCancellable) {
+                        questionsJob.cancelAndJoin()
+                        questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } }
+                    } }
+                }
                 CodingEngine.CODEX -> coroutineScope {
                     // A fresh connection makes provider overrides effective on resume. Codex ignores
                     // them for an already loaded thread; history itself remains in the same thread.
                     val client = subscription.newCodingClient()
                     clients[session.id] = client
+                    val questionnairesJob = launch {
+                        client.codingQuestionnaires.collect { requests ->
+                            questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } + requests }
+                        }
+                    }
                     val approvalsJob = launch {
                         client.codingApprovals.collect { current ->
                             approvals.update { previous -> previous.filterNot { it.sessionId == session.id } + current }
@@ -93,8 +114,9 @@ class DesktopCodingRuntime(
                         }
                     } finally {
                         withContext(NonCancellable) {
-                            try { approvalsJob.cancelAndJoin(); client.close() }
+                            try { questionnairesJob.cancelAndJoin(); approvalsJob.cancelAndJoin(); client.close() }
                             finally {
+                                questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } }
                                 clients.remove(session.id)
                                 approvals.update { previous -> previous.filterNot { it.sessionId == session.id } }
                             }

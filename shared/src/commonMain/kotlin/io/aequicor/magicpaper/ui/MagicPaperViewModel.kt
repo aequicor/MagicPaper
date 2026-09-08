@@ -63,9 +63,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
 /**
@@ -107,12 +110,126 @@ class MagicPaperViewModel(
     val state: StateFlow<UiState> = _state.asStateFlow()
     val requestPins = requestPinRepository?.let { RequestPinService(it, gateway, scope, json) }
 
+    private val interactionQueue = UserInteractionQueue()
+    private val interactionDecisions = runCatching { json.decodeFromString<Set<String>>(store.read("coding-interaction-decisions") ?: "[]") }.getOrDefault(emptySet()).toMutableSet()
+    private val interactionSubmitting = mutableSetOf<String>()
+    private val interactionErrors = mutableMapOf<String, String>()
+    private var decisionStorageRecovery: UserInteractionRequest? = null
+    private val requestedInputRecovery = mutableSetOf<String>()
+    private val _questionnaireDrafts = MutableStateFlow<Map<String, QuestionnaireDraft>>(emptyMap())
+    val questionnaireDrafts = _questionnaireDrafts.asStateFlow()
+    // Kept above the composer lifetime so switching sessions and temporarily replacing it cannot lose attachments.
+    val composerDrafts = mutableMapOf<String, io.aequicor.magicpaper.ui.components.CodingComposerDraft>()
+
+    fun updateQuestionnaireDraft(id: String, draft: QuestionnaireDraft) {
+        if (id !in interactionSubmitting) _questionnaireDrafts.update { it + (id to draft) }
+    }
+
+    private fun currentInteractionCandidates(): List<UserInteractionRequest> = interactionCandidates(
+        _state.value.coding, planningChat?.store?.plans?.value.orEmpty(), planningChat?.states?.value.orEmpty(),
+        planningChat?.persistenceErrors?.value.orEmpty(), codingRuntime?.questionnaires?.value.orEmpty(), requestedInputRecovery) + listOfNotNull(decisionStorageRecovery)
+
+    private fun saveInteractionDecisions() = store.write("coding-interaction-decisions",
+        json.encodeToString(interactionDecisions.filterNot { it.startsWith("runtime:") || it.startsWith("approval:") }.toSet()))
+
+    private fun refreshInteractions() {
+        val queued = interactionQueue.reconcile(currentInteractionCandidates(), interactionDecisions).map { request ->
+            request.copy(submitting = request.submitting || request.id in interactionSubmitting,
+                error = interactionErrors[request.id] ?: request.error)
+        }
+        _state.update { state ->
+            val sessions = state.coding.sessions.map { item ->
+                val interactions = queued.filter { it.affects(item.session) }
+                if (item.interactions == interactions) item else item.copy(interactions = interactions)
+            }
+            if (state.coding.interactions == queued && state.coding.sessions == sessions) state
+            else state.copy(coding = state.coding.copy(interactions = queued, sessions = sessions))
+        }
+    }
+
+    /** Reopening an acknowledged action joins the queue; it never jumps over the active request. */
+    fun openQuestionnaire(kind: InteractionKind, sourceId: String) {
+        if (kind == InteractionKind.RECOVER_INPUT) requestedInputRecovery.add(sourceId)
+        val targets = currentInteractionCandidates().filter { it.kind == kind &&
+            (it.sourceId == sourceId || it.planId == sourceId || it.ownerSessionId == sourceId) }
+        targets.forEach { interactionDecisions.remove(it.id) }
+        if (targets.isNotEmpty()) {
+            store.write("coding-interaction-decisions", json.encodeToString(interactionDecisions.toSet()))
+            refreshInteractions()
+        }
+    }
+
+    fun submitQuestionnaire(id: String, answers: List<PlanningAnswer>) {
+        val request = _state.value.coding.interactions.firstOrNull { it.id == id } ?: return
+        if (request.submitting || !interactionSubmitting.add(id)) return
+        interactionErrors.remove(id)
+        refreshInteractions()
+        scope.launch {
+            try {
+                val fresh = currentInteractionCandidates().firstOrNull { it.id == id } ?: error("Обращение уже закрыто")
+                require(fresh.questions == request.questions && fresh.details == request.details && fresh.revision == request.revision) { "Обращение изменилось. Проверьте актуальные данные." }
+                validateInteractionAnswers(fresh.questions, answers)
+                when (request.kind) {
+                    InteractionKind.RECOVER_DECISIONS -> {
+                        if (!answers.single().skipped && "leave" !in answers.single().selected) saveInteractionDecisions()
+                        decisionStorageRecovery = null
+                    }
+                    InteractionKind.RUNTIME -> {
+                        codingRuntime!!.respondQuestionnaire(request.sourceId, answers)
+                    }
+                    InteractionKind.APPROVAL -> {
+                        if (request.outcomeUnknown) {
+                            val approval = _state.value.coding.approvals.firstOrNull { it.id == request.sourceId } ?: error("Разрешение уже закрыто")
+                            codingRuntime?.abort(approval.sessionId)
+                        } else codingRuntime!!.respondApproval(request.sourceId,
+                            if ("yes" in answers.single().selected) CodingApprovalDecision.ALLOW_ONCE else CodingApprovalDecision.DENY)
+                    }
+                    InteractionKind.RECOVER_RUN -> {
+                        val session = _state.value.coding.sessions.firstOrNull { it.session.id == request.sessionId } ?: error("Сессия удалена")
+                        val answer = answers.single()
+                        if (answer.skipped || "leave" in answer.selected) {
+                            updateStoredCodingSession(session.session) { latest ->
+                                val checkpoint = latest.pendingRun ?: session.messages.interruptedCodingRequest()?.let { CodingRunCheckpoint(it.id, it.text) }
+                                latest.copy(pendingRun = checkpoint?.copy(intent = ExecutionIntent.STOP, stoppedByUser = true))
+                            }
+                            appendCodingMessage(session.session, CodingMessage(request.id + "-left", CodingRole.USER,
+                                "Оставить работу остановленной.", createdAt = Id.now()))
+                        } else resumeCodingSession(request.sessionId, answer.text, fromQuestionnaire = true)
+                    }
+                    else -> planningChat!!.submitInteraction(request, answers)
+                }
+                interactionDecisions.add(id)
+                if (request.kind !in setOf(InteractionKind.RUNTIME, InteractionKind.APPROVAL, InteractionKind.RECOVER_DECISIONS)) {
+                    try { saveInteractionDecisions() } catch (e: Exception) {
+                        // The action already happened. Retrying storage must never repeat the action.
+                        decisionStorageRecovery = request.copy(id = "decision-storage:$id", sourceId = id,
+                            kind = InteractionKind.RECOVER_DECISIONS, revision = null, planId = null,
+                            questions = listOf(PlanningQuestion("decision", "Не удалось сохранить принятое решение. Как продолжить?", QuestionKind.SINGLE,
+                                listOf(QuestionOption("retry", "Повторить сохранение"), QuestionOption("leave", "Оставить остановленной")), allowCustomInput = false)),
+                            details = e.message ?: "Хранилище недоступно", initialAnswers = emptyList(), submitting = false, error = null)
+                    }
+                }
+                _questionnaireDrafts.update { it - id }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { interactionErrors[id] = e.message ?: "Не удалось передать ответ. Повторите подтверждение." }
+            finally { interactionSubmitting.remove(id); refreshInteractions() }
+        }
+    }
+
     /** Активные прогоны по идентификаторам кодинг-сессий (параллельно в разных сессиях). */
     private val codingJobs = mutableMapOf<String, Job>()
     private val codingSessionLocks = mutableMapOf<String, Mutex>()
     private var closing = false
 
     init {
+        scope.launch { _state.collect { refreshInteractions() } }
+        codingRuntime?.let { runtime -> scope.launch { runtime.questionnaires.collect { refreshInteractions() } } }
+        planningChat?.let { service -> scope.launch {
+            combine(service.states, service.store.plans, service.persistenceErrors, service.drafts) { _, _, _, _ -> Unit }.collect {
+                _state.update { state -> state.copy(coding = state.coding.copy(sessions = state.coding.sessions.map(::withPlanningState))) }
+                refreshInteractions()
+            }
+        } }
         scope.launch { bootstrap() }
         requestPins?.let { pins -> scope.launch {
             var previousOpen: PinConversation? = null
@@ -235,6 +352,7 @@ class MagicPaperViewModel(
                 coding = it.coding.copy(
                     projects = projects,
                     current = projects.firstOrNull(),
+                    sessions = loadCodingSessions(projects),
                     projectStatuses = codingStatusSnapshot(projects),
                 ),
             )
@@ -248,6 +366,13 @@ class MagicPaperViewModel(
     }
 
     /** Сводные статусы всех проектов (по первой загрузке, без активных прогонов). */
+    private suspend fun loadCodingSessions(projects: List<CodingProject>): List<CodingSessionUi> {
+        val repo = codingProjects ?: return emptyList()
+        return projects.flatMap { project -> repo.sessions(project.id).map { session ->
+            withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id)))
+        } }
+    }
+
     private suspend fun codingStatusSnapshot(projects: List<CodingProject>): Map<String, CodingSessionStatus> {
         val repo = codingProjects ?: return emptyMap()
         return projects.associate { project ->
@@ -1022,16 +1147,17 @@ class MagicPaperViewModel(
             ))
         }
         _state.update { st ->
-            // Сессии других проектов с живыми прогонами не выбрасываем — они
-            // обновляют статус фоном; на экране фильтруются по current.id.
+            // The same queue supplies every project indicator, including inactive projects.
             val loadedIds = loaded.map { it.session.id }.toSet()
             val carried = st.coding.sessions.filter {
-                it.running && it.session.projectId != projectId && it.session.id !in loadedIds
+                it.session.projectId != projectId && it.session.id !in loadedIds
             }
             st.copy(
                 coding = st.coding.copy(
                     current = project,
-                    sessions = loaded + carried,
+                    sessions = loaded.map { fresh -> st.coding.sessions.firstOrNull {
+                        it.session.id == fresh.session.id && it.running
+                    } ?: fresh } + carried,
                     currentSessionId = st.coding.currentSessionId
                         .takeIf { it != null && it in loadedIds }
                         ?: loaded.firstOrNull()?.session?.id,
@@ -1183,9 +1309,9 @@ class MagicPaperViewModel(
         launchCodingRun(selected, CodingRunCheckpoint(Id.new(), text.trim(), attachments), recovering = false)
     }
 
-    fun resumeCodingSession(sessionId: String, text: String = "", attachments: List<Attachment> = emptyList()) {
+    fun resumeCodingSession(sessionId: String, text: String = "", attachments: List<Attachment> = emptyList(), fromQuestionnaire: Boolean = false) {
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
-        if (!ui.canResume) return
+        if (!(if (fromQuestionnaire) ui.copy(interactions = emptyList()) else ui).canResume) return
         if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
             planningChat.resume(ui.session, text); return
         }
@@ -1195,7 +1321,7 @@ class MagicPaperViewModel(
         val instruction = text.trim()
         launchCodingRun(ui.session, request.copy(
             prompt = request.prompt + if (instruction.isNotEmpty()) "\n\nУточнение пользователя: $instruction" else "",
-            attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.RUN,
+            attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.RUN, stoppedByUser = false,
         ), recovering = true, additionalMessage = instruction.takeIf { it.isNotEmpty() || attachments.isNotEmpty() }?.let {
             CodingMessage(Id.new(), CodingRole.USER, it, createdAt = Id.now(), attachments = attachments.map { attachment -> attachment.asMeta() })
         })
@@ -1321,7 +1447,7 @@ class MagicPaperViewModel(
             return
         }
         scope.launch {
-            updateStoredCodingSession(ui.session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP)) }
+            updateStoredCodingSession(ui.session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP, stoppedByUser = true)) }
             codingRuntime?.abort(sessionId)
             codingJobs[sessionId]?.cancel()
         }

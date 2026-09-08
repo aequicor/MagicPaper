@@ -61,12 +61,14 @@ class PlanningProposalRenderTest {
                 val plan = base.copy(proposal = proposal, phase = phase, milestones = listOf(
                     if (phase == ExecutionPhase.COMPLETE) stage.copy(status = MilestoneStatus.DONE) else stage))
                 store.save(plan); runCurrent()
-                val ui = CodingSessionUi(parent, plan = plan)
+                val requests = interactionCandidates(CodingUi(sessions = listOf(CodingSessionUi(parent, plan = plan))),
+                    listOf(plan), service.states.value, emptyMap())
+                val ui = CodingSessionUi(parent, plan = plan, interactions = requests)
                 for (width in listOf(1100, 430)) {
                     ImageComposeScene(width, 700) {
                         MagicPaperTheme { Surface { Row {
                             if (width > 700) ProjectsPanel(CodingUi(projects = listOf(project), current = project,
-                                sessions = listOf(ui), currentSessionId = parent.id), {}, {}, {}, {}, {}, {}, {}, Modifier.width(300.dp))
+                                sessions = listOf(ui), interactions = requests, currentSessionId = parent.id), {}, {}, {}, {}, {}, {}, {}, Modifier.width(300.dp))
                             Column(Modifier.weight(1f)) {
                                 OrchestrationStatus(ui, service, {})
                                 Text("Ход работы оркестратора", Modifier.padding(16.dp))
@@ -76,8 +78,8 @@ class PlanningProposalRenderTest {
                         repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
                         fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                         val labels = nodes().map(::text)
-                        assertTrue(labels.none { it.contains("ждёт вашего ответа", ignoreCase = true) || it == "Нужен ваш ответ" })
-                        val expected = if (phase == ExecutionPhase.COMPLETE) "Предложение доработки · нужно подтверждение"
+                        assertEquals(phase == ExecutionPhase.COMPLETE, "Ждём вашего ответа" in labels)
+                        val expected = if (phase == ExecutionPhase.COMPLETE) "Ждём вашего ответа"
                             else "Выполнение этапов · есть предложение доработки"
                         assertTrue(expected in labels, labels.toString())
                         for (label in listOf("Предложение доработки", "Посмотреть")) {

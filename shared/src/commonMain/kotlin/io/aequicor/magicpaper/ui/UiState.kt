@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui
 
+import io.aequicor.magicpaper.domain.UserInteractionRequest
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.ExecutionPhase
 import io.aequicor.magicpaper.domain.interruptedCodingRequest
@@ -40,10 +41,11 @@ data class CodingSessionUi(
     val awaitingUser: Boolean = false,
     val interruptedRequest: Boolean = false,
     val failedRequest: Boolean = false,
+    val interactions: List<UserInteractionRequest> = emptyList(),
 ) {
     val canResume: Boolean
         get() {
-            if (running || awaitingUser || draft.awaitingApproval || session.archived) return false
+            if (running || interactions.isNotEmpty() || session.archived) return false
             if (interruptedRequest || failedRequest) return messages.pendingPlanningQuestion() == null
             val current = plan
             if (current != null) {
@@ -65,40 +67,32 @@ data class CodingSessionUi(
 
     private fun computeStatus(): CodingSessionStatus {
         if (session.archived) return CodingSessionStatus.IDLE
-        if (failedRequest || messages.lastOrNull { it.inputStatus != null }?.inputStatus == OrchestrationInputStatus.FAILED)
-            return CodingSessionStatus.BLOCKED
-        if (awaitingUser) return CodingSessionStatus.WAITING
-        if (draft.awaitingApproval) return CodingSessionStatus.WAITING
-        if (!running && (session.pendingRun != null || interruptedRequest)) return CodingSessionStatus.WAITING
+        if (interactions.isNotEmpty()) return CodingSessionStatus.WAITING
         val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
         if (stage != null) return when {
-            stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.WAITING
             stage.attempts.lastOrNull()?.waitingForEvent != null -> CodingSessionStatus.SCHEDULED
+            stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.IDLE
             stage.attempts.lastOrNull()?.let { it.awaitingPlanner && (it.error == null || it.error.isPlannerAnswerWait) } == true -> CodingSessionStatus.IDLE
-            stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.BLOCKED
+            stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.IDLE
             running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
             stage.completed -> CodingSessionStatus.IDLE
             else -> CodingSessionStatus.QUEUED
         }
         if (plan != null && session.id == plan.parentSessionId) return when {
-            messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
-            plan.proposalReadyForConfirmation -> CodingSessionStatus.CONFIRMATION
             running -> CodingSessionStatus.WORKING
             plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
             plan.issue?.requiresUser == true || plan.finalAttempt?.error?.requiresUser == true ||
-                plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.BLOCKED
+                plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.IDLE
             plan.issue != null -> CodingSessionStatus.QUEUED
             plan.intent == ExecutionIntent.RUN && plan.phase in listOf(ExecutionPhase.RECOVERING, ExecutionPhase.VERIFYING, ExecutionPhase.APPLYING) -> CodingSessionStatus.WORKING
             plan.scheduledMessages.any { it.status == io.aequicor.magicpaper.domain.ScheduledMessageStatus.WAITING } ||
                 plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> CodingSessionStatus.SCHEDULED
-            plan.confirmedRevision != null -> CodingSessionStatus.IDLE
-            else -> codingStatusOf(messages)
+            else -> CodingSessionStatus.IDLE
         }
         return when {
-            running && draft.awaitingModel -> CodingSessionStatus.WAITING
             running -> CodingSessionStatus.WORKING
             session.stageId != null -> CodingSessionStatus.QUEUED
-            else -> codingStatusOf(messages)
+            else -> CodingSessionStatus.IDLE
         }
     }
 }
@@ -108,6 +102,7 @@ data class CodingUi(
     val computerSupported: Boolean = false,
     val computer: io.aequicor.magicpaper.domain.ComputerUseState = io.aequicor.magicpaper.domain.ComputerUseState(),
     val approvals: List<io.aequicor.magicpaper.domain.CodingApproval> = emptyList(),
+    val interactions: List<UserInteractionRequest> = emptyList(),
     val projects: List<CodingProject> = emptyList(),
     val current: CodingProject? = null,
     /** Сессии текущего проекта с журналами и живыми прогонами. */
@@ -127,7 +122,7 @@ data class CodingUi(
         get() = sessions.firstOrNull { it.session.id == currentSessionId } ?: sessions.firstOrNull()
 
     fun statusOf(projectId: String, fallback: CodingSessionStatus = CodingSessionStatus.IDLE): CodingSessionStatus {
-        if (approvals.any { it.projectId == projectId }) return CodingSessionStatus.WAITING
+        if (interactions.any { it.projectId == projectId }) return CodingSessionStatus.WAITING
         val own = sessions.filter { it.session.projectId == projectId }
         return if (own.isNotEmpty()) {
             aggregateCodingStatus(own.map { it.status })
@@ -139,10 +134,8 @@ data class CodingUi(
     /** Сессии проекта (в состоянии лежат и фоновые сессии других проектов). */
     fun sessionsOf(projectId: String): List<CodingSessionUi> =
         sessions.filter { it.session.projectId == projectId }.map { item ->
-            val waiting = approvals.any { it.projectId == projectId &&
-                (it.sessionId == item.session.id || it.sessionId == "${item.session.id}-merge" || it.sessionId == "${item.session.id}-delivery") }
-            if (item.draft.awaitingApproval == waiting) item
-            else item.copy(draft = item.draft.copy(awaitingApproval = waiting))
+            val pending = interactions.filter { it.affects(item.session) }
+            if (item.interactions == pending) item else item.copy(interactions = pending)
         }
 
     /**

@@ -73,6 +73,7 @@ data class CodingRunCheckpoint(
     val attachments: List<Attachment> = emptyList(),
     val intent: ExecutionIntent = ExecutionIntent.RUN,
     val responseId: String = "",
+    val stoppedByUser: Boolean = false,
 )
 
 /** Older logs have no checkpoint; only an unanswered or failed turn can be resumed. */
@@ -88,7 +89,7 @@ enum class CodingSessionStatus {
     /** Агент выполняет прогон — красный. */
     WORKING,
 
-    /** Агент задал вопрос, не подтвердил действие или запрос без ответа — жёлтый. */
+    /** Есть открытое обращение в опроснике — жёлтый. */
     WAITING,
 
     /** Доработка готова к подтверждению; ответа на вопрос не требуется. */
@@ -107,27 +108,8 @@ enum class CodingSessionStatus {
     IDLE,
 }
 
-/**
- * Статус сессии по её журналу (когда прогон не активен):
- * вопрос агента в конце ленты, незавершённый запрос или ошибка — WAITING,
- * иначе IDLE.
- */
-fun codingStatusOf(history: List<CodingMessage>): CodingSessionStatus {
-    val messages = history.filter { it.handoff == null }
-    if (messages.pendingPlanningQuestion() != null) return CodingSessionStatus.WAITING
-    val last = messages.lastOrNull() ?: return CodingSessionStatus.IDLE
-    // Запрос отправлен, ответа нет (сбой или потерянный прогон) — ждём решения.
-    if (last.role == CodingRole.USER) return CodingSessionStatus.WAITING
-    if (last.failed) return CodingSessionStatus.WAITING
-    // Вопрос в конце последней строки с поправкой на markdown-обёртки и кавычки.
-    val tail = messages.last().text.lines().lastOrNull { it.isNotBlank() }.orEmpty()
-        .trim().trimEnd('"', '*', '`', '_', '\u201D', '\u201C', '\u00BB', '\u00AB')
-    return if (tail.endsWith("?") || tail.endsWith("\uFF1F")) {
-        CodingSessionStatus.WAITING
-    } else {
-        CodingSessionStatus.IDLE
-    }
-}
+/** History is not a request for user attention. The live interaction queue owns WAITING. */
+fun codingStatusOf(history: List<CodingMessage>): CodingSessionStatus = CodingSessionStatus.IDLE
 
 /** Сводный статус проекта: самый срочный из статусов его сессий. */
 fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSessionStatus =
@@ -524,6 +506,8 @@ interface CodingProjectRepository {
  * Все зависимости изолированы в папке данных приложения и удаляются вместе с ним.
  */
 interface CodingRuntime {
+    val questionnaires: kotlinx.coroutines.flow.StateFlow<List<UserInteractionRequest>> get() = noRuntimeQuestionnaires
+    suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) { error("Опросник недоступен") }
     val computerUse: ComputerUse? get() = null
     val projectSkills: ProjectSkills? get() = null
     val approvals: kotlinx.coroutines.flow.StateFlow<List<CodingApproval>> get() = noCodingApprovals

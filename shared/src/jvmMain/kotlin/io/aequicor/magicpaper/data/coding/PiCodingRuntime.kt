@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.RuntimeQuestionnaires
+import io.aequicor.magicpaper.domain.PlanningAnswer
+
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
@@ -47,6 +50,10 @@ class PiCodingRuntime(
     override val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
     private val subscriptionToken: (suspend () -> String)? = null,
 ) : CodingRuntime {
+    private val questionnaireRegistry = RuntimeQuestionnaires()
+    override val questionnaires = questionnaireRegistry.requests
+    override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) { questionnaireRegistry.respond(id, answers) }
+
 
     internal fun piAiDirectory(): File {
         val agent = File(prefix, "node_modules/@earendil-works/pi-coding-agent")
@@ -226,12 +233,14 @@ class PiCodingRuntime(
         var outcome = AttemptOutcome(launchError = "агент не запущен")
         val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
         val computerBridge = computerUse?.bridge(session.id)
+        val questionnaireBridge = io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
         try {
+            writeAtomically(File(sessionHome(session.id), "questionnaire.mjs"), io.aequicor.magicpaper.data.questionnaire.PiQuestionnaireExtension.source)
             if (computerBridge != null) {
                 writeAtomically(File(sessionHome(session.id), "computer-use.mjs"), io.aequicor.magicpaper.data.computer.PiComputerExtension.source)
             }
             while (true) {
-                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
@@ -246,6 +255,7 @@ class PiCodingRuntime(
                 )
             }
         } finally {
+            questionnaireBridge.close()
             computerBridge?.close()
             abortedSessions.remove(session.id)
         }
@@ -269,6 +279,7 @@ class PiCodingRuntime(
         piSessionId: String?,
         emit: suspend (CodingEvent) -> Unit,
         computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null,
+        questionnaireBridge: io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge? = null,
     ): AttemptOutcome {
         var tokenBroker: SubscriptionTokenBroker? = null
         val args = mutableListOf(
@@ -287,6 +298,7 @@ class PiCodingRuntime(
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
         args += listOf("--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
+        if (questionnaireBridge != null) args += listOf("--extension", File(sessionHome(session.id), "questionnaire.mjs").absolutePath)
         if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)
         // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит
         // (PI_REASONING_LEVEL — то, что pi отдаёт инструментам, а не вход запуска),
@@ -314,6 +326,10 @@ class PiCodingRuntime(
                     environment().putAll(piEnv(node, sessionHome(session.id)))
                     environment().remove("MAGICPAPER_COMPUTER_URL")
                     environment().remove("MAGICPAPER_COMPUTER_TOKEN")
+                    if (questionnaireBridge != null) {
+                        environment()["MAGICPAPER_QUESTIONNAIRE_URL"] = questionnaireBridge.url
+                        environment()["MAGICPAPER_QUESTIONNAIRE_TOKEN"] = questionnaireBridge.token
+                    }
                     if (computerBridge != null) {
                         environment()["MAGICPAPER_COMPUTER_URL"] = computerBridge.url
                         environment()["MAGICPAPER_COMPUTER_TOKEN"] = computerBridge.token
@@ -871,6 +887,7 @@ class PiCodingRuntime(
         // не должны прочитать наполовину записанный models.json.
         writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile, imageInput = imageInput))
         writeAtomically(File(home, "model-options.mjs"), PiModelOptions.extension(profile))
+        File(home, HINTS_FILE).appendText("\n\n" + io.aequicor.magicpaper.data.questionnaire.QuestionnaireTool.instructions)
         if (profile.advanced.systemPromptOverride.isNotBlank()) File(home, HINTS_FILE).appendText("\n\n" + profile.advanced.systemPromptOverride)
 
     }

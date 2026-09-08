@@ -4,6 +4,8 @@ import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.planning.*
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
+import io.aequicor.magicpaper.ui.CodingUi
+import io.aequicor.magicpaper.ui.interactionCandidates
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -96,6 +98,49 @@ class PlanningChatServiceTest {
             plannerSelection = parent.modelSelection, milestones = listOf(Milestone("stage", "Stage", description = "Change files", acceptance = "Checks pass", assignment = StageAssignment(profile.id, "m"))),
             tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage")), DecisionNode("stage", "Stage", DecisionKind.STAGE, stageId = "stage"))).also { store.save(it) }
     }
+    private suspend fun Fixture.status(item: CodingSessionUi): CodingSessionStatus {
+        val sessions = projects.sessions(project.id).map { s ->
+            if (s.id == item.session.id) item else CodingSessionUi(s, projects.messages(project.id, s.id), plan = store.plans.value.firstOrNull { it.id == s.planId })
+        }
+        val requests = interactionCandidates(CodingUi(sessions = sessions), store.plans.value, service.states.value, service.persistenceErrors.value)
+        return item.copy(interactions = requests.filter { it.affects(item.session) }).status
+    }
+
+    private suspend fun Fixture.interactions(parent: CodingSession) = interactionCandidates(
+        CodingUi(sessions = listOf(CodingSessionUi(parent, projects.messages(project.id, parent.id)))),
+        store.plans.value, service.states.value, service.persistenceErrors.value)
+
+    @Test fun confirmedAllSkippedQuestionnaireClosesOriginalRequestAndPersistsExplicitSkips() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.service.send(parent, "Подготовь план"); runCurrent()
+        val request = f.interactions(parent).single { it.kind == InteractionKind.QUESTION }
+        val original = f.projects.orchestration(parent.id)!!.questions.single { it.id == request.sourceId }
+        assertTrue(original.partialAnswers.isEmpty())
+        f.gateway.overrideReply = """{"reply":"Пропуски учтены","questions":[]}"""
+        f.service.submitInteraction(request, request.questions.map { PlanningAnswer(it.id, skipped = true) }); runCurrent()
+        val state = f.projects.orchestration(parent.id)!!
+        assertEquals(UserRequestStatus.ANSWERED, state.questions.single { it.id == request.sourceId }.status)
+        assertTrue(state.inputs.single { it.replyTo == request.sourceId }.answers.all { it.skipped })
+        assertContains(state.inputs.single { it.replyTo == request.sourceId }.text, "Пропущено пользователем")
+        assertFailsWith<IllegalStateException> { f.service.submitInteraction(request, request.questions.map { PlanningAnswer(it.id, skipped = true) }) }
+    }
+
+    @Test fun confirmationRejectsStaleRevisionAndNoKeepsPlanWithoutStarting() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); val plan = f.readyPlan("p", parent)
+        val request = f.interactions(parent).single { it.kind == InteractionKind.CONFIRM_PLAN }
+        f.store.update(plan.id) { it.copy(goal = "Уточнённая цель") }
+        assertFailsWith<IllegalArgumentException> {
+            f.service.submitInteraction(request, listOf(PlanningAnswer("decision", listOf("yes"))))
+        }
+        assertTrue(f.runtime.calls.isEmpty()); assertNull(f.store.planFor(plan.id)!!.confirmedRevision)
+        val current = f.interactions(parent).single { it.kind == InteractionKind.CONFIRM_PLAN }
+        f.service.submitInteraction(current, listOf(PlanningAnswer("decision", listOf("no")))); runCurrent()
+        assertNull(f.store.planFor(plan.id)!!.confirmedRevision); assertTrue(f.runtime.calls.isEmpty())
+        assertTrue(f.projects.messages(project.id, parent.id).any { it.id == current.id + "-declined" })
+    }
+
     @Test fun restartRecoversUnavailableAssignmentsAndCoordinatesCheckpointBeforeStartingAnotherWorkerTurn() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
@@ -274,8 +319,8 @@ class PlanningChatServiceTest {
         assertNull(f.service.drafts.value[parent.id])
         val waiting = f.store.planFor(plan.id)!!
         val history = f.projects.messages(project.id, parent.id)
-        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, history, plan = waiting).status)
-        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(worker, plan = waiting).status)
+        assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(parent, history, plan = waiting)))
+        assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(worker, plan = waiting)))
         val message = assertNotNull(history.pendingPlanningQuestion())
         assertTrue(message.steps.any { it.title == "Сопоставляю результаты этапов" })
         assertTrue(message.steps.none { it.running })
@@ -303,7 +348,7 @@ class PlanningChatServiceTest {
         assertEquals(2, blocked.milestones.single().attempts.single().repairRetries)
         val history = f.projects.messages(project.id, parent.id)
         assertNull(history.pendingPlanningQuestion())
-        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, history, plan = blocked).status)
+        assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(parent, history, plan = blocked)))
         val notice = history.single { it.failed }
         assertContains(notice.text, reason)
         assertContains(notice.text, "исчерпаны (2)")
@@ -639,7 +684,7 @@ class PlanningChatServiceTest {
         val question = assertNotNull(history.pendingPlanningQuestion())
         assertEquals("stage", question.planning!!.sourceStageId)
         assertTrue(question.text.contains("за три попытки"))
-        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, history, plan = saved).status)
+        assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(parent, history, plan = saved)))
         f.gateway.coordinator = """{"reply":"Результат принят"}"""
         f.service.send(parent, "Продолжить с сохранённого результата", replyTo = question.id)
         advanceTimeBy(1000); runCurrent()
@@ -730,8 +775,8 @@ class PlanningChatServiceTest {
         assertTrue(failed.steps.none { it.running })
         assertEquals("", f.store.plans.value.single().pendingRequest)
         val notice = CodingMessage("worker-notice", CodingRole.AGENT, "Worker continues", createdAt = 2)
-        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(session, history + notice,
-            plan = f.store.plans.value.single()).status)
+        assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(session, history + notice,
+            plan = f.store.plans.value.single())))
 
         f.gateway.failure = null
         f.service.retryInput(session.id, input.id); runCurrent()

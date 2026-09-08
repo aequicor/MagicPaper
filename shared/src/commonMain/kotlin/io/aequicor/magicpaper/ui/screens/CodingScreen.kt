@@ -1,5 +1,11 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.runtime.CompositionLocalProvider
+import io.aequicor.magicpaper.domain.UserInteractionRequest
+import io.aequicor.magicpaper.domain.QuestionnaireDraft
+import io.aequicor.magicpaper.domain.PlanningAnswer
+import io.aequicor.magicpaper.domain.InteractionKind
+
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
@@ -120,7 +126,6 @@ import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingApproval
 import io.aequicor.magicpaper.domain.CodingApprovalDecision
-import io.aequicor.magicpaper.ui.components.CodingApprovalDock
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
@@ -130,8 +135,9 @@ import io.aequicor.magicpaper.domain.PlanningChatService
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.MilestoneStatus
-import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
-import io.aequicor.magicpaper.ui.components.PlanningBlockerDock
+import io.aequicor.magicpaper.ui.components.UserInteractionDock
+import io.aequicor.magicpaper.ui.components.LocalOpenQuestionnaire
+import io.aequicor.magicpaper.ui.components.CodingComposerDraft
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
 import io.aequicor.magicpaper.ui.components.codingChatRows
 import io.aequicor.magicpaper.ui.components.codingHistoryItems
@@ -280,8 +286,6 @@ private fun SessionArea(
     Column(modifier = Modifier.fillMaxSize()) {
         val service = vm.planningChat
         val scope = rememberCoroutineScope()
-        val serviceError = service?.error?.collectAsState()?.value
-        serviceError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
         val serviceDrafts = service?.drafts?.collectAsState()?.value.orEmpty()
         val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
         val live = service?.execution?.live?.collectAsState()?.value.orEmpty()
@@ -307,6 +311,12 @@ private fun SessionArea(
                 pins = pins[PinConversation(active.session.id, active.session.projectId)].orEmpty(),
                 approvals = ui.approvals.filter { it.projectId == project.id },
                 onApproval = vm::respondCodingApproval,
+                interactions = ui.interactions.filter { it.affects(active.session) },
+                questionnaireDrafts = vm.questionnaireDrafts.collectAsState().value,
+                onQuestionnaireDraft = vm::updateQuestionnaireDraft,
+                onQuestionnaireSubmit = vm::submitQuestionnaire,
+                onOpenQuestionnaire = vm::openQuestionnaire,
+                composerDraft = vm.composerDrafts.getOrPut(active.session.id) { CodingComposerDraft() },
                 onStopApproval = vm::abortCodingSession,
                 busy = effective.running,
                 allowQueue = active.session.stageId != null || active.session.planningMode,
@@ -401,7 +411,7 @@ private val StatusQueued = Color(0xFF97959B)    // серый: ждёт пере
 private val CodingSessionStatus.label: String
     get() = when (this) {
         CodingSessionStatus.WORKING -> "работает"
-        CodingSessionStatus.WAITING -> "ждёт вашего ответа"
+        CodingSessionStatus.WAITING -> "Ждём вашего ответа"
         CodingSessionStatus.CONFIRMATION -> "ждёт подтверждения доработки"
         CodingSessionStatus.BLOCKED -> "выполнение остановлено"
         CodingSessionStatus.QUEUED -> "ждёт оркестратора"
@@ -875,11 +885,18 @@ internal fun CodingChat(
     onStopApproval: (String) -> Unit = {},
     onSkills: (() -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
+    interactions: List<UserInteractionRequest> = session.interactions,
+    questionnaireDrafts: Map<String, QuestionnaireDraft> = emptyMap(),
+    onQuestionnaireDraft: (String, QuestionnaireDraft) -> Unit = { _, _ -> },
+    onQuestionnaireSubmit: (String, List<PlanningAnswer>) -> Unit = { _, _ -> },
+    onOpenQuestionnaire: (InteractionKind, String) -> Unit = { _, _ -> },
+    composerDraft: CodingComposerDraft = remember(session.session.id) { CodingComposerDraft() },
     pins: List<RequestPinGroup> = emptyList(),
     listState: LazyListState = key(session.session.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
 ) {
+    CompositionLocalProvider(LocalOpenQuestionnaire provides onOpenQuestionnaire) {
     val messages = session.messages
     val hideSystemSteps = LocalHideSystemSteps.current
     val rows = remember(messages, hideSystemSteps) { codingChatRows(messages, hideSystemSteps) }
@@ -897,7 +914,7 @@ internal fun CodingChat(
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
     val status: @Composable () -> Unit = {
         key(session.session.id) {
-            AgentMessageStatus(draft, thinkingExpanded, { thinkingExpanded = !thinkingExpanded })
+            AgentMessageStatus(draft, thinkingExpanded, waitingForUser = interactions.isNotEmpty(), onToggle = { thinkingExpanded = !thinkingExpanded })
         }
     }
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
@@ -916,8 +933,7 @@ internal fun CodingChat(
             }
         } }
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            val questionHeight = maxHeight * 0.55f
-            val blockerHeight = maxHeight * 0.4f
+            val questionHeight = maxHeight * 0.75f
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
@@ -998,18 +1014,15 @@ internal fun CodingChat(
                 Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = footerHeight + 12.dp))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
-                CodingApprovalDock(approvals, onApproval, onStopApproval,
-                    Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 12.dp, vertical = 4.dp))
-                if (planningService != null && approvals.isEmpty()) PlanningQuestionsDock(
-                    planningQuestionsSession.session, planningQuestionsSession.messages, planningService,
-                    false,
-                    Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
-                )
-                if (planningService != null && approvals.isEmpty()) PlanningBlockerDock(
-                    planningQuestionsSession.session, planningQuestionsSession.messages, planningService, busy,
-                    Modifier.fillMaxWidth().heightIn(max = blockerHeight).padding(horizontal = 12.dp, vertical = 4.dp),
-                )
+                val request = interactions.firstOrNull()
+                if (request != null) key(request.id) {
+                    UserInteractionDock(request, questionnaireDrafts[request.id] ?: QuestionnaireDraft(request.initialAnswers),
+                        { onQuestionnaireDraft(request.id, it) }, { onQuestionnaireSubmit(request.id, it) },
+                        Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 8.dp, vertical = 4.dp),
+                        queuedCount = interactions.size - 1)
+                } else
                 CodingComposer(
+                    state = composerDraft,
                     enabled = engineReady && (!busy || allowQueue),
                     busy = busy && !allowQueue,
                     controls = modelChip,
@@ -1023,6 +1036,7 @@ internal fun CodingChat(
                 )
             }
         }
+    }
     }
 }
 
@@ -1302,7 +1316,7 @@ private fun DraftFragment(first: Boolean, last: Boolean, content: @Composable ()
 }
 
 @Composable
-internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle: () -> Unit) {
+internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingForUser: Boolean = false, onToggle: () -> Unit) {
     val fragments = remember(draft.steps, draft.thinking) {
         val recorded = draft.steps.filter { it.kind == CodingStepKind.THINKING }.map { it.title }
         // The recorder normally includes the live fragment in steps; other runtimes may send it separately.
@@ -1314,9 +1328,9 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
         draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.THINKING }?.title.orEmpty()
     }
     val activity = when {
+        waitingForUser -> "Ждём вашего ответа"
         draft.failedMessage != null -> "Работа остановлена из-за ошибки"
         !draft.active -> "Работа завершена"
-        draft.awaitingApproval -> "Ожидает подтверждения…"
         progress != null -> progress.title
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
@@ -1326,7 +1340,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
         else -> "Агент работает…"
     }
     val hasThinking = remember(fragments) { fragments.any { it.isNotBlank() } }
-    val isWorking = draft.active && !draft.awaitingApproval && draft.failedMessage == null &&
+    val isWorking = draft.active && !waitingForUser && draft.failedMessage == null &&
         (progress != null || tool != null || !draft.awaitingModel)
     var dots by remember { mutableStateOf(3) }
     LaunchedEffect(isWorking) {
@@ -1357,7 +1371,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
         ) {
             ActivityDot(
                 if (isWorking) CodingSessionStatus.WORKING
-                else if (draft.active) CodingSessionStatus.WAITING else CodingSessionStatus.IDLE,
+                else if (draft.active) CodingSessionStatus.WORKING else CodingSessionStatus.IDLE,
                 size = 6,
             )
             Spacer(Modifier.width(6.dp))
@@ -1419,6 +1433,7 @@ private fun currentThinkingSummary(thinking: String): String {
 
 @Composable
 internal fun CodingComposer(
+    state: CodingComposerDraft = remember { CodingComposerDraft() },
     onSkills: (() -> Unit)? = null,
     enabled: Boolean,
     busy: Boolean,
@@ -1430,8 +1445,8 @@ internal fun CodingComposer(
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
 ) {
-    var text by rememberSaveable { mutableStateOf("") }
-    var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
+    var text by state.text
+    var attachments by state.attachments
     fun submit() {
         if (!enabled || busy || (onResume == null && text.isBlank() && attachments.isEmpty())) return
         (onResume ?: onSend)(text, attachments)

@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.SemanticsActions
@@ -15,7 +16,7 @@ import io.aequicor.magicpaper.data.planning.JsonPlanningRepository
 import io.aequicor.magicpaper.data.planning.PlanningStore
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.*
-import io.aequicor.magicpaper.ui.CodingSessionUi
+import io.aequicor.magicpaper.ui.*
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -26,7 +27,7 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalComposeUiApi::class)
 class OrchestrationFailureRenderTest {
-    @Test fun collapsedSummaryShowsFailureAndRetryWhileAWorkerContinues() = runTest {
+    @Test fun failedInputUsesQuestionnaireWhileAWorkerContinues() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {
             val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -60,11 +61,16 @@ class OrchestrationFailureRenderTest {
                 error = "Input exceeds the maximum length of 1048576 characters.")
             projects.saveOrchestration(OrchestrationState(parent.id, project.id, activePlanId = plan.id, inputs = listOf(input)))
             service.bootstrap(); runCurrent()
+            val interaction = interactionCandidates(CodingUi(sessions = listOf(CodingSessionUi(parent, plan = plan))),
+                listOf(plan), service.states.value, emptyMap()).single()
+            var submissions = 0
             val output = File("build/reports/orchestration").apply { mkdirs() }
             for (width in listOf(1000, 430)) {
                 ImageComposeScene(width, 560) {
                     MagicPaperTheme { Surface { Column {
-                        OrchestrationStatus(CodingSessionUi(parent, plan = plan), service, {})
+                        var draft by remember { mutableStateOf(QuestionnaireDraft()) }
+                        OrchestrationStatus(CodingSessionUi(parent, plan = plan, interactions = listOf(interaction)), service, {})
+                        UserInteractionDock(interaction, draft, { draft = it }, { submissions++ })
                     } } }
                 }.use { scene ->
                     repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
@@ -75,16 +81,19 @@ class OrchestrationFailureRenderTest {
                         assertTrue(it.boundsInRoot.top >= 0 && it.boundsInRoot.bottom <= 560, "$label must be visible")
                         assertTrue(it.boundsInRoot.left >= 0 && it.boundsInRoot.right <= width, "$label must fit")
                     }
-                    visible("Ошибка обработки сообщения")
-                    visible("Контекст запроса превысил допустимый размер")
+                    visible("1/1 · Не удалось обработать сообщение")
+                    visible(input.error)
                     visible("Повторить обработку")
                     visible("Сейчас:")
                     visible("Подробнее")
                     assertTrue(nodes.none { text(it) == "Оркестратор обрабатывает сообщение" })
                     val retry = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }
-                        .first { text(it) == "Повторить обработку" }
+                        .first { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.option.retry" }
                     assertNotNull(retry.config.getOrNull(SemanticsActions.OnClick))
                     assertNull(retry.config.getOrNull(SemanticsProperties.Disabled))
+                    retry.config[SemanticsActions.OnClick].action!!.invoke()
+                    repeat(3) { scene.render(120_000_000L + it * 16_000_000L).close(); runCurrent() }
+                    assertEquals(0, submissions, "Selecting recovery must not execute it")
                     File(output, "input-failure-$width.png").writeBytes(scene.render(112_000_000L).use {
                         it.encodeToData()!!.use { data -> data.bytes }
                     })

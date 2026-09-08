@@ -30,6 +30,7 @@ internal fun OrchestrationStatus(
     modifier: Modifier = Modifier,
     scrolled: Boolean = false,
 ) {
+    val openQuestionnaire = LocalOpenQuestionnaire.current
     val states by service.states.collectAsState()
     val plans by service.store.plans.collectAsState()
     val sessions by service.sessions.collectAsState()
@@ -39,7 +40,7 @@ internal fun OrchestrationStatus(
     val state = states[session.session.id]
     val plan = plans.firstOrNull { it.id == state?.activePlanId }
         ?: plans.filter { it.parentSessionId == session.session.id }.maxByOrNull { it.updatedAt }
-    val questions = state?.openQuestions().orEmpty()
+    val questions = state?.openQuestions().orEmpty().filter { q -> session.interactions.any { it.sourceId == q.id } }
     val children = sessions.filter { it.parentSessionId == session.session.id }
     var expanded by rememberSaveable(session.session.id) { mutableStateOf(false) }
     var archive by rememberSaveable(session.session.id) { mutableStateOf(false) }
@@ -50,17 +51,17 @@ internal fun OrchestrationStatus(
     val active = plan?.selectedMilestones.orEmpty().filter { plan?.isStageWorking(it) == true }
     val failedInput = state?.inputs?.lastOrNull()?.takeIf { it.status == OrchestrationInputStatus.FAILED }
     val phase = when {
+        session.interactions.isNotEmpty() -> "Ждём вашего ответа"
         session.session.id in persistenceErrors -> "Ошибка сохранения · выполнение остановлено"
         failedInput != null -> "Ошибка обработки сообщения"
         plan == null -> "Готов обсудить задачу"
-        questions.isNotEmpty() -> "Нужен ваш ответ"
-        plan.proposalReadyForConfirmation -> "Предложение доработки · нужно подтверждение"
-        blockers.isNotEmpty() -> "Нужно устранить блокировку"
+        plan.proposalReadyForConfirmation -> "Предложение доработки сохранено"
+        blockers.isNotEmpty() -> "Выполнение остановлено"
         plan.phase == ExecutionPhase.COMPLETE -> "Работа завершена · можно задать вопрос или запросить доработку"
         plan.intent == ExecutionIntent.PAUSE -> "Пауза"
         plan.intent == ExecutionIntent.STOP && plan.confirmedRevision != null -> "Остановлено"
         drafts[session.session.id]?.active == true -> "Оркестратор обрабатывает сообщение"
-        plan.confirmedRevision == null -> if (plan.milestones.isEmpty()) "Уточнение задачи" else "План готов · нужно подтверждение"
+        plan.confirmedRevision == null -> if (plan.milestones.isEmpty()) "Уточнение задачи" else "План сохранён"
         plan.phase == ExecutionPhase.VERIFYING -> "Итоговая проверка"
         plan.phase == ExecutionPhase.APPLYING -> "Перенос результата в проект"
         active.isNotEmpty() -> "Выполнение этапов" + if (plan.proposal != null) " · есть предложение доработки" else ""
@@ -84,16 +85,7 @@ internal fun OrchestrationStatus(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(phase, style = MaterialTheme.typography.bodyMedium)
-                    failedInput?.let { input ->
-                        OrchestrationInputFailure(input) { service.retryInput(session.session.id, input.id) }
-                    }
-                    persistenceErrors[session.session.id]?.let { message ->
-                        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        unsavedInputs[session.session.id].orEmpty().forEach { input ->
-                            Text("Не сохранено: ${input.text}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        TextButton({ service.recoverOrchestration(session.session.id) }) { Text("Проверить хранилище и восстановить очередь") }
-                    }
+                    if (session.interactions.isNotEmpty()) Text("Обращений: ${session.interactions.size}", style = MaterialTheme.typography.bodySmall)
                     if (stages.isNotEmpty()) Text("Текущий запуск: $done/${stages.size} этапов", style = MaterialTheme.typography.labelMedium)
                     questions.take(2).forEach { q -> Text("Ответ для: ${q.scopeLabel}", color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.bodySmall) }
@@ -110,7 +102,7 @@ internal fun OrchestrationStatus(
                     style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
             if (plan?.proposal != null) PlanningProposalCard(plan, questions.isNotEmpty()) { proposalId ->
-                service.confirm(plan.id, proposalId)
+                openQuestionnaire(InteractionKind.CONFIRM_PLAN, plan.id)
             }
             if (expanded) Column(Modifier.heightIn(max = 270.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -124,7 +116,7 @@ internal fun OrchestrationStatus(
                     }
                     if (input.status in listOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED)) {
                         if (input.error.isNotBlank()) Text(input.error, color = MaterialTheme.colorScheme.error)
-                        TextButton({ service.retryInput(session.session.id, input.id) }) { Text("Повторить обработку") }
+                        TextButton({ openQuestionnaire(InteractionKind.RECOVER_INPUT, input.id) }) { Text("Повторить обработку") }
                     }
                 }
                 if (plan != null) ScheduledMessages(plan,
@@ -164,7 +156,7 @@ internal fun OrchestrationStatus(
                 }, style = MaterialTheme.typography.bodySmall)
                 if (plan != null && plan.phase != ExecutionPhase.COMPLETE && plan.confirmedRevision != null) {
                     Row {
-                        TextButton({ service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) {
+                        TextButton({ if (plan.intent != ExecutionIntent.RUN && plan.blockingIssues(session.messages).isNotEmpty()) openQuestionnaire(InteractionKind.RECOVER_PLAN, plan.id) else service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) {
                             Text(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить")
                         }
                         TextButton({ service.control(plan.id, "stop") }) { Text("Остановить") }

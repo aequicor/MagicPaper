@@ -3,9 +3,11 @@ package io.aequicor.magicpaper.domain
 import kotlinx.serialization.Serializable
 
 @Serializable enum class QuestionKind { SINGLE, MULTIPLE, TEXT }
-@Serializable data class QuestionOption(val id: String, val label: String)
-@Serializable data class PlanningQuestion(val id: String, val title: String, val kind: QuestionKind = QuestionKind.TEXT, val options: List<QuestionOption> = emptyList())
-@Serializable data class PlanningAnswer(val questionId: String, val selected: List<String> = emptyList(), val text: String = "")
+@Serializable data class QuestionOption(val id: String, val label: String, val description: String = "", val enabled: Boolean = true)
+@Serializable data class PlanningQuestion(val id: String, val title: String, val kind: QuestionKind = QuestionKind.TEXT,
+    val options: List<QuestionOption> = emptyList(), val allowCustomInput: Boolean = true, val canSkip: Boolean = true,
+    val secret: Boolean = false)
+@Serializable data class PlanningAnswer(val questionId: String, val selected: List<String> = emptyList(), val text: String = "", val skipped: Boolean = false)
 @Serializable data class PlanningChatBlock(val planId: String, val questions: List<PlanningQuestion> = emptyList(), val answers: List<PlanningAnswer> = emptyList(), val graph: Boolean = false, val replyTo: String? = null, val sourceStageId: String? = null, val sourceSessionId: String? = null, val scopeLabel: String = "", val requestStatus: UserRequestStatus = UserRequestStatus.OPEN, val closesRequest: Boolean = true, val affectedStageIds: List<String> = emptyList())
 @Serializable data class PlanVersion(val revision: Long, val tree: List<DecisionNode>, val milestones: List<Milestone>, val at: Long)
 @Serializable enum class DeliveryState { QUEUED, DELIVERED, ANSWERED, CANCELLED }

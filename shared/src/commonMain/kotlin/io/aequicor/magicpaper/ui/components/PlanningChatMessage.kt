@@ -15,6 +15,7 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun PlanningChatMessage(message: CodingMessage, session: CodingSession, history: List<CodingMessage>, service: PlanningChatService, onOpenSession: (String) -> Unit) {
+    val openQuestionnaire = LocalOpenQuestionnaire.current
     val block = message.planning ?: return
     val plans by service.store.plans.collectAsState()
     val live by service.execution.live.collectAsState()
@@ -22,7 +23,7 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
     val source = plans.firstOrNull { it.id == block.planId } ?: return
     if (block.questions.isNotEmpty()) {
         val answered = block.requestStatus == UserRequestStatus.ANSWERED || history.any { it.planning?.replyTo == message.id && it.planning.closesRequest }
-        Text(if (answered) "Ответы на уточнения отправлены" else "Ответьте в карточке уточнения под диалогом",
+        Text(if (answered) "Ответы на уточнения отправлены" else "Ответьте в опроснике под диалогом",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (!block.graph) return
@@ -53,7 +54,7 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
             HorizontalDivider()
             val state by service.states.collectAsState()
             PlanningProposalDetails(plan, state[plan.parentSessionId]?.openQuestions(plan.id).orEmpty().isNotEmpty()) {
-                service.confirm(plan.id, it)
+                openQuestionnaire(InteractionKind.CONFIRM_PLAN, plan.id)
             }
         }
         if (plan.confirmedRevision != null) {
@@ -70,12 +71,12 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { graphOpen = true }) { Text("Схема плана") }
             if (plan.confirmedRevision == null) {
-                Button(onClick = { service.confirm(plan.id) }, enabled = plan.wizardStep != PlanningStep.CLARIFY && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid && drafts[session.id]?.active != true) { Text("Подтвердить") }
+                Button(onClick = { openQuestionnaire(InteractionKind.CONFIRM_PLAN, plan.id) }, enabled = plan.wizardStep != PlanningStep.CLARIFY && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid && drafts[session.id]?.active != true) { Text("Подтвердить") }
             } else {
                 if (plan.phase != ExecutionPhase.COMPLETE) {
-                    OutlinedButton(onClick = { service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) { Text(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить") }
+                    OutlinedButton(onClick = { if (plan.intent != ExecutionIntent.RUN && plan.blockingIssues(history).isNotEmpty()) openQuestionnaire(InteractionKind.RECOVER_PLAN, plan.id) else service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) { Text(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить") }
                     TextButton(onClick = { service.control(plan.id, "stop") }, enabled = plan.intent != ExecutionIntent.STOP) { Text("Остановить") }
-                    if (plan.issue != null) TextButton(onClick = { service.control(plan.id, "retry") }) {
+                    if (plan.issue != null) TextButton(onClick = { openQuestionnaire(InteractionKind.RECOVER_PLAN, plan.id) }) {
                         Text(if (plan.canExtendAfterFinalVerification) "Доработать план" else "Повторить")
                     }
                 }
