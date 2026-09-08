@@ -452,7 +452,8 @@ class PlanningExecutionService(
                     Работай только в этой рабочей папке. Не выполняй внешних публикаций.
                     Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
                 """.trimIndent() + "\n" + extraInstructions
-                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false)
+                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false,
+                    chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now()))
                 saveAttempt(id, stageId, attempt)
                 journal(id, "agent-intent", stageId, attempt.id)
                 var failure: String? = null
@@ -494,6 +495,8 @@ class PlanningExecutionService(
                     }
                     if (Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
                 }
+                attempt = attempt.copy(chatTurns = attempt.chatTurns.dropLast(1) + attempt.chatTurns.last().copy(completedAt = Id.now()))
+                currentAttempt = attempt
                 if (failure != null || !ended || attempt.report.isBlank()) {
                     val issue = classify(failure ?: "Поток завершился без подтверждённого результата", uncertain = !ended)
                     if (issue.kind == IssueKind.TRANSIENT && attempt.transportRetries < 3) {

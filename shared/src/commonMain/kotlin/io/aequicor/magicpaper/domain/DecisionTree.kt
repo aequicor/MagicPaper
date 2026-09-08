@@ -46,6 +46,8 @@ import kotlinx.serialization.Serializable
     val kind: IssueKind, val message: String, val retryAt: Long = 0,
     val retries: Int = 0, val requiresUser: Boolean = false,
 )
+/** Boundaries in the cumulative activity log, independent of coordinator retries. */
+@Serializable data class StageChatTurn(val startStep: Int, val startedAt: Long = 0, val completedAt: Long = 0)
 @Serializable data class StageAttempt(
     val id: String, val sessionId: String, val assignment: StageAssignment,
     val phase: AttemptPhase = AttemptPhase.PREPARED, val engineSessionId: String = "",
@@ -58,6 +60,7 @@ import kotlinx.serialization.Serializable
     val startedAt: Long = 0, val updatedAt: Long = 0,
     /** The worker has returned its turn; the planner owns the next decision. */
     val awaitingPlanner: Boolean = false,
+    val chatTurns: List<StageChatTurn> = emptyList(),
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",

@@ -47,8 +47,7 @@ fun Plan.isStageWorking(stage: Milestone): Boolean = intent == ExecutionIntent.R
 /** Keep the coordination envelope out of the user-facing conversation. */
 fun readableStageActivity(steps: List<CodingStep>): List<CodingStep> = steps.map { step ->
     if (step.kind != CodingStepKind.ANSWER) step else {
-        val raw = step.title.substringAfter("```json").substringBeforeLast("```").trim()
-        val reply = runCatching { kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.decodeFromString<StageReply>(raw) }.getOrNull()
+        val reply = stageReplyOrNull(step.title)
         if (reply == null) step else step.copy(title = reply.text)
     }
 }

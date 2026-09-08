@@ -455,12 +455,11 @@ class PlanningChatService(
                     else "Этап «${stage.title}» завершён и проверен. ${stage.checkNote}", createdAt = stage.updatedAt))
                 stage.attempts.forEach { a ->
                     append(plan.projectId, sessionId, CodingMessage("${a.id}-prompt", CodingRole.USER, a.prompt.ifBlank { stage.description }, createdAt = a.startedAt))
-                    append(plan.projectId, sessionId, CodingMessage("${a.id}-response", CodingRole.AGENT, a.report, steps = a.steps.filter { it.isVisibleActivity }.map { step -> if (step.kind == CodingStepKind.ANSWER && step.title.trim().startsWith("{")) step.copy(title = runCatching { json.decodeFromString<StageReply>(step.title).text }.getOrDefault(step.title)) else step },
-                        failed = a.error != null, createdAt = a.startedAt + 1))
                 }
                 messageLock.withLock {
                     val messages = projects.messages(plan.projectId, sessionId)
-                    val next = messages.map { m -> if (m.deliveryId != null) m.copy(pendingDelivery = plan.deliveries.any { it.id == m.deliveryId && it.state == DeliveryState.QUEUED }) else m }
+                    val next = messages.withStageResponses(stage.attempts.flatMap { it.chatResponses(history) })
+                        .map { m -> if (m.deliveryId != null) m.copy(pendingDelivery = plan.deliveries.any { it.id == m.deliveryId && it.state == DeliveryState.QUEUED }) else m }
                     if (messages != next) projects.saveMessages(plan.projectId, sessionId, next)
                 }
             }

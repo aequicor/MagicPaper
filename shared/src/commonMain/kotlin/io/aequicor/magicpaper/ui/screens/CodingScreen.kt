@@ -100,9 +100,7 @@ import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
-import io.aequicor.magicpaper.domain.isStageWorking
 import io.aequicor.magicpaper.domain.CodingStep
-import io.aequicor.magicpaper.domain.readableStageActivity
 import io.aequicor.magicpaper.domain.PlanningChatService
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.domain.ExecutionIntent
@@ -123,6 +121,7 @@ import io.aequicor.magicpaper.ui.CodingSessionMode
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.components.CodingAttachments
 import io.aequicor.magicpaper.ui.components.CodingModelChip
@@ -234,13 +233,11 @@ private fun SessionArea(
         val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
         val live = service?.execution?.live?.collectAsState()?.value.orEmpty()
         val workerPlan = plans.firstOrNull { it.id == active.session.planId }
-        val worker = workerPlan?.milestones?.firstOrNull { it.id == active.session.stageId }
-        val attempt = worker?.attempts?.lastOrNull()
-        val workerLive = attempt?.let { live[it.id] ?: it }
-        val workerRunning = worker != null && workerPlan.isStageWorking(worker) && workerLive?.error?.requiresUser != true
-        val draft = serviceDrafts[active.session.id] ?: if (workerRunning) CodingDraft(steps = readableStageActivity(workerLive?.steps.orEmpty()), active = true) else active.draft
-        val effective = active.copy(messages = if (workerRunning && attempt != null) active.messages.filterNot { it.id == "${attempt.id}-response" } else active.messages,
-            draft = draft.copy(awaitingApproval = active.draft.awaitingApproval), running = workerRunning || draft.active || active.running)
+        val parentMessages = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId }?.messages.orEmpty()
+        val stageChat = active.withStageChat(workerPlan, live, parentMessages)
+        val draft = serviceDrafts[active.session.id] ?: stageChat.draft
+        val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
+            running = stageChat.running || draft.active)
             CodingChat(
                 project = project,
                 session = effective,

@@ -45,6 +45,8 @@ class PlanningChatServiceTest {
     private class Runtime(val gate: CompletableDeferred<Unit> = CompletableDeferred()) : CodingRuntime {
         val calls = mutableListOf<Pair<CodingSession, String>>()
         val paths = mutableListOf<String>()
+        val turnGates = mutableListOf<CompletableDeferred<Unit>>()
+        val turnReplies = mutableListOf<String>()
         override val supported = true
         override val rootPath = "/shared"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
@@ -53,10 +55,12 @@ class PlanningChatServiceTest {
         override fun abortAll() = Unit
         override suspend fun uninstall() = Unit
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
+            val index = calls.size
             calls += session to prompt; paths += project.path
             emit(CodingEvent.SessionStarted("engine-${session.id}"))
             gate.await()
-            emit(CodingEvent.FinalText("""{"kind":"RESULT","text":"Проверки выполнены","changedFiles":[]}"""))
+            turnGates.getOrNull(index)?.await()
+            emit(CodingEvent.FinalText(turnReplies.getOrNull(index) ?: """{"kind":"RESULT","text":"Проверки выполнены","changedFiles":[]}"""))
             emit(CodingEvent.Finished)
         }
     }
@@ -166,6 +170,79 @@ class PlanningChatServiceTest {
         f.service.send(parent, "PDF", replyTo = message.id); advanceTimeBy(1000); runCurrent()
         assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
         assertFalse(f.store.planFor(plan.id)!!.milestones.single().attempts.last().awaitingPlanner)
+    }
+
+    @Test fun repeatedHandoffKeepsEachReplyAfterItsIncomingMessageAndSurvivesReload() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        val secondTurn = CompletableDeferred<Unit>()
+        f.runtime.gate.complete(Unit)
+        f.runtime.turnGates += listOf(CompletableDeferred(Unit), secondTurn)
+        f.runtime.turnReplies += listOf(
+            """{"kind":"QUESTION","text":"Какой формат?"}""",
+            """{"kind":"RESULT","text":"Экспорт PDF проверен"}""",
+        )
+        f.gateway.coordinator = """{"reply":"Уточните формат","askUser":true}"""
+        f.service.confirm(plan.id); runCurrent()
+        val worker = f.projects.sessions(project.id).single { it.stageId != null }
+        val first = f.projects.messages(project.id, worker.id).last { it.role == CodingRole.AGENT }
+        assertEquals("Какой формат?", first.text)
+        val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
+        f.service.send(parent, "PDF", replyTo = question.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(2, f.runtime.calls.size)
+        assertEquals(first, f.projects.messages(project.id, worker.id).single { it.role == CodingRole.AGENT })
+        val coordinatorGate = CompletableDeferred<Unit>()
+        f.gateway.coordinatorGates += listOf(CompletableDeferred(Unit), coordinatorGate)
+        secondTurn.complete(Unit); runCurrent()
+        val saved = f.store.planFor(plan.id)!!.milestones.single().attempts.single()
+        assertTrue(saved.awaitingPlanner)
+        val history = f.projects.messages(project.id, worker.id)
+        val replies = history.filter { it.role == CodingRole.AGENT }
+        assertEquals(listOf("Какой формат?", "Экспорт PDF проверен"), replies.map { it.text })
+        assertEquals(first, replies.first())
+        val answerIndex = history.indexOfFirst { it.deliveryId != null && "PDF" in it.text }
+        assertTrue(answerIndex > history.indexOf(first))
+        assertEquals(replies.last(), history.last())
+        assertTrue(history.indexOf(replies.last()) > answerIndex)
+        assertEquals(2, saved.chatTurns.size)
+        assertTrue(saved.chatTurns.all { it.completedAt > 0 })
+        assertEquals(history, JsonCodingProjectRepository(f.kv, json).messages(project.id, worker.id))
+        assertEquals(saved.chatTurns, JsonPlanningRepository(f.kv, json).planFor(plan.id)!!.milestones.single().attempts.single().chatTurns)
+        f.store.update(plan.id) { it.copy(updatedAt = it.updatedAt + 1) }; runCurrent()
+        assertEquals(history, f.projects.messages(project.id, worker.id))
+    }
+
+    @Test fun legacyCombinedReplyIsSplitAroundTheUserAnswerWithoutLosingActivity() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val workerId = "plan-p-stage-stage"
+        val steps = listOf(
+            CodingStep(CodingStepKind.TOOL, "Чтение", result = "Прочитано"),
+            CodingStep(CodingStepKind.ANSWER, """{"kind":"QUESTION","text":"Какой формат?"}"""),
+            CodingStep(CodingStepKind.THINKING, "Проверяю PDF"),
+            CodingStep(CodingStepKind.ANSWER, "```json\n{\"kind\":\"RESULT\",\"text\":\"PDF готов\"}\n```"),
+        )
+        val attempt = StageAttempt("a", workerId, StageAssignment(profile.id, "m"), steps = steps,
+            report = "PDF готов", turnIndex = 2, startedAt = 10, awaitingPlanner = true)
+        val plan = base.copy(confirmedRevision = 1, milestones = listOf(base.milestones.single().copy(attempts = listOf(attempt))))
+        f.service.prepareSessions(plan)
+        f.projects.saveMessages(project.id, workerId, listOf(
+            CodingMessage("a-response", CodingRole.AGENT, "PDF готов", steps = readableStageActivity(steps), createdAt = 11),
+            CodingMessage("answer", CodingRole.USER, "PDF", createdAt = 30),
+        ))
+        f.projects.saveMessages(project.id, parent.id, listOf(
+            CodingMessage("a-turn-0", CodingRole.AGENT, "Какой формат?", createdAt = 20),
+            CodingMessage("a-turn-1", CodingRole.AGENT, "PDF готов", createdAt = 40),
+        ))
+        f.store.save(plan); runCurrent()
+        val history = f.projects.messages(project.id, workerId)
+        assertEquals(listOf("a-prompt", "a-response", "answer", "a-response-1"), history.map { it.id })
+        assertEquals(listOf("Какой формат?", "PDF готов"), history.filter { it.role == CodingRole.AGENT }.map { it.text })
+        assertEquals(readableStageActivity(steps), history.flatMap { it.steps })
+        f.store.update(plan.id) { it }; runCurrent()
+        assertEquals(history, f.projects.messages(project.id, workerId))
     }
 
     @Test fun concurrentCoordinatorTurnsKeepRemainingActivityVisible() = runTest {
