@@ -124,6 +124,8 @@ import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.ChatScrollItem
+import io.aequicor.magicpaper.ui.components.chatDisclosure
 import io.aequicor.magicpaper.ui.components.CodingAttachments
 import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.CodingModelSwitcherDialog
@@ -788,7 +790,7 @@ internal fun CodingChat(
     }
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
-    stickToBottom(listState, session.session.id)
+    val scroll = stickToBottom(listState, session.session.id)
     val density = LocalDensity.current
     var footerHeight by remember { mutableStateOf(0.dp) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -820,29 +822,33 @@ internal fun CodingChat(
             }
             items(rows, key = { it.message.id }) { row ->
                 val message = row.message
-                CodingMessageBubble(message) {
-                    if (busy && statusMessageId != null &&
-                        (message.id == statusMessageId || row.planCard?.id == statusMessageId)
-                    ) status()
-                    if (planningService != null && message.planning != null) {
-                        Spacer(Modifier.height(6.dp))
-                        PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
-                    }
-                    row.planCard?.let { card ->
-                        Spacer(Modifier.height(12.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        Spacer(Modifier.height(12.dp))
-                        ChatMarkdown(card.text)
-                        if (planningService != null) {
+                ChatScrollItem(scroll, message.id) {
+                    CodingMessageBubble(message) {
+                        if (busy && statusMessageId != null &&
+                            (message.id == statusMessageId || row.planCard?.id == statusMessageId)
+                        ) status()
+                        if (planningService != null && message.planning != null) {
                             Spacer(Modifier.height(6.dp))
-                            PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                            PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
                         }
+                        row.planCard?.let { card ->
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Spacer(Modifier.height(12.dp))
+                            ChatMarkdown(card.text)
+                            if (planningService != null) {
+                                Spacer(Modifier.height(6.dp))
+                                PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                            }
+                        }
+                        if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                     }
-                    if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                 }
             }
             if (hasDraft || (busy && statusMessageId == null)) {
-                item(key = "draft") { DraftBubble(draft, if (busy) status else null) }
+                item(key = "draft") {
+                    ChatScrollItem(scroll, "draft") { DraftBubble(draft, if (busy) status else null) }
+                }
             }
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -987,7 +993,7 @@ private fun ThinkingStepRow(step: CodingStep) {
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        Row(Modifier.clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.chatDisclosure { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "💭",
                 style = MaterialTheme.typography.bodySmall,
@@ -1032,7 +1038,7 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Row(
-            Modifier.then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier),
+            Modifier.then(if (hasDetail) Modifier.chatDisclosure { expanded = !expanded } else Modifier),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Canvas(
@@ -1189,7 +1195,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
                 Row(
-                    Modifier.fillMaxWidth().clickable(onClick = onToggle).semantics {
+                    Modifier.fillMaxWidth().chatDisclosure(onToggle).semantics {
                         contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,

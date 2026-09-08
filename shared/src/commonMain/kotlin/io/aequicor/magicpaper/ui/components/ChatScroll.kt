@@ -1,11 +1,67 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.roundToInt
+
+/** Disclosure changes are reader actions, so they must take precedence over following output. */
+internal class ChatScrollState(private val listState: LazyListState) {
+    var disclosureRevision by mutableIntStateOf(0)
+        private set
+
+    fun preserveDisclosure(itemKey: Any, item: LayoutCoordinates?, header: LayoutCoordinates?) {
+        disclosureRevision++
+        if (item?.isAttached != true || header?.isAttached != true) return
+        val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == itemKey } ?: return
+        val headerInItem = item.localPositionOf(header, Offset.Zero).y
+        // A multiline command's top may already be offscreen when its middle is clicked.
+        // Keep a visible header where it is, otherwise bring its collapsed row to the top.
+        val headerInViewport = info.offset + headerInItem
+        val target = headerInViewport.coerceAtLeast(0f)
+        // Apply with the height change, before LazyColumn can skip the shrunken message.
+        listState.requestScrollToItem(info.index, (headerInItem - target).roundToInt())
+    }
+}
+
+private val LocalChatDisclosure = staticCompositionLocalOf<(LayoutCoordinates?) -> Unit> { {} }
+
+@Composable
+internal fun ChatScrollItem(scroll: ChatScrollState, key: Any, content: @Composable () -> Unit) {
+    var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    Box(Modifier.onGloballyPositioned { coordinates = it }) {
+        CompositionLocalProvider(LocalChatDisclosure provides { header ->
+            scroll.preserveDisclosure(key, coordinates, header)
+        }) { content() }
+    }
+}
+
+/** Use on the stable top of a disclosure, not the vertically centred arrow of a tall command. */
+internal fun Modifier.chatDisclosure(onToggle: () -> Unit): Modifier = composed {
+    val preserve = LocalChatDisclosure.current
+    var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    onGloballyPositioned { coordinates = it }.clickable {
+        preserve(coordinates)
+        onToggle()
+    }
+}
 
 /**
  * Прокрутка ленты чата «за дно», а не «за начало последнего сообщения».
@@ -39,13 +95,15 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  * принять собственную докрутку за жест читателя.
  */
 @Composable
-fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit) {
-    LaunchedEffect(listState, resetKey) {
+internal fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit): ChatScrollState {
+    val scroll = remember(listState, resetKey) { ChatScrollState(listState) }
+    LaunchedEffect(listState, scroll) {
         var following = true
         // Открыли чат — сразу на дно, не дожидаясь изменений ленты.
         listState.pinToEnd()
         var anchor = listState.anchor()
-        snapshotFlow { listState.wakeUp() }
+        var disclosureRevision = scroll.disclosureRevision
+        snapshotFlow { listState.wakeUp() to scroll.disclosureRevision }
             .distinctUntilChanged()
             .collect {
                 // Размер ленты может обновиться внутри layout: прокручиваем после его завершения.
@@ -53,9 +111,11 @@ fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit) {
                 val atEnd = !listState.canScrollForward
                 val now = listState.anchor()
                 when {
+                    scroll.disclosureRevision != disclosureRevision -> following = false
                     atEnd -> following = true
                     now.before(anchor) -> following = false
                 }
+                disclosureRevision = scroll.disclosureRevision
                 anchor = now
                 if (following && !atEnd && !listState.isScrollInProgress) {
                     listState.pinToEnd()
@@ -63,6 +123,7 @@ fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit) {
                 }
             }
     }
+    return scroll
 }
 
 /**
