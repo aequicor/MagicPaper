@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -125,23 +126,27 @@ internal fun Modifier.chatScrollInput(scroll: ChatScrollState): Modifier = compo
 
 private val LocalChatDisclosure = staticCompositionLocalOf<(LayoutCoordinates?) -> Unit> { {} }
 
+// Coordinates are only read by click handlers. Publishing them as Compose state
+// needlessly invalidates the whole message after layout and during list reuse.
+private class ChatCoordinates { var value: LayoutCoordinates? = null }
+
 @Composable
 internal fun ChatScrollItem(scroll: ChatScrollState, key: Any, content: @Composable () -> Unit) {
-    var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    val highlight = if (scroll.highlightedKey == key) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier
-    Box(Modifier.then(highlight).onGloballyPositioned { coordinates = it }) {
-        CompositionLocalProvider(LocalChatDisclosure provides { header ->
-            scroll.preserveDisclosure(key, coordinates, header)
-        }) { content() }
+    val coordinates = remember { ChatCoordinates() }
+    val highlighted by remember(scroll, key) { derivedStateOf { scroll.highlightedKey == key } }
+    val highlight = if (highlighted) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier
+    val preserve = remember(scroll, key) { { header: LayoutCoordinates? -> scroll.preserveDisclosure(key, coordinates.value, header) } }
+    Box(Modifier.then(highlight).onGloballyPositioned { coordinates.value = it }) {
+        CompositionLocalProvider(LocalChatDisclosure provides preserve) { content() }
     }
 }
 
 /** Use on the stable top of a disclosure, not the vertically centred arrow of a tall command. */
 internal fun Modifier.chatDisclosure(onToggle: () -> Unit): Modifier = composed {
     val preserve = LocalChatDisclosure.current
-    var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    onGloballyPositioned { coordinates = it }.clickable {
-        preserve(coordinates)
+    val coordinates = remember { ChatCoordinates() }
+    onGloballyPositioned { coordinates.value = it }.clickable {
+        preserve(coordinates.value)
         onToggle()
     }
 }

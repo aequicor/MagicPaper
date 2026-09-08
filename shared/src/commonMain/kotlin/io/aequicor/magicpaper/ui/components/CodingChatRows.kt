@@ -4,6 +4,23 @@ import io.aequicor.magicpaper.domain.*
 
 internal data class CodingChatRow(val message: CodingMessage, val planCard: CodingMessage? = null)
 
+/** A run can contain thousands of steps; each one must be its own lazy-list item. */
+internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int? = null) {
+    val first: Boolean get() = stepIndex == null || stepIndex == 0
+    val last: Boolean get() = stepIndex == null || stepIndex == row.message.steps.lastIndex
+    // Keep the original message key on its first fragment for request-pin navigation.
+    val key: String = if (first) row.message.id else "${row.message.id}:step:$stepIndex"
+    val step: CodingStep? get() = stepIndex?.let { row.message.steps[it] }
+}
+
+internal fun codingHistoryItems(rows: List<CodingChatRow>): List<CodingHistoryItem> = buildList {
+    rows.forEach { row ->
+        if (row.message.role == CodingRole.AGENT && row.message.steps.isNotEmpty()) {
+            row.message.steps.indices.forEach { add(CodingHistoryItem(row, it)) }
+        } else add(CodingHistoryItem(row))
+    }
+}
+
 /** Join the saved plan card to its preceding explanation, including existing conversations. */
 internal fun codingChatRows(messages: List<CodingMessage>, hideSystemSteps: Boolean = true): List<CodingChatRow> = buildList {
     for (stored in messages) {

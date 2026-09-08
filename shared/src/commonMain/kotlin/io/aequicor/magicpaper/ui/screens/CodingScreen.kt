@@ -130,6 +130,8 @@ import io.aequicor.magicpaper.ui.components.PlanningQuestionsDock
 import io.aequicor.magicpaper.ui.components.PlanningBlockerDock
 import io.aequicor.magicpaper.ui.components.PlanningChatMessage
 import io.aequicor.magicpaper.ui.components.codingChatRows
+import io.aequicor.magicpaper.ui.components.codingHistoryItems
+import io.aequicor.magicpaper.ui.components.codingToolPreview
 import io.aequicor.magicpaper.ui.components.isVisibleInChat
 import io.aequicor.magicpaper.ui.components.visibleChatContent
 import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
@@ -862,16 +864,24 @@ internal fun CodingChat(
     onSkills: (() -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     pins: List<RequestPinGroup> = emptyList(),
+    listState: LazyListState = key(session.session.id) {
+        rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
+    },
 ) {
-    val listState = rememberLazyListState()
     val messages = session.messages
     val hideSystemSteps = LocalHideSystemSteps.current
     val rows = remember(messages, hideSystemSteps) { codingChatRows(messages, hideSystemSteps) }
-    val pinIndices = remember(rows) { rows.mapIndexed { index, row -> row.message.id to index + 1 }.toMap() }
+    val history = remember(rows) { codingHistoryItems(rows) }
+    val pinIndices = remember(history) {
+        buildMap { history.forEachIndexed { index, item -> if (item.first) put(item.row.message.id, index + 1) } }
+    }
     val draft = session.draft
     val visibleDraft = remember(draft, hideSystemSteps) { draft.visibleChatContent(hideSystemSteps) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
     val hasDraft = visibleDraft.steps.isNotEmpty()
+    val draftSteps = remember(visibleDraft.steps, busy) {
+        visibleDraft.steps.filter { !busy || it.kind != CodingStepKind.THINKING }
+    }
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
     val status: @Composable () -> Unit = {
         key(session.session.id) {
@@ -884,7 +894,7 @@ internal fun CodingChat(
     val density = LocalDensity.current
     var footerHeight by remember { mutableStateOf(0.dp) }
     val showOrchestrationStatus = session.session.effectiveRole == CodingSessionRole.ORCHESTRATOR && planningService != null
-    val scrolled by remember { derivedStateOf { listState.canScrollBackward } }
+    val scrolled by remember(listState) { derivedStateOf { listState.canScrollBackward } }
     Column(Modifier.fillMaxSize()) {
         if (showOrchestrationStatus)
             OrchestrationStatus(session, planningService, onOpenSession, Modifier.zIndex(1f), scrolled = scrolled)
@@ -908,7 +918,7 @@ internal fun CodingChat(
                     },
                 contentPadding = PaddingValues(start = 16.dp, top = if (showOrchestrationStatus) 6.dp else 16.dp,
                     end = 16.dp, bottom = footerHeight + 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.Top,
             ) {
                 item {
                     Text(
@@ -917,10 +927,12 @@ internal fun CodingChat(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                items(rows, key = { it.message.id }) { row ->
+                items(history, key = { it.key }, contentType = { it.step?.kind ?: it.row.message.role }) { item ->
+                    val row = item.row
                     val message = row.message
-                    ChatScrollItem(scroll, message.id) {
-                        CodingMessageBubble(message, header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
+                    ChatScrollItem(scroll, item.key) {
+                        CodingMessageBubble(message, step = item.step, first = item.first, last = item.last,
+                            header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
                             if (busy && statusMessageId != null &&
                                 (message.id == statusMessageId || row.planCard?.id == statusMessageId)
                             ) status()
@@ -944,9 +956,22 @@ internal fun CodingChat(
                     }
                 }
                 if (hasDraft || (busy && statusMessageId == null)) {
-                    item(key = "draft") {
+                    items(draftSteps.size, key = { "draft-step:$it:${draftSteps[it].kind}" },
+                        contentType = { draftSteps[it].kind }) { index ->
+                        val step = draftSteps[index]
+                        val itemKey = "draft-step:$index:${step.kind}"
+                        ChatScrollItem(scroll, itemKey) {
+                            key(session.session.id) {
+                                DraftFragment(first = index == 0, last = !busy && index == draftSteps.lastIndex) {
+                                    CodingStepRow(step, live = draft.active &&
+                                        (index == draftSteps.lastIndex || step.kind == CodingStepKind.TOOL || step.kind == CodingStepKind.EXEC))
+                                }
+                            }
+                        }
+                    }
+                    if (busy) item(key = "draft", contentType = "status") {
                         ChatScrollItem(scroll, "draft") {
-                            key(session.session.id) { DraftBubble(visibleDraft, if (busy) status else null) }
+                            key(session.session.id) { DraftFragment(first = draftSteps.isEmpty(), last = true) { status() } }
                         }
                     }
                 }
@@ -984,7 +1009,14 @@ internal fun CodingChat(
 
 /** Бабл записи журнала: лента прогона в хронологическом порядке либо просто текст. */
 @Composable
-private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () -> Unit)? = null, footer: (@Composable () -> Unit)? = null) {
+private fun CodingMessageBubble(
+    message: CodingMessage,
+    step: CodingStep? = null,
+    first: Boolean = true,
+    last: Boolean = true,
+    header: (@Composable () -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
+) {
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -992,29 +1024,29 @@ private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () 
         MaterialTheme.colorScheme.surfaceContainerHigh
     }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(top = if (first) 10.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         Column(
             modifier = Modifier
                 .widthIn(max = 680.dp)
+                .then(if (step != null) Modifier.fillMaxWidth() else Modifier)
                 .clip(
                     androidx.compose.foundation.shape.RoundedCornerShape(
-                        topStart = if (isUser) 20.dp else 6.dp,
-                        topEnd = if (isUser) 6.dp else 20.dp,
-                        bottomStart = 20.dp,
-                        bottomEnd = 20.dp,
+                        topStart = if (!first) 0.dp else if (isUser) 20.dp else 6.dp,
+                        topEnd = if (!first) 0.dp else if (isUser) 6.dp else 20.dp,
+                        bottomStart = if (last) 20.dp else 0.dp,
+                        bottomEnd = if (last) 20.dp else 0.dp,
                     )
                 )
                 .background(bubbleColor)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
         ) {
-            header?.invoke()
+            if (first) header?.invoke()
             if (isUser) {
                 SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
-            } else if (message.steps.isNotEmpty()) {
-                // Лента: текст и действия идут как приходили — в хронологическом порядке.
-                message.steps.forEach { step -> CodingStepRow(step, live = false) }
+            } else if (step != null) {
+                CodingStepRow(step, live = false)
             } else {
                 // Совместимость со старыми журналами без ленты.
                 SelectionContainer {
@@ -1044,8 +1076,10 @@ private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () 
                     }
                 }
             }
-            CodingAttachments(message.attachments)
-            footer?.invoke()
+            if (last) {
+                CodingAttachments(message.attachments)
+                footer?.invoke()
+            }
         }
     }
 }
@@ -1117,7 +1151,7 @@ private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
         }
         if (expanded) {
             Spacer(Modifier.height(4.dp))
-            ChatMarkdown(step.title, streaming = live)
+            ChatMarkdown(step.title, Modifier.heightIn(max = 240.dp), streaming = live, scrollable = true)
         }
     }
 }
@@ -1126,12 +1160,37 @@ private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
 @Composable
 private fun ToolStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable(step.callId.ifBlank { step.title }) { mutableStateOf(false) }
+    val preview = remember(step.title) { codingToolPreview(step.title) }
+    // Output can grow on every event. A closed card has the same small set of
+    // display inputs, so Compose can skip its content while that output streams.
+    ToolStepContent(
+        title = if (expanded) step.title else preview,
+        result = if (expanded) step.result else "",
+        running = step.running,
+        ok = step.ok,
+        live = live,
+        isExec = step.kind == CodingStepKind.EXEC,
+        expanded = expanded,
+        onToggle = { expanded = !expanded },
+    )
+}
+
+@Composable
+private fun ToolStepContent(
+    title: String,
+    result: String,
+    running: Boolean,
+    ok: Boolean,
+    live: Boolean,
+    isExec: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
     val statusColor = when {
-        step.running -> MaterialTheme.colorScheme.primary
-        !step.ok -> MaterialTheme.colorScheme.error
+        running -> MaterialTheme.colorScheme.primary
+        !ok -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val hasDetail = step.result.isNotBlank()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1141,14 +1200,14 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Row(
-            Modifier.fillMaxWidth().chatDisclosure { expanded = !expanded },
+            Modifier.fillMaxWidth().chatDisclosure(onToggle),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Canvas(
                 modifier = Modifier.size(14.dp).semantics {
                     contentDescription = when {
-                        step.running -> "Выполняется"
-                        !step.ok -> "Ошибка выполнения"
+                        running -> "Выполняется"
+                        !ok -> "Ошибка выполнения"
                         else -> "Выполнено"
                     }
                 },
@@ -1156,12 +1215,12 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
                 val stroke = 1.4.dp.toPx()
                 // Draw every status inside the icon bounds, independent of text line height.
                 when {
-                    step.running -> {
+                    running -> {
                         drawCircle(statusColor, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
                         drawLine(statusColor, center, Offset(center.x, size.height * 0.25f), stroke, StrokeCap.Round)
                         drawLine(statusColor, center, Offset(size.width * 0.72f, center.y), stroke, StrokeCap.Round)
                     }
-                    step.ok -> {
+                    ok -> {
                         val bend = Offset(size.width * 0.4f, size.height * 0.76f)
                         drawLine(statusColor, Offset(size.width * 0.16f, size.height * 0.52f), bend, stroke, StrokeCap.Round)
                         drawLine(statusColor, bend, Offset(size.width * 0.84f, size.height * 0.24f), stroke, StrokeCap.Round)
@@ -1176,10 +1235,11 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             }
             Spacer(Modifier.width(8.dp))
             Text(
-                step.title,
+                title,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = if (expanded) Int.MAX_VALUE else 2,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             Text(
@@ -1188,19 +1248,19 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (step.running && live) {
+        if (running && live) {
             Text(
-                if (step.kind == CodingStepKind.EXEC) "Выполняется команда…" else "Выполняется действие…",
+                if (isExec) "Выполняется команда…" else "Выполняется действие…",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (expanded && hasDetail) {
+        if (expanded && result.isNotBlank()) {
             SelectionContainer {
                 Text(
-                    step.result,
+                    result,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
-                    color = if (step.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                    color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                 )
             }
         }
@@ -1209,32 +1269,28 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
 
 /** Текущий ответ агента со статусом и раскрываемыми размышлениями внизу. */
 @Composable
-private fun DraftBubble(draft: CodingDraft, footer: (@Composable () -> Unit)? = null) {
+private fun DraftFragment(first: Boolean, last: Boolean, content: @Composable () -> Unit) {
     Column(
-        Modifier.widthIn(max = 680.dp)
-            .clip(MaterialTheme.shapes.medium)
+        Modifier.padding(top = if (first) 10.dp else 0.dp).widthIn(max = 680.dp).fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium.copy(
+                topStart = if (first) MaterialTheme.shapes.medium.topStart else CornerSize(0.dp),
+                topEnd = if (first) MaterialTheme.shapes.medium.topEnd else CornerSize(0.dp),
+                bottomStart = if (last) MaterialTheme.shapes.medium.bottomStart else CornerSize(0.dp),
+                bottomEnd = if (last) MaterialTheme.shapes.medium.bottomEnd else CornerSize(0.dp)))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
     ) {
-        draft.steps.forEachIndexed { index, step ->
-            if (footer == null || step.kind != CodingStepKind.THINKING) {
-                key(index, step.kind) {
-                    CodingStepRow(step, live = draft.active &&
-                        (index == draft.steps.lastIndex || step.kind == CodingStepKind.TOOL || step.kind == CodingStepKind.EXEC))
-                }
-            }
-        }
-        footer?.invoke()
+        content()
     }
 }
 
 @Composable
 internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle: () -> Unit) {
-    val recorded = draft.steps.filter { it.kind == CodingStepKind.THINKING }.map { it.title }
-    // The recorder normally includes the live fragment in steps; other runtimes may send it separately.
-    val fragments = if (draft.thinking.isNotBlank() && recorded.lastOrNull() != draft.thinking)
-        recorded + draft.thinking else recorded
-    val thinking = fragments.joinToString("\n\n").trim()
+    val fragments = remember(draft.steps, draft.thinking) {
+        val recorded = draft.steps.filter { it.kind == CodingStepKind.THINKING }.map { it.title }
+        // The recorder normally includes the live fragment in steps; other runtimes may send it separately.
+        if (draft.thinking.isNotBlank() && recorded.lastOrNull() != draft.thinking) recorded + draft.thinking else recorded
+    }
     val tool = draft.steps.lastOrNull { it.running && it.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC) }
     val progress = draft.steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.INFO && it.running }
     val currentThinking = draft.thinking.ifBlank {
@@ -1248,11 +1304,11 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
         tool?.kind == CodingStepKind.EXEC -> "Агент выполняет команду…"
         tool != null -> "Агент выполняет действие…"
         draft.awaitingModel -> "Ожидает ответа модели…"
-        currentThinking.isNotBlank() -> currentThinkingSummary(currentThinking)
+        currentThinking.isNotBlank() -> remember(currentThinking) { currentThinkingSummary(currentThinking) }
         draft.steps.lastOrNull()?.kind == CodingStepKind.ANSWER -> "Готовит ответ…"
         else -> "Агент работает…"
     }
-    val hasThinking = thinking.isNotBlank()
+    val hasThinking = remember(fragments) { fragments.any { it.isNotBlank() } }
     val isWorking = draft.active && !draft.awaitingApproval && draft.failedMessage == null &&
         (progress != null || tool != null || !draft.awaitingModel)
     var dots by remember { mutableStateOf(3) }
@@ -1315,6 +1371,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (expanded) {
+                    val thinking = remember(fragments) { fragments.joinToString("\n\n").trim() }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         if (draft.active) {
@@ -1322,11 +1379,8 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(6.dp))
                         }
-                        val scroll = rememberScrollState()
-                        Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
-                            ChatMarkdown(thinking, compact = true, streaming = draft.active)
-                        }
-                        LaunchedEffect(scroll.maxValue) { scroll.scrollTo(scroll.maxValue) }
+                        ChatMarkdown(thinking, Modifier.fillMaxWidth().heightIn(max = 190.dp),
+                            compact = true, streaming = draft.active, scrollable = true)
                     }
                 }
             }

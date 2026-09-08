@@ -55,39 +55,42 @@ data class CodingSessionUi(
         }
 
     /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */
-    val status: CodingSessionStatus
-        get() {
-            if (session.archived) return CodingSessionStatus.IDLE
-            if (awaitingUser) return CodingSessionStatus.WAITING
-            if (draft.awaitingApproval) return CodingSessionStatus.WAITING
-            if (!running && (session.pendingRun != null || interruptedRequest)) return CodingSessionStatus.WAITING
-            val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
-            if (stage != null) return when {
-                stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.WAITING
-                stage.attempts.lastOrNull()?.let { it.awaitingPlanner && (it.error == null || it.error.isPlannerAnswerWait) } == true -> CodingSessionStatus.IDLE
-                stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.BLOCKED
-                running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
-                stage.completed -> CodingSessionStatus.IDLE
-                else -> CodingSessionStatus.QUEUED
-            }
-            if (plan != null && session.id == plan.parentSessionId) return when {
-                messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
-                plan.proposal != null -> CodingSessionStatus.WAITING
-                running -> CodingSessionStatus.WORKING
-                plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
-                plan.issue?.requiresUser == true || plan.finalAttempt?.error?.requiresUser == true ||
-                    plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.BLOCKED
-                plan.issue != null -> CodingSessionStatus.QUEUED
-                plan.confirmedRevision != null -> CodingSessionStatus.IDLE
-                else -> codingStatusOf(messages)
-            }
-            return when {
-                running && draft.awaitingModel -> CodingSessionStatus.WAITING
-                running -> CodingSessionStatus.WORKING
-                session.stageId != null -> CodingSessionStatus.QUEUED
-                else -> codingStatusOf(messages)
-            }
+    // This is an immutable snapshot. Re-reading a sidebar status must not rescan
+    // its entire history on every layout; copy() creates a fresh cache when it changes.
+    val status: CodingSessionStatus by lazy { computeStatus() }
+
+    private fun computeStatus(): CodingSessionStatus {
+        if (session.archived) return CodingSessionStatus.IDLE
+        if (awaitingUser) return CodingSessionStatus.WAITING
+        if (draft.awaitingApproval) return CodingSessionStatus.WAITING
+        if (!running && (session.pendingRun != null || interruptedRequest)) return CodingSessionStatus.WAITING
+        val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
+        if (stage != null) return when {
+            stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.WAITING
+            stage.attempts.lastOrNull()?.let { it.awaitingPlanner && (it.error == null || it.error.isPlannerAnswerWait) } == true -> CodingSessionStatus.IDLE
+            stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.BLOCKED
+            running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
+            stage.completed -> CodingSessionStatus.IDLE
+            else -> CodingSessionStatus.QUEUED
         }
+        if (plan != null && session.id == plan.parentSessionId) return when {
+            messages.pendingPlanningQuestion(setOf(plan.id)) != null -> CodingSessionStatus.WAITING
+            plan.proposal != null -> CodingSessionStatus.WAITING
+            running -> CodingSessionStatus.WORKING
+            plan.pendingRequest.isNotBlank() || plan.milestones.any { plan.isStageWorking(it) } -> CodingSessionStatus.WORKING
+            plan.issue?.requiresUser == true || plan.finalAttempt?.error?.requiresUser == true ||
+                plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.BLOCKED
+            plan.issue != null -> CodingSessionStatus.QUEUED
+            plan.confirmedRevision != null -> CodingSessionStatus.IDLE
+            else -> codingStatusOf(messages)
+        }
+        return when {
+            running && draft.awaitingModel -> CodingSessionStatus.WAITING
+            running -> CodingSessionStatus.WORKING
+            session.stageId != null -> CodingSessionStatus.QUEUED
+            else -> codingStatusOf(messages)
+        }
+    }
 }
 
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
@@ -128,7 +131,8 @@ data class CodingUi(
         sessions.filter { it.session.projectId == projectId }.map { item ->
             val waiting = approvals.any { it.projectId == projectId &&
                 (it.sessionId == item.session.id || it.sessionId == "${item.session.id}-merge" || it.sessionId == "${item.session.id}-delivery") }
-            item.copy(draft = item.draft.copy(awaitingApproval = waiting))
+            if (item.draft.awaitingApproval == waiting) item
+            else item.copy(draft = item.draft.copy(awaitingApproval = waiting))
         }
 
     /**
@@ -137,8 +141,8 @@ data class CodingUi(
      * правой части (какой журнал показывать).
      */
     fun activeSessionIdOf(projectId: String): String? {
-        val own = sessionsOf(projectId)
-        return (own.firstOrNull { it.session.id == currentSessionId } ?: own.firstOrNull())?.session?.id
+        return (sessions.firstOrNull { it.session.projectId == projectId && it.session.id == currentSessionId }
+            ?: sessions.firstOrNull { it.session.projectId == projectId })?.session?.id
     }
 }
 
