@@ -1,12 +1,16 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -175,10 +179,18 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
     val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
     val delivery = plans.flatMap { it.deliveries }.firstOrNull { it.id == route.deliveryId }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(Modifier.fillMaxWidth()) {
-            AddressLink(route.source, onOpen, Modifier.weight(1f))
-            Text(" → ", modifier = Modifier.padding(top = 12.dp))
-            AddressLink(route.target, onOpen, Modifier.weight(1f))
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < 480.dp * LocalDensity.current.fontScale) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    AddressLink(route.source, "От", onOpen, Modifier.fillMaxWidth())
+                    Text("↓", Modifier.padding(start = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    AddressLink(route.target, "Кому", onOpen, Modifier.fillMaxWidth())
+                }
+            } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AddressLink(route.source, "От", onOpen, Modifier.weight(1f))
+                Text("→", Modifier.padding(top = 30.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AddressLink(route.target, "Кому", onOpen, Modifier.weight(1f))
+            }
         }
         route.via?.takeIf { it.sessionId != route.source.sessionId }?.let {
             Text("Через оркестратора: ${it.name}", style = MaterialTheme.typography.labelSmall)
@@ -189,13 +201,17 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
     }
 }
 
-@Composable private fun AddressLink(address: SessionAddress, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
-    TextButton({ onOpen(address.sessionId) }, modifier = modifier, enabled = address.sessionId.isNotBlank(), contentPadding = PaddingValues(horizontal = 2.dp)) {
-        Column {
-            Text(address.name)
-            if (address.subtitle.isNotBlank()) Text(address.subtitle, style = MaterialTheme.typography.labelSmall)
-            if (address.orchestratorName.isNotBlank()) Text(address.orchestratorName, style = MaterialTheme.typography.labelSmall)
-        }
+@Composable private fun AddressLink(address: SessionAddress, label: String, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+    val link = if (address.sessionId.isNotBlank()) Modifier.clip(MaterialTheme.shapes.small)
+        .clickable(role = Role.Button) { onOpen(address.sessionId) } else Modifier
+    Column(modifier.then(link).heightIn(min = 48.dp).padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(address.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+            color = if (address.sessionId.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+        if (address.subtitle.isNotBlank()) Text(address.subtitle, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (address.orchestratorName.isNotBlank()) Text(address.orchestratorName, style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

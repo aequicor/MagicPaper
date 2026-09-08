@@ -13,6 +13,7 @@ import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
+import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
 import io.aequicor.magicpaper.ui.screens.CodingChat
 import io.aequicor.magicpaper.ui.screens.ProjectsPanel
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
@@ -87,6 +88,23 @@ class OrchestrationRenderTest {
                 }.use { scene ->
                     repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
                     File(output, "orchestrator-$width.png").writeBytes(scene.render(112_000_000L).use {
+                        it.encodeToData()!!.use { data -> data.bytes }
+                    })
+                }
+            }
+            val longName = "Реализовать полноценную систему скилов, репозитория скилов, дообучения в процессе работы"
+            val longRoute = CodingMessage("long-route", CodingRole.AGENT, "", createdAt = 3,
+                route = MessageRoute(SessionAddress("parent", longName, "Оркестратор 1"),
+                    SessionAddress("worker", "Исполнение и управление в MagicPaper", "Исполнитель · Этап 5", "$longName · Оркестратор 1"),
+                    kind = "Задание", stageLabel = "Этап 5 · Исполнение и управление в MagicPaper"))
+            for ((width, height) in listOf(700 to 480, 430 to 700)) {
+                ImageComposeScene(width, height) {
+                    MagicPaperTheme { Surface {
+                        Box(Modifier.padding(16.dp)) { OrchestrationMessageRoute(longRoute, null) {} }
+                    } }
+                }.use { scene ->
+                    repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                    File(output, "long-route-$width.png").writeBytes(scene.render(112_000_000L).use {
                         it.encodeToData()!!.use { data -> data.bytes }
                     })
                 }
