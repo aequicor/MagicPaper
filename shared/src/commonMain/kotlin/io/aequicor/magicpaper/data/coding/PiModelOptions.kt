@@ -17,6 +17,7 @@ object PiModelOptions {
     }
 
     fun extension(profile: LlmProfile): String {
+        if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) return "export default function() {}"
         val parameters = parameters(profile)
         val google = profile.provider == ProviderType.GOOGLE
         return """

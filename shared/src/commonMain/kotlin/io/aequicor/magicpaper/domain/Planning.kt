@@ -88,6 +88,7 @@ data class Plan(
     val goal: String,
     val milestones: List<Milestone> = emptyList(),
     val plannerSelection: ModelSelection? = null,
+    val engine: CodingEngine? = null,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val wizardStep: PlanningStep? = null,
     val parentSessionId: String = "",

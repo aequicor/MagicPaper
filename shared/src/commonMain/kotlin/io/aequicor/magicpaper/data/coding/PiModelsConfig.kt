@@ -102,13 +102,14 @@ object PiModelsConfig {
     fun root(profile: LlmProfile, providerId: String = PROVIDER_ID, imageInput: Boolean = false) = buildJsonObject {
         put("providers", buildJsonObject {
             put(providerId, buildJsonObject {
-                put("baseUrl", profile.baseUrl.trimEnd('/'))
+                put("baseUrl", if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) "https://chatgpt.com/backend-api" else profile.baseUrl.trimEnd('/'))
                 put("api", when (profile.provider) {
+                    ProviderType.OPENAI_SUBSCRIPTION -> "openai-codex-responses"
                     ProviderType.ANTHROPIC -> "anthropic-messages"
                     ProviderType.GOOGLE -> "google-generative-ai"
                     else -> API
                 })
-                put("apiKey", profile.apiKey.ifBlank { ANONYMOUS_KEY })
+                put("apiKey", if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) "managed-by-magicpaper" else profile.apiKey.ifBlank { ANONYMOUS_KEY })
                 val reasoning = reasoning(profile)
                 // supportsReasoningEffort обязано совпадать с reasoning: при
                 // несогласованности пи объявляет мышление, но не передаёт уровень.

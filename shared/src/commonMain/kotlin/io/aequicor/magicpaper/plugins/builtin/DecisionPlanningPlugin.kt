@@ -67,6 +67,7 @@ class CodingPlanningPlugin(
         var busy by remember { mutableStateOf(false) }
         var submitting by remember { mutableStateOf(false) }
         var activity by remember { mutableStateOf<List<CodingStep>>(emptyList()) }
+        var draftEngine by remember { mutableStateOf<CodingEngine?>(null) }
         var draftPlanner by remember { mutableStateOf<ModelSelection?>(null) }
         var draftSearch by remember { mutableStateOf<SearchProvider?>(null) }
         var pickPlanner by remember { mutableStateOf(false) }
@@ -165,6 +166,11 @@ class CodingPlanningPlugin(
                             OutlinedButton(onClick = { pickPlanner = true }, enabled = !busy && !submitting) {
                                 Text("${planner?.shortLabel ?: "Выбрать модель"} · ${planner?.effort?.shortLabel ?: "default"} ▾")
                             }
+                            Text("Движок сессий", style = MaterialTheme.typography.titleMedium)
+                            if (plan == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                CodingEngine.entries.forEach { engine -> FilterChip(selected = (draftEngine ?: settings.defaultCodingEngine) == engine,
+                                    onClick = { draftEngine = engine }, enabled = !busy && !submitting, label = { Text(engine.title) }) }
+                            } else Text(plan.engine?.title ?: "Закреплён за сессиями", style = MaterialTheme.typography.bodySmall)
                             Text("Search engine", style = MaterialTheme.typography.titleMedium)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 SearchProvider.entries.forEach { provider -> FilterChip((plan?.searchProvider ?: draftSearch ?: settings.searchProvider) == provider,
@@ -176,7 +182,7 @@ class CodingPlanningPlugin(
                     if (planner?.configured != true) Text("Выберите подключённую модель из избранного.", color = MaterialTheme.colorScheme.error)
                     Button(enabled = !busy && !submitting && goal.isNotBlank() && planner?.configured == true, onClick = {
                         if (plan == null) {
-                            val fresh = Plan(Id.new(), project.id, goal.trim(), plannerSelection = draftPlanner, searchProvider = draftSearch ?: settings.searchProvider,
+                            val fresh = Plan(Id.new(), project.id, goal.trim(), plannerSelection = draftPlanner, engine = draftEngine ?: settings.defaultCodingEngine, searchProvider = draftSearch ?: settings.searchProvider,
                                 wizardStep = PlanningStep.CLARIFY, createdAt = Id.now(), updatedAt = Id.now())
                             doRefine(INITIAL_PLANNING_MESSAGE, initial = fresh.copy(tree = listOf(DecisionNode("${fresh.id}-root", fresh.goal, DecisionKind.GOAL))))
                         } else if (goal.trim() != plan.goal) {

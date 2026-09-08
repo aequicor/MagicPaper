@@ -78,6 +78,9 @@ data class CodingUi(
     val projectStatuses: Map<String, CodingSessionStatus> = emptyMap(),
     val runtime: RuntimeStatus = RuntimeStatus(RuntimePhase.UNKNOWN),
     val installing: Boolean = false,
+    val engines: Map<io.aequicor.magicpaper.domain.CodingEngine, RuntimeStatus> = emptyMap(),
+    val preparingEngines: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
+    val creatingSession: Boolean = false,
     /** Активная вкладка проекта: диалог с агентом или панель плагина. */
     val sessionMode: CodingSessionMode = CodingSessionMode.DIALOG,
 ) {
@@ -148,6 +151,7 @@ data class UiState(
     /** Профиль, открытый в редакторе настроек (для перехода из чата). */
     val editingLlmProfileId: String? = null,
     val modelsSettingsOpen: Boolean = false,
+    val enginesSettingsOpen: Boolean = false,
     /** Модели, загруженные у провайдера черновика (этап 6). */
     val editorModels: List<io.aequicor.magicpaper.domain.ModelDefaults.DiscoveredModel> = emptyList(),
     val editorModelsLoading: Boolean = false,

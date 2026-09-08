@@ -113,7 +113,7 @@ class PlanningChatService(
                     val history = projects.messages(session.projectId, session.id)
                     val id = Id.new()
                     plan = Plan(id, session.projectId, text.trim(), parentSessionId = session.id, sessionId = session.id,
-                        sharedWorkspace = true, plannerSelection = session.modelSelection,
+                        sharedWorkspace = true, plannerSelection = session.modelSelection, engine = session.engine,
                         searchProvider = session.searchProvider, createdAt = Id.now(), updatedAt = Id.now(),
                         tree = listOf(DecisionNode("$id-root", text.trim(), DecisionKind.GOAL)),
                         dialogue = history.map { PlanningMessage(it.id, if (it.role == CodingRole.USER) "user" else "assistant", it.text) })
@@ -247,7 +247,8 @@ class PlanningChatService(
             val id = stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}"
             if (existing.none { it.id == id }) projects.saveSession(CodingSession(id, plan.projectId, "${plan.goal.take(32)} · ${stage.title}", Id.now(),
                 planId = plan.id, parentSessionId = plan.parentSessionId, stageId = stage.id,
-                modelSelection = stage.assignment?.let { ModelSelection(it.profileId, it.modelId, it.effort) }))
+                modelSelection = stage.assignment?.let { ModelSelection(it.profileId, it.modelId, it.effort) },
+                engine = stage.attempts.firstOrNull()?.engine ?: plan.engine ?: legacyCodingEngine(profiles.load().firstOrNull { it.id == stage.assignment?.profileId })))
             append(plan.projectId, id, CodingMessage("$id-task", CodingRole.USER, "${stage.description.ifBlank { stage.title }}\n\nКритерии: ${stage.acceptance}", createdAt = plan.createdAt))
         }
         changed()
@@ -480,7 +481,7 @@ class PlanningChatService(
         store.plans().forEach { plan ->
             if (plan.parentSessionId.isBlank()) {
                 val sessionId = "planning-${plan.id}"
-                if (projects.sessions(plan.projectId).none { it.id == sessionId }) projects.saveSession(CodingSession(sessionId, plan.projectId, "План: ${plan.goal.take(40)}", plan.createdAt, planningMode = true, modelSelection = plan.plannerSelection))
+                if (projects.sessions(plan.projectId).none { it.id == sessionId }) projects.saveSession(CodingSession(sessionId, plan.projectId, "План: ${plan.goal.take(40)}", plan.createdAt, planningMode = true, modelSelection = plan.plannerSelection, engine = plan.engine ?: legacyCodingEngine(plan.plannerSelection?.let { ProfileResolver.selection(it, profiles.load()) })))
                 val linked = store.update(plan.id) { it.copy(parentSessionId = sessionId,
                     confirmedRevision = if (it.intent != ExecutionIntent.STOP || it.milestones.any { m -> m.attempts.isNotEmpty() }) it.revision else null,
                     versions = if (it.versions.isEmpty()) listOf(PlanVersion(it.revision, it.tree, it.milestones.map { m -> m.copy(attempts = emptyList()) }, Id.now())) else it.versions) }

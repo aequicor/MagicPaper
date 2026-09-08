@@ -69,6 +69,7 @@ class CodexAppServerOpenAiSubscription(
     private val appHome: Path = defaultAppHome(),
     private val commandOverride: String? = System.getenv("MAGICPAPER_CODEX_PATH"),
     val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
+    private val ownsComputerUse: Boolean = true,
 ) : OpenAiSubscriptionService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startMutex = Mutex()
@@ -80,6 +81,7 @@ class CodexAppServerOpenAiSubscription(
     private val codingRuns = ConcurrentHashMap<String, CodingAccumulator>()
     private val codingSessions = ConcurrentHashMap<String, String>()
     private val codingContexts = ConcurrentHashMap<String, CodingSession>()
+    private val codingThreads = ConcurrentHashMap.newKeySet<String>()
     private val approvalBroker = CodexApprovalBroker { threadId, message ->
         codingRuns[threadId]?.emit(CodingEvent.Notice(message))
     }
@@ -112,6 +114,26 @@ class CodexAppServerOpenAiSubscription(
 
     @Volatile private var process: Process? = null
     @Volatile private var writer: BufferedWriter? = null
+
+    internal fun newCodingClient() = CodexAppServerOpenAiSubscription(json, appHome, commandOverride, computerUse, ownsComputerUse = false)
+
+    private val tokenMutex = Mutex()
+    /** Refresh ownership remains with app-server; pi receives only the current access token. */
+    internal suspend fun subscriptionAccessToken(): String = tokenMutex.withLock {
+        val response = request("account/read", buildJsonObject { put("refreshToken", true) }).jsonObject
+        check((response["account"] as? JsonObject)?.string("type") == "chatgpt") { "Войдите в ChatGPT в настройках движков" }
+        withContext(Dispatchers.IO) {
+            val auth = json.parseToJsonElement(Files.readString(appHome.resolve("auth.json"))).jsonObject
+            (auth["tokens"] as? JsonObject)?.string("access_token")?.takeIf { it.isNotBlank() }
+                ?: error("Не удалось получить доступ к подписке. Повторите вход в ChatGPT.")
+        }
+    }
+    suspend fun runtimeStatus(): io.aequicor.magicpaper.domain.RuntimeStatus = try {
+        ensureStarted()
+        io.aequicor.magicpaper.domain.RuntimeStatus(io.aequicor.magicpaper.domain.RuntimePhase.READY,
+            "Codex app-server: ${resolveCodexCommand(commandOverride)}")
+    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+      catch (e: Exception) { io.aequicor.magicpaper.domain.RuntimeStatus(io.aequicor.magicpaper.domain.RuntimePhase.ERROR, e.message.orEmpty()) }
 
     override suspend fun account(refreshToken: Boolean): OpenAiSubscriptionAccount {
         val response = request("account/read", buildJsonObject { put("refreshToken", refreshToken) }).jsonObject
@@ -242,37 +264,40 @@ class CodexAppServerOpenAiSubscription(
         prompt: String,
         profile: LlmProfile,
         attachments: List<io.aequicor.magicpaper.domain.Attachment>,
+        modelProvider: String = "openai",
+        providerConfig: JsonObject = JsonObject(emptyMap()),
     ): Flow<CodingEvent> = channelFlow {
         var confirmedFinished = false
         var computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null
         try {
             check(File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
-            check(profile.configured) { "Не настроена модель OpenAI по подписке." }
-            check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
+            check(profile.configured) { "Не настроено подключение модели." }
+            if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
             val codingProfile = profile.forCoding()
             val permissions = CodexCodingPermissions(Paths.get(project.path))
             computerBridge = computerUse?.bridge(session.id)
-            val threadConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(permissions.threadConfig(), computerBridge)
+            val threadConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(JsonObject(permissions.threadConfig() + providerConfig), computerBridge)
             val instructions = listOf(CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride)
                 .filter { it.isNotBlank() }.joinToString("\n\n")
             val resumed = session.piSessionId.takeIf { it.isNotBlank() }?.let { oldId ->
-                // A loaded Codex thread keeps its MCP clients on resume. Unload the completed
-                // thread first so the new per-turn endpoint/token is applied without losing history.
-                if (computerUse != null) request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })
-                runCatching {
-                    request(
-                        "thread/resume",
-                        buildJsonObject {
-                            put("threadId", oldId)
-                            put("cwd", project.path)
-                            put("model", codingProfile.modelId)
-                            with(permissions) { approvals() }
-                            put("sandbox", "workspace-write")
-                            put("config", threadConfig)
-                            put("developerInstructions", instructions)
-                        },
-                    ).jsonObject["thread"]?.jsonObject?.string("id")
-                }.getOrNull()
+                if (computerUse != null && oldId in codingThreads) {
+                    request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })
+                    codingThreads.remove(oldId)
+                }
+                request(
+                    "thread/resume",
+                    buildJsonObject {
+                        put("threadId", oldId)
+                        put("cwd", project.path)
+                        put("model", codingProfile.modelId)
+                        with(permissions) { approvals() }
+                        put("sandbox", "workspace-write")
+                        put("modelProvider", modelProvider)
+                        put("config", threadConfig)
+                        put("developerInstructions", instructions)
+                    },
+                ).jsonObject["thread"]?.jsonObject?.requireString("id")
+                    ?: error("Codex не восстановил coding-сессию.")
             }
             val threadId = resumed ?: request(
                 "thread/start",
@@ -281,12 +306,14 @@ class CodexAppServerOpenAiSubscription(
                     put("model", codingProfile.modelId)
                     with(permissions) { approvals() }
                     put("sandbox", "workspace-write")
+                    put("modelProvider", modelProvider)
                     put("config", threadConfig)
                     put("serviceName", "MagicPaper Coding")
                     put("developerInstructions", instructions)
                 },
             ).jsonObject["thread"]?.jsonObject?.requireString("id")
                 ?: error("Codex не вернул идентификатор coding-сессии.")
+            codingThreads.add(threadId)
             send(CodingEvent.SessionStarted(threadId))
             val accumulator = CodingAccumulator()
             approvalBroker.clearTurn(threadId)
@@ -351,7 +378,7 @@ class CodexAppServerOpenAiSubscription(
     fun abortAllCoding() = codingSessions.keys.toList().forEach(::abortCoding)
 
     override fun close() {
-        computerUse?.disable()
+        if (ownsComputerUse) computerUse?.disable()
         approvalBroker.clear()
         pending.values.forEach { it.cancel() }
         turns.values.forEach { it.done.cancel() }

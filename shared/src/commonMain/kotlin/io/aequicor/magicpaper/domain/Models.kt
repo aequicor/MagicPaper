@@ -53,6 +53,7 @@ data class AppSettings(
     /** Активный по умолчанию профиль подключения (см. [LlmProfile]). */
     val activeLlmProfileId: String = "",
     val defaultModel: ModelSelection? = null,
+    val defaultCodingEngine: CodingEngine = CodingEngine.PI,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val queritApiKey: String = "",
     val queritBaseUrl: String = "https://api.querit.ai/v1",

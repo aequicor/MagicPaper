@@ -18,6 +18,7 @@ class PlanningExecutionServiceTest {
         override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "checked")
     }
     private class Runtime(private val gate: CompletableDeferred<Unit>? = null, private val failure: String? = null) : CodingRuntime {
+        val engines = mutableListOf<CodingEngine?>()
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
         override val supported = true; override val rootPath = "/fake"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
@@ -27,6 +28,7 @@ class PlanningExecutionServiceTest {
         override suspend fun uninstall() = Unit
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             calls += session.id
+            engines += session.engine
             emit(CodingEvent.SessionStarted("engine-${session.id}"))
             emit(CodingEvent.ThinkingDelta("Проверяю критерии"))
             emit(CodingEvent.ToolStarted("read", "Чтение проекта", "read-1"))
@@ -53,6 +55,17 @@ class PlanningExecutionServiceTest {
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
+
+    @Test fun chosenEngineIsInheritedByWorkersAndFinalVerification() = runTest {
+        val (store, service, runtime) = fixture()
+        store.save(plan(stage("a")).copy(engine = CodingEngine.CODEX))
+        service.start(project.id); advanceTimeBy(500); runCurrent()
+        assertEquals(PlanStatus.DONE, store.planFor(project.id)?.status)
+        assertTrue(runtime.engines.size >= 2)
+        assertTrue(runtime.engines.all { it == CodingEngine.CODEX })
+        assertEquals(CodingEngine.CODEX, store.planFor(project.id)!!.milestones.single().attempts.single().engine)
+        assertEquals(CodingEngine.CODEX, store.planFor(project.id)!!.finalAttempt!!.engine)
+    }
 
     @Test fun parallelStagesStartTogetherAndJoinWaits() = runTest {
         val gate = CompletableDeferred<Unit>(); val runtime = Runtime(gate)

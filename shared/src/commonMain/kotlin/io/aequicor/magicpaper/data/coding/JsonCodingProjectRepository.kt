@@ -20,6 +20,7 @@ import kotlinx.serialization.json.Json
 class JsonCodingProjectRepository(
     private val store: KeyValueStore,
     private val json: Json,
+    private val migrateEngine: suspend (CodingSession, CodingProject?) -> io.aequicor.magicpaper.domain.CodingEngine = { _, _ -> io.aequicor.magicpaper.domain.CodingEngine.PI },
 ) : CodingProjectRepository {
 
     private val projectsSerializer = ListSerializer(CodingProject.serializer())
@@ -66,13 +67,18 @@ class JsonCodingProjectRepository(
             createdAt = project.createdAt,
             piSessionId = project.piSessionId,
         )
-        saveSessions(allSessions() + main)
+        val migrated = main.copy(engine = migrateEngine(main, project))
+        saveSessions(allSessions() + migrated)
         migrateLegacyLog(project.id, main.id)
-        return listOf(main)
+        return listOf(migrated)
     }
 
     override suspend fun saveSession(session: CodingSession) {
-        saveSessions(allSessions().filterNot { it.id == session.id } + session)
+        val current = allSessions()
+        val previous = current.firstOrNull { it.id == session.id }
+        require(previous?.engine == null || session.engine == null || session.engine == previous.engine) { "Движок существующей сессии изменить нельзя" }
+        val saved = if (session.engine != null) session else session.copy(engine = previous?.engine ?: migrateEngine(session, all().firstOrNull { it.id == session.projectId }))
+        saveSessions(current.filterNot { it.id == session.id } + saved)
     }
 
     override suspend fun deleteSession(projectId: String, sessionId: String) {
@@ -113,7 +119,12 @@ class JsonCodingProjectRepository(
 
     private suspend fun allSessions(): List<CodingSession> {
         val raw = store.read(KEY_SESSIONS) ?: return emptyList()
-        return runCatching { json.decodeFromString(sessionsSerializer, raw) }.getOrDefault(emptyList())
+        val sessions = runCatching { json.decodeFromString(sessionsSerializer, raw) }.getOrDefault(emptyList())
+        if (sessions.none { it.engine == null }) return sessions
+        val projects = all().associateBy { it.id }
+        val migrated = sessions.map { if (it.engine != null) it else it.copy(engine = migrateEngine(it, projects[it.projectId])) }
+        saveSessions(migrated)
+        return migrated
     }
 
     private suspend fun saveSessions(sessions: List<CodingSession>) {

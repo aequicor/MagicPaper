@@ -155,10 +155,16 @@ class PlanningExecutionService(
             require(graph.valid) { graph.errors.joinToString("\n") }
             val roster = profiles.load()
             secrets.update { it + roster.map { p -> p.apiKey }.filter { it.isNotBlank() } }
-            plan.selectedMilestones.filter { !it.completed }.map {
-                require(it.acceptance.isNotBlank() || it.description.isNotBlank()) { "Задайте критерии этапа «${it.title}»" }
-                (it.attempts.lastOrNull()?.assignment ?: assignment(it, roster)).executionProfile(roster)
-            }.distinctBy { it.id }.forEach { runtime.preflight(it) }
+            val savedSessions = projects?.sessions(project.id).orEmpty()
+            plan.selectedMilestones.filter { !it.completed }.map { stage ->
+                require(stage.acceptance.isNotBlank() || stage.description.isNotBlank()) { "Задайте критерии этапа «${stage.title}»" }
+                val attempt = stage.attempts.lastOrNull()
+                val profile = (attempt?.assignment ?: assignment(stage, roster)).executionProfile(roster)
+                val sessionId = attempt?.sessionId ?: "plan-${plan.id}-stage-${stage.id}"
+                val engine = attempt?.engine ?: savedSessions.firstOrNull { it.id == sessionId }?.engine ?: plan.engine ?: legacyCodingEngine(profile)
+                engine to profile
+            }.distinctBy { (engine, profile) -> Triple(engine, profile.id, profile.modelId) }
+                .forEach { (engine, profile) -> runtime.preflight(engine, profile) }
             val judge = plan.plannerSelection?.let { ProfileResolver.selection(it, roster) } ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
             require(judge?.configured == true) { "Подключите модель для проверки результата" }
             if (plan.issue != null) plan = store.update(id) { it.copy(issue = null, phase = ExecutionPhase.RECOVERING) }
@@ -281,7 +287,7 @@ class PlanningExecutionService(
                     try {
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                         val activityRecorder = CodingRunRecorder()
-                        monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId),
+                        monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load()))),
                             "Разреши Git merge-конфликт, сохрани пользовательские изменения и результат плана. Цель: ${plan.goal}. Если изменения уже объединены, продолжи проверки. Добавь разрешённые файлы в индекс, выполни подходящие тесты и сообщи фактические результаты. Не изменяй исходную папку вне этой рабочей копии. Предыдущий отчёт: ${attempt.mergeReport}",
                             (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
                             activityRecorder.apply(event)
@@ -325,6 +331,7 @@ class PlanningExecutionService(
         if (plan.workspace?.applied == true) return true
         var attempt = plan.finalAttempt ?: StageAttempt("${plan.runId}-final", "${plan.runId}-final-session",
             assignment(plan.selectedMilestones.first(), profiles.load()), path = workspace.integrationPath, startedAt = Id.now())
+        if (attempt.engine == null) attempt = attempt.copy(engine = plan.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())))
         if (attempt.phase == AttemptPhase.COMPLETE) return true
         suspend fun persist() { store.update(id) { it.copy(finalAttempt = safeAttempt(attempt.copy(updatedAt = Id.now())), phase = ExecutionPhase.VERIFYING) } }
         persist()
@@ -343,7 +350,7 @@ class PlanningExecutionService(
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                 val activityRecorder = CodingRunRecorder()
                 monitoredRun(project.copy(path = workspace.integrationPath),
-                    CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId),
+                    CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine),
                     "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
                     attempt.assignment.executionProfile(profiles.load())).collect { event ->
                     activityRecorder.apply(event)
@@ -398,6 +405,11 @@ class PlanningExecutionService(
         try {
             var stage = store.planFor(id)!!.milestones.first { it.id == stageId }
             var attempt = stage.attempts.lastOrNull() ?: StageAttempt(Id.new(), if (store.planFor(id)!!.parentSessionId.isNotBlank()) "plan-$id-stage-$stageId" else Id.new(), assignment(stage, profiles.load()), startedAt = Id.now())
+            if (attempt.engine == null) {
+                val saved = projects?.sessions(project.id)?.firstOrNull { it.id == attempt.sessionId }
+                attempt = attempt.copy(engine = saved?.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())))
+                saveAttempt(id, stageId, attempt)
+            }
             currentAttempt = attempt
             if (stage.attempts.isEmpty()) saveAttempt(id, stageId, attempt)
             if (attempt.path.isBlank()) {
@@ -460,7 +472,7 @@ class PlanningExecutionService(
                 var ended = false
                 var lastSave = 0L
                 var lastDisplay = 0L
-                val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId)
+                val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine)
                 if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                 val activityRecorder = CodingRunRecorder()
@@ -581,7 +593,7 @@ class PlanningExecutionService(
                         attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING)
                         saveAttempt(id, stageId, attempt)
                         journal(id, "conflict-agent-intent", stageId, attempt.id)
-                        val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId)
+                        val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())))
                         var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                         val activityRecorder = CodingRunRecorder()
