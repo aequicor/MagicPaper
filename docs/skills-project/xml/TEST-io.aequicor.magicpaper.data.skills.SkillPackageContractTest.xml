@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" tests="18" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:39.173Z" hostname="MacBook-Pro-Aequicor.local" time="0.021">
+  <properties/>
+  <testcase name="updateKeepsActiveVersionAndRequiresNewPermissions[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.002"/>
+  <testcase name="rejectsCorruptionAndWrongCatalogChecksum[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="rejectsInvalidCatalogSourcesAndDuplicates[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.0"/>
+  <testcase name="acceptsValidPackageAndCatalog[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.0"/>
+  <testcase name="unknownOriginOrLicenseBlocksUntilLocalReview[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.002"/>
+  <testcase name="rejectsFileDirectoryCollisionsAndPublisherTrustFlags[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.002"/>
+  <testcase name="rejectsUnlistedMissingOversizedAndInvalidInstructions[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="directoryVerifierRejectsEscapingSymlink[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="permissionsCannotBeBorrowedFromAnotherSkillOrRestoredSilently[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.002"/>
+  <testcase name="rejectsTraversalAliasesLinksAndSpecialFilesBeforeExtraction[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.0"/>
+  <testcase name="concurrentActivationRejectsStaleApproval[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.003"/>
+  <testcase name="sha256UsesStandardDigest[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.0"/>
+  <testcase name="rejectsUnsupportedSchemaPlatformAndVersion[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="checksumsAndDeclaredLicenseNeverGrantTrust[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="rejectsMissingConflictingAndCyclicDependencies[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="activationAndRollbackSwitchEntireDependencyGraphAtomically[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.002"/>
+  <testcase name="reviewAndConsentAreBoundToExactRelease[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <testcase name="refusesReplacingVersionWithDifferentBytes[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillPackageContractTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

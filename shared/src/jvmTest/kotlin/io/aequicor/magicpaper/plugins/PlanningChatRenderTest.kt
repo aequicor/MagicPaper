@@ -3,12 +3,16 @@ package io.aequicor.magicpaper.plugins
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import io.aequicor.magicpaper.ui.screens.ResizableProjectPanels
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.data.coding.*
@@ -86,6 +90,7 @@ class PlanningChatRenderTest {
         } finally { Dispatchers.resetMain() }
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     @Test fun projectAndPlanStayVisibleWhenStagesScroll() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {
@@ -103,7 +108,18 @@ class PlanningChatRenderTest {
                 state.scrollToItem(12)
                 repeat(5) { scene.render((it + 6) * 16_000_000L).close(); runCurrent() }
                 assertTrue(state.firstVisibleItemIndex >= 10)
-                assertTrue(state.layoutInfo.visibleItemsInfo.any { it.key == "session-plan" && it.offset == 0 })
+                assertEquals(0, state.layoutInfo.visibleItemsInfo.single { it.key == "project-p" }.offset)
+                fun nodes(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::nodes)
+                val visible = scene.semanticsOwners.flatMap { nodes(it.unmergedRootSemanticsNode) }
+                    .filter { it.boundsInRoot.height > 0 }
+                fun title(text: String) = visible.single {
+                    it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == text } == true
+                }.boundsInRoot
+                val projectTitle = title(project.name)
+                val planTitle = title("🔀 ${parent.name}")
+                assertTrue(projectTitle.top >= 0)
+                assertTrue(planTitle.top >= projectTitle.bottom, "The pinned plan must remain below its project")
+                assertTrue(planTitle.bottom <= 620, "Both pinned titles must remain visible")
                 val bytes = scene.render(200_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } }
                 File("build/reports/planning-chat/sticky-sidebar.png").apply { parentFile.mkdirs() }.writeBytes(bytes)
             }

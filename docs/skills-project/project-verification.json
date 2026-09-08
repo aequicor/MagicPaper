@@ -1,0 +1,174 @@
+{
+  "build": "BUILD SUCCESSFUL",
+  "command": "./gradlew --no-daemon :shared:jvmTest --tests 'io.aequicor.magicpaper.data.skills.*' --tests '*ProjectsPanel*Test' --tests '*CodingChatScrollTest' --tests '*CodingComposerRenderTest' --tests '*CodexCodingPermissionsTest' :desktopApp:compileKotlin",
+  "counts": {
+    "tests": 100,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "suites": [
+    {
+      "name": "io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "366f667ecadc5dbe4408a9bcb49359359054c180528d9cd6c521d558b8103b47"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.SkillStoreTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "533963dffa4a5fc74e53563f9f46759141be840dfc30bb8d70c9408e819c5d2e"
+    },
+    {
+      "name": "io.aequicor.magicpaper.ui.screens.CodingChatScrollTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "d609864ae369c6dbfc660907b241dcc718cebc01b7892beb1208117dbbc0081c"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.llm.CodexCodingPermissionsTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "cedb20ab35edfb149417bd704c581eee6e07706b0abe94774822493adbea460a"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "3fdc2ba80ebc6639d17cfa76912e7a2b9ad74aeca44b0ae91951a236a38960e3"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.SkillPackageContractTest",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "9b4726d0d2d509294d2f6bf793579c021d3ad7670ef94060fafd60599225530f"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.JsonSkillRepositoryTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "8bdf62b6d3356e641a7c9b3f0b8a36323f856e11f186ee11ec1d8c54551dd112"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.SkillRuntimeIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "7153029c2440aac8c438d3c07f9a7f073034a23ede5684bc317134b820680d94"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.SkillInstallerTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "1f129a09f8395f2d2e13b3b49228cc5f6f35304bff5b9795ee84216a724deff6"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.SkillSelectorTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "adfdcb5c51f02ac196cf88544398a3b5ae85d375c27d4d2fa81a9f2309fe8175"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.LocalSkillsPanelTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "ce5b0711287ea66b27dfad44980d39aae145e5c07cd317f2a813e36d9c8a282e"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.LocalExperiencePanelTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "b14b6e9799cdf4dd38bef33bd36eecb84ce9cdc4d4cf8820056c733c72a3d0c3"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.ProjectSkillsTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "64b56dd92b0d64c4f8a8870f0e0f144cf46713b79f9ac377f18100b828b3723c"
+    },
+    {
+      "name": "io.aequicor.magicpaper.ui.screens.CodingComposerRenderTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "cb7b3ca21d0bd95747958e017c213a1b2263abe9b63f4a550c8ad70d142cd186"
+    },
+    {
+      "name": "io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "908f497b0866e78451d3d28f958168961443e56313dc8becfc7e1b774255efed"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.SkillsAcceptanceTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "87c7a7c7bdce8a0fa43cca7bc28edda0c18081fd5c6c685e89710984ad71f361"
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.skills.LocalSkillExperienceTest",
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "8caeb3185fc41a4ef01405f034183947bf17a3d574607397afde04d8ede51ca9"
+    }
+  ],
+  "diffCheck": "PASS",
+  "sourceChangesAfterBuildInput": [],
+  "ownedSourceFiles": [
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt",
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/ProjectSkills.kt",
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/SkillReleaseStore.kt",
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt",
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+    "shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/coding/DesktopCodingRuntime.kt",
+    "shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/LocalSkillRepository.kt",
+    "shared/src/jvmMain/kotlin/io/aequicor/magicpaper/di/Dependencies.jvm.kt",
+    "shared/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/ProjectSkillsPanel.kt",
+    "shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/ProjectSkillsTest.kt"
+  ],
+  "concurrentChangesPreserved": [
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ChatMarkdown.kt",
+    "shared/src/jvmTest/kotlin/io/aequicor/magicpaper/ui/screens/CodingChatScrollTest.kt"
+  ],
+  "initialBaselineDifference": [
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt"
+  ],
+  "livePi": "NOT_RUN: application blocked before transport",
+  "liveCodex": "NOT_RUN: application blocked before transport",
+  "fullClickThrough": "NOT_RUN",
+  "historicallyInjectedContextRemoval": "NOT_IMPLEMENTED: this adapter never transmits packages",
+  "fullStageAcceptance": false
+}

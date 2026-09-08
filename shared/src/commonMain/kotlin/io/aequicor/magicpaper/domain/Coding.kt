@@ -464,6 +464,7 @@ interface CodingProjectRepository {
  */
 interface CodingRuntime {
     val computerUse: ComputerUse? get() = null
+    val projectSkills: ProjectSkills? get() = null
     val approvals: kotlinx.coroutines.flow.StateFlow<List<CodingApproval>> get() = noCodingApprovals
     suspend fun respondApproval(id: String, decision: CodingApprovalDecision) = Unit
     /** Verify engine prerequisites without starting a stage executor. */

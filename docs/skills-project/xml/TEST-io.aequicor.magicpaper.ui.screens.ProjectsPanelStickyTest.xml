@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:58.686Z" hostname="MacBook-Pro-Aequicor.local" time="4.96">
+  <properties/>
+  <testcase name="pinAndReleaseAnimateWithoutChangingListGeometry[jvm]" classname="io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest" time="0.946"/>
+  <testcase name="scrollingOverPinnedSessionAndCollapsingItsChildrenStillWork[jvm]" classname="io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest" time="1.087"/>
+  <testcase name="projectRemainsAbovePinnedSessionAndBothHeadersStayClickable[jvm]" classname="io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest" time="1.212"/>
+  <testcase name="sessionChangesAtGroupBoundaryWithoutMovingProject[jvm]" classname="io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest" time="1.715"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

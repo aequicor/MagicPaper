@@ -3,6 +3,13 @@ package io.aequicor.magicpaper.domain
 internal val PlanningIssue.isPlannerAnswerWait: Boolean
     get() = kind == IssueKind.CONFIGURATION && message == "Ожидается ответ планировщику"
 
+/** Only a settled rejection can be superseded by a revised plan. */
+internal val Plan.canExtendAfterFinalVerification: Boolean
+    get() = phase == ExecutionPhase.WAITING && issue?.kind == IssueKind.VERIFICATION &&
+        finalAttempt?.phase == AttemptPhase.VERIFYING && finalAttempt.error?.kind == IssueKind.VERIFICATION &&
+        finalAttempt.pendingTool.isBlank() && !finalAttempt.pendingToolExternal && finalAttempt.mergePhase == null &&
+        workspace?.applied != true
+
 internal data class PlanningBlocker(
     val planId: String,
     val issue: PlanningIssue,

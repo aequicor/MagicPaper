@@ -68,7 +68,9 @@ import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
                 if (plan.phase != ExecutionPhase.COMPLETE) {
                     OutlinedButton(onClick = { service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) { Text(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить") }
                     TextButton(onClick = { service.control(plan.id, "stop") }, enabled = plan.intent != ExecutionIntent.STOP) { Text("Остановить") }
-                    if (plan.issue != null) TextButton(onClick = { service.control(plan.id, "retry") }) { Text("Повторить") }
+                    if (plan.issue != null) TextButton(onClick = { service.control(plan.id, "retry") }) {
+                        Text(if (plan.canExtendAfterFinalVerification) "Доработать план" else "Повторить")
+                    }
                 }
                 if (initial != null) TextButton(onClick = { original = !original }) { Text(if (original) "Актуальный план" else "Подтверждённая версия") }
             }

@@ -119,6 +119,8 @@ data class Plan(
     val runId: String = "",
     val workspace: PlanWorkspace? = null,
     val finalAttempt: StageAttempt? = null,
+    /** Previous checks retained when a rejected result is extended with more work. */
+    val finalAttemptHistory: List<StageAttempt> = emptyList(),
     val issue: PlanningIssue? = null,
     val journal: List<PlanJournalEntry> = emptyList(),
     /** Transport failures outside a stage attempt (preflight and workspace preparation). */

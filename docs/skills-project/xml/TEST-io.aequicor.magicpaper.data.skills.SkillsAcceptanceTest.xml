@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.data.skills.SkillsAcceptanceTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:39.848Z" hostname="MacBook-Pro-Aequicor.local" time="2.918">
+  <properties/>
+  <testcase name="measuredLifecycleAndPairedBackupRestoreForEverySupportedScenario[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillsAcceptanceTest" time="2.918"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

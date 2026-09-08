@@ -7,7 +7,12 @@ import kotlinx.coroutines.flow.*
 import java.util.concurrent.ConcurrentHashMap
 
 /** The persisted session engine is the only routing input. Providers supply model access. */
-class DesktopCodingRuntime(private val pi: PiCodingRuntime, private val subscription: CodexAppServerOpenAiSubscription) : CodingRuntime {
+class DesktopCodingRuntime(
+    private val pi: PiCodingRuntime,
+    private val subscription: CodexAppServerOpenAiSubscription,
+    override val projectSkills: ProjectSkills? = null,
+    private val skillSnapshot: suspend (String) -> List<SkillInstruction> = { emptyList() },
+) : CodingRuntime {
     override val computerUse get() = subscription.computerUse
     private val active = ConcurrentHashMap.newKeySet<String>()
     private val clients = ConcurrentHashMap<String, CodexAppServerOpenAiSubscription>()
@@ -49,6 +54,22 @@ class DesktopCodingRuntime(private val pi: PiCodingRuntime, private val subscrip
         check(active.add(session.id)) { "Сессия уже выполняется" }
         val grant = computerUse?.grant(session.id)
         try {
+            val adapter = if (engine == CodingEngine.CODEX) "Codex" else "Pi"
+            val runId = java.util.UUID.randomUUID().toString()
+            val selected = try { skillSnapshot(project.id) } catch (e: CancellationException) { throw e } catch (_: Exception) {
+                emit(CodingEvent.Failed("SKILLS $runId: привязки или пакеты повреждены; запуск заблокирован."))
+                emit(CodingEvent.Finished)
+                return@flow
+            }
+            if (selected.isNotEmpty()) {
+                emit(CodingEvent.Notice("SKILLS run=$runId project=${project.id} session=${session.id} adapter=$adapter\n" +
+                    selected.joinToString("\n") { "${it.id}@${it.version} sha256=${it.checksum}; заявлено=${it.permissions}" } +
+                    "\nПередано: нет. Предоставлено пакету: нет. Результат задачи: не проверен."))
+                emit(CodingEvent.Failed(CodingSkillProtection.reason(adapter)))
+                emit(CodingEvent.Finished)
+                return@flow
+            }
+            emit(CodingEvent.Notice("SKILLS run=$runId project=${project.id} session=${session.id} adapter=$adapter: подключённых пакетов нет; пакету не предоставлены полномочия."))
             preflight(engine, profile)
             when (engine) {
                 CodingEngine.PI -> pi.run(project, session, prompt, profile, attachments).collect { emit(it) }

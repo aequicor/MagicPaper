@@ -5,7 +5,7 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class CodexCodingPermissionsTest {
-    @Test fun cacheIsWritableButNetworkStillRequiresReview() = withHome { home ->
+    @Test fun cacheIsWritableAndAdditionalAccessUsesAutomaticReview() = withHome { home ->
         val project = home.resolve("project")
         val policy = CodexCodingPermissions(project, home, null)
         assertEquals(listOf(project.toString(), home.resolve(".gradle").toString()), policy.writableRoots)
@@ -13,7 +13,7 @@ class CodexCodingPermissionsTest {
         assertEquals(policy.sandboxPolicy()["writableRoots"], policy.threadConfig()["sandbox_workspace_write.writable_roots"])
         val approvals = buildJsonObject { with(policy) { approvals() } }
         assertEquals(JsonPrimitive("on-request"), approvals["approvalPolicy"])
-        assertEquals(JsonPrimitive("user"), approvals["approvalsReviewer"])
+        assertEquals(JsonPrimitive("auto_review"), approvals["approvalsReviewer"])
     }
 
     @Test fun customGradleCacheIsReused() = withHome { home ->

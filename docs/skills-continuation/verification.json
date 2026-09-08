@@ -1,0 +1,17 @@
+{
+  "result": "PASS",
+  "preservedFiles": 353,
+  "headAndBothDiffsUnchanged": true,
+  "unexpectedFiles": [],
+  "historicalXmlSuites": 84,
+  "historicalXmlCounts": {
+    "tests": 479,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "documentLinks": 30,
+  "requirementScenarioPairs": 15,
+  "gradleRun": false,
+  "liveTransportsTested": false
+}

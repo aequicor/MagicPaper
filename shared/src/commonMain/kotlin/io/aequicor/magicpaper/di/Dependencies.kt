@@ -71,6 +71,9 @@ internal fun buildDependencies(
     filePicker: FilePicker = NoopFilePicker,
     openAiSubscription: OpenAiSubscriptionService? = null,
     planningWorkspace: io.aequicor.magicpaper.domain.PlanningWorkspace = io.aequicor.magicpaper.domain.LocalPlanningWorkspace(),
+    platformPlugins: List<io.aequicor.magicpaper.plugins.MagicPlugin> = emptyList(),
+    packageInstructions: io.aequicor.magicpaper.domain.SkillInstructionSource? = null,
+    experiencePlugin: ((io.aequicor.magicpaper.domain.LlmGateway, io.aequicor.magicpaper.domain.LlmProfileRepository) -> io.aequicor.magicpaper.plugins.MagicPlugin)? = null,
 ): MagicPaperDependencies {
     val json = appJson
     val client = HttpClient()
@@ -120,7 +123,8 @@ internal fun buildDependencies(
     // за которым наблюдают оба плагина.
     val skillStore = SkillStore(JsonSkillRepository(store, json))
     val installer = SkillInstaller(skillStore)
-    val agent = MagicAgent(gateway, search, docs, skillLibrary = skillStore)
+    val agent = MagicAgent(gateway, search, docs, skillLibrary = skillStore,
+        packageRuntime = packageInstructions?.let { io.aequicor.magicpaper.domain.SkillInstructionRuntime(it, gateway) })
     // Планирование: свой стор поверх того же хранилища (как у навыков);
     // исполнитель — поверх кодинг-рантайма, проверка — моделью через шлюз.
     val planningStore = PlanningStore(JsonPlanningRepository(store, json))
@@ -143,8 +147,9 @@ internal fun buildDependencies(
         .register(FocusPlugin)
         .register(CalcPlugin)
         .register(SkillsRepositoryPlugin(EmbeddedSkillCatalog(), installer, skillStore))
-        .register(SelfEducationPlugin(SkillEducator(gateway, json), installer, skillStore, chatRepo, settingsRepo, profileRepo))
+        .apply { experiencePlugin?.let { register(it(gateway, profileRepo)) } }
         .register(planner)
+    platformPlugins.forEach(registry::register)
     val planningChat = codingProjects?.let { PlanningChatService(planningStore, planningExecution, it, profileRepo, settingsRepo, PlanComposer(gateway, json, search), gateway) }
     val viewModel = MagicPaperViewModel(
         agent = agent,

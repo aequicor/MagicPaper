@@ -39,8 +39,11 @@ internal fun PlanningBlockerCard(
                 }
             }
             Button(onClick = onRetry, enabled = !busy) {
-                Text(if (blockers.any { it.stage != null && it.issue.kind == IssueKind.VERIFICATION })
-                    "Исправить и проверить" else "Повторить запуск")
+                Text(when {
+                    blockers.any { it.stage == null && it.issue.kind == IssueKind.VERIFICATION } -> "Доработать план"
+                    blockers.any { it.stage != null && it.issue.kind == IssueKind.VERIFICATION } -> "Исправить и проверить"
+                    else -> "Повторить запуск"
+                })
             }
         }
     }

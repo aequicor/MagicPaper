@@ -1,0 +1,42 @@
+ M README.md
+ M shared/src/commonMain/kotlin/io/aequicor/magicpaper/di/Dependencies.kt
+ M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/MagicAgent.kt
+ M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanningChatService.kt
+ M shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanningExecutionService.kt
+ M shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt
+ M shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/PlanningChatServiceTest.kt
+ M shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/PlanningExecutionServiceTest.kt
+ M shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/llm/CodexAppServerOpenAiSubscription.kt
+ M shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/llm/CodexCodingPermissions.kt
+ M shared/src/jvmMain/kotlin/io/aequicor/magicpaper/di/Dependencies.jvm.kt
+ M shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/llm/CodexCodingPermissionsTest.kt
+ M shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/llm/PlanningResponseTimeoutTest.kt
+ M shared/src/jvmTest/kotlin/io/aequicor/magicpaper/ui/screens/AgentMessageStatusTest.kt
+?? docs/SKILLS-CONTRACT.md
+?? docs/SKILLS-DISCOVERY.md
+?? docs/SKILLS-EXPERIENCE.md
+?? docs/SKILLS-LOCAL-STORAGE.md
+?? docs/SKILLS-RUNTIME.md
+?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/PlanningReplyPreview.kt
+?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/SkillInstructionRuntime.kt
+?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/SkillPackage.kt
+?? shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/SkillReleaseStore.kt
+?? shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/PlanningReplyPreviewTest.kt
+?? shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/SkillInstructionRuntimeTest.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/LocalSkillExperience.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/LocalSkillRepository.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/MacSkillDirectoryReader.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/SkillPackageImporter.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/SkillPackageValidator.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/SkillPublicDownload.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/skills/StrictExperienceCatalog.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/LocalExperiencePlugin.kt
+?? shared/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/LocalSkillsPlugin.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/LocalExperiencePanelTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/LocalSkillExperienceTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/LocalSkillRepositoryTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/LocalSkillsPanelTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/SkillPackageContractTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/SkillRuntimeIntegrationTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/skills/SkillsAcceptanceTest.kt
+?? shared/src/jvmTest/kotlin/io/aequicor/magicpaper/ui/screens/ProjectsPanelCollapseTest.kt

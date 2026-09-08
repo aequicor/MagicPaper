@@ -1,0 +1,28 @@
+{
+  "baselineVerification": "FAIL: concurrent source change; original baseline retained",
+  "preservedFiles": 352,
+  "changedFiles": {
+    "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt": {
+      "baseline": "67646efd148fac2a38e1567fcff8dfc73bb9a54aeb17c5f7f8a83faa293559f5",
+      "current": "2071d0f7207c4e4bb151067a5c46faef4540e0d80e9da5209d45ca79aa0b9e3f"
+    }
+  },
+  "headUnchanged": true,
+  "indexDiffUnchanged": true,
+  "workingDiffUnchanged": false,
+  "historicalXmlUnchanged": true,
+  "historicalXmlSuites": 84,
+  "historicalXmlCounts": {
+    "tests": 479,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "documentLinks": 30,
+  "explicitRequirementScenarioComponentRows": 15,
+  "manualReview": "Results, four states and eight transition rules disclosed in SKILLS-CONTINUATION.md supplement; structural checks do not prove behavior",
+  "diffCheck": "PASS",
+  "gradleRun": false,
+  "livePi": "NOT_RUN",
+  "liveCodex": "NOT_RUN"
+}

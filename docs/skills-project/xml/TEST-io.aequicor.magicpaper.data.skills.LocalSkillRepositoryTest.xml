@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" tests="18" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:35.809Z" hostname="MacBook-Pro-Aequicor.local" time="1.391">
+  <properties/>
+  <testcase name="unknownOriginAndLicenseIndependentlyStayQuarantinedAfterRestart[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.046"/>
+  <testcase name="zipRejectsExpansionBeyondActualStreamBudget[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.098"/>
+  <testcase name="interruptedActivationRetainsActiveAndRollbackSnapshot[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.082"/>
+  <testcase name="looseSkillRequiresPreviewAndKeepsUnknownMetadata[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.355"/>
+  <testcase name="quarantinedMetadataAndLocalSearchSurviveRestart[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.028"/>
+  <testcase name="networkPolicyRejectsCredentialsQueriesUnapprovedOriginsAndNonPublicAddresses[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.0"/>
+  <testcase name="explicitRecoveryRepairsCorruptSnapshotAndPayloadWithoutExposingEmptyLibrary[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.086"/>
+  <testcase name="rollbackRestoresExactInstructionAndDifferentNonEmptyPermissionsAcrossRestarts[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.098"/>
+  <testcase name="backupRestoresExactFilesReviewsQuarantineAndBothVersionMaps[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.191"/>
+  <testcase name="localDirectoryAndZipPassSameValidatorWithoutExecutingScripts[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.06"/>
+  <testcase name="networkUpgradeDenialAndConsentPersistAndRollbackWorksOffline[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.092"/>
+  <testcase name="httpsAndPinnedGitUseAnonymousSourceOnlyRequestsAndRemainQuarantined[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.055"/>
+  <testcase name="nestedDirectoryImportReadsOnlyRegularFilesAndRejectsLinkedParent[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.002"/>
+  <testcase name="interruptedCommitKeepsEntirePreviousSnapshot[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.061"/>
+  <testcase name="panelChangeApprovalCannotGrantNewPermissionsWithoutSeparatePermissionApproval[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.084"/>
+  <testcase name="directoryRejectsSymlinkAndZipRejectsTraversalDuplicatesAndUnixLinks[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.001"/>
+  <testcase name="corruptSnapshotAndPayloadFailClosed[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.026"/>
+  <testcase name="secondWriterIsRejectedAndVersionBytesAreImmutable[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest" time="0.026"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

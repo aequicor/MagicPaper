@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:38.030Z" hostname="MacBook-Pro-Aequicor.local" time="1.135">
+  <properties/>
+  <testcase name="bindingCommitFailureAndBackupRestorePreserveExactPins[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.073"/>
+  <testcase name="realPanelRendersForProjectRoundTrip[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.789"/>
+  <testcase name="adapterStartAndResumeRefuseBeforeTransportWithExactReceipt[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.07"/>
+  <testcase name="quarantineConsentStalePreviewAndCancellation[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.061"/>
+  <testcase name="pinsRestartProjectRoundTripAndImmutableRun[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.101"/>
+  <testcase name="corruptPersistentPinFailsClosed[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.038"/>
+  <testcase name="cancellationDoesNotBecomeFailureOrStartTransport[jvm]" classname="io.aequicor.magicpaper.data.skills.ProjectSkillsTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

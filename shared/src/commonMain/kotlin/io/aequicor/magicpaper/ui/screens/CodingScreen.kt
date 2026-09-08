@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.platform.LocalDensity
@@ -42,6 +43,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.Layout
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -60,6 +63,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -125,6 +129,8 @@ import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.ChatScrollItem
+import io.aequicor.magicpaper.ui.components.chatDisclosure
 import io.aequicor.magicpaper.ui.components.CodingAttachments
 import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.CodingModelSwitcherDialog
@@ -150,6 +156,20 @@ fun CodingScreen(
         val state by vm.state.collectAsState()
         NewCodingSessionDialog(state.settings.defaultCodingEngine, vm::cancelCodingSessionCreation, vm::addCodingSession)
     }
+    var skillsProject by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(ui.current?.id) { skillsProject = null }
+    skillsProject?.let { projectId ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { skillsProject = null }) {
+            androidx.compose.material3.Surface(shape = MaterialTheme.shapes.large) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("SKILLS", style = MaterialTheme.typography.titleLarge)
+                    vm.projectSkills?.Content(projectId)
+                        ?: Text("Проектные навыки недоступны на этой платформе")
+                    TextButton(onClick = { skillsProject = null }) { Text("Закрыть") }
+                }
+            }
+        }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         ResizableProjectPanels(modifier = Modifier.weight(1f), sidebar = { panelModifier ->
             ProjectsPanel(
@@ -173,6 +193,7 @@ fun CodingScreen(
                 } else {
                     SessionArea(
                         vm = vm,
+                        onSkills = { skillsProject = project.id },
                         ui = ui,
                         project = project,
                         active = active,
@@ -219,6 +240,7 @@ internal fun ResizableProjectPanels(
 @Composable
 private fun SessionArea(
     vm: MagicPaperViewModel,
+    onSkills: () -> Unit,
     ui: CodingUi,
     project: CodingProject,
     active: CodingSessionUi,
@@ -271,6 +293,7 @@ private fun SessionArea(
                         else -> vm.abortCodingSession(active.session.id)
                     }
                 },
+                onSkills = onSkills,
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 onPlanning = if (service != null && active.session.stageId == null) {
                     { scope.launch { service.configure(active.session, planning = true) } }
@@ -416,62 +439,126 @@ internal fun ProjectsPanel(
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         val collapsed = remember { mutableStateMapOf<String, Boolean>() }
-        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-            var position = 0
-            ui.projects.forEach { project ->
-                val expanded = project.id == ui.current?.id
-                val own = ui.sessionsOf(project.id)
-                val projectHeader: @Composable (Boolean) -> Unit = { compact ->
-                    ProjectRow(project, expanded, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
-                        { onSelectProject(project.id) }, { onDeleteProject(project.id) }, compact, { onDeleteAllSessions(project.id) })
-                }
-                val projectPosition = position
-                stickyHeader(key = "project-${project.id}") {
-                    val pinned = listState.firstVisibleItemIndex > projectPosition ||
-                        (listState.firstVisibleItemIndex == projectPosition && listState.firstVisibleItemScrollOffset > 0)
-                    Column(Modifier.fillMaxWidth().background(if (pinned) MaterialTheme.colorScheme.surface else Color.Transparent)) { projectHeader(pinned) }
-                }
-                position++
-                if (expanded) {
-                    val activeId = ui.activeSessionIdOf(project.id)
-                    val ids = own.map { it.session.id }.toSet()
-                    own.filter { it.session.parentSessionId !in ids }.forEach { sessionUi ->
-                        val children = own.filter { it.session.parentSessionId == sessionUi.session.id }
-                        val showChildren = collapsed[sessionUi.session.id] != true
-                        val headerPosition = position++
-                        val sessionRow: @Composable () -> Unit = {
-                            SessionRow(sessionUi, sessionUi.session.id == activeId,
-                                { onSelectSession(sessionUi.session.id) }, { onDeleteSession(sessionUi.session.id) },
-                                { onAbortSession(sessionUi.session.id) },
-                                childCount = children.size, expanded = showChildren,
-                                onToggleChildren = { collapsed[sessionUi.session.id] = showChildren })
-                        }
-                        if (sessionUi.session.planningMode || children.isNotEmpty()) {
-                            stickyHeader(key = "session-${sessionUi.session.id}") {
-                                val pinned = listState.firstVisibleItemIndex > headerPosition ||
-                                    (listState.firstVisibleItemIndex == headerPosition && listState.firstVisibleItemScrollOffset > 0)
-                                Column(Modifier.fillMaxWidth().background(if (pinned) MaterialTheme.colorScheme.surface else Color.Transparent)) {
-                                    if (pinned) projectHeader(true)
-                                    sessionRow()
-                                }
-                            }
-                        } else item(key = "session-${sessionUi.session.id}") { sessionRow() }
-                        if (showChildren) children.forEach { child ->
-                            item(key = "session-${child.session.id}") {
-                                SessionRow(child, child.session.id == activeId,
-                                    { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
-                                    { onAbortSession(child.session.id) }, nested = true)
-                            }
-                            position++
+        // Disclosure is local UI state: never reload a project or reset its active session.
+        // Selecting another project opens its list; status updates preserve disclosure.
+        var projectCollapsed by remember(ui.current?.id) { mutableStateOf(false) }
+        val projectIndex = ui.projects.indexOfFirst { it.id == ui.current?.id }
+        val ownSessions = ui.current?.let { ui.sessionsOf(it.id) }.orEmpty()
+        val sessionIds = ownSessions.map { it.session.id }.toSet()
+        val groups = buildList {
+            var index = projectIndex + 1
+            if (!projectCollapsed) ownSessions.filter { it.session.parentSessionId !in sessionIds }.forEach { parent ->
+                val children = ownSessions.filter { it.session.parentSessionId == parent.session.id }
+                val expanded = collapsed[parent.session.id] != true
+                val start = index++
+                if (expanded) index += children.size
+                add(ProjectSessionGroup(parent, children, expanded, start, index))
+            }
+        }
+        val sessionHeader: @Composable (ProjectSessionGroup) -> Unit = { group ->
+            val session = group.parent
+            SessionRow(session, session.session.id == ui.activeSessionIdOf(session.session.projectId),
+                { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
+                { onAbortSession(session.session.id) },
+                childCount = group.children.size, expanded = group.expanded,
+                onToggleChildren = { collapsed[session.session.id] = group.expanded })
+        }
+        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                ui.projects.forEach { project ->
+                    val selected = project.id == ui.current?.id
+                    val expanded = selected && !projectCollapsed
+                    val own = ui.sessionsOf(project.id)
+                    // Only projects participate in the native sticky-header chain. Session
+                    // headers occupy a separate level below it and cannot push a project away.
+                    stickyHeader(key = "project-${project.id}") { index ->
+                        val pinned = listState.firstVisibleItemIndex > index ||
+                            (listState.firstVisibleItemIndex == index && listState.firstVisibleItemScrollOffset > 0)
+                        ProjectHeaderSurface(pinned) {
+                            ProjectRow(project, selected, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
+                                {
+                                    if (selected) projectCollapsed = !projectCollapsed
+                                    else onSelectProject(project.id)
+                                }, { onDeleteProject(project.id) }, onDeleteAllSessions = { onDeleteAllSessions(project.id) })
                         }
                     }
-                    item(key = "add-${project.id}") { AddSessionRow(onAdd = onAddSession) }
-                    position++
+                    if (expanded) {
+                        val activeId = ui.activeSessionIdOf(project.id)
+                        groups.forEach { group ->
+                            item(key = "session-${group.parent.session.id}") { sessionHeader(group) }
+                            if (group.expanded) group.children.forEach { child ->
+                                item(key = "session-${child.session.id}") {
+                                    SessionRow(child, child.session.id == activeId,
+                                        { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
+                                        { onAbortSession(child.session.id) }, nested = true)
+                                }
+                            }
+                        }
+                        item(key = "add-${project.id}") { AddSessionRow(onAdd = onAddSession) }
+                    }
                 }
             }
+            ProjectPinnedSession(listState, "project-${ui.current?.id}", groups, sessionHeader)
         }
         TextButton(onClick = onAddProject, modifier = Modifier.padding(8.dp)) {
             Text("✦ Новый проект")
+        }
+    }
+}
+
+private data class ProjectSessionGroup(
+    val parent: CodingSessionUi,
+    val children: List<CodingSessionUi>,
+    val expanded: Boolean,
+    val index: Int,
+    val endIndex: Int,
+)
+
+/** Animate the surface, never the lazy item's height: scroll anchors remain stable. */
+@Composable
+private fun ProjectHeaderSurface(pinned: Boolean, content: @Composable () -> Unit) {
+    val progress by animateFloatAsState(
+        if (pinned) 1f else 0f,
+        tween(200, easing = FastOutSlowInEasing),
+        label = "projectHeaderPin",
+    )
+    val surface = MaterialTheme.colorScheme.surface
+    Column(Modifier.fillMaxWidth()
+        .graphicsLayer { shadowElevation = 3.dp.toPx() * progress }
+        .background(surface.copy(alpha = progress))) { content() }
+}
+
+/** The current session sticks below its project, only until its own children end. */
+@Composable
+private fun ProjectPinnedSession(
+    listState: LazyListState,
+    projectKey: String,
+    groups: List<ProjectSessionGroup>,
+    content: @Composable (ProjectSessionGroup) -> Unit,
+) {
+    val visible = listState.layoutInfo.visibleItemsInfo
+    val project = visible.firstOrNull { it.key == projectKey } ?: return
+    val top = (project.offset + project.size).coerceAtLeast(0)
+    val firstBelowProject = visible.firstOrNull { it.index > project.index && it.offset + it.size > top } ?: return
+    val group = groups.firstOrNull { firstBelowProject.index in it.index until it.endIndex } ?: return
+    if (!group.parent.session.planningMode && group.children.isEmpty()) return
+    val original = visible.firstOrNull { it.index == group.index }
+    if (original != null && original.offset >= top) return
+    // The following root session (or add-session row) pushes this header out. Clip
+    // the movement below the project so neither level can obscure the other.
+    val boundary = visible.firstOrNull { it.index == group.endIndex }?.offset
+        ?: listState.layoutInfo.viewportEndOffset
+    val available = (boundary - top).coerceAtLeast(0)
+    val topPadding = with(LocalDensity.current) { top.toDp() }
+    Box(Modifier.fillMaxSize().padding(top = topPadding).clipToBounds()) {
+        Layout(modifier = Modifier.scrollable(listState, Orientation.Vertical, reverseDirection = true), content = {
+            key(group.parent.session.id) {
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) { content(group) }
+            }
+        }) { measurables, constraints ->
+            val header = measurables.single().measure(constraints.copy(minHeight = 0))
+            val height = minOf(header.height, available)
+            layout(header.width, height) { header.placeRelative(0, height - header.height) }
         }
     }
 }
@@ -486,7 +573,6 @@ private fun ProjectRow(
     sessionCount: Int,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
-    compact: Boolean = false,
     onDeleteAllSessions: () -> Unit = {},
 ) {
     Row(
@@ -499,7 +585,7 @@ private fun ProjectRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Стрелка-маркер: под выбранным проектом раскрыт список его сессий.
-        if (!compact) Text(
+        Text(
             if (expanded) "▾" else "▸",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.outline,
@@ -516,7 +602,7 @@ private fun ProjectRow(
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
             )
-            if (!compact) Text(
+            Text(
                 buildString {
                     append("$sessionCount ${sessionCountWord(sessionCount)}")
                     if (sessionCount > 0) {
@@ -721,6 +807,7 @@ internal fun CodingChat(
     approvals: List<CodingApproval> = emptyList(),
     onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
     onStopApproval: (String) -> Unit = {},
+    onSkills: (() -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -734,7 +821,7 @@ internal fun CodingChat(
     }
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
-    stickToBottom(listState, session.session.id)
+    val scroll = stickToBottom(listState, session.session.id)
     val density = LocalDensity.current
     var footerHeight by remember { mutableStateOf(0.dp) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -766,29 +853,33 @@ internal fun CodingChat(
             }
             items(rows, key = { it.message.id }) { row ->
                 val message = row.message
-                CodingMessageBubble(message) {
-                    if (busy && statusMessageId != null &&
-                        (message.id == statusMessageId || row.planCard?.id == statusMessageId)
-                    ) status()
-                    if (planningService != null && message.planning != null) {
-                        Spacer(Modifier.height(6.dp))
-                        PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
-                    }
-                    row.planCard?.let { card ->
-                        Spacer(Modifier.height(12.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        Spacer(Modifier.height(12.dp))
-                        ChatMarkdown(card.text)
-                        if (planningService != null) {
+                ChatScrollItem(scroll, message.id) {
+                    CodingMessageBubble(message) {
+                        if (busy && statusMessageId != null &&
+                            (message.id == statusMessageId || row.planCard?.id == statusMessageId)
+                        ) status()
+                        if (planningService != null && message.planning != null) {
                             Spacer(Modifier.height(6.dp))
-                            PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                            PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
                         }
+                        row.planCard?.let { card ->
+                            Spacer(Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Spacer(Modifier.height(12.dp))
+                            ChatMarkdown(card.text)
+                            if (planningService != null) {
+                                Spacer(Modifier.height(6.dp))
+                                PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                            }
+                        }
+                        if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                     }
-                    if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                 }
             }
             if (hasDraft || (busy && statusMessageId == null)) {
-                item(key = "draft") { DraftBubble(draft, if (busy) status else null) }
+                item(key = "draft") {
+                    ChatScrollItem(scroll, "draft") { DraftBubble(draft, if (busy) status else null) }
+                }
             }
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -812,6 +903,7 @@ internal fun CodingChat(
                 onPlanning = onPlanning,
                 onSend = onSend,
                 onAbort = onAbort,
+                onSkills = onSkills,
                 onPickAttachments = onPickAttachments,
             )
         }
@@ -933,7 +1025,7 @@ private fun ThinkingStepRow(step: CodingStep) {
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        Row(Modifier.clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.chatDisclosure { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "💭",
                 style = MaterialTheme.typography.bodySmall,
@@ -959,7 +1051,7 @@ private fun ThinkingStepRow(step: CodingStep) {
     }
 }
 
-/** Строка рассуждения модели: сворачиваемый «💭 …» с полным текстом по тапу. */
+/** Команда или действие: часы до завершения, полный текст и вывод по тапу. */
 @Composable
 private fun ToolStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable(step.callId.ifBlank { step.title }) { mutableStateOf(false) }
@@ -978,7 +1070,7 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Row(
-            Modifier.then(if (hasDetail) Modifier.clickable { expanded = !expanded } else Modifier),
+            Modifier.fillMaxWidth().chatDisclosure { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Canvas(
@@ -1019,19 +1111,17 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
                 maxLines = if (expanded) Int.MAX_VALUE else 2,
                 modifier = Modifier.weight(1f),
             )
-            if (hasDetail) {
-                Text(
-                    if (expanded) "▴" else "▾",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (step.running && live && step.result.isBlank()) {
             Text(
-                "выполняется…",
+                if (expanded) "▴" else "▾",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (step.running && live) {
+            Text(
+                if (step.kind == CodingStepKind.EXEC) "Выполняется команда…" else "Выполняется действие…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (expanded && hasDetail) {
@@ -1135,7 +1225,7 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
                 Row(
-                    Modifier.fillMaxWidth().clickable(onClick = onToggle).semantics {
+                    Modifier.fillMaxWidth().chatDisclosure(onToggle).semantics {
                         contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1179,6 +1269,7 @@ private fun currentThinkingSummary(thinking: String): String {
 
 @Composable
 private fun CodingComposer(
+    onSkills: (() -> Unit)? = null,
     enabled: Boolean,
     busy: Boolean,
     controls: (@Composable () -> Unit)? = null,
@@ -1215,6 +1306,8 @@ private fun CodingComposer(
                         Text("+", style = MaterialTheme.typography.titleLarge)
                     }
                     DropdownMenu(addMenuOpen, { addMenuOpen = false }) {
+                        DropdownMenuItem(text = { Text("SKILLS") }, enabled = onSkills != null,
+                            onClick = { addMenuOpen = false; onSkills?.invoke() })
                         DropdownMenuItem(
                             text = { Text("Прикрепить файлы") },
                             leadingIcon = { Text("📎") },

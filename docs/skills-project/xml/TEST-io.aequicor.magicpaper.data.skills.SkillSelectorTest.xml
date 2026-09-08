@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.data.skills.SkillSelectorTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:39.841Z" hostname="MacBook-Pro-Aequicor.local" time="0.005">
+  <properties/>
+  <testcase name="disabledSkillsAreSkipped[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillSelectorTest" time="0.002"/>
+  <testcase name="findsProofreadForCorrectionRequest[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillSelectorTest" time="0.001"/>
+  <testcase name="emptyQuerySelectsNothing[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillSelectorTest" time="0.001"/>
+  <testcase name="findsSummarizeForParaphraseRequest[jvm]" classname="io.aequicor.magicpaper.data.skills.SkillSelectorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
