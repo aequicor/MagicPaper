@@ -89,12 +89,7 @@ class PlanningExecutionService(
         job?.join()
     }
     suspend fun edit(projectId: String, revision: Long, change: (Plan) -> Plan) = store.update(projectId, revision) { old ->
-        change(old).also {
-            if (old.finalAttempt != null) require(it.tree == old.tree && it.milestones == old.milestones) {
-                "Итоговая проверка уже начата. Для дополнительной работы создайте новую цель."
-            }
-            DecisionCompiler.validateEdit(old, it)
-        }
+        validateRevision(old, change(old))
     }
     /** Rebase an LLM proposal over telemetry, never over intervening user edits or started work. */
     suspend fun applyProposal(base: Plan, proposal: Plan) = store.update(base.id) { latest ->
@@ -109,9 +104,20 @@ class PlanningExecutionService(
                 current
             } ?: proposed
         })
-        if (latest.finalAttempt != null) require(rebased.tree == latest.tree && rebased.milestones == latest.milestones) { "Итоговая проверка уже начата" }
-        DecisionCompiler.validateEdit(latest, rebased)
-        rebased
+        validateRevision(latest, rebased)
+    }
+    private fun validateRevision(old: Plan, updated: Plan): Plan {
+        DecisionCompiler.validateEdit(old, updated)
+        val previous = old.finalAttempt ?: return updated
+        if (updated.tree == old.tree && updated.milestones == old.milestones) return updated
+        require(old.canExtendAfterFinalVerification) {
+            "Итоговая проверка уже начата. Дождитесь её завершения перед изменением плана."
+        }
+        // Merely changing a label or an inactive branch cannot dismiss a failed check.
+        if (updated.selectedMilestones.all { it.completed }) return updated
+        return updated.copy(finalAttempt = null, finalAttemptHistory = old.finalAttemptHistory + previous,
+            issue = null, phase = ExecutionPhase.RECOVERING,
+            status = if (updated.intent == ExecutionIntent.RUN) PlanStatus.RUNNING else PlanStatus.STOPPED)
     }
     /** Explicit retry does not erase counters; the caller fixes configuration or acknowledges uncertainty. */
     suspend fun retry(projectId: String) {
@@ -209,7 +215,7 @@ class PlanningExecutionService(
             if (plan.selectedMilestones.all { it.completed }) {
                 if (!verifyIntegration(id, project, workspace, judge!!)) return
                 if (store.planFor(id)!!.selectedMilestones.any { !it.completed }) {
-                    store.update(id) { it.copy(finalAttempt = null, phase = ExecutionPhase.EXECUTING) }
+                    store.update(id) { it.copy(finalAttempt = null, finalAttemptHistory = it.finalAttemptHistory + listOfNotNull(it.finalAttempt), phase = ExecutionPhase.EXECUTING) }
                     return
                 }
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
@@ -323,7 +329,8 @@ class PlanningExecutionService(
         val workspaces = workspaceFor(id)
         var plan = store.planFor(id)!!
         if (plan.workspace?.applied == true) return true
-        var attempt = plan.finalAttempt ?: StageAttempt("${plan.runId}-final", "${plan.runId}-final-session",
+        val finalId = "${plan.runId}-final" + if (plan.finalAttemptHistory.isEmpty()) "" else "-${plan.finalAttemptHistory.size + 1}"
+        var attempt = plan.finalAttempt ?: StageAttempt(finalId, "$finalId-session",
             assignment(plan.selectedMilestones.first(), profiles.load()), path = workspace.integrationPath, startedAt = Id.now())
         if (attempt.phase == AttemptPhase.COMPLETE) return true
         suspend fun persist() { store.update(id) { it.copy(finalAttempt = safeAttempt(attempt.copy(updatedAt = Id.now())), phase = ExecutionPhase.VERIFYING) } }

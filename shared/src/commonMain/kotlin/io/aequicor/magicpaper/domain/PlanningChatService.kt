@@ -182,7 +182,11 @@ class PlanningChatService(
             store.update(id) { it.copy(pendingRequest = "", requestId = "", plannerSelection = choice, searchProvider = session.searchProvider,
                 versions = if (result.tree != pending.tree || result.milestones != pending.milestones) it.versions + snapshot else it.versions) }
             val saved = store.planFor(id)!!
-            if (saved.confirmedRevision != null) prepareSessions(saved)
+            if (saved.confirmedRevision != null) {
+                prepareSessions(saved)
+                if (pending.canExtendAfterFinalVerification && saved.finalAttempt == null && saved.intent == ExecutionIntent.RUN)
+                    execution.start(id)
+            }
         } catch (e: Exception) {
             // A model/request timeout cancels its child coroutine, not this planning turn.
             // Preserve actual cancellation, but publish timeouts like other request failures.
@@ -214,12 +218,23 @@ class PlanningChatService(
     } }
     fun control(id: String, command: String) = launch {
         if (id in deletedPlans) return@launch
+        val before = store.planFor(id) ?: return@launch
+        if (command == "retry" && before.canExtendAfterFinalVerification && before.parentSessionId.isNotBlank()) {
+            val parent = projects.sessions(before.projectId).firstOrNull { it.id == before.parentSessionId }
+                ?: error("Сессия планировщика не найдена")
+            send(parent, "Доработай план после неудачной итоговой проверки. Причина: ${before.issue?.message}. " +
+                "Учти последние запросы и ответы пользователя в этом диалоге, включая ещё не применённые изменения плана. " +
+                "Добавь этапы исправления и проверки в рамках текущей цели, сохрани завершённые этапы. " +
+                "Если данных достаточно, продолжи выполнение; иначе задай необходимые вопросы.")
+            return@launch
+        }
         when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id); else -> execution.start(id) }
         val plan = store.planFor(id) ?: return@launch
         val text = when (command) {
             "pause" -> "Планировщик приостановил выдачу новых заданий. Текущие ходы завершатся."
             "stop" -> "Планировщик остановил выполнение этапов."
-            "retry" -> "Планировщик повторно запускает незавершённые этапы."
+            "retry" -> if (before.finalAttempt != null && before.selectedMilestones.all { it.completed })
+                "Планировщик повторяет итоговую проверку." else "Планировщик повторно запускает незавершённые этапы."
             else -> "Планировщик возобновил распределение заданий."
         }
         append(plan.projectId, plan.parentSessionId, CodingMessage(Id.new(), CodingRole.AGENT, text, createdAt = Id.now()))
@@ -237,7 +252,8 @@ class PlanningChatService(
                     status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", dependsOn = listOf(completed.id))
                 current.copy(deliveries = current.deliveries.map { if (it.id == delivery.id) it.copy(targetStageId = nextId) else it },
                     milestones = current.milestones + next, phase = ExecutionPhase.EXECUTING, status = PlanStatus.RUNNING,
-                    finalAttempt = null, workspace = current.workspace?.copy(applied = false),
+                    finalAttempt = null, finalAttemptHistory = current.finalAttemptHistory + listOfNotNull(current.finalAttempt),
+                    workspace = current.workspace?.copy(applied = false),
                     tree = current.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + nextId) else it } + DecisionNode(nextId, next.title, DecisionKind.STAGE, stageId = nextId))
             }
             if (updated.deliveries != plan.deliveries) { prepareSessions(updated); return }
@@ -274,6 +290,7 @@ class PlanningChatService(
             p.copy(deliveries = p.deliveries + PlanDelivery(deliveryId, source, destination, text, replyTo = replyTo), issue = null,
                 phase = if (complete) ExecutionPhase.EXECUTING else p.phase,
                 finalAttempt = if (complete) null else p.finalAttempt,
+                finalAttemptHistory = p.finalAttemptHistory + if (complete) listOfNotNull(p.finalAttempt) else emptyList(),
                 workspace = if (complete && p.sharedWorkspace) p.workspace?.copy(applied = false) else p.workspace,
                 milestones = p.milestones.map { m -> if (m.id != target || complete) m else m.copy(attempts = m.attempts.map {
                     if (it.error?.kind == IssueKind.VERIFICATION) it.retryAfterUserAction() else it.copy(error = null)

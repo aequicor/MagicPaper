@@ -227,6 +227,65 @@ class PlanningChatServiceTest {
         assertContains(f.runtime.calls.last { it.first.id == workerId }.second, "Нужно проверить откат разрешений")
     }
 
+    private suspend fun Fixture.rejectedFinal(parent: CodingSession): Plan {
+        val draft = readyPlan("p", parent)
+        val issue = PlanningIssue(IssueKind.VERIFICATION, "Coding integration is missing", requiresUser = true)
+        val blocked = draft.copy(confirmedRevision = 1, runId = "run", intent = ExecutionIntent.RUN,
+            status = PlanStatus.FAILED, phase = ExecutionPhase.WAITING, issue = issue,
+            milestones = draft.milestones.map { it.copy(status = MilestoneStatus.DONE, report = "Completed work") },
+            dialogue = listOf(PlanningMessage("last-answer", "user", "Нужны каталог и ссылка на репозиторий")),
+            finalAttempt = StageAttempt("run-final", "run-final-session", StageAssignment(profile.id, "m"),
+                phase = AttemptPhase.VERIFYING, report = "Previous checks", error = issue))
+        store.save(blocked)
+        service.prepareSessions(blocked)
+        return store.planFor(blocked.id)!!
+    }
+
+    @Test fun failedFinalAcceptsUserContinuationOrRepairButtonAndResumesInSameSession() = runTest {
+        for (useRetry in listOf(false, true)) {
+            val f = Fixture(this); f.initialize(); runCurrent()
+            val parent = f.session("parent")
+            val blocked = f.rejectedFinal(parent)
+            val followup = blocked.milestones.single().copy(id = "followup", title = "Coding integration",
+                status = MilestoneStatus.PENDING, report = "", dependsOn = listOf("stage"))
+            val proposal = blocked.copy(milestones = blocked.milestones + followup,
+                tree = blocked.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + "followup") else it } +
+                    DecisionNode("followup", "Coding integration", DecisionKind.STAGE, stageId = "followup"))
+            f.gateway.overrideReply = "{\"reply\":\"Добавлены этапы продолжения\"," + json.encodeToString(Plan.serializer(), proposal).drop(1)
+            if (useRetry) f.service.control(blocked.id, "retry") else f.service.send(parent, "Добавь подключение к coding-агенту")
+            runCurrent()
+            val resumed = f.store.planFor(blocked.id)!!
+            assertEquals(blocked.id, resumed.id)
+            assertEquals(blocked.parentSessionId, resumed.parentSessionId)
+            assertNull(resumed.issue)
+            assertNull(resumed.finalAttempt)
+            assertEquals(blocked.finalAttempt, resumed.finalAttemptHistory.single())
+            assertEquals(blocked.milestones.single(), resumed.milestones.first())
+            assertEquals("plan-${blocked.id}-stage-followup", f.runtime.calls.single().first.id)
+            assertContains(f.gateway.lastMessages.last().content, "Нужны каталог и ссылка на репозиторий")
+            if (useRetry) assertContains(f.gateway.lastMessages.last().content, "Coding integration is missing")
+            assertFalse(f.projects.messages(project.id, parent.id).any { it.text == "Итоговая проверка уже начата" })
+            f.gateway.overrideReply = null
+            f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+            assertEquals(PlanStatus.DONE, f.store.planFor(blocked.id)!!.status)
+            assertEquals(2, f.runtime.calls.size)
+            assertEquals("run-final-2-session", f.runtime.calls.last().first.id)
+        }
+    }
+
+    @Test fun repairClarificationKeepsFinalBlockerUntilActualWorkIsAdded() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val blocked = f.rejectedFinal(parent)
+        f.service.control(blocked.id, "retry"); runCurrent()
+        val discussed = f.store.planFor(blocked.id)!!
+        assertEquals(blocked.finalAttempt, discussed.finalAttempt)
+        assertEquals(blocked.issue, discussed.issue)
+        assertTrue(discussed.finalAttemptHistory.isEmpty())
+        assertTrue(f.runtime.calls.isEmpty())
+        assertEquals(3, f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!.planning!!.questions.size)
+    }
+
     @Test fun repeatedHandoffKeepsEachReplyAfterItsIncomingMessageAndSurvivesReload() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
