@@ -648,7 +648,8 @@ class OrchestrationService(
         var requests = state(session.id, session.projectId).openQuestions(plan.id)
         val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
         fun context(current: Plan): String =
-            "Актуальное состояние: runId=${current.runId}; intent=${current.intent}; phase=${current.phase}; status=${current.status}; ошибка=${current.issue?.message.orEmpty()}\n" +
+            "Актуальное состояние: runId=${current.runId}; intent=${current.intent}; phase=${current.phase}; статус=${current.status}; ошибка=${current.issue?.message.orEmpty()}\n" +
+                "Итоговая проверка: ${current.finalAttempt?.let { "фаза=${it.phase}; ошибка=${it.error?.message.orEmpty()}; отчёт=${it.report}" } ?: "нет сохранённой попытки"}\n" +
                 "Приёмка: ${current.finalAttempt?.acceptanceRecord?.let { json.encodeToString(AcceptanceRecord.serializer(), it) } ?: "не подтверждена"}\n" +
                 "${schedulingContext(current)}\nОткрытые запросы: ${json.encodeToString(kotlinx.serialization.builtins.ListSerializer(OrchestrationQuestion.serializer()), requests)}"
         val messages = mutableListOf(LlmMessage(LlmChatRole.SYSTEM, """
