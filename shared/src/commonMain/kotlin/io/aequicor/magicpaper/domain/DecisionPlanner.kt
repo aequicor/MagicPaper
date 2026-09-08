@@ -85,7 +85,7 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                 val updated = recommendChoices(plan.copy(tree = nodes, milestones = bound, dialogue = dialogue, wizardStep = PlanningStep.REVIEW, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace))
                 DecisionCompiler.validateEdit(plan, updated)
                 require(updated.milestones.all { it.title.isNotBlank() && it.acceptance.isNotBlank() }) { "Каждому этапу нужны название и критерии проверки" }
-                return updated
+                return updated.allocateTaskIdentifiers(plan)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 lastError = e.message.orEmpty()

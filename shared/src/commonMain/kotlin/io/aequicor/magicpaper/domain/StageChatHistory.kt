@@ -47,5 +47,5 @@ internal fun StageAttempt.chatResponses(parentMessages: List<CodingMessage> = em
 internal fun List<CodingMessage>.withStageResponses(responses: List<CodingMessage>): List<CodingMessage> {
     val replacements = responses.associateBy { it.id }
     val existingIds = map { it.id }.toSet()
-    return (map { replacements[it.id] ?: it } + responses.filter { it.id !in existingIds }).sortedBy { it.createdAt }
+    return (map { replacements[it.id] ?: it } + responses.filter { it.id !in existingIds }).sortedWith(compareBy<CodingMessage> { it.createdAt }.thenBy { if (it.handoff != null) 1 else 0 })
 }

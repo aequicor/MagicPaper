@@ -49,6 +49,7 @@ data class CodingSessionUi(
                 if (current.confirmedRevision == null || current.phase == ExecutionPhase.COMPLETE || current.proposal != null ||
                     messages.pendingPlanningQuestion(setOf(current.id)) != null ||
                     current.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForUser != null }) return false
+                if (current.intent == ExecutionIntent.RUN && current.issue == null && current.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null }) return false
                 return current.intent != ExecutionIntent.RUN || current.issue != null ||
                     current.phase == ExecutionPhase.WAITING
             }
@@ -71,6 +72,7 @@ data class CodingSessionUi(
         val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
         if (stage != null) return when {
             stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.WAITING
+            stage.attempts.lastOrNull()?.waitingForEvent != null -> CodingSessionStatus.SCHEDULED
             stage.attempts.lastOrNull()?.let { it.awaitingPlanner && (it.error == null || it.error.isPlannerAnswerWait) } == true -> CodingSessionStatus.IDLE
             stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.BLOCKED
             running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
@@ -85,6 +87,8 @@ data class CodingSessionUi(
             plan.issue?.requiresUser == true || plan.finalAttempt?.error?.requiresUser == true ||
                 plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.error?.requiresUser == true } -> CodingSessionStatus.BLOCKED
             plan.issue != null -> CodingSessionStatus.QUEUED
+            plan.scheduledMessages.any { it.status == io.aequicor.magicpaper.domain.ScheduledMessageStatus.WAITING } ||
+                plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> CodingSessionStatus.SCHEDULED
             plan.confirmedRevision != null -> CodingSessionStatus.IDLE
             else -> codingStatusOf(messages)
         }

@@ -376,7 +376,8 @@ class PlanningChatServiceTest {
             assertNull(resumed.finalAttempt)
             assertEquals(blocked.finalAttempt, resumed.finalAttemptHistory.single())
             assertEquals(blocked.milestones.single(), resumed.milestones.first())
-            assertEquals("plan-${blocked.id}-stage-followup", f.runtime.calls.single().first.id)
+            assertNotEquals("followup", resumed.milestones.last().id)
+            assertEquals("plan-${blocked.id}-stage-${resumed.milestones.last().id}", f.runtime.calls.single().first.id)
             assertContains(f.gateway.lastMessages.last().content, "Нужны каталог и ссылка на репозиторий")
             if (useRetry) assertContains(f.gateway.lastMessages.last().content, "Coding integration is missing")
             assertFalse(f.projects.messages(project.id, parent.id).any { it.text == "Итоговая проверка уже начата" })
@@ -415,24 +416,26 @@ class PlanningChatServiceTest {
         f.gateway.coordinator = """{"reply":"Уточните формат","askUser":true}"""
         f.service.confirm(plan.id); runCurrent()
         val worker = f.projects.sessions(project.id).single { it.stageId != null }
-        val first = f.projects.messages(project.id, worker.id).last { it.role == CodingRole.AGENT }
+        val first = f.projects.messages(project.id, worker.id).last { it.role == CodingRole.AGENT && it.handoff == null }
         assertEquals("Какой формат?", first.text)
         val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
         f.service.send(parent, "PDF", replyTo = question.id); advanceTimeBy(1000); runCurrent()
         assertEquals(2, f.runtime.calls.size)
-        assertEquals(first, f.projects.messages(project.id, worker.id).single { it.role == CodingRole.AGENT })
+        assertEquals(first, f.projects.messages(project.id, worker.id).single { it.role == CodingRole.AGENT && it.handoff == null })
         val coordinatorGate = CompletableDeferred<Unit>()
         f.gateway.coordinatorGates += listOf(CompletableDeferred(Unit), coordinatorGate)
         secondTurn.complete(Unit); runCurrent()
         val saved = f.store.planFor(plan.id)!!.milestones.single().attempts.single()
         assertTrue(saved.awaitingPlanner)
         val history = f.projects.messages(project.id, worker.id)
-        val replies = history.filter { it.role == CodingRole.AGENT }
+        val replies = history.filter { it.role == CodingRole.AGENT && it.handoff == null }
         assertEquals(listOf("Какой формат?", "Экспорт PDF проверен"), replies.map { it.text })
         assertEquals(first, replies.first())
         val answerIndex = history.indexOfFirst { it.deliveryId != null && "PDF" in it.text }
         assertTrue(answerIndex > history.indexOf(first))
-        assertEquals(replies.last(), history.last())
+        assertEquals(replies.last(), history.last { it.handoff == null })
+        assertEquals(2, history.count { it.handoff != null })
+        assertEquals(HandoffStatus.PROCESSING, history.last { it.handoff != null }.handoff!!.status)
         assertTrue(history.indexOf(replies.last()) > answerIndex)
         assertEquals(2, saved.chatTurns.size)
         assertTrue(saved.chatTurns.all { it.completedAt > 0 })
@@ -919,8 +922,9 @@ class PlanningChatServiceTest {
         f.service.send(session, "Добавь проверку"); runCurrent()
         val updated = f.store.planFor("p")!!
         assertEquals(completed, updated.milestones.first { it.id == "stage" }.copy(displayNumber = completed.displayNumber))
-        assertTrue(updated.milestones.any { it.id == "extra" })
-        assertTrue(f.projects.sessions(project.id).any { it.stageId == "extra" })
+        val extra = updated.milestones.single { it.title == "Extra" }
+        assertNotEquals("extra", extra.id)
+        assertTrue(f.projects.sessions(project.id).any { it.stageId == extra.id })
         assertTrue(updated.versions.isNotEmpty())
     }
 
@@ -1069,7 +1073,9 @@ class PlanningChatServiceTest {
         f.service.confirm("p", proposal.id); runCurrent()
         assertEquals(calls, f.runtime.calls.size)
         assertTrue(f.projects.sessions(project.id).first { it.stageId == "stage" }.archived)
-        val continuation = f.projects.sessions(project.id).first { it.stageId == "errors" }
+        val continuationTask = done.milestones.single { it.title == "Обработка ошибок" }
+        assertNotEquals("errors", continuationTask.id)
+        val continuation = f.projects.sessions(project.id).first { it.stageId == continuationTask.id }
         assertEquals("Обработка ошибок", continuation.name)
         assertEquals(1, continuation.continuationOfNumber)
         assertEquals(2, continuation.stageNumber)
@@ -1269,6 +1275,128 @@ class PlanningChatServiceTest {
         val parent = f.session("parent", engine = CodingEngine.CODEX)
         f.service.send(parent, "Сделай редактор"); runCurrent()
         assertEquals(CodingEngine.CODEX, f.store.plans.value.single().engine)
+    }
+
+    @Test fun eventWaitReleasesSlotAndWakesWorkerOnceWithoutStatusModelCalls() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val other = base.milestones.single().copy(id = "other", title = "Independent task")
+        val p = base.copy(parallelism = 1, milestones = base.milestones + other,
+            tree = base.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + "other") else it } +
+                DecisionNode("other", "Independent task", DecisionKind.STAGE, stageId = "other"))
+        f.store.save(p)
+        val independent = CompletableDeferred<Unit>()
+        f.runtime.turnGates += listOf(CompletableDeferred(Unit), independent)
+        f.runtime.turnReplies += listOf(
+            """{"kind":"WAIT","text":"Нужен результат соседней задачи","waitFor":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"other"},"resumeMessage":"Проверь результат"}""",
+            """{"kind":"RESULT","text":"Independent verified result"}""",
+            """{"kind":"RESULT","text":"Review done"}""",
+        )
+        f.gateway.coordinatorReplies += listOf(
+            """{"reply":"Ожидаем результат без опросов","schedules":[{"trigger":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"other"},"targetTaskId":"stage","waitTaskId":"stage","text":"Проверь результат соседней задачи"}]}""",
+            """{"reply":"Результат принят"}""",
+            """{"reply":"Проверка принята"}""",
+        )
+        f.runtime.gate.complete(Unit)
+        f.service.confirm("p"); advanceTimeBy(1000); runCurrent()
+        var current = f.store.planFor("p")!!
+        val rule = current.scheduledMessages.single()
+        assertEquals(rule.id, current.milestones.first { it.id == "stage" }.attempts.last().waitingForEvent)
+        assertEquals(listOf("plan-p-stage-stage", "plan-p-stage-other"), f.runtime.calls.map { it.first.id })
+        assertEquals(1, f.gateway.coordinatorCallbacks.size)
+        val worker = f.projects.sessions(project.id).first { it.stageId == "stage" }
+        assertEquals(CodingSessionStatus.SCHEDULED, CodingSessionUi(worker, plan = current).status)
+        assertContains(f.runtime.calls.first().second, "taskId=stage")
+        assertContains(f.runtime.calls.first().second, "taskId=other")
+        assertContains(f.runtime.calls.first().second, "runId=${current.runId}")
+        advanceTimeBy(3_600_000); runCurrent()
+        assertEquals(2, f.runtime.calls.size)
+        assertEquals(1, f.gateway.coordinatorCallbacks.size)
+        independent.complete(Unit); advanceTimeBy(10_000); runCurrent()
+        current = f.store.planFor("p")!!
+        val workerCalls = f.runtime.calls.filter { it.first.id.startsWith("plan-p-stage-") }
+        assertEquals(listOf("plan-p-stage-stage", "plan-p-stage-other", "plan-p-stage-stage"), workerCalls.map { it.first.id })
+        assertEquals(1, f.runtime.calls.count { it.first.name == "Итоговая проверка" })
+        assertEquals(3, f.gateway.coordinatorCallbacks.size)
+        assertContains(workerCalls.last().second, "Independent verified result")
+        assertEquals(PlanStatus.DONE, current.status)
+        assertEquals(ScheduledMessageStatus.QUEUED, current.scheduledMessages.single().status)
+        assertEquals(1, current.deliveries.count { it.id == rule.deliveryId })
+        val childTransfers = f.projects.messages(project.id, worker.id).filter { it.handoff != null }
+        assertEquals(2, childTransfers.size)
+        val parentTransfers = f.projects.messages(project.id, parent.id).filter { it.handoff?.taskId == "stage" }
+        assertEquals(childTransfers.map { it.handoff?.eventId }.toSet(), parentTransfers.map { it.handoff?.eventId }.toSet())
+        assertTrue(childTransfers.all { it.handoff?.status == HandoffStatus.RESOLVED })
+    }
+
+    @Test fun timedOutWaitCallsOnlyOrchestratorAndDoesNotResumeWorker() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("model", "m"), phase = AttemptPhase.EXECUTING)
+        val p = base.copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.RUN,
+            milestones = base.milestones.map { it.copy(attempts = listOf(attempt), status = MilestoneStatus.ACTIVE) })
+        f.store.save(p); f.service.prepareSessions(p); runCurrent()
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Срок истёк; продолжение требует решения."}"""
+        f.service.messageScheduler.apply("p", listOf(ScheduleCommand(trigger = MessageTrigger(MessageTriggerKind.EVENT,
+            event = MessageEventKind.RESULT_RETURNED, taskId = "stage", deadline = 1), targetTaskId = "stage", waitTaskId = "stage", text = "Продолжить после результата")),
+            "wait", parent.id, emptySet(), "stage")
+        runCurrent()
+        val current = f.store.planFor("p")!!
+        val rule = current.scheduledMessages.single()
+        assertTrue(rule.timeout)
+        assertTrue(f.runtime.calls.isEmpty())
+        assertNotNull(current.milestones.single().attempts.single().waitingForEvent)
+        val input = f.projects.orchestration(parent.id)!!.inputs.single { it.scheduledRuleId == rule.id }
+        assertEquals(OrchestrationInputStatus.DONE, input.status)
+        assertTrue(current.deliveries.isEmpty())
+        repeat(3) { f.service.messageScheduler.tick(); runCurrent() }
+        assertEquals(1, f.projects.orchestration(parent.id)!!.inputs.count { it.scheduledRuleId == rule.id })
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun userCreatesRuleThroughChatAndCancellationUsesNoModel() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val p = base.copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.PAUSE)
+        f.store.save(p)
+        f.gateway.userDecision = """{"intent":"SCHEDULE","reply":"Дождусь результата","schedules":[{"trigger":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"stage"},"text":"Объясни итог"}]}"""
+        f.service.send(parent, "Когда этап завершится, объясни итог"); runCurrent()
+        val rule = f.store.planFor("p")!!.scheduledMessages.single()
+        assertEquals("run", rule.runId)
+        assertEquals(parent.id, rule.targetSessionId)
+        assertContains(f.gateway.lastMessages.last().content, "taskId=stage")
+        f.gateway.failure = "Cancel must not call the model"
+        f.service.cancelScheduledMessage("p", rule.id); runCurrent()
+        assertEquals(ScheduledMessageStatus.CANCELLED, f.store.planFor("p")!!.scheduledMessages.single().status)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun fullAnswerProducesOneDurableEventAndPartialAnswerDoesNot() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val p = f.readyPlan("p", parent).copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.PAUSE)
+        f.store.save(p)
+        val q = OrchestrationQuestion("question", p.id, "Two details", listOf(
+            PlanningQuestion("first", "First", QuestionKind.TEXT), PlanningQuestion("second", "Second", QuestionKind.TEXT)), parent.id)
+        f.projects.saveOrchestration(OrchestrationState(parent.id, project.id, activePlanId = p.id, questions = listOf(q)))
+        f.service.recoverOrchestration(parent.id); runCurrent()
+        f.service.messageScheduler.apply(p.id, listOf(ScheduleCommand(trigger = MessageTrigger(MessageTriggerKind.EVENT,
+            event = MessageEventKind.QUESTION_ANSWERED, questionId = q.id), text = "Summarize the answer")), "subscription", parent.id, setOf(q.id))
+        f.service.send(parent, "One", listOf(PlanningAnswer("first", text = "One")), replyTo = q.id); runCurrent()
+        assertTrue(f.store.planFor(p.id)!!.messageEvents.none { it.kind == MessageEventKind.QUESTION_ANSWERED })
+        assertEquals(ScheduledMessageStatus.WAITING, f.store.planFor(p.id)!!.scheduledMessages.single().status)
+        f.service.send(parent, "Two", listOf(PlanningAnswer("second", text = "Two")), replyTo = q.id); runCurrent()
+        val events = f.store.planFor(p.id)!!.messageEvents.filter { it.kind == MessageEventKind.QUESTION_ANSWERED }
+        assertEquals(1, events.size)
+        assertEquals(q.id, events.single().questionId)
+        assertEquals("run", events.single().runId)
+        assertEquals(ScheduledMessageStatus.READY, f.store.planFor(p.id)!!.scheduledMessages.single().status)
+        f.service.recoverOrchestration(parent.id); runCurrent(); f.service.messageScheduler.tick()
+        assertEquals(events, f.store.planFor(p.id)!!.messageEvents.filter { it.kind == MessageEventKind.QUESTION_ANSWERED })
+        assertTrue(f.runtime.calls.isEmpty())
     }
 
 }

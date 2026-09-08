@@ -63,6 +63,7 @@ import kotlinx.serialization.Serializable
     /** null migrates older attempts; false also distinguishes an answered handoff from an unprocessed report. */
     val coordinationPending: Boolean? = null,
     val waitingForUser: String? = null,
+    val waitingForEvent: String? = null,
     val chatTurns: List<StageChatTurn> = emptyList(),
     val engine: CodingEngine? = null,
 )

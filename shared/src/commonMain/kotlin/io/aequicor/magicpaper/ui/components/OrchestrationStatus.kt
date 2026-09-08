@@ -64,6 +64,7 @@ internal fun OrchestrationStatus(
         plan.phase == ExecutionPhase.VERIFYING -> "Итоговая проверка"
         plan.phase == ExecutionPhase.APPLYING -> "Перенос результата в проект"
         active.isNotEmpty() -> "Выполнение этапов"
+        plan.scheduledMessages.any { it.status == ScheduledMessageStatus.WAITING } || plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> "Ожидание события или времени"
         else -> "Ожидание следующего этапа"
     }
     val elevation by animateDpAsState(if (scrolled) 6.dp else 0.dp)
@@ -120,6 +121,9 @@ internal fun OrchestrationStatus(
                         TextButton({ service.retryInput(session.session.id, input.id) }) { Text("Повторить обработку") }
                     }
                 }
+                if (plan != null) ScheduledMessages(plan,
+                    onCancel = { service.cancelScheduledMessage(plan.id, it) },
+                    onEdit = { id, request -> service.send(session.session, "Измени правило $id: $request") })
                 Text("Сессии", style = MaterialTheme.typography.labelLarge)
                 children.filter { !it.archived }.forEach { child ->
                     val childPlan = plans.firstOrNull { it.id == child.planId }
@@ -128,6 +132,7 @@ internal fun OrchestrationStatus(
                     Text(when {
                         questions.any { child.id == it.sourceSessionId || child.stageId in it.stageIds } -> "Ждёт вашего ответа"
                         stage?.waitingForAnswer() == true -> "Ждёт вашего ответа"
+                        stage?.attempts?.lastOrNull()?.waitingForEvent != null -> childPlan.eventWaitLabel(stage.id)
                         stage?.completed == true -> "Завершено"
                         stage != null && childPlan.isStageWorking(stage) -> "Работает"
                         else -> "Ожидает задания"
@@ -231,6 +236,7 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
         }
         if (route.stageLabel.isNotBlank()) Text(route.stageLabel, style = MaterialTheme.typography.labelMedium)
         Text(route.kind + (delivery?.let { " · ${it.state.deliveryLabel()}" } ?: ""), style = MaterialTheme.typography.labelSmall)
+        message.handoff?.let { HandoffDetails(it) }
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
     }
 }
@@ -253,6 +259,7 @@ internal fun DeliveryState.deliveryLabel(): String = when (this) {
     DeliveryState.QUEUED -> "В очереди"
     DeliveryState.DELIVERED -> "Передано исполнителю"
     DeliveryState.ANSWERED -> "Обработано"
+    DeliveryState.CANCELLED -> "Отменено"
 }
 internal fun OrchestrationInputStatus.inputLabel(): String = when (this) {
     OrchestrationInputStatus.QUEUED -> "Сообщение в очереди"

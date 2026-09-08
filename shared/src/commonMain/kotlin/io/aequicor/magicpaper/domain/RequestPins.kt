@@ -27,7 +27,7 @@ fun ChatSession.pinMessages(): List<PinMessage> = messages.map {
 
 fun List<CodingMessage>.pinMessages(): List<PinMessage> {
     val deliveries = mutableSetOf<String>()
-    return mapNotNull { message ->
+    return filter { it.handoff == null }.mapNotNull { message ->
         val input = message.role == CodingRole.USER
         val delivery = message.deliveryId ?: message.route?.deliveryId
         if (input && delivery != null && !deliveries.add(delivery)) return@mapNotNull null

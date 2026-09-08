@@ -57,6 +57,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
@@ -112,6 +113,7 @@ import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
 import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
+import io.aequicor.magicpaper.domain.eventWaitLabel
 import io.aequicor.magicpaper.ui.components.inputLabel
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEngine
@@ -402,6 +404,7 @@ private val CodingSessionStatus.label: String
         CodingSessionStatus.WAITING -> "ждёт вашего ответа"
         CodingSessionStatus.BLOCKED -> "выполнение остановлено"
         CodingSessionStatus.QUEUED -> "ждёт оркестратора"
+        CodingSessionStatus.SCHEDULED -> "ждёт события или времени"
         CodingSessionStatus.IDLE -> "ждёт запроса"
     }
 
@@ -417,6 +420,7 @@ fun ActivityDot(
         CodingSessionStatus.WAITING -> StatusWaiting
         CodingSessionStatus.BLOCKED -> Color(0xFFC77843)
         CodingSessionStatus.QUEUED -> StatusQueued
+        CodingSessionStatus.SCHEDULED -> StatusQueued
         CodingSessionStatus.IDLE -> StatusIdle
     }
     val pulse by animateFloatAsState(
@@ -904,6 +908,11 @@ internal fun CodingChat(
     Column(Modifier.fillMaxSize()) {
         if (showOrchestrationStatus)
             OrchestrationStatus(session, planningService, onOpenSession, Modifier.zIndex(1f), scrolled = scrolled)
+        session.session.stageId?.let { id -> session.plan?.eventWaitLabel(id)?.takeIf { it.isNotBlank() }?.let { label ->
+            Surface(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                Text(label, Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+            }
+        } }
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
             val questionHeight = maxHeight * 0.55f
             val blockerHeight = maxHeight * 0.4f

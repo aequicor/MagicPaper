@@ -26,6 +26,7 @@ class PlanningExecutionService(
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+    val supported: Boolean get() = runtime.supported
     var chatHooks: PlanningExecutionHooks? = null
     private val jobs = mutableMapOf<String, Job>()
     private val jobsLock = Mutex()
@@ -206,6 +207,7 @@ class PlanningExecutionService(
                     val candidates = plan.milestones.filter { m ->
                         m.id in compiled.stageIds && !m.completed && m.id !in active && m.id !in waitingStages &&
                             m.attempts.lastOrNull()?.waitingForUser == null &&
+                            m.attempts.lastOrNull()?.waitingForEvent == null &&
                             m.attempts.lastOrNull()?.error?.requiresUser != true &&
                             (m.attempts.lastOrNull()?.error?.retryAt ?: 0) <= Id.now() &&
                             compiled.dependencies[m.id].orEmpty().all { dep -> plan.milestones.first { it.id == dep }.completed }
@@ -215,7 +217,7 @@ class PlanningExecutionService(
                         active[stage.id] = launch { executeStage(id, stage.id, project, workspace, integration, judge!!) }
                     }
                     if (active.isEmpty()) {
-                        if (waitingStages.isNotEmpty()) store.update(id) { it.copy(phase = ExecutionPhase.WAITING) }
+                        if (waitingStages.isNotEmpty() || plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null }) store.update(id) { it.copy(phase = ExecutionPhase.WAITING) }
                         plan.selectedMilestones.filterNot { it.completed }.mapNotNull { it.attempts.lastOrNull()?.error }
                             .sortedWith(compareByDescending<PlanningIssue> { it.requiresUser }.thenBy { it.retryAt })
                             .firstOrNull()?.let { block(id, it) }
@@ -456,11 +458,12 @@ class PlanningExecutionService(
                     attempt = attempt.copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
                         awaitingPlanner = resumed.action == StageTurnAction.WAIT, coordinationPending = false,
                         phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
-                        waitingForUser = if (resumed.action == StageTurnAction.WAIT) resumed.requestId ?: "legacy" else null, error = null)
+                        waitingForEvent = if (resumed.action == StageTurnAction.WAIT_EVENT) resumed.requestId else null,
+                            waitingForUser = if (resumed.action == StageTurnAction.WAIT) resumed.requestId ?: "legacy" else null, error = null)
                     saveAttempt(id, stageId, attempt)
-                    if (resumed.action == StageTurnAction.WAIT) {
+                    if (resumed.action in setOf(StageTurnAction.WAIT, StageTurnAction.WAIT_EVENT)) {
                         if (!hasQueuedReply(id, stageId)) return
-                        attempt = attempt.copy(error = null, waitingForUser = null)
+                        attempt = attempt.copy(error = null, waitingForUser = null, waitingForEvent = null)
                         saveAttempt(id, stageId, attempt)
                     }
                     if (resumed.action == StageTurnAction.VERIFY) break
@@ -557,11 +560,12 @@ class PlanningExecutionService(
                         awaitingPlanner = decision.action == StageTurnAction.WAIT, coordinationPending = false)
                     if (decision.action != StageTurnAction.VERIFY) {
                         attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null,
+                            waitingForEvent = if (decision.action == StageTurnAction.WAIT_EVENT) decision.requestId else null,
                             waitingForUser = if (decision.action == StageTurnAction.WAIT) decision.requestId ?: "legacy" else null)
                         saveAttempt(id, stageId, attempt)
-                        if (decision.action == StageTurnAction.WAIT) {
+                        if (decision.action in setOf(StageTurnAction.WAIT, StageTurnAction.WAIT_EVENT)) {
                             if (!hasQueuedReply(id, stageId)) return
-                            attempt = attempt.copy(error = null, waitingForUser = null)
+                            attempt = attempt.copy(error = null, waitingForUser = null, waitingForEvent = null)
                             saveAttempt(id, stageId, attempt)
                         }
                         continue

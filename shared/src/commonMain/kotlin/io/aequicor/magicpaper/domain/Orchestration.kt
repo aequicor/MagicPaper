@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable enum class CodingSessionRole { CHAT, ORCHESTRATOR, WORKER }
 @Serializable enum class OrchestrationInputStatus { QUEUED, PROCESSING, DONE, FAILED, CANCELLED }
-@Serializable enum class UserTurnIntent { DISCUSS, REFINE, ANSWER, INSTRUCT, CONTROL }
+@Serializable enum class UserTurnIntent { DISCUSS, REFINE, ANSWER, INSTRUCT, CONTROL, SCHEDULE }
 @Serializable enum class UserRequestStatus { OPEN, ANSWERED, CANCELLED }
 @Serializable enum class SessionCommandKind { CREATE, ARCHIVE, RESTORE, RENAME }
 
@@ -18,6 +18,7 @@ import kotlinx.serialization.Serializable
     val proposalId: String? = null,
     val requiresConfirmation: Boolean = false,
     val questions: List<PlanningQuestion> = emptyList(),
+    val schedules: List<ScheduleCommand> = emptyList(),
 )
 
 @Serializable data class OrchestrationInput(
@@ -26,6 +27,9 @@ import kotlinx.serialization.Serializable
     val status: OrchestrationInputStatus = OrchestrationInputStatus.QUEUED,
     val decision: UserTurnDecision? = null, val error: String = "",
     val resumeAfter: Boolean = false,
+    val scheduledRuleId: String? = null,
+    val sourcePlanId: String? = null,
+    val sourceRunId: String? = null,
 )
 
 @Serializable data class OrchestrationQuestion(
@@ -37,6 +41,8 @@ import kotlinx.serialization.Serializable
     val partialMessages: Map<String, String> = emptyMap(),
     val answerInputId: String? = null,
     val forPlanning: Boolean = false,
+    val answeredAt: Long? = null,
+    val answeredRunId: String? = null,
 )
 
 @Serializable data class SessionCommand(
@@ -50,6 +56,7 @@ import kotlinx.serialization.Serializable
     val inputs: List<OrchestrationInput> = emptyList(),
     val questions: List<OrchestrationQuestion> = emptyList(),
     val sessionCommands: List<SessionCommand> = emptyList(),
+    val messageEvents: List<MessageEvent> = emptyList(),
     /** Allocated once per stage, across every plan belonging to this orchestrator. */
     val stageNumbers: Map<String, Int> = emptyMap(),
     val nextStageNumber: Int = 1,

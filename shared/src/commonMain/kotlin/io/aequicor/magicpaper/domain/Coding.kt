@@ -97,6 +97,9 @@ enum class CodingSessionStatus {
     /** Исполнитель ждёт передачи работы оркестратором — серый. */
     QUEUED,
 
+    /** Сессия ждёт события или времени, ответ пользователя не требуется. */
+    SCHEDULED,
+
     /** Сессия свободна, ждёт запроса — зелёный. */
     IDLE,
 }
@@ -106,7 +109,8 @@ enum class CodingSessionStatus {
  * вопрос агента в конце ленты, незавершённый запрос или ошибка — WAITING,
  * иначе IDLE.
  */
-fun codingStatusOf(messages: List<CodingMessage>): CodingSessionStatus {
+fun codingStatusOf(history: List<CodingMessage>): CodingSessionStatus {
+    val messages = history.filter { it.handoff == null }
     if (messages.pendingPlanningQuestion() != null) return CodingSessionStatus.WAITING
     val last = messages.lastOrNull() ?: return CodingSessionStatus.IDLE
     // Запрос отправлен, ответа нет (сбой или потерянный прогон) — ждём решения.
@@ -129,7 +133,8 @@ fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSess
         CodingSessionStatus.BLOCKED -> 1
         CodingSessionStatus.WORKING -> 2
         CodingSessionStatus.QUEUED -> 3
-        CodingSessionStatus.IDLE -> 4
+        CodingSessionStatus.SCHEDULED -> 4
+        CodingSessionStatus.IDLE -> 5
     } } ?: CodingSessionStatus.IDLE
 
 /** Фазы состояния кодинг-рантайма (движка пи-агента). */
@@ -487,6 +492,8 @@ data class CodingMessage(
     val pendingDelivery: Boolean = false,
     val route: MessageRoute? = null,
     val inputStatus: OrchestrationInputStatus? = null,
+    val handoff: HandoffInfo? = null,
+    val scheduledRuleId: String? = null,
 
 )
 

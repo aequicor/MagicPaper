@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.planning
 
+import io.aequicor.magicpaper.domain.checkpointMessageEvents
 import io.aequicor.magicpaper.domain.ModelDossier
 import io.aequicor.magicpaper.domain.Plan
 import io.aequicor.magicpaper.domain.resolvePlan
@@ -48,7 +49,8 @@ class PlanningStore(private val repo: PlanningRepository) : PlanningRepository {
         requireWritable()
         val old = persisted { repo.planFor(projectId) } ?: error("План не найден")
         require(expectedRevision == null || old.revision == expectedRevision) { "План изменился; повторите правку" }
-        val next = change(old).copy(revision = old.revision + 1, updatedAt = Id.now())
+        val at = Id.now()
+        val next = change(old).checkpointMessageEvents(old, at).copy(revision = old.revision + 1, updatedAt = at)
         persisted { repo.save(next) }
         refreshPlans()
         next
@@ -66,7 +68,7 @@ class PlanningStore(private val repo: PlanningRepository) : PlanningRepository {
 
     override suspend fun save(plan: Plan) = lock.withLock {
         requireWritable()
-        persisted { repo.save(plan) }
+        persisted { repo.save(plan.checkpointMessageEvents(repo.planFor(plan.id), Id.now())) }
         refreshPlans()
         Unit
     }

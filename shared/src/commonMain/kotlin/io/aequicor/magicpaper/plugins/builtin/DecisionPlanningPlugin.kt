@@ -380,7 +380,7 @@ class CodingPlanningPlugin(
         }
         if (node.kind != DecisionKind.STAGE) Row {
             if (node.kind != DecisionKind.CHOICE) TextButton(onClick = { edit { old ->
-                val id = Id.new()
+                val id = Id.uuid()
                 old.copy(milestones = old.milestones + Milestone(id, "Новый этап"), tree = old.tree.map { if (it.id == node.id) it.copy(children = it.children + id) else it } + DecisionNode(id, "Новый этап", DecisionKind.STAGE, stageId = id))
             } }) { Text("+ Этап") }
             TextButton(onClick = { edit { old ->

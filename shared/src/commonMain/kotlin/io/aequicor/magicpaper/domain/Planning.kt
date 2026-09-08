@@ -102,6 +102,10 @@ data class Plan(
     val pendingRequest: String = "",
     val requestId: String = "",
     val coordination: List<CoordinationRecord> = emptyList(),
+    val scheduledMessages: List<ScheduledMessage> = emptyList(),
+    val messageEvents: List<MessageEvent> = emptyList(),
+    val scheduleReceipts: Map<String, String> = emptyMap(),
+    val scheduleQuestionIds: Set<String> = emptySet(),
     val proposal: PlanProposal? = null,
     val runHistory: List<PlanRunSnapshot> = emptyList(),
 
