@@ -61,6 +61,7 @@ import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.ChatPlainText
 import io.aequicor.magicpaper.ui.components.MessageAttachments
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.stickToBottom
@@ -190,13 +191,7 @@ private fun MessageBubble(message: ChatMessage) {
         ) {
             if (isUser) {
                 // Пользователь пишет обычный текст — без разметки.
-                SelectionContainer {
-                    Text(
-                        message.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
+                ChatPlainText(message.text)
                 // Прикреплённые файлы: миниатюры изображений, файлы чипами.
                 MessageAttachments(message.attachments)
             } else {

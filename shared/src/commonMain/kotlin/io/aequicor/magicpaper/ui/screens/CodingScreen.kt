@@ -149,6 +149,7 @@ import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.ChatPlainText
 import io.aequicor.magicpaper.ui.components.FadingSingleLineText
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
 import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
@@ -1052,14 +1053,14 @@ private fun CodingMessageBubble(
         ) {
             if (first) header?.invoke()
             if (isUser) {
-                SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
+                ChatPlainText(message.text)
             } else if (step != null) {
                 CodingStepRow(step, live = false)
             } else {
                 // Совместимость со старыми журналами без ленты.
                 SelectionContainer {
                     Column {
-                        Text(
+                        ChatPlainText(
                             message.text,
                             style = MaterialTheme.typography.bodyLarge,
                             color = if (message.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
@@ -1106,16 +1107,16 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
             Spacer(Modifier.height(4.dp))
         }
         CodingStepKind.THINKING -> ThinkingStepRow(step, live)
-        CodingStepKind.ERROR -> SelectionContainer {
-            Text(
+        CodingStepKind.ERROR -> {
+            ChatPlainText(
                 "✕ ${step.title}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(vertical = 3.dp),
             )
         }
-        CodingStepKind.INFO -> SelectionContainer {
-            Text(
+        CodingStepKind.INFO -> {
+            ChatPlainText(
                 "◷ ${step.title}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1242,14 +1243,11 @@ private fun ToolStepContent(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            Text(
-                title,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (expanded) Int.MAX_VALUE else 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            if (expanded) ChatPlainText(title, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else Text(title, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Text(
                 if (expanded) "▴" else "▾",
                 style = MaterialTheme.typography.bodySmall,
@@ -1264,13 +1262,8 @@ private fun ToolStepContent(
             )
         }
         if (expanded && result.isNotBlank()) {
-            SelectionContainer {
-                Text(
-                    result,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
-                    color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                )
-            }
+            ChatPlainText(result, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
+                color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
         }
     }
 }

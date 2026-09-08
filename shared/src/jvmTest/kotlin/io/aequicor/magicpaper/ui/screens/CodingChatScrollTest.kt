@@ -59,7 +59,7 @@ class CodingChatScrollTest {
 
         init {
             render()
-            assertTrue(answerHeight > 600, "Exercise an answer taller than the viewport")
+            assertTrue(answerHeight in 360..460, "Long answers must use a bounded preview: $answerHeight")
             assertFalse(list.canScrollForward)
         }
 
@@ -162,8 +162,8 @@ class CodingChatScrollTest {
         chat.position(140)
         val height = chat.commandBounds.height
         chat.click()
-        chat.position(600)
-        assertTrue(chat.commandTop < -300, "Read the middle of the expanded command")
+        chat.position(400)
+        assertTrue(chat.commandTop < -100, "Read the middle of the expanded command")
         chat.click(100f)
         assertTrue(chat.commandTop in 0f..32f, "Collapsed command disappeared above viewport: ${chat.commandTop}")
         assertTrue(abs(chat.commandBounds.height - height) <= 1)
@@ -209,7 +209,7 @@ class CodingChatScrollTest {
             chat.append(19 + chunk)
             assertTrue(chat.measuredHeights.all { it >= previousHeight },
                 "Streaming temporarily collapsed the answer: $previousHeight -> ${chat.measuredHeights}")
-            assertTrue(chat.answerHeight > previousHeight, "The new paragraph must render")
+            assertEquals(previousHeight, chat.answerHeight, "New hidden paragraphs must not grow the preview")
             assertFalse(chat.list.canScrollForward, "Follow the bottom after each rendered chunk")
         }
     }
@@ -220,7 +220,7 @@ class CodingChatScrollTest {
         assertTrue(chat.list.canScrollForward)
         val index = chat.list.firstVisibleItemIndex
         val offset = chat.list.firstVisibleItemScrollOffset
-        assertEquals(12, index, "Read inside the tall streaming answer")
+        assertTrue(index < 12, "Read the history above the bounded answer")
         repeat(6) { chunk ->
             chat.append(19 + chunk)
             assertEquals(index, chat.list.firstVisibleItemIndex, "Streaming changed the visible message")

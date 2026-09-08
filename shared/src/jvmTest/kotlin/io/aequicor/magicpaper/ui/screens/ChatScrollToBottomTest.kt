@@ -38,12 +38,17 @@ class ChatScrollToBottomTest {
                     val answer = (1..lines.value).joinToString("\n\n") { "Строка ответа $it" }
                     if (coding) {
                         CodingChat(CodingProject("p", "Проект", "/project", 0),
-                            CodingSessionUi(CodingSession("s", "p", "Диалог", 0), messages = listOf(
+                            // A long answer now has a bounded preview, so scrolling needs history.
+                            CodingSessionUi(CodingSession("s", "p", "Диалог", 0), messages = List(if (long) 12 else 0) {
+                                CodingMessage("earlier-$it", CodingRole.USER, "Предыдущее сообщение $it", createdAt = 0)
+                            } + listOf(
                                 CodingMessage("request", CodingRole.USER, "Проверь проект", createdAt = 0),
                                 CodingMessage("answer", CodingRole.AGENT, answer, createdAt = 1))),
                             false, true, { _, _ -> }, {}, { _, _ -> })
                     } else {
-                        MessagesList(ChatSession("s", "Диалог", 0, 0, messages = listOf(
+                        MessagesList(ChatSession("s", "Диалог", 0, 0, messages = List(if (long) 12 else 0) {
+                            ChatMessage("earlier-$it", ChatRole.USER, "Предыдущее сообщение $it", 0)
+                        } + listOf(
                             ChatMessage("request", ChatRole.USER, "Проверь проект", 0),
                             ChatMessage("answer", ChatRole.AGENT, answer, 1))), false)
                     }
