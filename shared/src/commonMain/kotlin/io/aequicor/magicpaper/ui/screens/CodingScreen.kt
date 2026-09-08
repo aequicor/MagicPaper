@@ -116,6 +116,8 @@ import io.aequicor.magicpaper.ui.components.OrchestrationStatus
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageInputStatus
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
+import io.aequicor.magicpaper.ui.components.MessagePinColumn
+import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
 import io.aequicor.magicpaper.domain.PinConversation
@@ -920,6 +922,8 @@ internal fun CodingChat(
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
     val scroll = stickToBottom(listState, session.session.id)
+    val pinNumbers = remember(pins, pinIndices) { requestPinNumbers(pins, pinIndices.keys) }
+    var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     val density = LocalDensity.current
     var footerHeight by remember { mutableStateOf(0.dp) }
     val showOrchestrationStatus = session.session.effectiveRole == CodingSessionRole.ORCHESTRATOR && planningService != null
@@ -965,6 +969,7 @@ internal fun CodingChat(
                     val message = row.message
                     ChatScrollItem(scroll, item.key) {
                         CodingMessageBubble(message, step = item.step, first = item.first, last = item.last,
+                            pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
                             header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
                             if (busy && statusMessageId != null &&
                                 (message.id == statusMessageId || row.planCard?.id == statusMessageId)
@@ -1009,7 +1014,8 @@ internal fun CodingChat(
                     }
                 }
             }
-            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd))
+            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd),
+                browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
             ChatScrollToBottomButton(scroll,
                 Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = footerHeight + 12.dp))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -1047,6 +1053,8 @@ private fun CodingMessageBubble(
     step: CodingStep? = null,
     first: Boolean = true,
     last: Boolean = true,
+    pinNumber: Int? = null,
+    onShowPins: () -> Unit = {},
     header: (@Composable () -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
 ) {
@@ -1060,7 +1068,9 @@ private fun CodingMessageBubble(
         modifier = Modifier.fillMaxWidth().padding(top = if (first) 10.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        Column(
+        MessagePinColumn(
+            number = pinNumber.takeIf { isUser && last },
+            onClick = onShowPins,
             modifier = Modifier
                 .widthIn(max = 680.dp)
                 .then(if (step != null) Modifier.fillMaxWidth() else Modifier)
