@@ -40,15 +40,26 @@ fun ModelsSettings(vm: MagicPaperViewModel, state: UiState) {
             onEffort = { effort -> default?.let { vm.setDefaultModel(it.copy(effort = effort)) } },
             onParameters = { default?.let { variantEditor = it.profileId to it.modelId } },
         )
+        operational?.let {
+            Text("Модель: ${it.shortLabel}", style = MaterialTheme.typography.bodySmall)
+            Text("Движок операций: ${it.completionEngineLabel}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Избранное · ${favorites.size}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-            TextButton(onClick = vm::generateModelDescriptions, enabled = !state.descriptionsGenerating && favorites.isNotEmpty()) {
+            TextButton(onClick = vm::generateModelDescriptions, enabled = !state.descriptionsGenerating && favorites.isNotEmpty() && operational != null) {
                 Text(if (state.descriptionsGenerating) "Создание…" else "Создать описания", style = MaterialTheme.typography.labelMedium)
             }
         }
         Text("Параметры поставщика. Свои параметры сохраняются отдельным вариантом. Effort выбирается в чате или проекте.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Описания: модель по умолчанию + интернет-поиск. Поиск: ${state.settings.descriptionSearchLabel()}.", style = MaterialTheme.typography.bodySmall)
+        Text("Движок новых сессий проектов: ${state.settings.defaultCodingEngine.title}. Для описаний используется движок операций, указанный выше.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (operational == null) Text("Выберите модель по умолчанию для создания описаний.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        if (state.descriptionsGenerating || state.descriptionsErrors.isNotEmpty()) state.descriptionsContext?.let {
+            Text("${if (state.descriptionsGenerating) "Текущий запуск" else "Последний запуск"}: $it", style = MaterialTheme.typography.bodySmall)
+        }
         state.descriptionsProgress?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        state.descriptionsErrors.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         if (favorites.isEmpty()) Text("Отметьте ★ у моделей в каталоге поставщика.", style = MaterialTheme.typography.bodyMedium)
         favorites.forEach { (p, key) -> key(p.id, key) {
             LibraryModelRow(p, key, state, vm, { variantEditor = p.id to key }, { descriptionEditor = p.id to key })
@@ -97,9 +108,8 @@ private fun LibraryModelRow(profile: LlmProfile, model: String, state: UiState, 
     val variant = profile.variants.firstOrNull { it.id == model }
     val fact = profile.modelCatalog.firstOrNull { it.id == profile.sourceModelId(model) }
     val dossier = state.modelDescriptions.forModel(profile, model)
-    val currentDefault = state.settings.defaultModel
-    val isDefault = if (currentDefault != null) currentDefault.profileId == profile.id && currentDefault.modelId == model
-        else state.settings.activeLlmProfileId == profile.id && profile.modelId == model
+    val currentDefault = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
+    val isDefault = currentDefault?.id == profile.id && currentDefault.selectionKey == model
     Column {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { expanded = !expanded }.padding(vertical = 8.dp)) {
@@ -122,6 +132,10 @@ private fun LibraryModelRow(profile: LlmProfile, model: String, state: UiState, 
                 Text(dossier?.strengths?.ifBlank { "Описание не заполнено" } ?: "Описание не заполнено", style = MaterialTheme.typography.bodySmall)
                 dossier?.limitations?.takeIf { it.isNotBlank() }?.let { Text("Ограничения: $it", style = MaterialTheme.typography.bodySmall) }
                 if (dossier != null) {
+                    if (dossier.source == DossierSource.WEB && dossier.updatedAt > 0)
+                        Text("Поиск выполнен: ${kotlin.time.Instant.fromEpochMilliseconds(dossier.updatedAt).toString().take(10)}", style = MaterialTheme.typography.labelSmall)
+                    if (dossier.source == DossierSource.WEB && dossier.references.isEmpty())
+                        Text("Старое описание без интернет-источников. Создайте его заново для проверки актуальных данных.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     Text(if (dossier.rating > 0) "Оценка: ${dossier.rating}/5" else "Оценка не задана", style = MaterialTheme.typography.labelSmall)
                     if (dossier.note.isNotBlank()) Text(dossier.note, style = MaterialTheme.typography.labelSmall)
                     dossier.references.filter { it.startsWith("https://") || it.startsWith("http://") }.forEachIndexed { index, url ->

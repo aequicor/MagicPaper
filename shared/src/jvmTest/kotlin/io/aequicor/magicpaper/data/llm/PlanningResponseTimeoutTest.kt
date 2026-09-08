@@ -47,10 +47,12 @@ class PlanningResponseTimeoutTest {
         assertEquals("Complete plan", result.await())
     }
 
-    @Test fun silenceAfterProgressStillTimesOut() = runTest {
+    @Test fun silenceAfterProgressReportsFailureInsteadOfCancellingTheCaller() = runTest {
         val turn = CodexAppServerOpenAiSubscription.TurnAccumulator {}
         val result = async {
-            assertFailsWith<TimeoutCancellationException> { turn.awaitResult(120) }
+            val failure = assertFailsWith<IllegalStateException> { turn.awaitResult(120) }
+            assertTrue(failure.message!!.contains("OpenAI Subscription"))
+            assertTrue(failure.message!!.contains("120 секунд"))
         }
         runCurrent()
         advanceTimeBy(90_000)

@@ -25,6 +25,7 @@ import java.nio.file.Paths
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -231,11 +233,12 @@ class CodexAppServerOpenAiSubscription(
             ?: error("Codex не вернул идентификатор диалога.")
         val accumulator = TurnAccumulator(onActivity)
         turns[threadId] = accumulator
+        var turnId: String? = null
         try {
             val input = buildTurnInput(messages, profile.advanced.contextMessages)
             val capability = ModelDefaults.capability(profile)
             val effort = profile.resolveEffort(capability).level?.wire
-            request(
+            val started = request(
                 "turn/start",
                 buildJsonObject {
                     put("threadId", threadId)
@@ -247,13 +250,21 @@ class CodexAppServerOpenAiSubscription(
                     put("approvalPolicy", "never")
                     put("sandboxPolicy", buildJsonObject { put("type", "readOnly") })
                 },
-            )
+            ).jsonObject
+            turnId = (started["turn"] as? JsonObject)?.string("id")
             val timeout = profile.advanced.safeTimeoutSeconds
             val text = accumulator.awaitResult(timeout)
             return text.ifBlank { error("OpenAI вернул пустой ответ.") }
         } finally {
             turns.remove(threadId)
-            runCatching { request("thread/unsubscribe", buildJsonObject { put("threadId", threadId) }) }
+            withContext(NonCancellable) {
+                withTimeoutOrNull(5_000) {
+                    if (!accumulator.done.isCompleted && turnId != null) runCatching {
+                        request("turn/interrupt", buildJsonObject { put("threadId", threadId); put("turnId", turnId) })
+                    }
+                    runCatching { request("thread/unsubscribe", buildJsonObject { put("threadId", threadId) }) }
+                }
+            }
         }
     }
 
@@ -475,7 +486,8 @@ class CodexAppServerOpenAiSubscription(
         pending[id] = deferred
         try {
             send(buildJsonObject { put("id", id); put("method", method); put("params", params) })
-            return withTimeout(30_000) { deferred.await() }
+            return withTimeoutOrNull(30_000) { deferred.await() }
+                ?: throw AppServerException("Codex не ответил на $method за 30 секунд. Проверьте состояние движка и повторите запрос.")
         } finally {
             pending.remove(id)
         }
@@ -686,13 +698,13 @@ class CodexAppServerOpenAiSubscription(
             if (timeoutSeconds == 0) return done.await()
             while (true) {
                 // Each provider event renews the inactivity deadline; completion wins a tie.
-                val result = withTimeout(timeoutSeconds * 1_000L) {
-                    select<String?> {
-                        done.onAwait { it }
-                        activity.onReceive { null }
+                val result = withTimeoutOrNull(timeoutSeconds * 1_000L) {
+                    select<Pair<Boolean, String>> {
+                        done.onAwait { true to it }
+                        activity.onReceive { false to "" }
                     }
-                }
-                if (result != null) return result
+                } ?: throw AppServerException("OpenAI Subscription: нет ответа от Codex в течение $timeoutSeconds секунд. Повторите запрос или увеличьте таймаут модели.")
+                if (result.first) return result.second
             }
         }
 

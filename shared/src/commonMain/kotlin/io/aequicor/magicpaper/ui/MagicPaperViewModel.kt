@@ -640,14 +640,21 @@ class MagicPaperViewModel(
         if (judge == null) { _state.update { it.copy(notice = "Сначала выберите модель по умолчанию.") }; return }
         val targets = snapshot.availableLlmProfiles.flatMap { p -> p.displayModels.map { p.forModel(it) } }
         if (targets.isEmpty()) { _state.update { it.copy(notice = "Добавьте избранные модели.") }; return }
-        _state.update { it.copy(descriptionsGenerating = true) }
+        _state.update { it.copy(descriptionsGenerating = true, descriptionsErrors = emptyList(),
+            descriptionsContext = "${judge.shortLabel} · ${judge.completionEngineLabel}. Поиск: ${snapshot.settings.descriptionSearchLabel()}") }
         scope.launch {
             var failures = 0
             try {
                 targets.forEachIndexed { index, target ->
-                    _state.update { it.copy(descriptionsProgress = "${index + 1}/${targets.size} · ${target.modelName(target.selectionKey)}") }
-                    val dossier = researcher.research(target, judge, snapshot.settings)
-                    if (dossier.source == DossierSource.HEURISTIC) failures++
+                    val label = "${index + 1}/${targets.size} · ${target.modelName(target.selectionKey)}"
+                    _state.update { it.copy(descriptionsProgress = label) }
+                    val dossier = researcher.research(target, judge, snapshot.settings) { progress ->
+                        _state.update { it.copy(descriptionsProgress = "$label\n$progress") }
+                    }
+                    if (dossier.source == DossierSource.HEURISTIC) {
+                        failures++
+                        _state.update { it.copy(descriptionsErrors = it.descriptionsErrors + "${target.shortLabel}: ${dossier.note}") }
+                    }
                     else {
                         // Do not replace an edit made while research was in flight.
                         val before = snapshot.modelDescriptions.firstOrNull { it.profileId == target.id && it.modelId == target.selectionKey }
@@ -656,9 +663,10 @@ class MagicPaperViewModel(
                     }
                     _state.update { it.copy(modelDescriptions = planning?.dossiers().orEmpty()) }
                 }
-                _state.update { it.copy(notice = if (failures == 0) "Описания созданы." else "Не удалось создать описания для $failures моделей. Сохранённые описания оставлены.") }
+                _state.update { it.copy(notice = if (failures == 0) "Описания созданы по интернет-источникам." else "Не удалось создать описания для $failures моделей. Причины указаны в разделе «Модели»; прежние описания сохранены.") }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { _state.update { it.copy(notice = "Не удалось сохранить описания: ${e.message}") } }
+            catch (e: Exception) { _state.update { it.copy(notice = "Не удалось сохранить описания: ${e.message}",
+                descriptionsErrors = it.descriptionsErrors + "Не удалось сохранить описания: ${e.message}") } }
             finally { _state.update { it.copy(descriptionsGenerating = false, descriptionsProgress = null) } }
         }
     }

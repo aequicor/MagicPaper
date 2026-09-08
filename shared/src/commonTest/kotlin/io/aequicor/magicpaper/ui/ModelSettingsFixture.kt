@@ -15,9 +15,12 @@ class ModelSettingsFixture {
     val settings = JsonSettingsRepository(kv, json)
     val planning = PlanningStore(JsonPlanningRepository(kv, json))
     val calls = mutableListOf<LlmProfile>()
+    var gatewayFailure: Exception? = null
+    var searchHits = listOf(SearchHit("Model", "https://example.com/model", "Current model capabilities"))
     val gateway = object : LlmGateway {
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
             calls += profile
+            gatewayFailure?.let { throw it }
             if (messages.firstOrNull()?.content == PIN_ANALYSIS_PROMPT)
                 return """{"summary":"Краткий запрос","newRequest":true}"""
             return """{"strengths":"Работа с кодом и сложными задачами.","limitations":"Длительные ответы при высоком effort.","rating":4}"""
@@ -27,7 +30,7 @@ class ModelSettingsFixture {
         override val provider = SearchProvider.WIKIPEDIA
         override val displayName = "Search"
         override fun isConfigured(settings: AppSettings) = true
-        override suspend fun search(query: String, settings: AppSettings, limit: Int) = listOf(SearchHit("Model", "https://example.com/model"))
+        override suspend fun search(query: String, settings: AppSettings, limit: Int) = searchHits
     }
     suspend fun prepare(codingRuntime: CodingRuntime? = null, codingProjects: CodingProjectRepository? = null,
         requestPinRepository: RequestPinRepository? = null): MagicPaperViewModel {

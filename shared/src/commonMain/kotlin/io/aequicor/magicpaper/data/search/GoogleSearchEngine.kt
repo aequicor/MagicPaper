@@ -8,6 +8,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
@@ -36,9 +37,11 @@ class GoogleSearchEngine(
             parameter("num", limit.coerceIn(1, 10))
         }
         val body = response.bodyAsText()
-        return runCatching {
+        check(response.status.isSuccess()) { "Google: HTTP ${response.status.value}" }
+        return run {
             val root = json.parseToJsonElement(body).jsonObject
-            val items = root["items"]?.jsonArray ?: return@runCatching emptyList<SearchHit>()
+            check(root["error"] == null) { "Google: ошибка поискового API" }
+            val items = root["items"]?.jsonArray ?: return@run emptyList<SearchHit>()
             items.mapNotNull { item ->
                 val o = item.jsonObject
                 val title = o["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
@@ -49,6 +52,6 @@ class GoogleSearchEngine(
                     provider = displayName,
                 )
             }
-        }.getOrDefault(emptyList())
+        }
     }
 }

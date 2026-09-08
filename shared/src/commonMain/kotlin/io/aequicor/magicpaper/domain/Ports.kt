@@ -38,7 +38,12 @@ interface SearchEngine {
     val displayName: String
     fun isConfigured(settings: AppSettings): Boolean
     suspend fun search(query: String, settings: AppSettings, limit: Int = 5): List<SearchHit>
+    suspend fun searchWithDiagnostics(query: String, settings: AppSettings, limit: Int = 5): SearchResult =
+        if (isConfigured(settings)) SearchResult(search(query, settings, limit))
+        else SearchResult(issues = listOf("$displayName: подключение не настроено."))
 }
+
+data class SearchResult(val hits: List<SearchHit> = emptyList(), val issues: List<String> = emptyList())
 
 /**
  * Шлюз к модели. Транспорт выбирается по типу провайдера в профиле

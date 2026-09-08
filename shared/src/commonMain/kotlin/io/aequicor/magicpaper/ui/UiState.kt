@@ -187,6 +187,8 @@ data class UiState(
     val modelDescriptions: List<io.aequicor.magicpaper.domain.ModelDossier> = emptyList(),
     val descriptionsGenerating: Boolean = false,
     val descriptionsProgress: String? = null,
+    val descriptionsErrors: List<String> = emptyList(),
+    val descriptionsContext: String? = null,
     val catalogRefreshing: Set<String> = emptySet(),
     val openAiSubscription: OpenAiSubscriptionUi = OpenAiSubscriptionUi(),
 ) {

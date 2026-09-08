@@ -38,4 +38,27 @@ class ModelSettingsViewModelTest {
             assertTrue(fixture.planning.dossiers().any { it.modelId == "variant:precise" && it.limitations.isNotBlank() })
         } finally { Dispatchers.resetMain() }
     }
+
+    @Test fun failedGenerationShowsEveryReasonAndKeepsSavedDescriptions() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val fixture = ModelSettingsFixture()
+            val vm = fixture.prepare()
+            val before = fixture.planning.dossiers()
+            fixture.gatewayFailure = IllegalStateException("Subscription: model unavailable")
+            vm.generateModelDescriptions()
+            assertEquals(before, fixture.planning.dossiers())
+            assertEquals(3, vm.state.value.descriptionsErrors.size)
+            assertTrue(vm.state.value.descriptionsErrors.all { "model unavailable" in it })
+            assertTrue(vm.state.value.descriptionsContext!!.contains("gpt-5.4", ignoreCase = true))
+            assertFalse(vm.state.value.descriptionsGenerating)
+            fixture.gatewayFailure = null
+            fixture.searchHits = emptyList()
+            fixture.calls.clear()
+            vm.generateModelDescriptions()
+            assertEquals(3, vm.state.value.descriptionsErrors.size)
+            assertTrue(fixture.calls.isEmpty())
+            assertEquals(before, fixture.planning.dossiers())
+        } finally { Dispatchers.resetMain() }
+    }
 }

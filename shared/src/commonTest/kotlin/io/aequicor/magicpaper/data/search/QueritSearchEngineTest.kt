@@ -106,6 +106,30 @@ class QueritSearchEngineTest {
         assertEquals("https://proxy.example/v1/search", QueritSearchEngine.endpoint("https://proxy.example/v1/search/", "search"))
     }
 
+    @Test fun diagnosticsDistinguishMissingCredentialsAndHttpFailureFromNoResults() = runTest {
+        val client = HttpClient(MockEngine { respond("unauthorized", HttpStatusCode.Unauthorized) })
+        try {
+            val composite = CompositeSearchEngine(listOf(QueritSearchEngine(client, json)))
+            val settings = AppSettings(searchProvider = SearchProvider.QUERIT)
+            assertTrue(composite.searchWithDiagnostics("model", settings).issues.single().contains("не настроено"))
+            val failed = composite.searchWithDiagnostics("model", settings.copy(queritApiKey = "private-key"))
+            assertTrue(failed.hits.isEmpty())
+            assertTrue(failed.issues.single().contains("HTTP 401"))
+            assertFalse(failed.issues.single().contains("private-key"))
+        } finally { client.close() }
+    }
+
+    @Test fun diagnosticsKeepAutoFallbackFailureVisibleAndRedactCredentials() = runTest {
+        val composite = CompositeSearchEngine(listOf(
+            fake(SearchProvider.GOOGLE) { error("request failed: ?key=secret-key") },
+            fake(SearchProvider.WIKIPEDIA) { listOf(SearchHit("Wiki", "https://example.com")) },
+        ))
+        val result = composite.searchWithDiagnostics("model", AppSettings(googleApiKey = "secret-key"))
+        assertEquals(1, result.hits.size)
+        assertTrue(result.issues.single().contains("[скрыто]"))
+        assertFalse(result.issues.single().contains("secret-key"))
+    }
+
     private fun fake(provider: SearchProvider, block: suspend () -> List<SearchHit>) = object : SearchEngine {
         override val provider = provider
         override val displayName = provider.name
