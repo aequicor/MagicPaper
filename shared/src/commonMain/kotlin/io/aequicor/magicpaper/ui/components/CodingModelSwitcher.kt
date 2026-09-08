@@ -30,8 +30,9 @@ fun CodingModelChip(profile: LlmProfile?, overridden: Boolean, onClick: () -> Un
 fun CodingModelSwitcherDialog(vm: MagicPaperViewModel, sessionId: String, profiles: List<LlmProfile>, activeProfileId: String, sessionProfileId: String?, onDismiss: () -> Unit) {
     val state by vm.state.collectAsState()
     val session = state.coding.sessions.firstOrNull { it.session.id == sessionId }?.session
-    val resolved = session?.let(vm::codingProfileOf)
-    val selected = session?.modelSelection ?: resolved?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) }
+    val plans = vm.planningChat?.store?.plans?.collectAsState()?.value.orEmpty()
+    val resolved = session?.let { vm.codingProfileOf(it, plans.firstOrNull { plan -> plan.id == it.planId }) }
+    val selected = resolved?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) } ?: session?.modelSelection
     FavoriteModelPicker(profiles.filter { session?.planningMode == true || it.supportsCoding }, selected,
         { vm.selectCodingModel(sessionId, it) }, onDismiss, "Модель сессии проекта", footer = {
             if (selected != null && resolved?.supportsCoding == true) TextButton(onClick = { vm.selectCodingModel(sessionId, selected, forProject = true) }) { Text("Использовать в новых сессиях проекта") }

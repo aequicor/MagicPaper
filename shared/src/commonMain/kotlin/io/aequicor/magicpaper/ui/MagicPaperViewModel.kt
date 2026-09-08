@@ -300,10 +300,12 @@ class MagicPaperViewModel(
      * Разрешённый профиль кодинг-сессии: переопределение сессии важнее глобального;
      * порядок тот же, что у чата (см. [ProfileResolver]).
      */
-    fun codingProfileOf(session: CodingSession): LlmProfile? {
+    fun codingProfileOf(session: CodingSession, plan: Plan? = null): LlmProfile? {
         val s = _state.value
         if (session.planningMode) return session.modelSelection?.let { ProfileResolver.selection(it, s.availableLlmProfiles) } ?: ProfileResolver.resolve(null as ChatSession?, s.settings, s.availableLlmProfiles)
-        return ProfileResolver.coding(session, s.coding.projects.firstOrNull { it.id == session.projectId }, s.settings, s.availableLlmProfiles)
+        val workerPlan = plan ?: planningChat?.store?.plans?.value?.firstOrNull { it.id == session.planId }
+            ?: s.coding.sessions.firstOrNull { it.session.id == session.id }?.plan
+        return ProfileResolver.coding(session, s.coding.projects.firstOrNull { it.id == session.projectId }, s.settings, s.availableLlmProfiles, workerPlan)
     }
 
     // ---- Навигация -------------------------------------------------------

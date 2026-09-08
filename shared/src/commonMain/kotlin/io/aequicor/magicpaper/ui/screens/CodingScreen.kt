@@ -283,7 +283,7 @@ private fun SessionArea(
         val serviceDrafts = service?.drafts?.collectAsState()?.value.orEmpty()
         val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
         val live = service?.execution?.live?.collectAsState()?.value.orEmpty()
-        val workerPlan = plans.firstOrNull { it.id == active.session.planId }
+        val workerPlan = plans.firstOrNull { it.id == active.session.planId } ?: active.plan
         val parentMessages = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId }?.messages.orEmpty()
         val stageChat = active.withStageChat(workerPlan, live, parentMessages)
         val draft = serviceDrafts[active.session.id] ?: stageChat.draft
@@ -339,7 +339,7 @@ private fun SessionArea(
                     Text(active.session.engine?.title.orEmpty(), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     CodingModelChip(
-                        profile = vm.codingProfileOf(active.session),
+                        profile = vm.codingProfileOf(active.session, workerPlan),
                         overridden = active.session.llmProfileId != null,
                         onClick = { switcherOpen = true },
                     )

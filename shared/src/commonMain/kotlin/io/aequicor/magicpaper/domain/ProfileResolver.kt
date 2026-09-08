@@ -40,7 +40,25 @@ object ProfileResolver {
         return ModelSelection(first.id, first.displayModels.first())
     }
 
-    fun coding(session: CodingSession, project: CodingProject?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
+    fun coding(session: CodingSession, project: CodingProject?, settings: AppSettings, profiles: List<LlmProfile>, plan: Plan? = null): LlmProfile? {
+        val stage = plan?.takeIf { it.id == session.planId && it.projectId == session.projectId }
+            ?.milestones?.firstOrNull { it.id == session.stageId }
+        // Workers execute the attempt's frozen assignment; their saved session choice
+        // can be absent in old sessions or stale after the planner reassigns a stage.
+        val attempt = stage?.attempts?.lastOrNull()
+        val assignment = (if (attempt?.mergePhase != null) attempt.mergeAssignment else null)
+            ?: attempt?.assignment ?: stage?.assignment
+        if (assignment != null) {
+            return selection(ModelSelection(assignment.profileId, assignment.modelId, assignment.effort), profiles)
+                ?.takeIf { it.supportsCoding }
+                ?.let { if (assignment.options != null) it.copy(advanced = assignment.options) else it }
+        }
+        if (stage != null && stage.agentProfileId.isNotBlank()) {
+            val profile = profiles.firstOrNull { it.id == stage.agentProfileId && it.connectionConfigured }
+                ?.takeIf { it.supportsCoding } ?: return null
+            val model = stage.agentModelId.ifBlank { profile.codingModel }
+            return selection(ModelSelection(profile.id, model, profile.effortSelectionFor(model)), profiles)
+        }
         val choice = session.modelSelection ?: project?.modelSelection
         if (choice != null) return selection(choice, profiles)?.takeIf { it.supportsCoding }
         val profile = profiles.firstOrNull { it.id == session.llmProfileId && it.connectionConfigured }
