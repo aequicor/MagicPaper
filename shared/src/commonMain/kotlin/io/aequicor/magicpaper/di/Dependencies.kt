@@ -22,6 +22,7 @@ import io.aequicor.magicpaper.data.skills.EmbeddedSkillCatalog
 import io.aequicor.magicpaper.data.skills.JsonSkillRepository
 import io.aequicor.magicpaper.data.skills.SkillStore
 import io.aequicor.magicpaper.data.storage.JsonChatRepository
+import io.aequicor.magicpaper.data.storage.JsonRequestPinRepository
 import io.aequicor.magicpaper.data.storage.JsonLlmProfileRepository
 import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
 import io.aequicor.magicpaper.data.storage.KeyValueStore
@@ -173,6 +174,7 @@ internal fun buildDependencies(
         searchConnectionChecker = io.aequicor.magicpaper.data.search.HttpSearchConnectionChecker(client, json),
         filePicker = filePicker,
         openAiSubscription = openAiSubscription,
+        requestPinRepository = JsonRequestPinRepository(store, json),
     )
     planningChat?.bootstrap()
     planningExecution.bootstrap()

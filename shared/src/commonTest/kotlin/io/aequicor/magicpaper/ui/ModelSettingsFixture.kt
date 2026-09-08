@@ -18,6 +18,8 @@ class ModelSettingsFixture {
     val gateway = object : LlmGateway {
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
             calls += profile
+            if (messages.firstOrNull()?.content == PIN_ANALYSIS_PROMPT)
+                return """{"summary":"Краткий запрос","newRequest":true}"""
             return """{"strengths":"Работа с кодом и сложными задачами.","limitations":"Длительные ответы при высоком effort.","rating":4}"""
         }
     }
@@ -27,7 +29,8 @@ class ModelSettingsFixture {
         override fun isConfigured(settings: AppSettings) = true
         override suspend fun search(query: String, settings: AppSettings, limit: Int) = listOf(SearchHit("Model", "https://example.com/model"))
     }
-    suspend fun prepare(codingRuntime: CodingRuntime? = null, codingProjects: CodingProjectRepository? = null): MagicPaperViewModel {
+    suspend fun prepare(codingRuntime: CodingRuntime? = null, codingProjects: CodingProjectRepository? = null,
+        requestPinRepository: RequestPinRepository? = null): MagicPaperViewModel {
         val declaration = DeclaredReasoning(efforts = setOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.XHIGH))
         val p = LlmProfile("openai", "OpenAI", baseUrl = "https://example.com/v1", modelId = "gpt-5.4",
             modelLibraryVersion = 1, favoriteModels = listOf("gpt-5.4"),
@@ -48,6 +51,6 @@ class ModelSettingsFixture {
         }
         return MagicPaperViewModel(MagicAgent(gateway, search, docs), chats, settings, profiles, docs, PluginRegistry(), bridge, kv, json,
             planning = planning, gateway = gateway, dossierResearcher = DossierResearcher(gateway, search),
-            codingRuntime = codingRuntime, codingProjects = codingProjects)
+            codingRuntime = codingRuntime, codingProjects = codingProjects, requestPinRepository = requestPinRepository)
     }
 }

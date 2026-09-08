@@ -2,7 +2,10 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -19,6 +22,8 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.roundToInt
 
@@ -26,6 +31,29 @@ import kotlin.math.roundToInt
 internal class ChatScrollState(private val listState: LazyListState) {
     var disclosureRevision by mutableIntStateOf(0)
         private set
+
+    var highlightedKey by mutableStateOf<Any?>(null)
+        private set
+
+    suspend fun navigateToMessage(key: Any, index: () -> Int?, topInset: () -> Int) {
+        if (index() == null) return
+        disclosureRevision++ // Explicit navigation must win over streaming/bottom following.
+        highlightedKey = key
+        try {
+            var clearance = topInset()
+            // A previous group can be taller. Only grow the clearance, avoiding a layout loop.
+            for (pass in 0..2) {
+                listState.scrollToItem(index() ?: return, -clearance)
+                // Frame callbacks precede layout: let the newly selected panel finish measuring.
+                repeat(2) { withFrameNanos { } }
+                if (topInset() <= clearance) break
+                clearance = topInset()
+            }
+            delay(1400)
+        } finally {
+            if (highlightedKey == key) highlightedKey = null
+        }
+    }
 
     fun preserveDisclosure(itemKey: Any, item: LayoutCoordinates?, header: LayoutCoordinates?) {
         disclosureRevision++
@@ -46,7 +74,8 @@ private val LocalChatDisclosure = staticCompositionLocalOf<(LayoutCoordinates?) 
 @Composable
 internal fun ChatScrollItem(scroll: ChatScrollState, key: Any, content: @Composable () -> Unit) {
     var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    Box(Modifier.onGloballyPositioned { coordinates = it }) {
+    val highlight = if (scroll.highlightedKey == key) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier
+    Box(Modifier.then(highlight).onGloballyPositioned { coordinates = it }) {
         CompositionLocalProvider(LocalChatDisclosure provides { header ->
             scroll.preserveDisclosure(key, coordinates, header)
         }) { content() }

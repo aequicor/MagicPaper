@@ -94,6 +94,7 @@ class MagicPaperViewModel(
     private val openAiSubscription: OpenAiSubscriptionService? = null,
     val planningChat: PlanningChatService? = null,
     private val searchConnectionChecker: SearchConnectionChecker? = null,
+    requestPinRepository: RequestPinRepository? = null,
 ) : ViewModel() {
     val projectSkills get() = codingRuntime?.projectSkills
 
@@ -104,6 +105,7 @@ class MagicPaperViewModel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+    val requestPins = requestPinRepository?.let { RequestPinService(it, gateway, scope, json) }
 
     /** Активные прогоны по идентификаторам кодинг-сессий (параллельно в разных сессиях). */
     private val codingJobs = mutableMapOf<String, Job>()
@@ -112,6 +114,32 @@ class MagicPaperViewModel(
 
     init {
         scope.launch { bootstrap() }
+        requestPins?.let { pins -> scope.launch {
+            var previousOpen: PinConversation? = null
+            _state.collect { state ->
+                val opened = when (state.screen) {
+                    Screen.CHAT -> state.current?.let { PinConversation(it.id) }
+                    Screen.CODING -> state.coding.currentSession?.session?.let { PinConversation(it.id, it.projectId) }
+                    else -> null
+                }
+                // Same operational model used by generateModelDescriptions, independent of chat overrides.
+                val profile = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
+                    ?.takeIf { it.provider != ProviderType.OPENAI_SUBSCRIPTION || state.openAiSubscription.account?.signedIn == true }
+                state.sessions.forEach { session ->
+                    val key = PinConversation(session.id)
+                    if (key == opened || pins.isTracking(key)) {
+                        val current = state.current?.takeIf { it.id == session.id } ?: session
+                        pins.sync(key, current.pinMessages(), profile, reopened = key == opened && key != previousOpen)
+                    }
+                }
+                state.coding.sessions.forEach { session ->
+                    val key = PinConversation(session.session.id, session.session.projectId)
+                    if (key == opened || session.running || pins.isTracking(key))
+                        pins.sync(key, session.messages.pinMessages(), profile, reopened = key == opened && key != previousOpen)
+                }
+                previousOpen = opened
+            }
+        } }
         codingRuntime?.computerUse?.let { computer -> scope.launch {
             computer.state.collect { value ->
                 _state.update { it.copy(coding = it.coding.copy(computer = value, computerSupported = computer.supported)) }
@@ -131,6 +159,9 @@ class MagicPaperViewModel(
                     if (owner == null || owner.planningMode || owner.stageId != null) computer.disable()
                 }
                 val old = _state.value.coding.sessions.associateBy { it.session.id }
+                old.values.filter { item -> stored.none { it.id == item.session.id } }.forEach {
+                    requestPins?.remove(PinConversation(it.session.id, it.session.projectId))
+                }
                 val sessions = stored.map { session ->
                     val previous = old[session.id] ?: CodingSessionUi(session)
                     if (session.stageId != null || session.planningMode || service.store.plans.value.any { it.parentSessionId == session.id })
@@ -353,6 +384,7 @@ class MagicPaperViewModel(
 
     fun deleteSession(id: String) {
         scope.launch {
+            requestPins?.remove(PinConversation(id))
             chats.delete(id)
             val rest = chats.sessions()
             _state.update {
@@ -870,6 +902,7 @@ class MagicPaperViewModel(
                 _state.update { st -> st.copy(notice = "Файл профиля повреждён.") }
                 return@launch
             }
+            requestPins?.clear()
             settingsRepo.save(bundle.settings)
             settingsRepo.savePluginStates(bundle.plugins)
             bundle.sessions.forEach { chats.save(it) }
@@ -883,6 +916,7 @@ class MagicPaperViewModel(
 
     fun wipeAll() {
         scope.launch {
+            requestPins?.clear()
             chats.wipe()
             settingsRepo.wipe()
             skills?.wipe()
@@ -999,6 +1033,7 @@ class MagicPaperViewModel(
         scope.launch {
             // Прерываем прогоны всех сессий удаляемого проекта.
             repo.sessions(id).forEach { session ->
+                requestPins?.remove(PinConversation(session.id, id))
                 codingRuntime?.abort(session.id)
                 codingJobs.remove(session.id)?.cancel()
             }
@@ -1073,6 +1108,7 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return
         scope.launch {
             repo.sessions(projectId).forEach { session ->
+                requestPins?.remove(PinConversation(session.id, projectId))
                 codingRuntime?.abort(session.id)
                 codingJobs.remove(session.id)?.let { job -> job.cancel(); job.join() }
             }
@@ -1094,6 +1130,7 @@ class MagicPaperViewModel(
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
         if (target.session.stageId != null && planningChat != null) { planningChat.archiveSession(id); return }
         scope.launch {
+            requestPins?.remove(PinConversation(id, target.session.projectId))
             codingRuntime?.abort(id)
             codingJobs.remove(id)?.cancel()
             repo.deleteSession(target.session.projectId, id)

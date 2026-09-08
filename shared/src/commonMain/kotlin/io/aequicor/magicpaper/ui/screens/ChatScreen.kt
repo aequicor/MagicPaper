@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,12 +54,16 @@ import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProfileResolver
+import io.aequicor.magicpaper.domain.PinConversation
+import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.components.MessageAttachments
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.stickToBottom
+import io.aequicor.magicpaper.ui.components.ChatScrollItem
+import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
@@ -66,7 +71,9 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
     Column(modifier = Modifier.fillMaxSize()) {
-        MessagesList(state.current, state.busy, modifier = Modifier.weight(1f))
+        val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
+        MessagesList(state.current, state.busy, modifier = Modifier.weight(1f),
+            pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty())
         Composer(
             enabled = !state.busy,
             session = state.current,
@@ -80,12 +87,13 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
 }
 
 @Composable
-private fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier) {
+internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier, pins: List<RequestPinGroup> = emptyList()) {
     val messages = session?.messages.orEmpty()
     val listState = rememberLazyListState()
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
-    stickToBottom(listState, session?.id)
+    val scroll = stickToBottom(listState, session?.id)
+    val indices = remember(messages) { messages.mapIndexed { index, message -> message.id to index }.toMap() }
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isEmpty()) {
             EmptyHint()
@@ -96,9 +104,12 @@ private fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifie
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(messages, key = { it.id }) { MessageBubble(it) }
+                items(messages, key = { it.id }) { message ->
+                    ChatScrollItem(scroll, message.id) { MessageBubble(message) }
+                }
             }
         }
+        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopCenter))
         AnimatedVisibility(
             visible = busy,
             modifier = Modifier.align(Alignment.BottomStart),

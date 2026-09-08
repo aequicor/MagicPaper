@@ -105,6 +105,9 @@ import io.aequicor.magicpaper.domain.effectiveRole
 import io.aequicor.magicpaper.domain.CodingSessionRole
 import io.aequicor.magicpaper.ui.components.OrchestrationStatus
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
+import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
+import io.aequicor.magicpaper.domain.PinConversation
+import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.components.inputLabel
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEngine
@@ -278,6 +281,7 @@ private fun SessionArea(
         val draft = serviceDrafts[active.session.id] ?: stageChat.draft
         val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
             running = stageChat.running || draft.active)
+        val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
         if (ui.computerSupported && !active.session.planningMode && active.session.stageId == null) {
             io.aequicor.magicpaper.ui.components.ComputerUsePanel(
                 state = ui.computer, sessionId = active.session.id, running = effective.running,
@@ -290,6 +294,7 @@ private fun SessionArea(
             CodingChat(
                 project = project,
                 session = effective,
+                pins = pins[PinConversation(active.session.id, active.session.projectId)].orEmpty(),
                 approvals = ui.approvals.filter { it.projectId == project.id },
                 onApproval = vm::respondCodingApproval,
                 onStopApproval = vm::abortCodingSession,
@@ -854,11 +859,13 @@ internal fun CodingChat(
     onStopApproval: (String) -> Unit = {},
     onSkills: (() -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
+    pins: List<RequestPinGroup> = emptyList(),
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
     val hideSystemSteps = LocalHideSystemSteps.current
     val rows = remember(messages, hideSystemSteps) { codingChatRows(messages, hideSystemSteps) }
+    val pinIndices = remember(rows) { rows.mapIndexed { index, row -> row.message.id to index + 1 }.toMap() }
     val draft = session.draft
     val visibleDraft = remember(draft, hideSystemSteps) { draft.visibleChatContent(hideSystemSteps) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
@@ -937,6 +944,7 @@ internal fun CodingChat(
                     }
                 }
             }
+            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopCenter))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
                 CodingApprovalDock(approvals, onApproval, onStopApproval,
