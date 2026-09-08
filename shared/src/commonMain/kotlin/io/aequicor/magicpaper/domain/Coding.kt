@@ -163,6 +163,8 @@ class CodingRunRecorder {
     /** Накопленный текст рассуждения модели (thinking) до его фиксации в ленту. */
     private val thinking = StringBuilder()
     private val steps = mutableListOf<CodingStep>()
+    private val sourceSteps = mutableMapOf<Pair<CodingStepKind, String>, String>()
+    private val completedSources = mutableSetOf<Pair<CodingStepKind, String>>()
     /** Only fragments of the current model message may be replaced by its final snapshot. */
     private var messageStartIndex = 0
     private var failed: String? = null
@@ -180,24 +182,40 @@ class CodingRunRecorder {
             }
             is CodingEvent.TextDelta -> {
                 awaiting = false
+                if (event.sourceId.isNotBlank()) {
+                    updateSource(CodingStepKind.ANSWER, event.sourceId, event.delta, append = true)
+                    return false
+                }
                 // Ответ начался — рассуждение до него остаётся в прошлом.
                 flushThinking()
                 text.append(event.delta)
             }
             is CodingEvent.ThinkingDelta -> {
                 awaiting = false
+                if (event.sourceId.isNotBlank()) {
+                    updateSource(CodingStepKind.THINKING, event.sourceId, event.delta, append = !event.replace)
+                    return false
+                }
                 // Мысль пришла раньше текста: зафиксированный ответ остаётся в ленте.
                 flushText()
                 thinking.append(event.delta)
             }
             is CodingEvent.FinalThinking -> {
                 awaiting = false
+                if (event.sourceId.isNotBlank()) {
+                    updateSource(CodingStepKind.THINKING, event.sourceId, event.text, append = false)
+                    return false
+                }
                 // Pi repeats thinking at message_end, after the answer has already streamed.
                 // Update that message's earlier thinking without committing a second answer.
                 replaceFragment(CodingStepKind.THINKING, thinking, event.text)
             }
             is CodingEvent.FinalText -> {
                 awaiting = false
+                if (event.sourceId.isNotBlank()) {
+                    updateSource(CodingStepKind.ANSWER, event.sourceId, event.text, append = false)
+                    return false
+                }
                 flushThinking()
                 // message_end авторитетнее потоковых дельт текущего сообщения ассистента.
                 replaceFragment(CodingStepKind.ANSWER, text, event.text)
@@ -272,6 +290,26 @@ class CodingRunRecorder {
         return false
     }
 
+    /** Provider item identities survive interleaving and late/repeated final snapshots. */
+    private fun updateSource(kind: CodingStepKind, sourceId: String, value: String, append: Boolean) {
+        val source = kind to sourceId
+        if (append && source in completedSources) return
+        if (!append && kind == CodingStepKind.ANSWER) completedSources += source
+        if (value.isEmpty()) return
+        val id = sourceSteps[source]
+        val index = if (id == null) -1 else steps.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            val old = steps[index]
+            steps[index] = old.copy(title = if (append) old.title + value else value)
+        } else {
+            flushThinking()
+            flushText()
+            val step = CodingStep(kind, value, id = nextStepId())
+            sourceSteps[source] = step.id
+            steps += step
+        }
+    }
+
     private fun flushMessage() {
         flushThinking()
         flushText()
@@ -327,7 +365,9 @@ class CodingRunRecorder {
             failedMessage = failed,
             active = active,
             awaitingModel = active && awaiting,
-            thinking = thinking.toString(),
+            thinking = thinking.toString().ifBlank {
+                steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.THINKING && it.id in sourceSteps.values }?.title.orEmpty()
+            },
             timelineId = timelineId,
         )
 
@@ -375,17 +415,17 @@ sealed interface CodingEvent {
      */
     data object MessageStarted : CodingEvent
 
-    /** Живой фрагмент текста ответа. */
-    data class TextDelta(val delta: String) : CodingEvent
+    /** Живой фрагмент текста; sourceId identifies a provider item when streams interleave. */
+    data class TextDelta(val delta: String, val sourceId: String = "") : CodingEvent
 
-    /** Живой фрагмент рассуждения модели (thinking-дельта протокола пи). */
-    data class ThinkingDelta(val delta: String) : CodingEvent
+    /** Живая мысль; replace carries a combined snapshot of indexed provider paragraphs. */
+    data class ThinkingDelta(val delta: String, val sourceId: String = "", val replace: Boolean = false) : CodingEvent
 
     /** Итоговый текст рассуждения (авторитетный, из блоков thinking сообщения message_end). */
-    data class FinalThinking(val text: String) : CodingEvent
+    data class FinalThinking(val text: String, val sourceId: String = "") : CodingEvent
 
     /** Итоговый текст ассистента (авторитетный, из события message_end). */
-    data class FinalText(val text: String) : CodingEvent
+    data class FinalText(val text: String, val sourceId: String = "") : CodingEvent
 
     /** Агент начал вызывать инструмент (читает/пишет файл, выполняет команду и т.п.). */
     data class ToolStarted(

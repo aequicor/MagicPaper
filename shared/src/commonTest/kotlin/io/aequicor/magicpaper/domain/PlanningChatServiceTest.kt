@@ -595,6 +595,32 @@ class PlanningChatServiceTest {
         assertNull(f.service.drafts.value[parent.id])
     }
 
+    @Test fun routingThinkingUpdatesKeepTheStreamedAnswerAndItsIdentity() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.readyPlan("p", parent).also { plan -> f.store.save(plan.copy(dialogue = listOf(PlanningMessage("old", "assistant", "Готово")))) }
+        val gate = CompletableDeferred<Unit>()
+        f.gateway.gate = gate
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Ответ пользователю"}"""
+        f.service.send(parent, "Объясни результат"); runCurrent()
+        val callback = assertNotNull(f.gateway.requestCallback)
+        callback(CodingStep(CodingStepKind.ANSWER, """{"reply":"Ответ пользователю""", callId = "response", running = true))
+        runCurrent()
+        val answer = f.service.drafts.value.getValue(parent.id).steps.single { it.kind == CodingStepKind.ANSWER }
+        assertEquals("Ответ пользователю", answer.title)
+        assertTrue(answer.id.isNotBlank())
+        repeat(4) {
+            callback(CodingStep(CodingStepKind.THINKING, "Мысль $it", callId = "thought"))
+            runCurrent()
+            assertEquals(answer, f.service.drafts.value.getValue(parent.id).steps.single { it.kind == CodingStepKind.ANSWER })
+        }
+        val identity = assertNotNull(f.service.drafts.value.getValue(parent.id).timelineId)
+        gate.complete(Unit); runCurrent()
+        val saved = f.projects.messages(project.id, parent.id).single { it.id == identity }
+        assertEquals(identity, saved.timelineId)
+        assertEquals(answer.id, saved.steps.last { it.kind == CodingStepKind.ANSWER }.id)
+    }
+
     @Test fun stoppingCoordinatorClearsLiveActivityAndPreservesItsMessages() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")

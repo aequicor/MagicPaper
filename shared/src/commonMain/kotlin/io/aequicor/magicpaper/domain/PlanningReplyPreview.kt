@@ -62,3 +62,28 @@ internal fun planningReplyPreview(raw: String): String {
 
 internal fun CodingStep.planningPreview(): CodingStep =
     if (kind == CodingStepKind.ANSWER) copy(title = planningReplyPreview(title)) else this
+
+/** Replace one provider fragment in place; hidden activity must never replace the whole answer. */
+internal fun List<CodingStep>.withPlanningActivity(raw: CodingStep): List<CodingStep> {
+    val step = raw.planningPreview()
+    val index = indexOfLast {
+        if (step.id.isNotBlank()) it.id == step.id
+        else it.kind == step.kind && it.callId == step.callId &&
+            (step.callId.isNotBlank() || step.kind in listOf(CodingStepKind.ANSWER, CodingStepKind.THINKING, CodingStepKind.INFO))
+    }
+    val identified = step.copy(id = if (index >= 0) this[index].id else step.id.ifBlank { io.aequicor.magicpaper.util.Id.new() })
+    return if (index < 0) this + identified else mapIndexed { i, old -> if (i == index) identified else old }
+}
+
+/** Keep the visible answer's lazy-item identity when the orchestration reply is persisted. */
+internal fun CodingMessage.withPlanningDraft(draft: CodingDraft?): CodingMessage {
+    if (role != CodingRole.AGENT || draft?.timelineId != id) return this
+    val answer = draft.steps.lastOrNull { it.kind == CodingStepKind.ANSWER && it.title.isNotBlank() }
+    val savedSteps = steps.ifEmpty {
+        if (answer != null && text.isNotBlank()) listOf(CodingStep(CodingStepKind.ANSWER, text)) else emptyList()
+    }
+    val lastAnswer = savedSteps.indexOfLast { it.kind == CodingStepKind.ANSWER }
+    return copy(timelineId = draft.timelineId, steps = savedSteps.mapIndexed { index, step ->
+        if (index == lastAnswer && step.id.isBlank() && answer != null) step.copy(id = answer.id) else step
+    })
+}

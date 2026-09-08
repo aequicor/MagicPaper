@@ -49,7 +49,7 @@ class CodingChatCommitTest {
             } }
         } }
         init { render() }
-        fun render() { repeat(16) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+        fun render(check: () -> Unit = {}) { repeat(16) { onUi { scene.render(++frame * 32_000_000L).close(); check() }; Thread.sleep(5) } }
         fun readMiddle() { onUi { list.dispatchRawDelta(-900f) }; render(); assertTrue(list.canScrollForward) }
         fun publishSaved(clearDraft: Boolean) {
             onUi { value.value = value.value.copy(messages = listOf(recorder.message("response", 1)),
@@ -161,6 +161,27 @@ class CodingChatCommitTest {
         chat.render()
         assertFalse(chat.list.canScrollForward, "A changed item index is not a user scrolling backwards")
     } }
+
+    @Test fun collapsedThinkingKeepsAnswerBoundsAndListAnchorOnEveryUpdate() = Chat().use { chat ->
+        chat.recorder.apply(CodingEvent.TextDelta("Исправление методов учтено.\n\nВозобновляю адресную проверку.\n\nПроверяю импорт текста и обработку команд.\n\nСуществующие правила сохранены.\n\nРезультаты проверки появятся после завершения работы.", "answer"))
+        chat.recorder.apply(CodingEvent.ThinkingDelta("Проверяю", "thought"))
+        chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
+        chat.render()
+        val before = chat.anchor()
+        val bounds = assertNotNull(chat.textNode("Исправление методов учтено")).boundsInRoot
+        val count = chat.list.layoutInfo.totalItemsCount
+        repeat(12) {
+            chat.recorder.apply(CodingEvent.ThinkingDelta("\n\n**Проверка $it**\n" + "Размышление. ".repeat(80), "thought"))
+            chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
+            chat.render {
+                assertEquals(count, chat.list.layoutInfo.totalItemsCount)
+                assertEquals(before, chat.anchor(), "Hidden thought $it moved the list")
+                assertEquals(bounds, assertNotNull(chat.textNode("Исправление методов учтено")).boundsInRoot)
+                assertNull(chat.textNode("Размышление."), "Closed thinking must not compose its body")
+            }
+        }
+        chat.snapshot("collapsed-live-thinking")
+    }
 
     @Test fun equalVisibleDraftKeepsItsLiveStateDuringThinkingUpdates() = Chat().use { chat ->
         chat.recorder.apply(CodingEvent.ToolStarted("read", "running", callId = "running"))

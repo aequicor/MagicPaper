@@ -49,7 +49,7 @@ class OrchestrationService(
         coordinators.entries.groupBy { it.value.sessionId }.forEach { (sessionId, turns) ->
             val request = requests[sessionId] ?: CodingDraft()
             combined[sessionId] = request.copy(active = true, steps = request.steps + turns.flatMap { (id, activity) ->
-                activity.steps.map { it.copy(callId = "$id:${it.callId}") }
+                activity.steps.map { it.copy(callId = "$id:${it.callId}", id = "$id:${it.id}") }
             })
         }
         combined
@@ -285,7 +285,11 @@ class OrchestrationService(
         if (projectId in clearingProjects || projects.sessions(projectId).none { it.id == sessionId }) return@withLock
         val history = projects.messages(projectId, sessionId)
         val index = history.indexOfFirst { it.id == message.id }
-        val next = if (index < 0) history + message else history.map { if (it.id == message.id) message.copy(createdAt = it.createdAt) else it }
+        val previous = history.getOrNull(index)
+        val draft = _drafts.value[sessionId]?.takeIf { it.timelineId == message.id }
+            ?: previous?.let { CodingDraft(steps = it.steps, timelineId = it.timelineId) }
+        val saved = message.withPlanningDraft(draft)
+        val next = if (index < 0) history + saved else history.map { if (it.id == saved.id) saved.copy(createdAt = it.createdAt) else it }
         if (next != history) { projects.saveMessages(projectId, sessionId, next); changed() }
     }
     suspend fun configure(session: CodingSession, planning: Boolean = session.planningMode, search: SearchProvider = session.searchProvider) {
@@ -600,8 +604,10 @@ class OrchestrationService(
             UserTurnIntent.REFINE -> refine(current.id, input.id, input.text, decision.requiresConfirmation)
             UserTurnIntent.DISCUSS -> {
                 val message = decision.reply.ifBlank { "Уточните, что вы хотите узнать." }
-                store.update(current.id) { it.copy(dialogue = it.dialogue +
+                val saved = store.update(current.id) { it.copy(dialogue = it.dialogue +
                     PlanningMessage(input.id, "user", input.text) + PlanningMessage("${input.id}-reply", "assistant", message, questions = decision.questions)) }
+                // Publish while the draft still supplies the visible fragment identities.
+                publish(saved)
             }
             UserTurnIntent.CONTROL -> {
                 when (decision.command) {
@@ -642,10 +648,14 @@ class OrchestrationService(
             "План: ${plan.goal}; фаза=${plan.phase}; утверждён=${plan.confirmedRevision != null}; предложение=${plan.proposal?.explanation}; этапы=${plan.selectedMilestones.joinToString { it.id + ": " + it.stageLabel() + ": " + it.status + ": " + it.report }}\n" +
                 "${schedulingContext(plan)}\nОткрытые запросы: ${json.encodeToString(kotlinx.serialization.builtins.ListSerializer(OrchestrationQuestion.serializer()), requests)}\nДиалог:\n$history\nСообщение: ${input.text}"))
         repeat(3) { index ->
-            _drafts.update { it + (session.id to CodingDraft(active = true, awaitingModel = true)) }
+            _drafts.update { it + (session.id to CodingDraft(active = true, awaitingModel = true, timelineId = "${input.id}-reply")) }
             requirePlanningRequestSize(messages)
             val raw = gateway.completeWithActivity(profile, messages.toList()) { step ->
-                _drafts.update { it + (session.id to CodingDraft(active = true, steps = listOf(step.planningPreview()))) }
+                _drafts.update { all ->
+                    val previous = all[session.id] ?: CodingDraft(timelineId = "${input.id}-reply")
+                    all + (session.id to previous.copy(active = true, awaitingModel = false,
+                        steps = previous.steps.withPlanningActivity(step)))
+                }
             }
             val result = runCatching { json.decodeFromString<UserTurnDecision>(raw.substring(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) }.getOrNull()
             val valid = result != null && (result.intent != UserTurnIntent.ANSWER || requests.any { it.id == result.replyTo }) &&
@@ -735,13 +745,8 @@ class OrchestrationService(
         val sessionId = pending.parentSessionId
         val activity = MutableStateFlow<List<CodingStep>>(emptyList())
         fun event(rawStep: CodingStep) {
-            val step = rawStep.planningPreview()
-            activity.update { history ->
-                val index = history.indexOfLast { it.kind == step.kind && it.callId == step.callId &&
-                    (step.callId.isNotBlank() || step.kind in listOf(CodingStepKind.ANSWER, CodingStepKind.THINKING)) }
-                if (index >= 0) history.mapIndexed { i, old -> if (i == index) step else old } else history + step
-            }
-            _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true)) }
+            activity.update { it.withPlanningActivity(rawStep) }
+            _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
         }
         try {
             val roster = profiles.load()
@@ -772,6 +777,7 @@ class OrchestrationService(
             store.update(id) { it.copy(pendingRequest = "", requestId = "", plannerSelection = choice, searchProvider = session.searchProvider,
                 versions = if (result.tree != pending.tree || result.milestones != pending.milestones) it.versions + snapshot else it.versions) }
             val saved = store.planFor(id)!!
+            publish(saved)
             if (saved.confirmedRevision != null && !continuation) {
                 prepareSessions(saved)
                 if (pending.canExtendAfterFinalVerification && saved.finalAttempt == null && saved.intent == ExecutionIntent.RUN)
@@ -1240,14 +1246,9 @@ class OrchestrationService(
     }
 
     private fun coordinatorEvent(id: String, rawStep: CodingStep) {
-        val step = rawStep.planningPreview()
         coordinatorActivity.update { all ->
             val activity = all[id] ?: return@update all
-            val index = if (step.callId.isNotBlank()) activity.steps.indexOfLast { it.callId == step.callId && it.kind == step.kind }
-                else activity.steps.lastIndex.takeIf { last -> last >= 0 && activity.steps[last].kind == step.kind &&
-                    step.kind in listOf(CodingStepKind.THINKING, CodingStepKind.INFO, CodingStepKind.ANSWER) } ?: -1
-            val steps = if (index < 0) activity.steps + step else activity.steps.mapIndexed { i, old -> if (i == index) step else old }
-            all + (id to activity.copy(steps = steps))
+            all + (id to activity.copy(steps = activity.steps.withPlanningActivity(rawStep)))
         }
     }
 

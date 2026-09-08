@@ -654,13 +654,14 @@ class CodexAppServerOpenAiSubscription(
             "item/agentMessage/delta" -> {
                 val delta = params.string("delta").orEmpty()
                 turns[params.string("threadId")]?.textDelta(delta, params.string("itemId").orEmpty())
-                codingRuns[params.string("threadId")]?.emit(CodingEvent.TextDelta(delta))
+                codingRuns[params.string("threadId")]?.emit(CodingEvent.TextDelta(delta, params.string("itemId").orEmpty()))
             }
             "item/reasoning/textDelta", "item/reasoning/summaryTextDelta" -> {
-                codingRuns[params.string("threadId")]?.emit(CodingEvent.ThinkingDelta(params.string("delta").orEmpty()))
+                codingRuns[params.string("threadId")]?.reasoningDelta(params, summary = method == "item/reasoning/summaryTextDelta")
                 turns[params.string("threadId")]?.heartbeat()
                 // Planning displays the provider's public reasoning summary only.
-                if (method == "item/reasoning/summaryTextDelta") turns[params.string("threadId")]?.summary(params.string("delta").orEmpty())
+                if (method == "item/reasoning/summaryTextDelta") turns[params.string("threadId")]?.summary(params.string("delta").orEmpty(),
+                    params.string("itemId").orEmpty(), params["summaryIndex"]?.jsonPrimitive?.intOrNull ?: 0)
             }
             "item/commandExecution/outputDelta" -> codingRuns[params.string("threadId")]?.emit(
                 CodingEvent.ToolProgress(
@@ -715,9 +716,11 @@ class CodexAppServerOpenAiSubscription(
     internal class TurnAccumulator(private val onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit) {
         private val activity = Channel<Unit>(Channel.CONFLATED)
         private var receivedCharacters = 0
-        private var summaryText = ""
+        private val identity = io.aequicor.magicpaper.util.Id.new()
+        private val summaries = mutableMapOf<String, IndexedText>()
         private var itemId = ""
         private val messageText = mutableMapOf<String, String>()
+        private val completedMessages = mutableSetOf<String>()
 
         fun heartbeat() { activity.trySend(Unit) }
 
@@ -736,7 +739,7 @@ class CodexAppServerOpenAiSubscription(
         }
 
         fun textDelta(delta: String, messageId: String = itemId) {
-            if (delta.isEmpty()) return
+            if (delta.isEmpty() || messageId in completedMessages) return
             heartbeat()
             receivedCharacters += delta.length
             onActivity(io.aequicor.magicpaper.domain.CodingStep(
@@ -747,21 +750,21 @@ class CodexAppServerOpenAiSubscription(
             val text = messageText[messageId].orEmpty() + delta
             messageText[messageId] = text
             onActivity(io.aequicor.magicpaper.domain.CodingStep(
-                io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text, callId = messageId, running = true,
+                io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text, callId = messageId, running = true, id = "$identity:answer:$messageId",
             ))
         }
         fun started(item: JsonObject) {
             heartbeat()
             receivedCharacters = 0
             itemId = item.string("id").orEmpty()
-            summaryText = ""
             onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.INFO,
                 when (item.string("type")) { "reasoning" -> "Модель обдумывает план…"; "agentMessage" -> "Модель формирует ответ…"; else -> "Действие агента: ${item.string("type").orEmpty()}" }))
         }
-        fun summary(delta: String) {
+        fun summary(delta: String, messageId: String = itemId, index: Int = 0) {
             heartbeat()
-            summaryText += delta
-            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.THINKING, summaryText, callId = itemId))
+            val text = summaries.getOrPut(messageId) { IndexedText() }.append(index, delta)
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.THINKING,
+                text, callId = messageId, id = "$identity:thinking:$messageId"))
         }
         val done = CompletableDeferred<String>()
         private var last = ""
@@ -772,7 +775,8 @@ class CodexAppServerOpenAiSubscription(
             if (text.isBlank()) return
             last = text
             messageText.remove(messageId)
-            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text, callId = messageId))
+            completedMessages += messageId
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text, callId = messageId, id = "$identity:answer:$messageId"))
             if (phase == "final_answer" || phase == "finalAnswer") final = text
         }
 
@@ -783,7 +787,33 @@ class CodexAppServerOpenAiSubscription(
         }
     }
 
+    /** Protocol indexes identify independent paragraphs, whose deltas may interleave. */
+    private class IndexedText {
+        private val parts = sortedMapOf<Int, StringBuilder>()
+        fun append(index: Int, delta: String): String {
+            parts.getOrPut(index) { StringBuilder() }.append(delta)
+            return text
+        }
+        val text: String get() = parts.values.joinToString("\n\n")
+    }
+
     private class CodingAccumulator {
+        private class Reasoning {
+            val content = IndexedText()
+            val summary = IndexedText()
+            val text: String get() = summary.text.ifBlank { content.text }
+        }
+        private val reasoning = mutableMapOf<String, Reasoning>()
+        fun reasoningDelta(params: JsonObject, summary: Boolean) {
+            val id = params.string("itemId").orEmpty()
+            val delta = params.string("delta").orEmpty()
+            if (id.isBlank()) { emit(CodingEvent.ThinkingDelta(delta)); return }
+            val fragments = reasoning.getOrPut(id) { Reasoning() }
+            val index = params[if (summary) "summaryIndex" else "contentIndex"]?.jsonPrimitive?.intOrNull ?: 0
+            (if (summary) fragments.summary else fragments.content).append(index, delta)
+            emit(CodingEvent.ThinkingDelta(fragments.text, id, replace = true))
+        }
+
         val items = ConcurrentHashMap<String, JsonObject>()
         val events = Channel<CodingEvent>(Channel.UNLIMITED)
         val done = CompletableDeferred<Unit>()
@@ -814,7 +844,7 @@ class CodexAppServerOpenAiSubscription(
             val id = item.string("id").orEmpty()
             items.remove(id)
             when (item.string("type")) {
-                "agentMessage" -> item.string("text")?.takeIf { it.isNotBlank() }?.let { emit(CodingEvent.FinalText(it)) }
+                "agentMessage" -> item.string("text")?.takeIf { it.isNotBlank() }?.let { emit(CodingEvent.FinalText(it, id)) }
                 "mcpToolCall" -> if (item.string("server") == "magicpaper_computer") {
                     val result = item["result"] as? JsonObject
                     emit(CodingEvent.ToolFinished("computer",
@@ -826,10 +856,12 @@ class CodexAppServerOpenAiSubscription(
                     ))
                 }
                 "reasoning" -> {
-                    val text = (item["summary"] as? JsonArray).orEmpty()
-                        .mapNotNull { it.jsonPrimitive.contentOrNull }
-                        .joinToString("\n")
-                    if (text.isNotBlank()) emit(CodingEvent.FinalThinking(text))
+                    fun text(field: String) = (item[field] as? JsonArray).orEmpty()
+                        .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.joinToString("\n\n")
+                    val streamed = reasoning.remove(id)
+                    val text = text("summary").ifBlank { streamed?.summary?.text.orEmpty() }
+                        .ifBlank { text("content") }.ifBlank { streamed?.content?.text.orEmpty() }
+                    if (text.isNotBlank()) emit(CodingEvent.FinalThinking(text, id))
                 }
                 "commandExecution" -> emit(
                     CodingEvent.ToolFinished(
