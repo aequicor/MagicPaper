@@ -1,12 +1,15 @@
 package io.aequicor.magicpaper.ui.components
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
@@ -23,6 +26,7 @@ import io.aequicor.magicpaper.ui.CodingSessionUi
 internal fun OrchestrationStatus(
     session: CodingSessionUi, service: OrchestrationService, onOpenSession: (String) -> Unit,
     modifier: Modifier = Modifier,
+    scrolled: Boolean = false,
 ) {
     val states by service.states.collectAsState()
     val plans by service.store.plans.collectAsState()
@@ -58,15 +62,20 @@ internal fun OrchestrationStatus(
         active.isNotEmpty() -> "Выполнение этапов"
         else -> "Ожидание следующего этапа"
     }
-    Surface(modifier.semantics { contentDescription = "Состояние оркестратора" },
-        shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    val elevation by animateDpAsState(if (scrolled) 6.dp else 0.dp)
+    Surface(modifier.fillMaxWidth().semantics { contentDescription = "Состояние оркестратора" },
+        shape = MaterialTheme.shapes.medium.copy(topStart = CornerSize(0.dp), topEnd = CornerSize(0.dp)),
+        color = MaterialTheme.colorScheme.surfaceContainerLow, shadowElevation = elevation) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("${session.session.subtitle()} · ${session.session.name}", Modifier.weight(1f),
                     style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text(if (expanded) "Свернуть ▴" else "Подробнее ▾")
-                }
+                Text(if (expanded) "Свернуть ▴" else "Подробнее ▾",
+                    modifier = Modifier.clip(MaterialTheme.shapes.small)
+                        .clickable(role = Role.Button) { expanded = !expanded }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
             Text(phase, style = MaterialTheme.typography.bodyMedium)
             persistenceErrors[session.session.id]?.let { message ->
