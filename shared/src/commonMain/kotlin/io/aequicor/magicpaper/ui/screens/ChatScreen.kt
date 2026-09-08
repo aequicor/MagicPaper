@@ -65,6 +65,7 @@ import io.aequicor.magicpaper.ui.components.MessageAttachments
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.stickToBottom
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
+import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
 import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
@@ -116,6 +117,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             }
         }
         RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd))
+        ChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp))
         AnimatedVisibility(
             visible = busy,
             modifier = Modifier.align(Alignment.BottomStart),

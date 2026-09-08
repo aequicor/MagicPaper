@@ -48,6 +48,19 @@ internal class ChatScrollState(private val listState: LazyListState) {
         private set
     private var navigationId = 0
 
+    val canScrollToEnd: Boolean get() = listState.canScrollForward
+
+    suspend fun navigateToEnd() {
+        val navigation = ++navigationId
+        navigating = true
+        highlightedKey = null
+        try {
+            listState.pinToEnd { navigationId == navigation }
+        } finally {
+            if (navigationId == navigation) navigating = false
+        }
+    }
+
     fun interruptNavigation() {
         if (!navigating) return
         navigationId++
@@ -199,9 +212,9 @@ internal fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit): Cha
                 val atEnd = !listState.canScrollForward
                 val now = listState.anchor()
                 when {
-                    scroll.navigating || scroll.disclosureRevision != disclosureRevision -> following = false
+                    scroll.navigating -> following = false
                     atEnd -> following = true
-                    now.before(anchor) -> following = false
+                    scroll.disclosureRevision != disclosureRevision || now.before(anchor) -> following = false
                 }
                 disclosureRevision = scroll.disclosureRevision
                 anchor = now

@@ -151,6 +151,7 @@ import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.components.FadingSingleLineText
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
+import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
 import io.aequicor.magicpaper.ui.components.chatDisclosure
 import io.aequicor.magicpaper.ui.components.CodingAttachments
 import io.aequicor.magicpaper.ui.components.CodingModelChip
@@ -982,6 +983,8 @@ internal fun CodingChat(
                 }
             }
             RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd))
+            ChatScrollToBottomButton(scroll,
+                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = footerHeight + 12.dp))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
                 CodingApprovalDock(approvals, onApproval, onStopApproval,
