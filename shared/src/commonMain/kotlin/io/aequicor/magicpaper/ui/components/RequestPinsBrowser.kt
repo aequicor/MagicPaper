@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -8,17 +7,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -42,34 +42,26 @@ internal fun requestPinNumbers(groups: List<RequestPinGroup>, messageIds: Set<St
 
 @Composable
 internal fun MessagePinButton(number: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val ink = MaterialTheme.colorScheme.onPrimaryContainer
-    Surface(onClick = onClick,
-        modifier = modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).semantics {
-            contentDescription = "Закреплённое сообщение №$number. Открыть список"
-            role = Role.Button
-        },
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = ink,
-        border = BorderStroke(1.dp, ink.copy(alpha = .2f)),
+    val ink = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .6f)
+    Box(
+        modifier = modifier.size(20.dp).clip(CircleShape)
+            .clickable(role = Role.Button, onClickLabel = "Открыть список закреплений", onClick = onClick)
+            .semantics { contentDescription = "Закреплённое сообщение №$number. Открыть список" },
+        contentAlignment = Alignment.Center,
     ) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Canvas(Modifier.size(18.dp)) {
-                val path = Path().apply {
-                    moveTo(size.width * .3f, size.height * .12f)
-                    lineTo(size.width * .7f, size.height * .12f)
-                    lineTo(size.width * .64f, size.height * .44f)
-                    lineTo(size.width * .8f, size.height * .62f)
-                    lineTo(size.width * .2f, size.height * .62f)
-                    lineTo(size.width * .36f, size.height * .44f)
-                    close()
-                }
-                drawPath(path, ink, style = Stroke(width = 1.6.dp.toPx()))
-                drawLine(ink, Offset(size.width * .5f, size.height * .62f),
-                    Offset(size.width * .5f, size.height * .92f), 1.6.dp.toPx(), StrokeCap.Round)
+        Canvas(Modifier.size(16.dp)) {
+            val path = Path().apply {
+                moveTo(size.width * .3f, size.height * .12f)
+                lineTo(size.width * .7f, size.height * .12f)
+                lineTo(size.width * .64f, size.height * .44f)
+                lineTo(size.width * .8f, size.height * .62f)
+                lineTo(size.width * .2f, size.height * .62f)
+                lineTo(size.width * .36f, size.height * .44f)
+                close()
             }
-            Text("№$number", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            drawPath(path, ink, style = Stroke(width = 1.4.dp.toPx()))
+            drawLine(ink, Offset(size.width * .5f, size.height * .62f),
+                Offset(size.width * .5f, size.height * .92f), 1.4.dp.toPx(), StrokeCap.Round)
         }
     }
 }

@@ -104,7 +104,8 @@ class RequestPinsBrowserTest {
     @Test fun messageButtonOpensItsOwnPinAndSelectingAnotherPinRevealsTheSourceInBothChats() {
         for (coding in listOf(false, true)) Chat(coding).use { chat ->
             val marker = chat.indicator(4)
-            assertTrue(marker.boundsInRoot.height >= 48f)
+            assertTrue(marker.boundsInRoot.width <= 24f && marker.boundsInRoot.height <= 24f)
+            assertTrue(walk(marker).none { text(it).isNotEmpty() }, "The marker is an icon without a number or label")
             assertTrue(walk(chat.history()).any { it.id == marker.id }, "The button must be inside LazyColumn")
             val source = chat.nodes().single { text(it) == body(8) }
             assertTrue(marker.boundsInRoot.top >= source.boundsInRoot.bottom, "The marker belongs below its message text")
