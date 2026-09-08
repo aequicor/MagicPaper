@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:56.234Z" hostname="MacBook-Pro-Aequicor.local" time="2.45">
+  <properties/>
+  <testcase name="childCollapseSurvivesUpdatesSelectionAndProjectRoundTrip[jvm]" classname="io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest" time="1.305"/>
+  <testcase name="selectedProjectHeaderCollapsesAndReopensItsSessionList[jvm]" classname="io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest" time="1.145"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

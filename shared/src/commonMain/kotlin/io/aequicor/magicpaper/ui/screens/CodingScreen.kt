@@ -151,6 +151,20 @@ fun CodingScreen(
     profiles: List<LlmProfile> = emptyList(),
     activeProfileId: String = "",
 ) {
+    var skillsProject by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(ui.current?.id) { skillsProject = null }
+    skillsProject?.let { projectId ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { skillsProject = null }) {
+            androidx.compose.material3.Surface(shape = MaterialTheme.shapes.large) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("SKILLS", style = MaterialTheme.typography.titleLarge)
+                    vm.projectSkills?.Content(projectId)
+                        ?: Text("Проектные навыки недоступны на этой платформе")
+                    TextButton(onClick = { skillsProject = null }) { Text("Закрыть") }
+                }
+            }
+        }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         RuntimeBar(ui.runtime, ui.installing, vm::prepareCodingRuntime, vm::uninstallCodingRuntime)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -176,6 +190,7 @@ fun CodingScreen(
                 } else {
                     SessionArea(
                         vm = vm,
+                        onSkills = { skillsProject = project.id },
                         ui = ui,
                         project = project,
                         active = active,
@@ -222,6 +237,7 @@ internal fun ResizableProjectPanels(
 @Composable
 private fun SessionArea(
     vm: MagicPaperViewModel,
+    onSkills: () -> Unit,
     ui: CodingUi,
     project: CodingProject,
     active: CodingSessionUi,
@@ -268,6 +284,7 @@ private fun SessionArea(
                         else -> vm.abortCodingSession(active.session.id)
                     }
                 },
+                onSkills = onSkills,
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 onPlanning = if (service != null && active.session.stageId == null) {
                     { scope.launch { service.configure(active.session, planning = true) } }
@@ -844,6 +861,7 @@ internal fun CodingChat(
     approvals: List<CodingApproval> = emptyList(),
     onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
     onStopApproval: (String) -> Unit = {},
+    onSkills: (() -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -939,6 +957,7 @@ internal fun CodingChat(
                 onPlanning = onPlanning,
                 onSend = onSend,
                 onAbort = onAbort,
+                onSkills = onSkills,
                 onPickAttachments = onPickAttachments,
             )
         }
@@ -1086,7 +1105,7 @@ private fun ThinkingStepRow(step: CodingStep) {
     }
 }
 
-/** Строка рассуждения модели: сворачиваемый «💭 …» с полным текстом по тапу. */
+/** Команда или действие: часы до завершения, полный текст и вывод по тапу. */
 @Composable
 private fun ToolStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable(step.callId.ifBlank { step.title }) { mutableStateOf(false) }
@@ -1105,7 +1124,7 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Row(
-            Modifier.then(if (hasDetail) Modifier.chatDisclosure { expanded = !expanded } else Modifier),
+            Modifier.fillMaxWidth().chatDisclosure { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Canvas(
@@ -1146,19 +1165,17 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
                 maxLines = if (expanded) Int.MAX_VALUE else 2,
                 modifier = Modifier.weight(1f),
             )
-            if (hasDetail) {
-                Text(
-                    if (expanded) "▴" else "▾",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (step.running && live && step.result.isBlank()) {
             Text(
-                "выполняется…",
+                if (expanded) "▴" else "▾",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (step.running && live) {
+            Text(
+                if (step.kind == CodingStepKind.EXEC) "Выполняется команда…" else "Выполняется действие…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (expanded && hasDetail) {
@@ -1306,6 +1323,7 @@ private fun currentThinkingSummary(thinking: String): String {
 
 @Composable
 private fun CodingComposer(
+    onSkills: (() -> Unit)? = null,
     enabled: Boolean,
     busy: Boolean,
     controls: (@Composable () -> Unit)? = null,
@@ -1342,6 +1360,8 @@ private fun CodingComposer(
                         Text("+", style = MaterialTheme.typography.titleLarge)
                     }
                     DropdownMenu(addMenuOpen, { addMenuOpen = false }) {
+                        DropdownMenuItem(text = { Text("SKILLS") }, enabled = onSkills != null,
+                            onClick = { addMenuOpen = false; onSkills?.invoke() })
                         DropdownMenuItem(
                             text = { Text("Прикрепить файлы") },
                             leadingIcon = { Text("📎") },

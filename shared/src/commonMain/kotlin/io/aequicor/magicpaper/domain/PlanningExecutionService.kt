@@ -303,7 +303,7 @@ class PlanningExecutionService(
                                 CodingEvent.Finished -> ended = true
                                 else -> Unit
                             }
-                            if (Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                            if (boundary(event) || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
                             if (boundary(event) || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
                         }
                     } catch (e: CancellationException) { runtime.abort(sessionId); throw e }
@@ -366,7 +366,7 @@ class PlanningExecutionService(
                         CodingEvent.Finished -> ended = true
                         else -> Unit
                     }
-                    if (Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                    if (boundary(event) || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
                     if (boundary(event) || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
                 }
             } catch (e: CancellationException) { runtime.abort(attempt.sessionId); throw e }
@@ -496,7 +496,7 @@ class PlanningExecutionService(
                         else -> Unit
                     }
                     currentAttempt = attempt
-                    if (Id.now() - lastDisplay >= 100) {
+                    if (boundary(event) || Id.now() - lastDisplay >= 100) {
                         val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
                         liveState.update { it + (attempt.id to preview) }; lastDisplay = Id.now()
                     }
@@ -608,7 +608,7 @@ class PlanningExecutionService(
                                 CodingEvent.Finished -> ended = true
                                 else -> Unit
                             }
-                            if (Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                            if (boundary(event) || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
                             if (boundary(event) || Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
                         }
                         if (failure != null || !ended || attempt.mergeReport.isBlank()) {

@@ -17,7 +17,11 @@ class PlanningExecutionServiceTest {
     private val pass = object : MilestoneVerifier {
         override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "checked")
     }
-    private class Runtime(private val gate: CompletableDeferred<Unit>? = null, private val failure: String? = null) : CodingRuntime {
+    private class Runtime(
+        private val gate: CompletableDeferred<Unit>? = null,
+        private val failure: String? = null,
+        private val commandGate: CompletableDeferred<Unit>? = null,
+    ) : CodingRuntime {
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
         override val supported = true; override val rootPath = "/fake"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
@@ -31,6 +35,11 @@ class PlanningExecutionServiceTest {
             emit(CodingEvent.ThinkingDelta("Проверяю критерии"))
             emit(CodingEvent.ToolStarted("read", "Чтение проекта", "read-1"))
             emit(CodingEvent.ToolFinished("read", false, "read-1", "Файлы прочитаны"))
+            if (commandGate != null) {
+                emit(CodingEvent.ToolStarted("command", "./gradlew :shared:jvmTest", "command-1", isExec = true))
+                commandGate.await()
+                emit(CodingEvent.ToolFinished("command", false, "command-1", "BUILD SUCCESSFUL"))
+            }
             gate?.await()
             if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText("Verified result"))
             emit(CodingEvent.Finished)
@@ -53,6 +62,26 @@ class PlanningExecutionServiceTest {
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
+
+    @Test fun commandAppearsInLiveMessageBeforeOutputAndUpdatesOnCompletion() = runTest {
+        val commandGate = CompletableDeferred<Unit>()
+        val (store, service) = fixture(Runtime(gate = CompletableDeferred(), commandGate = commandGate))
+        store.save(plan(stage("a")))
+        service.start(project.id); runCurrent()
+        val attemptId = store.planFor(project.id)!!.milestones.single().attempts.single().id
+        val running = service.live.value[attemptId]!!.steps.single { it.kind == CodingStepKind.EXEC }
+        assertTrue(running.running)
+        assertContains(running.title, "./gradlew :shared:jvmTest")
+        assertEquals("", running.result)
+
+        commandGate.complete(Unit); runCurrent()
+        val finished = service.live.value[attemptId]!!.steps.single { it.kind == CodingStepKind.EXEC }
+        assertEquals(running.callId, finished.callId)
+        assertFalse(finished.running)
+        assertTrue(finished.ok)
+        assertEquals("BUILD SUCCESSFUL", finished.result)
+        service.stop(project.id); runCurrent()
+    }
 
     @Test fun parallelStagesStartTogetherAndJoinWaits() = runTest {
         val gate = CompletableDeferred<Unit>(); val runtime = Runtime(gate)

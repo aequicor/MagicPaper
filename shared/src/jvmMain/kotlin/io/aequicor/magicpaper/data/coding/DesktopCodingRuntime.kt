@@ -11,11 +11,17 @@ import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.CancellationException
+import io.aequicor.magicpaper.domain.CodingSkillProtection
 
 /** Desktop-роутер coding-движка: Codex для подписки ChatGPT, pi для API-профилей. */
 class DesktopCodingRuntime(
     private val pi: PiCodingRuntime,
     private val subscription: CodexAppServerOpenAiSubscription,
+    override val projectSkills: io.aequicor.magicpaper.domain.ProjectSkills? = null,
+    private val skillSnapshot: suspend (String) -> List<io.aequicor.magicpaper.domain.SkillInstruction> = { emptyList() },
 ) : CodingRuntime {
     override val approvals = subscription.codingApprovals
     override suspend fun respondApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) =
@@ -43,10 +49,28 @@ class DesktopCodingRuntime(
         prompt: String,
         profile: LlmProfile?,
         attachments: List<Attachment>,
-    ): Flow<CodingEvent> = if (profile?.provider == ProviderType.OPENAI_SUBSCRIPTION) {
-        subscription.runCoding(project, session, prompt, profile, attachments)
-    } else {
-        pi.run(project, session, prompt, profile, attachments)
+    ): Flow<CodingEvent> = flow {
+        val adapter = if (profile?.provider == ProviderType.OPENAI_SUBSCRIPTION) "Codex" else "Pi"
+        val runId = java.util.UUID.randomUUID().toString()
+        val selected = try { skillSnapshot(project.id) } catch (e: CancellationException) { throw e } catch (_: Exception) {
+            emit(CodingEvent.Failed("SKILLS $runId: привязки или пакеты повреждены; запуск заблокирован."))
+            emit(CodingEvent.Finished)
+            return@flow
+        }
+        if (selected.isNotEmpty()) {
+            emit(CodingEvent.Notice("SKILLS run=$runId project=${project.id} session=${session.id} adapter=$adapter\n" +
+                selected.joinToString("\n") { "${it.id}@${it.version} sha256=${it.checksum}; заявлено=${it.permissions}" } +
+                "\nПередано: нет. Предоставлено пакету: нет. Результат задачи: не проверен."))
+            emit(CodingEvent.Failed(CodingSkillProtection.reason(adapter)))
+            emit(CodingEvent.Finished)
+            return@flow
+        }
+        emit(CodingEvent.Notice("SKILLS run=$runId project=${project.id} session=${session.id} adapter=$adapter: подключённых пакетов нет; пакету не предоставлены полномочия."))
+        emitAll(if (profile?.provider == ProviderType.OPENAI_SUBSCRIPTION) {
+            subscription.runCoding(project, session, prompt, profile, attachments)
+        } else {
+            pi.run(project, session, prompt, profile, attachments)
+        })
     }
 
     override fun abort(sessionId: String) {

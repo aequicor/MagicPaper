@@ -21,8 +21,10 @@ class PlanningChatServiceTest {
         var overrideReply: String? = null
         var timeout = false
         var coordinator = """{"reply":"Результат принят","actions":[]}"""
+        val coordinatorReplies = mutableListOf<String>()
         val coordinatorCallbacks = mutableListOf<(CodingStep) -> Unit>()
         val coordinatorGates = mutableListOf<CompletableDeferred<Unit>>()
+        var requestCallback: ((CodingStep) -> Unit)? = null
         override suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
             if (messages.first().content.contains("Ты координатор")) {
                 val index = coordinatorCallbacks.size
@@ -31,6 +33,7 @@ class PlanningChatServiceTest {
                 coordinatorGates.getOrNull(index)?.await()
                 return complete(profile, messages)
             }
+            requestCallback = onActivity
             return super.completeWithActivity(profile, messages, onActivity)
         }
         override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
@@ -38,7 +41,8 @@ class PlanningChatServiceTest {
             if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
             overrideReply?.let { return it }
-            if (messages.first().content.contains("Ты координатор")) return coordinator
+            if (messages.first().content.contains("Ты координатор"))
+                return if (coordinatorReplies.isEmpty()) coordinator else coordinatorReplies.removeAt(0)
             return """{"reply":"Уточним результат","questions":[{"id":"single","title":"Формат?","kind":"SINGLE","options":[{"id":"pdf","label":"PDF"},{"id":"doc","label":"DOC"}]},{"id":"multi","title":"Возможности?","kind":"MULTIPLE","options":[{"id":"read","label":"Чтение"},{"id":"write","label":"Запись"}]},{"id":"text","title":"Критерии?","kind":"TEXT"}]}"""
         }
     }
@@ -152,7 +156,7 @@ class PlanningChatServiceTest {
         callback(CodingStep(CodingStepKind.ANSWER, "{\"askUser\":true}"))
         runCurrent()
         assertFalse(f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.TOOL }.running)
-        assertTrue(f.service.drafts.value[parent.id]!!.steps.none { it.kind == CodingStepKind.ANSWER })
+        assertTrue(f.service.drafts.value[parent.id]!!.steps.filter { it.kind == CodingStepKind.ANSWER }.all { it.title.isBlank() })
 
         coordinatorGate.complete(Unit); advanceTimeBy(1000); runCurrent()
         assertNull(f.service.drafts.value[parent.id])
@@ -382,6 +386,54 @@ class PlanningChatServiceTest {
         assertEquals(PlanStatus.DONE, f.store.planFor(base.id)!!.status)
     }
 
+    @Test fun coordinatorReplyStreamsBeforeCompletionWithoutPrematureActionsOrDuplicateFinalText() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.runtime.gate.complete(Unit)
+        val gate = CompletableDeferred<Unit>()
+        f.gateway.coordinatorGates += gate
+        f.service.confirm(plan.id); runCurrent()
+        val callback = f.gateway.coordinatorCallbacks.single()
+        callback(CodingStep(CodingStepKind.ANSWER, """{"reply":"Проверки""", callId = "answer", running = true))
+        runCurrent()
+        assertEquals("Проверки", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
+        callback(CodingStep(CodingStepKind.INFO, "Получен фрагмент", callId = "progress", running = true))
+        val full = """{"reply":"Проверки приняты","actions":[]}"""
+        callback(CodingStep(CodingStepKind.ANSWER, full, callId = "answer"))
+        runCurrent()
+        assertEquals("Проверки приняты", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
+        assertTrue(f.store.planFor(plan.id)!!.deliveries.isEmpty())
+        assertNull(f.store.planFor(plan.id)!!.coordination.single().decision)
+        assertTrue(f.projects.messages(project.id, parent.id).none { it.text == "Планировщик: Проверки приняты" })
+        f.gateway.coordinator = full
+        gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertNull(f.service.drafts.value[parent.id])
+        val final = f.projects.messages(project.id, parent.id).single { it.text == "Планировщик: Проверки приняты" }
+        assertEquals(listOf("Планировщик: Проверки приняты"), final.steps.filter { it.kind == CodingStepKind.ANSWER }.map { it.title })
+        assertTrue(f.store.planFor(plan.id)!!.coordination.single().activity.none { it.kind == CodingStepKind.ANSWER })
+    }
+
+    @Test fun planningQuestionsStreamReadableTextBeforeWizardAppears() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val gate = CompletableDeferred<Unit>()
+        f.gateway.gate = gate
+        f.service.send(parent, "Создай план"); runCurrent()
+        val callback = assertNotNull(f.gateway.requestCallback)
+        callback(CodingStep(CodingStepKind.ANSWER, """{"reply":"Уточним""", callId = "response", running = true))
+        runCurrent()
+        assertEquals("Уточним", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
+        callback(CodingStep(CodingStepKind.ANSWER, """{"reply":"Уточним результат","questions":['""", callId = "response", running = true))
+        runCurrent()
+        assertEquals("Уточним результат", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
+        assertNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+        gate.complete(Unit); runCurrent()
+        val question = assertNotNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+        assertEquals(listOf("Уточним результат"), question.steps.filter { it.kind == CodingStepKind.ANSWER }.map { it.title })
+        assertNull(f.service.drafts.value[parent.id])
+    }
+
     @Test fun stoppingCoordinatorClearsLiveActivityAndPreservesItsMessages() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
@@ -410,6 +462,91 @@ class PlanningChatServiceTest {
         assertTrue(failure.text.startsWith("Ошибка планировщика:"))
         assertTrue(failure.steps.any { it.kind == CodingStepKind.THINKING })
         assertEquals(CodingStepKind.ERROR, failure.steps.last().kind)
+    }
+
+    @Test fun invalidCoordinatorRouteIsRepairedBeforeAnyActionIsDelivered() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        val peer = f.readyPlan("peer", f.session("peer-parent"))
+        f.gateway.coordinatorReplies += listOf(
+            """{"reply":"Передаю вопрос","actions":[{"stageId":"stage","message":"Не доставлять частично"},{"stageId":"peer","message":"Согласуйте файлы"}]}""",
+            """{"reply":"Соседний план не запущен","actions":[{"stageId":"stage","message":"Продолжить проверку фактических файлов"}]}""",
+        )
+        val attempt = StageAttempt("a", "worker", StageAssignment("model", "m"),
+            report = """{"kind":"QUESTION","text":"Нужно согласование","targetStageId":"peer"}""")
+        assertEquals(StageTurnAction.CONTINUE, f.service.finished(plan, plan.milestones.single(), attempt).action)
+        val saved = f.store.planFor(plan.id)!!
+        assertEquals("Продолжить проверку фактических файлов", saved.deliveries.single().text)
+        assertTrue(f.store.planFor(peer.id)!!.deliveries.isEmpty())
+        assertEquals(2, f.gateway.coordinatorCallbacks.size)
+        assertTrue(f.gateway.lastMessages.last().content.contains("Недопустимые адресаты actions: peer"))
+        assertTrue(f.gateway.lastMessages.any { it.content.contains("intent=STOP; phase=IDLE; status=DRAFT") })
+        assertTrue(f.gateway.lastMessages.any { it.content.contains("нет сохранённых отчётов") })
+        val history = f.projects.messages(project.id, "parent")
+        assertTrue(history.any { it.id == "a-turn-0-repair-0" })
+        assertFalse(history.any { it.failed })
+        assertTrue(saved.coordination.single().activity.any { it.callId == "coordinator-repair-0" })
+        f.service.finished(saved, saved.milestones.single(), attempt)
+        assertEquals(2, f.gateway.coordinatorCallbacks.size)
+        assertEquals(1, f.store.planFor(plan.id)!!.deliveries.size)
+    }
+
+    @Test fun malformedAndBlankCoordinatorMessagesAreRepairedWithoutRepeatingWorker() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.gateway.coordinatorReplies += listOf("invalid JSON",
+            """{"reply":"Продолжить","actions":[{"stageId":"stage","message":" "}]}""",
+            """{"reply":"Результат принят"}""")
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
+        assertEquals(3, f.gateway.coordinatorCallbacks.size)
+        assertEquals(1, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        assertTrue(f.store.planFor(plan.id)!!.deliveries.isEmpty())
+    }
+
+    @Test fun repeatedlyInvalidCoordinatorResponseOpensAnswerableQuestionAndCanResume() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.gateway.coordinator = """{"reply":"Согласовать","actions":[{"stageId":"missing","message":"Вопрос"}]}"""
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val saved = f.store.planFor(plan.id)!!
+        assertEquals(3, f.gateway.coordinatorCallbacks.size)
+        assertEquals(ExecutionPhase.WAITING, saved.phase)
+        assertEquals("Ожидается ответ планировщику", saved.issue?.message)
+        assertTrue(saved.deliveries.isEmpty())
+        assertNull(f.service.drafts.value[parent.id])
+        val history = f.projects.messages(project.id, parent.id)
+        val question = assertNotNull(history.pendingPlanningQuestion())
+        assertEquals("stage", question.planning!!.sourceStageId)
+        assertTrue(question.text.contains("за три попытки"))
+        assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, history, plan = saved).status)
+        f.gateway.coordinator = """{"reply":"Результат принят"}"""
+        f.service.send(parent, "Продолжить с сохранённого результата", replyTo = question.id)
+        advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
+        assertNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+    }
+
+    @Test fun retryOfSavedCoordinatorRoutingFailureDoesNotRepeatCompletedWorkerTurn() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val base = f.readyPlan("p", f.session("parent"))
+        val error = PlanningIssue(IssueKind.UNCERTAIN, "Некорректное сообщение координатора", requiresUser = true)
+        val attempt = StageAttempt("a", "plan-p-stage-stage", StageAssignment("model", "m"), phase = AttemptPhase.EXECUTING,
+            path = "/shared", report = "Saved result", turnIndex = 3, awaitingPlanner = true, error = error)
+        f.store.save(base.copy(confirmedRevision = 1, intent = ExecutionIntent.RUN, phase = ExecutionPhase.WAITING,
+            status = PlanStatus.FAILED, issue = error,
+            milestones = listOf(base.milestones.single().copy(status = MilestoneStatus.FAILED, attempts = listOf(attempt))),
+            coordination = listOf(CoordinationRecord("a-turn-3", "stage", StageReply(StageReplyKind.RESULT, "Saved result")))))
+        f.runtime.gate.complete(Unit)
+        f.execution.retry(base.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(base.id)!!.status)
+        assertTrue(f.runtime.calls.none { it.first.id == attempt.sessionId })
+        assertEquals(1, f.gateway.coordinatorCallbacks.size)
+        assertEquals(1, f.store.planFor(base.id)!!.coordination.size)
+        assertEquals(4, f.store.planFor(base.id)!!.milestones.single().attempts.last().turnIndex)
     }
 
     @Test fun questionsUseHistoryAndAnswersAreStoredOnce() = runTest {

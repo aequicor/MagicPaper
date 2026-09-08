@@ -84,6 +84,7 @@ class MagicPaperViewModel(
     val planningChat: PlanningChatService? = null,
     private val searchConnectionChecker: SearchConnectionChecker? = null,
 ) : ViewModel() {
+    val projectSkills get() = codingRuntime?.projectSkills
 
     suspend fun checkSearchConnection(connection: SearchConnection, draft: AppSettings): SearchConnectionResult =
         searchConnectionChecker?.check(connection, draft)

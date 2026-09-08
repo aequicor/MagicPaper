@@ -566,7 +566,7 @@ class CodexAppServerOpenAiSubscription(
                 val threadId = params.string("threadId") ?: return
                 val item = params["item"] as? JsonObject ?: return
                 if (item.string("type") == "agentMessage") {
-                    turns[threadId]?.accept(item.string("text").orEmpty(), item.string("phase"))
+                    turns[threadId]?.accept(item.string("text").orEmpty(), item.string("phase"), item.string("id").orEmpty())
                 }
                 codingRuns[threadId]?.completeItem(item)
                 item.string("id")?.let { approvalBroker.completeItem(threadId, it) }
@@ -579,7 +579,7 @@ class CodexAppServerOpenAiSubscription(
             }
             "item/agentMessage/delta" -> {
                 val delta = params.string("delta").orEmpty()
-                turns[params.string("threadId")]?.textDelta(delta)
+                turns[params.string("threadId")]?.textDelta(delta, params.string("itemId").orEmpty())
                 codingRuns[params.string("threadId")]?.emit(CodingEvent.TextDelta(delta))
             }
             "item/reasoning/textDelta", "item/reasoning/summaryTextDelta" -> {
@@ -641,6 +641,7 @@ class CodexAppServerOpenAiSubscription(
         private var receivedCharacters = 0
         private var summaryText = ""
         private var itemId = ""
+        private val messageText = mutableMapOf<String, String>()
 
         fun heartbeat() { activity.trySend(Unit) }
 
@@ -658,7 +659,7 @@ class CodexAppServerOpenAiSubscription(
             }
         }
 
-        fun textDelta(delta: String) {
+        fun textDelta(delta: String, messageId: String = itemId) {
             if (delta.isEmpty()) return
             heartbeat()
             receivedCharacters += delta.length
@@ -666,6 +667,11 @@ class CodexAppServerOpenAiSubscription(
                 io.aequicor.magicpaper.domain.CodingStepKind.INFO,
                 "Модель формирует ответ… Получено $receivedCharacters символов",
                 callId = "model-response-progress", running = true,
+            ))
+            val text = messageText[messageId].orEmpty() + delta
+            messageText[messageId] = text
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(
+                io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text, callId = messageId, running = true,
             ))
         }
         fun started(item: JsonObject) {
@@ -685,11 +691,12 @@ class CodexAppServerOpenAiSubscription(
         private var last = ""
         private var final = ""
 
-        fun accept(text: String, phase: String?) {
+        fun accept(text: String, phase: String?, messageId: String = itemId) {
             heartbeat()
             if (text.isBlank()) return
             last = text
-            if (phase == "commentary") onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text))
+            messageText.remove(messageId)
+            onActivity(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.ANSWER, text, callId = messageId))
             if (phase == "final_answer" || phase == "finalAnswer") final = text
         }
 
@@ -782,8 +789,9 @@ class CodexAppServerOpenAiSubscription(
                 "Для сборки используй установленный toolchain и обычный кеш Gradle (GRADLE_USER_HOME из окружения или ~/.gradle); " +
                 "не переноси кеш в проект ради обхода ограничений и не добавляй --offline без необходимости. " +
                 "Если сборке нужны сеть, зависимости или доступ за пределами песочницы, запроси разрешение штатным механизмом Codex: " +
-                "MagicPaper покажет пользователю операцию и причину для подтверждения. Не останавливайся после первого отказа песочницы. " +
-                "Дождись решения через штатный механизм подтверждения. Если пользователь отклонил действие, не обходи отказ; выбери безопасный вариант или сообщи ограничение."
+                "Codex автоматически проверит запрос; если движок передаст его пользователю, MagicPaper покажет операцию и причину для подтверждения. " +
+                "Не останавливайся после первого отказа песочницы. Дождись решения через штатный механизм подтверждения. " +
+                "Если автоматическая проверка или пользователь отклонили действие, не обходи отказ; выбери безопасный вариант или сообщи ограничение."
 
         fun defaultAppHome(): Path = Paths.get(System.getProperty("user.home"), ".MagicPaper", "codex")
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:42.811Z" hostname="MacBook-Pro-Aequicor.local" time="9.614">
+  <properties/>
+  <testcase name="streamingAnswerKeepsItsHeightBetweenChunksAndFollowsTheBottom[jvm]" classname="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" time="2.738"/>
+  <testcase name="expandingAtBottomDoesNotAutoscrollPastTheCommand[jvm]" classname="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" time="0.633"/>
+  <testcase name="outputStillFollowsAtBottomAndSessionSwitchResetsReadingPosition[jvm]" classname="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" time="1.578"/>
+  <testcase name="streamingAnswerDoesNotMoveTheReaderInsideTheMessage[jvm]" classname="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" time="2.808"/>
+  <testcase name="visibleCommandStaysInPlaceWhenExpandedAndCollapsed[jvm]" classname="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" time="0.818"/>
+  <testcase name="collapsingMultilineCommandWithItsTopOffscreenKeepsCollapsedRowVisible[jvm]" classname="io.aequicor.magicpaper.ui.screens.CodingChatScrollTest" time="1.039"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

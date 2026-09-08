@@ -454,6 +454,7 @@ interface CodingProjectRepository {
  * Все зависимости изолированы в папке данных приложения и удаляются вместе с ним.
  */
 interface CodingRuntime {
+    val projectSkills: ProjectSkills? get() = null
     val approvals: kotlinx.coroutines.flow.StateFlow<List<CodingApproval>> get() = noCodingApprovals
     suspend fun respondApproval(id: String, decision: CodingApprovalDecision) = Unit
     /** Verify engine prerequisites without starting a stage executor. */

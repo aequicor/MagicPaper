@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="io.aequicor.magicpaper.data.skills.LocalSkillsPanelTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-08T04:53:37.201Z" hostname="MacBook-Pro-Aequicor.local" time="0.828">
+  <properties/>
+  <testcase name="quarantinedLibraryRendersAtNarrowAndDesktopWidths[jvm]" classname="io.aequicor.magicpaper.data.skills.LocalSkillsPanelTest" time="0.828"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

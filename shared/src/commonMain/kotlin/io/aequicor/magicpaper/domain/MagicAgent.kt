@@ -16,6 +16,7 @@ class MagicAgent(
     private val docs: DocRepository,
     private val skillLibrary: SkillLibrary = EmptySkillLibrary,
     private val skillSelector: SkillSelector = SkillSelector(),
+    private val packageRuntime: SkillInstructionRuntime? = null,
 ) {
 
     /** Результат ответа: текст и источники (для отображения в чате). */
@@ -30,6 +31,7 @@ class MagicAgent(
         operationalProfile: LlmProfile? = profile,
     ): Answer {
         val trimmed = userText.trim()
+        packageRuntime?.answer(trimmed, history, profile, attachments)?.let { return Answer(it) }
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
         // они усиливают любую ветку (доки, поиск, свободный диалог).
         val skills = skillSelector.select(trimmed, skillLibrary.relevantFor(trimmed))
