@@ -135,10 +135,15 @@ internal fun RequestPinsPanel(
         shadowElevation = 2.dp,
     ) {
         Column {
-            PinText(selection.group.request, "Перейти к запросу", onNavigate, title = true)
+            PinText(selection.group.request, title = true,
+                modifier = Modifier.clickable(role = Role.Button, onClickLabel = "Перейти к запросу") {
+                    onNavigate(selection.group.request)
+                })
             selection.clarification?.let { clarification ->
                 HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .12f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Перейти к уточнению") {
+                    onNavigate(clarification)
+                }, verticalAlignment = Alignment.CenterVertically) {
                     val count = selection.group.clarifications.size
                     if (count > 1) {
                         Column(Modifier.padding(start = 12.dp).widthIn(min = 12.dp)
@@ -156,7 +161,7 @@ internal fun RequestPinsPanel(
                                 color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
-                    PinText(clarification, "Перейти к уточнению", onNavigate, modifier = Modifier.weight(1f))
+                    PinText(clarification, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -164,10 +169,10 @@ internal fun RequestPinsPanel(
 }
 
 @Composable
-private fun PinText(pin: RequestPin, action: String, onNavigate: (RequestPin) -> Unit,
+private fun PinText(pin: RequestPin,
     modifier: Modifier = Modifier, title: Boolean = false) {
     val label = if (pin.author == "Пользователь") pin.summary else "${pin.author} · ${pin.summary}"
-    Box(modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = action) { onNavigate(pin) }
+    Box(modifier.fillMaxWidth()
         .heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
         Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,

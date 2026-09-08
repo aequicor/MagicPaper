@@ -2,7 +2,9 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +30,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -154,11 +157,18 @@ internal fun ChatScrollItem(scroll: ChatScrollState, key: Any, content: @Composa
     }
 }
 
-/** Use on the stable top of a disclosure, not the vertically centred arrow of a tall command. */
-internal fun Modifier.chatDisclosure(onToggle: () -> Unit): Modifier = composed {
+/** Apply before header padding; a shared source lets the enclosing card draw the indication. */
+internal fun Modifier.chatDisclosure(
+    interactionSource: MutableInteractionSource? = null,
+    onToggle: () -> Unit,
+): Modifier = composed {
     val preserve = LocalChatDisclosure.current
     val coordinates = remember { ChatCoordinates() }
-    onGloballyPositioned { coordinates.value = it }.clickable {
+    onGloballyPositioned { coordinates.value = it }.clickable(
+        interactionSource = interactionSource,
+        indication = if (interactionSource == null) LocalIndication.current else null,
+        role = Role.Button,
+    ) {
         preserve(coordinates.value)
         onToggle()
     }

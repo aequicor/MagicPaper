@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -223,7 +224,8 @@ private fun points(value: Double): String {
                         Column(Modifier.offset { IntOffset((point.x * density).roundToInt(), (point.y * density).roundToInt()) }
                             .size(220.dp, 156.dp).background(if (selected == node.id) scheme.primaryContainer else if (!inactive && membership != null) scheme.primaryContainer.copy(alpha = .35f) else scheme.surface, MaterialTheme.shapes.medium)
                             .border(if (selected == node.id) 2.dp else 1.dp, if (selected == node.id || (!inactive && membership != null)) scheme.primary else scheme.outlineVariant, MaterialTheme.shapes.medium)
-                            .graphicsLayer { alpha = if (inactive) .72f else 1f }.clickable { onSelect(node.id) }.padding(8.dp)) {
+                            .graphicsLayer { alpha = if (inactive) .72f else 1f }
+                            .clip(MaterialTheme.shapes.medium).clickable { onSelect(node.id) }.padding(8.dp)) {
                             Text(plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }?.stageLabel() ?: node.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (membership != null) Text(
                                 if (membership.shared) "↔ Общая для вариантов" else

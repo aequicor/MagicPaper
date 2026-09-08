@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -690,8 +692,6 @@ private fun SessionRow(
                 }
             )
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
                 onClickLabel = if (selected && childCount > 0) {
                     if (expanded) "Свернуть этапы" else "Раскрыть этапы"
                 } else null,
@@ -727,10 +727,9 @@ private fun SessionRow(
         }
         if (showActions && childCount > 0) {
             Box(Modifier.size(24.dp)
+                .clip(MaterialTheme.shapes.small)
                 .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
                 .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
                     onClick = onToggleChildren,
                 ),
                 contentAlignment = Alignment.Center) {
@@ -1131,15 +1130,17 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
 @Composable
 private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable("thinking-" + step.title.take(24).hashCode()) { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
             .clip(MaterialTheme.shapes.small)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .indication(interaction, LocalIndication.current),
     ) {
-        Row(Modifier.chatDisclosure { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().chatDisclosure(interaction) { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "💭",
                 style = MaterialTheme.typography.bodySmall,
@@ -1159,8 +1160,8 @@ private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
             )
         }
         if (expanded) {
-            Spacer(Modifier.height(4.dp))
-            ChatMarkdown(step.title, Modifier.heightIn(max = 240.dp), streaming = live, scrollable = true)
+            ChatMarkdown(step.title, Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 6.dp)
+                .heightIn(max = 240.dp), streaming = live, scrollable = true)
         }
     }
 }
@@ -1195,6 +1196,7 @@ private fun ToolStepContent(
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
     val statusColor = when {
         running -> MaterialTheme.colorScheme.primary
         !ok -> MaterialTheme.colorScheme.error
@@ -1206,10 +1208,11 @@ private fun ToolStepContent(
             .padding(vertical = 2.dp)
             .clip(MaterialTheme.shapes.small)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .indication(interaction, LocalIndication.current),
     ) {
         Row(
-            Modifier.fillMaxWidth().chatDisclosure(onToggle),
+            Modifier.fillMaxWidth().chatDisclosure(interaction, onToggle)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Canvas(
@@ -1257,12 +1260,14 @@ private fun ToolStepContent(
         if (running && live) {
             Text(
                 if (isExec) "Выполняется команда…" else "Выполняется действие…",
+                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (expanded && result.isNotBlank()) {
-            ChatPlainText(result, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
+            ChatPlainText(result, Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
                 color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
         }
     }
@@ -1354,12 +1359,14 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                 modifier = Modifier.weight(1f, fill = false))
         }
         if (hasThinking) {
+            val interaction = remember { MutableInteractionSource() }
             Column(Modifier.fillMaxWidth().padding(top = 6.dp)
                 .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                .indication(interaction, LocalIndication.current)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
                 Row(
-                    Modifier.fillMaxWidth().chatDisclosure(onToggle).semantics {
+                    Modifier.fillMaxWidth().chatDisclosure(interaction, onToggle).semantics {
                         contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,

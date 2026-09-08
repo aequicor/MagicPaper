@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.ComputerAccess
@@ -52,7 +53,8 @@ fun ComputerUsePanel(
                 val bitmap = rememberAttachmentBitmap(attachment)
                 if (bitmap != null) {
                     Image(bitmap, "Последний снимок, доступный агенту", contentScale = ContentScale.Fit,
-                        modifier = Modifier.height(72.dp).fillMaxWidth().clickable { expanded = true })
+                        modifier = Modifier.height(72.dp).fillMaxWidth().clip(MaterialTheme.shapes.small)
+                            .clickable { expanded = true })
                     if (expanded) AlertDialog(
                         onDismissRequest = { expanded = false },
                         title = { Text("Последний снимок экрана") },

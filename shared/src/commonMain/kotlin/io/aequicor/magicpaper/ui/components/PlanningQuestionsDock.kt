@@ -12,6 +12,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.*
@@ -111,6 +112,7 @@ internal fun PlanningQuestionWizard(
                     question.options.forEach { option ->
                         val selected = option.id in answer.selected
                         Row(Modifier.fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
                             .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else androidx.compose.ui.graphics.Color.Transparent,
                                 MaterialTheme.shapes.small)
                             .clickable(enabled = !busy, role = if (question.kind == QuestionKind.SINGLE) Role.RadioButton else Role.Checkbox) {

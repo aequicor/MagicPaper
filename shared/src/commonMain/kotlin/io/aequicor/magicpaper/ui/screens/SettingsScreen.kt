@@ -103,6 +103,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         Section("Оформление")
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .clip(MaterialTheme.shapes.small)
                 .toggleable(
                     value = draft.paperAnimationEnabled,
                     role = Role.Switch,
@@ -125,6 +126,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         }
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .clip(MaterialTheme.shapes.small)
                 .toggleable(
                     value = draft.hideSystemSteps,
                     role = Role.Switch,
@@ -289,7 +291,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
                 items(filtered, key = { it.id }) { model ->
                     val checked = model.id in draft.favoriteModels
-                    Row(Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Checkbox,
+                    Row(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).toggleable(value = checked, role = Role.Checkbox,
                         onValueChange = { draft = draft.withFavoriteModel(model.id) }).heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = checked, onCheckedChange = null)

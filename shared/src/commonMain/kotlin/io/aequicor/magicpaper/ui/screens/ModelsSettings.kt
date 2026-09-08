@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.platform.LocalUriHandler
@@ -74,8 +75,9 @@ fun ModelsSettings(vm: MagicPaperViewModel, state: UiState) {
             var query by remember { mutableStateOf("") }
             val all = (p.modelCatalog.map { it.id } + p.favoriteModels + listOf(p.sourceModelId(p.modelId)))
                 .filter { it.isNotBlank() }.distinct()
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("${if (expanded) "▾" else "▸"} ${p.name} · ${all.size}", Modifier.weight(1f).clickable { expanded = !expanded }.padding(vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
+            Row(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("${if (expanded) "▾" else "▸"} ${p.name} · ${all.size}", Modifier.weight(1f).padding(vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
                 TextButton(onClick = { vm.editLlmProfile(p.id) }) { Text("Настроить", style = MaterialTheme.typography.labelSmall) }
             }
             if (expanded) {
@@ -111,8 +113,9 @@ private fun LibraryModelRow(profile: LlmProfile, model: String, state: UiState, 
     val currentDefault = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
     val isDefault = currentDefault?.id == profile.id && currentDefault.selectionKey == model
     Column {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).clickable { expanded = !expanded }.padding(vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
                 Text(profile.modelName(model), style = MaterialTheme.typography.bodyMedium)
                 Text(buildList {
                     add(profile.name)
