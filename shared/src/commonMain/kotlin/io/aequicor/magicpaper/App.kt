@@ -11,18 +11,15 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -34,7 +31,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.di.MagicPaperDependencies
 import io.aequicor.magicpaper.di.createMagicPaperDependencies
 import io.aequicor.magicpaper.domain.PluginState
@@ -45,6 +46,8 @@ import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ModelSwitcherDialog
 import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
 import io.aequicor.magicpaper.ui.components.MagicPaperBackground
+import io.aequicor.magicpaper.ui.components.ToolbarButton
+import io.aequicor.magicpaper.ui.components.ToolbarIcon
 import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
@@ -55,6 +58,7 @@ import io.aequicor.magicpaper.ui.screens.WelcomeScreen
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
+import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import io.aequicor.magicpaper.ui.window.WindowDragArea
 import io.aequicor.magicpaper.ui.window.WindowTitleBarArea
 import kotlinx.coroutines.delay
@@ -64,25 +68,22 @@ import kotlinx.coroutines.delay
 fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies() }) {
     MagicPaperTheme {
         Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                // Edge-to-edge на всех платформах: контент не залезает под статусбар,
-                // вырез, навбар и клавиатуру (внутри — только зона приложения).
-                .windowInsetsPadding(WindowInsets.safeDrawing),
+            modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
             val state by deps.viewModel.state.collectAsState()
-            // Нативный прозрачный тайтлбар (macOS): фон дотянут до самого верха
-            // окна, а контент вытолкнут из-под высоты тайтлбара. Отступ слева
-            // под «светофор» применяется только к верхним панелям (см. их код).
-            val titleBarTop = LocalWindowTitleBarInsets.current.calculateTopPadding()
-            Column(modifier = Modifier.fillMaxSize().padding(top = titleBarTop)) {
-                if (state.showWelcome) {
-                    WelcomeScreen(deps.viewModel, state)
-                } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize()) {
+                // Один непрерывный лист под всем интерфейсом, включая прозрачный
+                // системный тайтлбар. Безопасные отступы относятся только к контенту.
+                MagicPaperBackground(state.settings.paperAnimationEnabled, Modifier.matchParentSize())
+                Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    if (state.showWelcome) {
+                        Box(Modifier.padding(top = LocalWindowTitleBarInsets.current.calculateTopPadding())) {
+                            WelcomeScreen(deps.viewModel, state)
+                        }
+                    } else {
                         TopBar(deps.viewModel, state.screen)
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                         Box(modifier = Modifier.weight(1f)) {
                             MainArea(deps.viewModel, state)
                             Notice(
@@ -92,15 +93,15 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
                             )
                         }
                     }
-                    if (state.modelSwitcherOpen && state.screen == Screen.CHAT) {
-                        ModelSwitcherDialog(
-                            vm = deps.viewModel,
-                            profiles = state.availableLlmProfiles,
-                            activeProfileId = state.settings.activeLlmProfileId,
-                            sessionProfileId = state.current?.llmProfileId,
-                            onDismiss = { deps.viewModel.toggleModelSwitcher(false) },
-                        )
-                    }
+                }
+                if (!state.showWelcome && state.modelSwitcherOpen && state.screen == Screen.CHAT) {
+                    ModelSwitcherDialog(
+                        vm = deps.viewModel,
+                        profiles = state.availableLlmProfiles,
+                        activeProfileId = state.settings.activeLlmProfileId,
+                        sessionProfileId = state.current?.llmProfileId,
+                        onDismiss = { deps.viewModel.toggleModelSwitcher(false) },
+                    )
                 }
             }
         }
@@ -112,9 +113,6 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
     LocalHideSystemSteps provides state.settings.hideSystemSteps,
 ) {
     Box(Modifier.fillMaxSize()) {
-        if (state.screen == Screen.CHAT || state.screen == Screen.CODING) {
-            MagicPaperBackground(state.settings.paperAnimationEnabled, Modifier.matchParentSize())
-        }
         Row(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen == Screen.CHAT) {
                 Row {
@@ -145,55 +143,64 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
 
 @Composable
 private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
-    // Разгруженный бар: разделы живут в настройках, здесь только панели и шестерёнка.
-    // На десктопе (окно без системных декораций) средняя часть бара — зона
-    // перетаскивания окна, а справа появляются кнопки свернуть/развернуть/закрыть.
-    // Интерактивные кнопки живут ВНЕ зоны перетаскивания, чтобы клик не
-    // пересекался с жестом переноса окна.
     val chrome = LocalWindowChrome.current
-    // Нативные кнопки поверх контента: macOS слева, Windows справа.
+    val desktopHeight = LocalWindowToolbarHeight.current
+    val toolbarHeight = desktopHeight ?: 56.dp
+    val buttonSize = if (desktopHeight != null) 28.dp else 48.dp
+    val titleStyle = if (desktopHeight != null) {
+        MaterialTheme.typography.labelMedium.copy(
+            fontFamily = FontFamily.SansSerif,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp,
+            lineHeight = 16.sp,
+        )
+    } else {
+        MaterialTheme.typography.titleSmall
+    }
+    // Резервируем только боковые зоны системных кнопок. Сам тулбар занимает
+    // их строку, а не добавляет ещё один ряд под прозрачным тайтлбаром macOS.
     val layoutDirection = LocalLayoutDirection.current
     val nativeInsets = LocalWindowTitleBarInsets.current
     val nativeStart = nativeInsets.calculateLeftPadding(layoutDirection)
     val nativeEnd = nativeInsets.calculateRightPadding(layoutDirection)
-    WindowTitleBarArea(modifier = Modifier.fillMaxWidth()) {
+    WindowTitleBarArea(modifier = Modifier.fillMaxWidth().height(toolbarHeight)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(
-                start = nativeStart.coerceAtLeast(12.dp),
-                end = nativeEnd.coerceAtLeast(if (chrome != null) 6.dp else 12.dp),
-                top = 4.dp,
-                bottom = 4.dp,
+            modifier = Modifier.fillMaxSize().padding(
+                start = nativeStart.coerceAtLeast(8.dp),
+                end = nativeEnd.coerceAtLeast(8.dp),
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
+            ToolbarButton(
+                icon = ToolbarIcon.Sidebar,
+                label = "Показать или скрыть боковую панель",
+                size = buttonSize,
                 onClick = { vm.toggleSessionsPanel() },
-                modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
-            ) { Text("☰", style = MaterialTheme.typography.titleMedium) }
-            WindowDragArea(modifier = Modifier.weight(1f)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                    Text("MagicPaper", style = MaterialTheme.typography.titleMedium)
+            )
+            WindowDragArea(modifier = Modifier.weight(1f).height(toolbarHeight)) {
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("MagicPaper", style = titleStyle, maxLines = 1)
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         screen.subtitle,
-                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                        style = titleStyle.copy(fontWeight = FontWeight.Normal),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            TextButton(
+            ToolbarButton(
+                icon = ToolbarIcon.Settings,
+                label = if (screen == Screen.SETTINGS) "Вернуться в чат" else "Настройки",
+                size = buttonSize,
+                selected = screen == Screen.SETTINGS,
                 onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
-                modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
-            ) {
-                Text(
-                    "⚙",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (screen == Screen.SETTINGS) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
+            )
             if (chrome != null) WindowButtons(chrome)
         }
     }
