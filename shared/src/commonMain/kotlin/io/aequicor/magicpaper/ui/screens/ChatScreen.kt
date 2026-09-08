@@ -68,6 +68,8 @@ import io.aequicor.magicpaper.ui.components.stickToBottom
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
 import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
+import io.aequicor.magicpaper.ui.components.MessagePinButton
+import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
 
@@ -100,6 +102,8 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = stickToBottom(listState, session?.id)
     val indices = remember(messages) { messages.mapIndexed { index, message -> message.id to index }.toMap() }
+    val pinNumbers = remember(pins, indices) { requestPinNumbers(pins, indices.keys) }
+    var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isEmpty()) {
             EmptyHint()
@@ -113,11 +117,14 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(messages, key = { it.id }) { message ->
-                    ChatScrollItem(scroll, message.id) { MessageBubble(message) }
+                    ChatScrollItem(scroll, message.id) {
+                        MessageBubble(message, pinNumbers[message.id]) { browserMessageId = message.id }
+                    }
                 }
             }
         }
-        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd))
+        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd),
+            browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
         ChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp))
         AnimatedVisibility(
             visible = busy,
@@ -161,7 +168,7 @@ private fun EmptyHint() {
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -198,6 +205,9 @@ private fun MessageBubble(message: ChatMessage) {
                 // Ответ агента рендерим как markdown: заголовки, списки,
                 // блоки кода с подсветкой синтаксиса и кнопкой копирования.
                 ChatMarkdown(message.text)
+            }
+            if (isUser && pinNumber != null) {
+                MessagePinButton(pinNumber, onShowPins, Modifier.align(Alignment.End).padding(top = 6.dp))
             }
             if (message.sources.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))

@@ -1,31 +1,27 @@
 package io.aequicor.magicpaper.ui.screens
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.domain.RequestPin
-import io.aequicor.magicpaper.domain.RequestPinGroup
-import io.aequicor.magicpaper.ui.components.*
+import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.ui.CodingSessionUi
+import io.aequicor.magicpaper.ui.components.requestPinEntries
+import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import java.awt.EventQueue
 import java.io.File
 import kotlin.test.*
 
+/** Real chat screens: the marker belongs to a saved LazyColumn message, never the sticky panel. */
 @OptIn(ExperimentalComposeUiApi::class)
 class RequestPinsBrowserTest {
     private companion object {
@@ -38,36 +34,40 @@ class RequestPinsBrowserTest {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         fun text(node: SemanticsNode) = node.config.getOrNull(SemanticsProperties.Text).orEmpty().joinToString(" ") { it.text }
         fun description(node: SemanticsNode) = node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().joinToString(" ")
-        fun pin(id: String) = RequestPin(id, "Сообщение $id", "Пользователь")
+        fun pin(id: String) = RequestPin(id, "Сводка $id", "Пользователь")
+        fun body(index: Int) = if (index % 2 == 0) "Исходное сообщение m$index\nПроверяем закрепление в ленте чата."
+            else "Ответ агента m$index"
+        fun isIndicator(node: SemanticsNode) = description(node).startsWith("Закреплённое сообщение №")
     }
 
-    private class Chat(val width: Int = 420, fontScale: Float = 1f, messageCount: Int = 10) : AutoCloseable {
-        val list = LazyListState()
+    private class Chat(val coding: Boolean, val width: Int = 420, fontScale: Float = 1f, val messageCount: Int = 10) : AutoCloseable {
         val session = mutableStateOf("first")
+        val tailCount = mutableIntStateOf(0)
         val groups = mutableStateOf(if (messageCount > 10) listOf(
-            RequestPinGroup(pin("m0"), (1 until messageCount).map { pin("m$it") })
+            RequestPinGroup(pin("m0"), (2 until messageCount step 2).map { pin("m$it") })
         ) else listOf(
-            RequestPinGroup(pin("m0"), listOf(pin("m2"), pin("m4"))),
+            RequestPinGroup(pin("m0"), listOf(pin("m2"))),
             RequestPinGroup(pin("m6"), listOf(pin("m8"))),
         ))
-        lateinit var scroll: ChatScrollState
         private var frame = 0L
-        private val scene = onUi { ImageComposeScene(width, 640) {
+        private val scene = onUi { ImageComposeScene(width, 780) {
             CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
                 MagicPaperTheme {
-                    scroll = stickToBottom(list, session.value)
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                        LazyColumn(state = list, modifier = Modifier.fillMaxSize().chatScrollInput(scroll),
-                            contentPadding = PaddingValues(16.dp)) {
-                            items(messageCount, key = { "m$it" }) { index ->
-                                ChatScrollItem(scroll, "m$index") {
-                                    Text("Исходное сообщение m$index", Modifier.fillMaxWidth().height(200.dp))
-                                }
-                            }
-                            item { Spacer(Modifier.height(700.dp)) }
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        if (coding) {
+                            CodingChat(CodingProject("p", "Проект", "/project", 0),
+                                CodingSessionUi(CodingSession(session.value, "p", "Диалог", 0),
+                                    messages = List(messageCount + tailCount.intValue) { index ->
+                                        CodingMessage("m$index", if (index < messageCount && index % 2 == 0) CodingRole.USER else CodingRole.AGENT,
+                                            body(index), createdAt = index.toLong())
+                                    }), false, true, { _, _ -> }, {}, { _, _ -> }, pins = groups.value)
+                        } else {
+                            MessagesList(ChatSession(session.value, "Диалог", 0, 0,
+                                messages = List(messageCount + tailCount.intValue) { index ->
+                                    ChatMessage("m$index", if (index < messageCount && index % 2 == 0) ChatRole.USER else ChatRole.AGENT,
+                                        body(index), index.toLong())
+                                }), false, pins = groups.value)
                         }
-                        RequestPinsOverlay(groups.value, (0 until messageCount).associate { "m$it" to it }, list, scroll,
-                            Modifier.align(Alignment.TopEnd))
                     }
                 }
             }
@@ -78,7 +78,13 @@ class RequestPinsBrowserTest {
         }
         fun nodes() = onUi { scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) } }
         fun hasText(label: String) = nodes().any { text(it) == label }
-        fun indicator() = nodes().single { description(it).startsWith("Закреплённые сообщения:") }
+        fun indicator(number: Int) = nodes().single { description(it) == "Закреплённое сообщение №$number. Открыть список" }
+        fun history() = nodes().first { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) != null }
+        fun position() = onUi { history().config[SemanticsProperties.VerticalScrollAxisRange].value() }
+        fun scrollTo(index: Int) {
+            onUi { assertTrue(history().config[SemanticsActions.ScrollToIndex].action!!.invoke(index + if (coding) 1 else 0)) }
+            render()
+        }
         fun click(node: SemanticsNode) {
             onUi {
                 val point = node.boundsInRoot.center
@@ -87,95 +93,95 @@ class RequestPinsBrowserTest {
             }
             render()
         }
-        // Dialog content follows the underlying panel, which can contain the same summary.
         fun clickText(label: String) = click(nodes().last { text(it) == label })
         fun snapshot(name: String) = onUi {
-            val file = File("build/reports/request-pins/$name.png").apply { parentFile.mkdirs() }
-            scene.render(++frame * 32_000_000L).use { image ->
-                image.encodeToData()!!.use { file.writeBytes(it.bytes) }
-            }
+            val file = File("build/reports/request-pins/$name-${if (coding) "coding" else "chat"}.png").apply { parentFile.mkdirs() }
+            scene.render(++frame * 32_000_000L).use { image -> image.encodeToData()!!.use { file.writeBytes(it.bytes) } }
         }
         override fun close() = onUi { scene.close() }
     }
 
-    @Test fun indicatorOpensAndClosesListWithoutNavigatingThenSelectionRevealsSource() = Chat().use { chat ->
-        assertTrue(description(chat.indicator()).contains(": 5."))
-        assertTrue(chat.indicator().boundsInRoot.height >= 48f)
-        val before = chat.list.firstVisibleItemIndex to chat.list.firstVisibleItemScrollOffset
-        chat.snapshot("indicator")
-        chat.click(chat.indicator())
-        assertTrue(chat.hasText("Закреплённые сообщения"))
-        assertTrue(chat.hasText("Всего: 5"))
-        assertEquals(before, chat.list.firstVisibleItemIndex to chat.list.firstVisibleItemScrollOffset)
-        assertNull(chat.scroll.highlightedKey)
-        chat.snapshot("pins-list")
-        chat.clickText("Закрыть")
-        assertFalse(chat.hasText("Закреплённые сообщения"))
-        assertEquals(before, chat.list.firstVisibleItemIndex to chat.list.firstVisibleItemScrollOffset)
-        chat.click(chat.indicator())
-        chat.clickText("Сообщение m6")
-        assertFalse(chat.hasText("Закреплённые сообщения"))
-        assertEquals("m6", chat.scroll.highlightedKey)
-        assertTrue(chat.list.layoutInfo.visibleItemsInfo.any { it.key == "m6" && it.offset >= 0 })
-    }
-
-    @Test fun buttonRemainsAtStartAndEmptyPinsOrSessionSwitchDismissTheList() = Chat().use { chat ->
-        onUi { chat.list.dispatchRawDelta(-10000f) }
-        chat.render()
-        assertNull(chat.scroll.requestPinsBounds)
-        chat.click(chat.indicator())
-        assertTrue(chat.hasText("Сообщение m0"))
-        chat.clickText("Сообщение m2")
-        assertEquals("m2", chat.scroll.highlightedKey)
-        chat.click(chat.indicator())
-        chat.session.value = "second"
-        chat.render()
-        assertFalse(chat.hasText("Закреплённые сообщения"), "An open list must not leak into another chat")
-        chat.click(chat.indicator())
-        chat.groups.value = emptyList()
-        chat.render()
-        assertFalse(chat.hasText("Закреплённые сообщения"))
-        assertTrue(chat.nodes().none { description(it).startsWith("Закреплённые сообщения:") })
-        assertNull(chat.scroll.requestPinsBounds)
-    }
-
-    @Test fun narrowScreenWithLargeFontKeepsButtonAndDialogActionsInsideViewport() = Chat(320, 1.5f).use { chat ->
-        val button = chat.indicator().boundsInRoot
-        assertTrue(button.left >= 0 && button.right <= 320)
-        chat.snapshot("indicator-narrow")
-        chat.click(chat.indicator())
-        assertTrue(chat.hasText("Всего: 5"))
-        for (label in listOf("Закреплённые сообщения", "Закрыть", "Сообщение m8")) {
-            val bounds = chat.nodes().first { text(it) == label }.boundsInRoot
-            assertTrue(bounds.left >= 0 && bounds.right <= 320 && bounds.top >= 0 && bounds.bottom <= 640,
-                "$label must fit the viewport: $bounds")
+    @Test fun messageButtonOpensItsOwnPinAndSelectingAnotherPinRevealsTheSourceInBothChats() {
+        for (coding in listOf(false, true)) Chat(coding).use { chat ->
+            val marker = chat.indicator(4)
+            assertTrue(marker.boundsInRoot.height >= 48f)
+            assertTrue(walk(chat.history()).any { it.id == marker.id }, "The button must be inside LazyColumn")
+            val source = chat.nodes().single { text(it) == body(8) }
+            assertTrue(marker.boundsInRoot.top >= source.boundsInRoot.bottom, "The marker belongs below its message text")
+            chat.snapshot("message-indicator")
+            val before = chat.position()
+            chat.click(marker)
+            assertTrue(chat.hasText("Закреплённые сообщения"))
+            assertTrue(chat.hasText("Всего: 4"))
+            assertTrue(chat.nodes().any { it.config.getOrNull(SemanticsProperties.Selected) == true &&
+                walk(it).any { child -> text(child) == "Сводка m8" } }, "Select the message whose button was clicked")
+            assertEquals(before, chat.position())
+            chat.clickText("Закрыть")
+            assertEquals(before, chat.position())
+            chat.click(chat.indicator(4))
+            chat.clickText("Сводка m0")
+            assertFalse(chat.hasText("Закреплённые сообщения"))
+            assertTrue(chat.hasText(body(0)))
+            assertTrue(chat.indicator(1).boundsInRoot.top >= 0)
         }
-        chat.snapshot("pins-list-narrow")
-        chat.clickText("Закрыть")
-        assertFalse(chat.hasText("Закреплённые сообщения"))
     }
 
-    @Test fun countAndListExcludeMissingSourcesAndKeepRequestOrderWithoutDuplicates() {
+    @Test fun markersScrollAwayWithMessagesAndUnpinnedMessagesHaveNoButton() {
+        for (coding in listOf(false, true)) Chat(coding).use { chat ->
+            chat.scrollTo(4)
+            val source = chat.nodes().single { text(it) == body(4) }.boundsInRoot
+            val next = chat.nodes().single { text(it) == body(5) }.boundsInRoot
+            assertTrue(chat.nodes().filter(::isIndicator).none { it.boundsInRoot.top in source.top..next.top },
+                "An unpinned user message must not show a marker")
+            chat.tailCount.intValue = 12
+            chat.render()
+            chat.scrollTo(21)
+            assertTrue(chat.hasText("Сводка m8"), "The sticky clarification remains visible")
+            assertTrue(chat.nodes().none(::isIndicator), "No button may remain on the sticky panel or outside the list")
+            chat.clickText("Сводка m8")
+            assertNotNull(chat.indicator(4), "Navigating back restores the marker on the source")
+        }
+    }
+
+    @Test fun switchingSessionsOrRemovingTheSelectedPinClosesTheBrowser() {
+        for (coding in listOf(false, true)) Chat(coding).use { chat ->
+            chat.click(chat.indicator(4))
+            chat.session.value = "second"
+            chat.render()
+            assertFalse(chat.hasText("Закреплённые сообщения"))
+            chat.click(chat.indicator(4))
+            chat.groups.value = chat.groups.value.dropLast(1)
+            chat.render()
+            assertFalse(chat.hasText("Закреплённые сообщения"), "A removed source cannot leave an obsolete browser open")
+            chat.groups.value = emptyList()
+            chat.render()
+            assertTrue(chat.nodes().none(::isIndicator))
+        }
+    }
+
+    @Test fun manyPinsFitOnNarrowScreensWithLargeTextAndKeepTheListLazy() {
+        for (coding in listOf(false, true)) Chat(coding, 360, 1.4f, 202).use { chat ->
+            val marker = chat.indicator(101)
+            val bounds = marker.boundsInRoot
+            assertTrue(bounds.left >= 0 && bounds.right <= 360 && bounds.top >= 0 && bounds.bottom <= 780)
+            chat.snapshot("message-indicator-narrow")
+            chat.click(marker)
+            assertTrue(chat.hasText("Всего: 101"))
+            assertTrue(chat.hasText("Сводка m200"))
+            assertTrue(chat.nodes().count { text(it).startsWith("Сводка m") } < 20)
+            chat.snapshot("message-pins-list-narrow")
+            chat.clickText("Закрыть")
+            assertFalse(chat.hasText("Закреплённые сообщения"))
+        }
+    }
+
+    @Test fun numbersAndListExcludeMissingSourcesAndKeepRequestOrderWithoutDuplicates() {
         val groups = listOf(RequestPinGroup(pin("a"), listOf(pin("b"), pin("missing"))),
             RequestPinGroup(pin("c"), listOf(pin("b"))))
         val entries = requestPinEntries(groups, setOf("a", "b", "c"))
         assertEquals(listOf("a", "b", "c"), entries.map { it.pin.messageId })
         assertEquals(listOf(true, false, true), entries.map { it.isRequest })
+        assertEquals(mapOf("a" to 1, "b" to 2, "c" to 3), requestPinNumbers(groups, setOf("a", "b", "c")))
         assertTrue(requestPinEntries(groups, emptySet()).isEmpty())
-    }
-
-    @Test fun manyPinsUseABoundedListAndKeepTheCurrentClarificationReachable() = Chat(320, 1.5f, 101).use { chat ->
-        assertTrue(description(chat.indicator()).contains(": 101."))
-        assertTrue(chat.indicator().boundsInRoot.right <= 320)
-        chat.snapshot("indicator-many")
-        chat.click(chat.indicator())
-        assertTrue(chat.hasText("Всего: 101"))
-        assertTrue(chat.hasText("Сообщение m100"))
-        assertTrue(chat.nodes().count { text(it).startsWith("Сообщение m") } < 20,
-            "The browser must compose only the visible part of a long history")
-        chat.snapshot("pins-list-many")
-        chat.clickText("Сообщение m100")
-        assertEquals("m100", chat.scroll.highlightedKey)
-        assertFalse(chat.hasText("Закреплённые сообщения"))
     }
 }

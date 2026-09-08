@@ -5,7 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -37,12 +37,15 @@ internal fun requestPinEntries(groups: List<RequestPinGroup>, messageIds: Set<St
         listOf(RequestPinEntry(group.request, true)) + group.clarifications.map { RequestPinEntry(it, false) }
     }.filter { it.pin.messageId in messageIds }.distinctBy { it.pin.messageId }
 
+internal fun requestPinNumbers(groups: List<RequestPinGroup>, messageIds: Set<String>): Map<String, Int> =
+    requestPinEntries(groups, messageIds).mapIndexed { index, entry -> entry.pin.messageId to index + 1 }.toMap()
+
 @Composable
-internal fun RequestPinsButton(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun MessagePinButton(number: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val ink = MaterialTheme.colorScheme.onPrimaryContainer
     Surface(onClick = onClick,
         modifier = modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).semantics {
-            contentDescription = "Закреплённые сообщения: $count. Открыть список"
+            contentDescription = "Закреплённое сообщение №$number. Открыть список"
             role = Role.Button
         },
         shape = RoundedCornerShape(12.dp),
@@ -66,7 +69,7 @@ internal fun RequestPinsButton(count: Int, onClick: () -> Unit, modifier: Modifi
                 drawLine(ink, Offset(size.width * .5f, size.height * .62f),
                     Offset(size.width * .5f, size.height * .92f), 1.6.dp.toPx(), StrokeCap.Round)
             }
-            Text(count.toString(), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            Text("№$number", style = MaterialTheme.typography.labelLarge, maxLines = 1)
         }
     }
 }
@@ -89,14 +92,14 @@ internal fun RequestPinsDialog(entries: List<RequestPinEntry>, selectedId: Strin
                     initialFirstVisibleItemIndex = (entries.indexOfFirst { it.pin.messageId == selectedId } - 1).coerceAtLeast(0))
                 LazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth(), state = listState,
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(entries, key = { it.pin.messageId }) { entry ->
+                    itemsIndexed(entries, key = { _, entry -> entry.pin.messageId }) { index, entry ->
                         val current = entry.pin.messageId == selectedId
                         Surface(shape = RoundedCornerShape(12.dp),
                             color = if (current) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
                             Column(Modifier.fillMaxWidth().semantics { selected = current }
                                 .clickable(role = Role.Button, onClickLabel = "Перейти к сообщению") { onNavigate(entry.pin) }
                                 .padding(12.dp)) {
-                                Text("${if (entry.isRequest) "Запрос" else "Уточнение"} · ${entry.pin.author}",
+                                Text("${if (entry.isRequest) "Запрос" else "Уточнение"} №${index + 1} · ${entry.pin.author}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text(entry.pin.summary, style = MaterialTheme.typography.bodyMedium,

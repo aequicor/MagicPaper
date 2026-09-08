@@ -60,6 +60,8 @@ internal fun RequestPinsOverlay(
     listState: LazyListState,
     scroll: ChatScrollState,
     modifier: Modifier = Modifier,
+    browserMessageId: String? = null,
+    onCloseBrowser: () -> Unit = {},
 ) {
     val visible by remember(groups, itemIndices, listState) {
         derivedStateOf {
@@ -82,10 +84,9 @@ internal fun RequestPinsOverlay(
     val fade = with(LocalDensity.current) { 16.dp.toPx() }
     val currentIndices by rememberUpdatedState(itemIndices)
     val entries = remember(groups, itemIndices) { requestPinEntries(groups, itemIndices.keys) }
-    var browserOpen by remember(scroll) { mutableStateOf(false) }
     SideEffect { if (visible == null) scroll.requestPinsBounds = null }
     val navigate: (RequestPin) -> Unit = { pin ->
-        browserOpen = false
+        onCloseBrowser()
         navigation?.cancel()
         navigation = scope.launch {
             scroll.navigateToMessage(pin.messageId,
@@ -95,21 +96,18 @@ internal fun RequestPinsOverlay(
     }
     val selection = visible
     if (selection != null) {
-        RequestPinsPanel(selection, onNavigate = navigate, pinCount = entries.size,
-            onShowPins = { browserOpen = true }, modifier = modifier.onGloballyPositioned {
+        RequestPinsPanel(selection, onNavigate = navigate, modifier = modifier.onGloballyPositioned {
                 val position = it.positionInParent()
                 scroll.requestPinsBounds = Rect(position.x, position.y,
                     position.x + it.size.width, position.y + it.size.height)
             })
-    } else if (entries.isNotEmpty()) {
-        // Keep the list reachable even before the first request has scrolled offscreen.
-        RequestPinsButton(entries.size, { browserOpen = true }, modifier.padding(horizontal = 12.dp, vertical = 4.dp))
     }
-    if (entries.isEmpty()) {
-        SideEffect { browserOpen = false }
-    } else if (browserOpen) {
-        RequestPinsDialog(entries, selection?.let { it.clarification ?: it.group.request }?.messageId,
-            onNavigate = navigate, onDismiss = { browserOpen = false })
+    if (browserMessageId != null) {
+        if (entries.any { it.pin.messageId == browserMessageId }) {
+            RequestPinsDialog(entries, browserMessageId, onNavigate = navigate, onDismiss = onCloseBrowser)
+        } else {
+            SideEffect { onCloseBrowser() }
+        }
     }
 }
 
@@ -143,8 +141,6 @@ internal fun RequestPinsPanel(
     selection: VisibleRequestPins,
     onNavigate: (RequestPin) -> Unit,
     modifier: Modifier = Modifier,
-    pinCount: Int = 0,
-    onShowPins: () -> Unit = {},
 ) {
     Surface(
         modifier = modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -153,13 +149,10 @@ internal fun RequestPinsPanel(
         shadowElevation = 2.dp,
     ) {
         Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PinText(selection.group.request, title = true,
-                    modifier = Modifier.weight(1f).clickable(role = Role.Button, onClickLabel = "Перейти к запросу") {
-                        onNavigate(selection.group.request)
-                    })
-                if (pinCount > 0) RequestPinsButton(pinCount, onShowPins, Modifier.padding(end = 8.dp))
-            }
+            PinText(selection.group.request, title = true,
+                modifier = Modifier.clickable(role = Role.Button, onClickLabel = "Перейти к запросу") {
+                    onNavigate(selection.group.request)
+                })
             selection.clarification?.let { clarification ->
                 HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .12f))
                 Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Перейти к уточнению") {
