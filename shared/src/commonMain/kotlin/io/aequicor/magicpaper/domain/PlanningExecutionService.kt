@@ -94,10 +94,10 @@ class PlanningExecutionService(
     /** Rebase an LLM proposal over telemetry, never over intervening user edits or started work. */
     suspend fun applyProposal(base: Plan, proposal: Plan) = store.update(base.id) { latest ->
         require(latest.tree == base.tree && latest.goal == base.goal && latest.priorities == base.priorities && latest.dialogue == base.dialogue) {
-            "Дерево изменилось во время ответа планировщика; повторите запрос"
+            "Дерево изменилось во время ответа оркестратора; повторите запрос"
         }
         fun spec(m: Milestone) = m.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", updatedAt = 0)
-        require(latest.milestones.map(::spec) == base.milestones.map(::spec)) { "Этапы изменились во время ответа планировщика" }
+        require(latest.milestones.map(::spec) == base.milestones.map(::spec)) { "Этапы изменились во время ответа оркестратора" }
         val rebased = latest.copy(sharedWorkspace = if (latest.confirmedRevision == null) proposal.sharedWorkspace else latest.sharedWorkspace, tree = proposal.tree, dialogue = proposal.dialogue, wizardStep = proposal.wizardStep, milestones = proposal.milestones.map { proposed ->
             latest.milestones.firstOrNull { it.id == proposed.id }?.takeIf { it.attempts.isNotEmpty() || it.status != MilestoneStatus.PENDING }?.let { current ->
                 require(spec(current) == spec(proposed)) { "Этап «${current.title}» начался во время планирования" }
@@ -197,8 +197,10 @@ class PlanningExecutionService(
                     if (plan.intent != ExecutionIntent.RUN || plan.issue != null || store.failure.value != null) {
                         active.values.toList().joinAll(); break
                     }
+                    val waitingStages = chatHooks?.blockedStages(plan).orEmpty()
                     val candidates = plan.milestones.filter { m ->
-                        m.id in compiled.stageIds && !m.completed && m.id !in active &&
+                        m.id in compiled.stageIds && !m.completed && m.id !in active && m.id !in waitingStages &&
+                            m.attempts.lastOrNull()?.waitingForUser == null &&
                             m.attempts.lastOrNull()?.error?.requiresUser != true &&
                             (m.attempts.lastOrNull()?.error?.retryAt ?: 0) <= Id.now() &&
                             compiled.dependencies[m.id].orEmpty().all { dep -> plan.milestones.first { it.id == dep }.completed }
@@ -208,6 +210,7 @@ class PlanningExecutionService(
                         active[stage.id] = launch { executeStage(id, stage.id, project, workspace, integration, judge!!) }
                     }
                     if (active.isEmpty()) {
+                        if (waitingStages.isNotEmpty()) store.update(id) { it.copy(phase = ExecutionPhase.WAITING) }
                         plan.selectedMilestones.filterNot { it.completed }.mapNotNull { it.attempts.lastOrNull()?.error }
                             .sortedWith(compareByDescending<PlanningIssue> { it.requiresUser }.thenBy { it.retryAt })
                             .firstOrNull()?.let { block(id, it) }
@@ -218,7 +221,7 @@ class PlanningExecutionService(
             }
             plan = store.planFor(id) ?: return
             if (plan.intent != ExecutionIntent.RUN || plan.issue != null || closing) return
-            if (plan.selectedMilestones.all { it.completed }) {
+            if (plan.selectedMilestones.all { it.completed } && chatHooks?.blockedStages(plan).orEmpty().isEmpty()) {
                 if (!verifyIntegration(id, project, workspace, judge!!)) return
                 if (store.planFor(id)!!.selectedMilestones.any { !it.completed }) {
                     store.update(id) { it.copy(finalAttempt = null, finalAttemptHistory = it.finalAttemptHistory + listOfNotNull(it.finalAttempt), phase = ExecutionPhase.EXECUTING) }
@@ -446,11 +449,11 @@ class PlanningExecutionService(
                     attempt = attempt.copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
                         awaitingPlanner = resumed.action == StageTurnAction.WAIT,
                         phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
-                        error = if (resumed.action == StageTurnAction.WAIT) PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
+                        waitingForUser = if (resumed.action == StageTurnAction.WAIT) resumed.requestId ?: "legacy" else null, error = null)
                     saveAttempt(id, stageId, attempt)
                     if (resumed.action == StageTurnAction.WAIT) {
                         if (!hasQueuedReply(id, stageId)) return
-                        attempt = attempt.copy(error = null)
+                        attempt = attempt.copy(error = null, waitingForUser = null)
                         saveAttempt(id, stageId, attempt)
                     }
                     if (resumed.action == StageTurnAction.VERIFY) break
@@ -483,7 +486,13 @@ class PlanningExecutionService(
                 if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                 val activityRecorder = CodingRunRecorder()
+                var deliveryAcknowledged = false
                 monitoredRun(project.copy(path = attempt.path), session, prompt, frozen).collect { event ->
+                    if (!deliveryAcknowledged && (event is CodingEvent.SessionStarted || event is CodingEvent.MessageStarted ||
+                            event is CodingEvent.TextDelta || event is CodingEvent.FinalText)) {
+                        chatHooks?.started(store.planFor(id)!!, stage, attempt)
+                        deliveryAcknowledged = true
+                    }
                     activityRecorder.apply(event)
                     attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
                     when (event) {
@@ -539,12 +548,12 @@ class PlanningExecutionService(
                     attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1,
                         awaitingPlanner = decision.action == StageTurnAction.WAIT)
                     if (decision.action != StageTurnAction.VERIFY) {
-                        attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = if (decision.action == StageTurnAction.WAIT)
-                            PlanningIssue(IssueKind.CONFIGURATION, "Ожидается ответ планировщику", requiresUser = true) else null)
+                        attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null,
+                            waitingForUser = if (decision.action == StageTurnAction.WAIT) decision.requestId ?: "legacy" else null)
                         saveAttempt(id, stageId, attempt)
                         if (decision.action == StageTurnAction.WAIT) {
                             if (!hasQueuedReply(id, stageId)) return
-                            attempt = attempt.copy(error = null)
+                            attempt = attempt.copy(error = null, waitingForUser = null)
                             saveAttempt(id, stageId, attempt)
                         }
                         continue

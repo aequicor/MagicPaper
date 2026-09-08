@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
+import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
@@ -10,6 +11,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class JsonCodingProjectRepositoryTest {
@@ -136,4 +139,36 @@ class JsonCodingProjectRepositoryTest {
         store.write("coding-log:q:z", "{broken")
         assertTrue(repo.messages("q", "z").isEmpty())
     }
+    @Test fun orchestrationRoundTripsAndRecoversLastSnapshot() = runTest {
+        val first = OrchestrationState("parent", "p", inputs = listOf(OrchestrationInput("input", "Вопрос", 1)),
+            stageNumbers = mapOf("plan:stage" to 3), nextStageNumber = 4)
+        repo.saveOrchestration(first)
+        val second = first.copy(inputs = first.inputs.map { it.copy(status = OrchestrationInputStatus.DONE) })
+        repo.saveOrchestration(second)
+        assertEquals(second, JsonCodingProjectRepository(store, json).orchestration("parent"))
+        store.write("coding-orchestration-parent", "{broken")
+        assertEquals(first, repo.orchestration("parent"))
+        store.delete("coding-orchestration-parent")
+        assertEquals(first, repo.orchestration("parent"))
+    }
+
+    @Test fun corruptedOrchestrationWithoutBackupIsAnError() = runTest {
+        store.write("coding-orchestration-parent", "{broken")
+        assertFails { repo.orchestration("parent") }
+        assertNull(repo.orchestration("missing"))
+    }
+
+    @Test fun deletingASessionRemovesItsOrchestrationSnapshotsOnly() = runTest {
+        repo.save(CodingProject("p", "Project", "/p", 1))
+        repo.saveSession(CodingSession("parent", "p", "Root", 1))
+        repo.saveSession(CodingSession("other", "p", "Other", 2))
+        repo.saveOrchestration(OrchestrationState("parent", "p"))
+        repo.saveOrchestration(OrchestrationState("parent", "p", nextStageNumber = 2))
+        val other = OrchestrationState("other", "p")
+        repo.saveOrchestration(other)
+        repo.deleteSession("p", "parent")
+        assertNull(repo.orchestration("parent"))
+        assertEquals(other, repo.orchestration("other"))
+    }
+
 }

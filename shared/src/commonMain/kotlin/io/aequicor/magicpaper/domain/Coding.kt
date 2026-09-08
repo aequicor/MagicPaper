@@ -52,6 +52,12 @@ data class CodingSession(
     val parentSessionId: String? = null,
     val stageId: String? = null,
     val planningMode: Boolean = false,
+    val role: CodingSessionRole = CodingSessionRole.CHAT,
+    val archived: Boolean = false,
+    val nameManuallySet: Boolean = false,
+    val stageNumber: Int? = null,
+    val orchestratorNumber: Int? = null,
+    val continuationOfNumber: Int? = null,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     /** Immutable after creation; null is only a legacy migration marker. */
     val engine: CodingEngine? = null,
@@ -60,7 +66,7 @@ data class CodingSession(
 
 /**
  * Состояние активности кодинг-сессии для индикатора-кружка.
- * Порядок объявления — приоритет срочности (используется для сводинки по проекту).
+ * Сводный приоритет задаёт aggregateCodingStatus: ожидание пользователя выше фоновой работы.
  */
 enum class CodingSessionStatus {
     /** Агент выполняет прогон — красный. */
@@ -72,7 +78,7 @@ enum class CodingSessionStatus {
     /** Выполнение остановлено из-за ошибки; это не вопрос пользователю. */
     BLOCKED,
 
-    /** Исполнитель ждёт передачи работы планировщиком — серый. */
+    /** Исполнитель ждёт передачи работы оркестратором — серый. */
     QUEUED,
 
     /** Сессия свободна, ждёт запроса — зелёный. */
@@ -102,7 +108,13 @@ fun codingStatusOf(messages: List<CodingMessage>): CodingSessionStatus {
 
 /** Сводный статус проекта: самый срочный из статусов его сессий. */
 fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSessionStatus =
-    statuses.minByOrNull { it.ordinal } ?: CodingSessionStatus.IDLE
+    statuses.minByOrNull { when (it) {
+        CodingSessionStatus.WAITING -> 0
+        CodingSessionStatus.BLOCKED -> 1
+        CodingSessionStatus.WORKING -> 2
+        CodingSessionStatus.QUEUED -> 3
+        CodingSessionStatus.IDLE -> 4
+    } } ?: CodingSessionStatus.IDLE
 
 /** Фазы состояния кодинг-рантайма (движка пи-агента). */
 enum class RuntimePhase { UNKNOWN, CHECKING, INSTALLING, READY, ERROR, UNSUPPORTED }
@@ -439,6 +451,8 @@ data class CodingMessage(
     val planning: PlanningChatBlock? = null,
     val deliveryId: String? = null,
     val pendingDelivery: Boolean = false,
+    val route: MessageRoute? = null,
+    val inputStatus: OrchestrationInputStatus? = null,
 
 )
 
@@ -455,6 +469,8 @@ interface CodingProjectRepository {
 
     suspend fun messages(projectId: String, sessionId: String): List<CodingMessage>
     suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>)
+    suspend fun orchestration(sessionId: String): OrchestrationState? = null
+    suspend fun saveOrchestration(state: OrchestrationState) { error("Хранилище оркестратора недоступно") }
     suspend fun wipe()
 }
 

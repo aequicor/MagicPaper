@@ -269,7 +269,7 @@ class CodingPlanningPlugin(
                 }
             }
             if (pickPlanner) FavoriteModelPicker(profiles, choice,
-                { selection -> if (plan == null) draftPlanner = selection else edit { it.copy(plannerSelection = selection) } }, { pickPlanner = false }, "Модель планировщика",
+                { selection -> if (plan == null) draftPlanner = selection else edit { it.copy(plannerSelection = selection) } }, { pickPlanner = false }, "Модель оркестратора",
                 footer = { TextButton(onClick = { if (plan == null) draftPlanner = null else edit { it.copy(plannerSelection = null) }; pickPlanner = false }) { Text("Модель по умолчанию") } })
         }
     }
@@ -286,7 +286,7 @@ class CodingPlanningPlugin(
                 Surface(Modifier.fillMaxWidth().padding(vertical = 4.dp), shape = MaterialTheme.shapes.medium,
                     color = if (message.role == "user") MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.secondaryContainer) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(if (message.role == "user") "Вы" else "Планировщик", style = MaterialTheme.typography.labelMedium)
+                        Text(if (message.role == "user") "Вы" else "Оркестратор", style = MaterialTheme.typography.labelMedium)
                         message.activity.forEach { CodingStepRow(it, false) }
                         ChatMarkdown(message.text)
                     }
@@ -438,7 +438,7 @@ private fun wizardLabel(step: PlanningStep) = when (step) {
     var expanded by remember { mutableStateOf(false) }
     TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "▾ Скрыть историю планирования" else "▸ История планирования и действия агента") }
     if (expanded) plan.dialogue.forEach { message ->
-        Text(if (message.role == "user") "Вы" else "Планировщик", style = MaterialTheme.typography.labelLarge)
+        Text(if (message.role == "user") "Вы" else "Оркестратор", style = MaterialTheme.typography.labelLarge)
         message.activity.forEach { CodingStepRow(it, false) }
         ChatMarkdown(message.text)
     }

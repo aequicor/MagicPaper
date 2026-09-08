@@ -95,6 +95,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.aequicor.magicpaper.domain.subtitle
+import io.aequicor.magicpaper.domain.effectiveRole
+import io.aequicor.magicpaper.domain.CodingSessionRole
+import io.aequicor.magicpaper.ui.components.OrchestrationStatus
+import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
+import io.aequicor.magicpaper.ui.components.inputLabel
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.CodingDraft
@@ -280,7 +286,7 @@ private fun SessionArea(
                 onApproval = vm::respondCodingApproval,
                 onStopApproval = vm::abortCodingSession,
                 busy = effective.running,
-                allowQueue = active.session.stageId != null,
+                allowQueue = active.session.stageId != null || active.session.planningMode,
                 planningService = service,
                 planningQuestionsSession = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId } ?: effective,
                 onOpenSession = vm::selectCodingSession,
@@ -371,9 +377,9 @@ private val StatusQueued = Color(0xFF97959B)    // серый: ждёт пере
 private val CodingSessionStatus.label: String
     get() = when (this) {
         CodingSessionStatus.WORKING -> "работает"
-        CodingSessionStatus.WAITING -> "ждёт ответа или подтверждения"
+        CodingSessionStatus.WAITING -> "ждёт вашего ответа"
         CodingSessionStatus.BLOCKED -> "выполнение остановлено"
-        CodingSessionStatus.QUEUED -> "ждёт планировщика"
+        CodingSessionStatus.QUEUED -> "ждёт оркестратора"
         CodingSessionStatus.IDLE -> "ждёт запроса"
     }
 
@@ -443,7 +449,7 @@ internal fun ProjectsPanel(
         // Selecting another project opens its list; status updates preserve disclosure.
         var projectCollapsed by remember(ui.current?.id) { mutableStateOf(false) }
         val projectIndex = ui.projects.indexOfFirst { it.id == ui.current?.id }
-        val ownSessions = ui.current?.let { ui.sessionsOf(it.id) }.orEmpty()
+        val ownSessions = ui.current?.let { ui.sessionsOf(it.id) }.orEmpty().filterNot { it.session.archived }
         val sessionIds = ownSessions.map { it.session.id }.toSet()
         val groups = buildList {
             var index = projectIndex + 1
@@ -468,7 +474,7 @@ internal fun ProjectsPanel(
                 ui.projects.forEach { project ->
                     val selected = project.id == ui.current?.id
                     val expanded = selected && !projectCollapsed
-                    val own = ui.sessionsOf(project.id)
+                    val own = ui.sessionsOf(project.id).filterNot { it.session.archived }
                     // Only projects participate in the native sticky-header chain. Session
                     // headers occupy a separate level below it and cannot push a project away.
                     stickyHeader(key = "project-${project.id}") { index ->
@@ -655,16 +661,17 @@ private fun SessionRow(
         Spacer(Modifier.width(7.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                (if (item.session.planningMode && !item.session.name.startsWith("🔀")) "🔀 " else "") + item.session.name,
+                item.session.name,
                 style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            if (status != CodingSessionStatus.WAITING && (nested || item.running || status == CodingSessionStatus.BLOCKED)) Text(
-                (if (nested) "Этап · " else "") +
-                    if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
-                        "передан планировщику" else status.label,
+            Text(item.session.subtitle(), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+            if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.BLOCKED) || nested) Text(
+                if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
+                    "передан оркестратору" else status.label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
             )
@@ -681,7 +688,7 @@ private fun SessionRow(
             key = "session-${item.session.id}",
             entries = buildList<Pair<String, () -> Unit>> {
                 if (item.running) add("Прервать прогон" to onAbort)
-                add("Удалить сессию" to onDelete)
+                add((if (item.session.stageId != null) "В архив" else "Удалить сессию") to onDelete)
             },
         )
     }
@@ -824,95 +831,100 @@ internal fun CodingChat(
     val scroll = stickToBottom(listState, session.session.id)
     val density = LocalDensity.current
     var footerHeight by remember { mutableStateOf(0.dp) }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val questionHeight = maxHeight * 0.55f
-        val blockerHeight = maxHeight * 0.4f
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize()
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                .drawWithContent {
-                    drawContent()
-                    // Fade only the messages; keep the paper background continuous.
-                    val edge = size.height - footerHeight.toPx()
-                    drawRect(Brush.verticalGradient(
-                        0f to Color.White, 0.35f to Color.White.copy(alpha = 0.8f),
-                        0.7f to Color.White.copy(alpha = 0.25f), 1f to Color.Transparent,
-                        startY = edge - 16.dp.toPx(), endY = edge + 16.dp.toPx(),
-                    ), blendMode = BlendMode.DstIn)
-                },
-            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = footerHeight + 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item {
-                Text(
-                    "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${project.path}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            items(rows, key = { it.message.id }) { row ->
-                val message = row.message
-                ChatScrollItem(scroll, message.id) {
-                    CodingMessageBubble(message) {
-                        if (busy && statusMessageId != null &&
-                            (message.id == statusMessageId || row.planCard?.id == statusMessageId)
-                        ) status()
-                        if (planningService != null && message.planning != null) {
-                            Spacer(Modifier.height(6.dp))
-                            PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
-                        }
-                        row.planCard?.let { card ->
-                            Spacer(Modifier.height(12.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            Spacer(Modifier.height(12.dp))
-                            ChatMarkdown(card.text)
-                            if (planningService != null) {
+    Column(Modifier.fillMaxSize()) {
+        if (session.session.effectiveRole == CodingSessionRole.ORCHESTRATOR && planningService != null)
+            OrchestrationStatus(session, planningService, onOpenSession, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
+        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            val questionHeight = maxHeight * 0.55f
+            val blockerHeight = maxHeight * 0.4f
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize()
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        // Fade only the messages; keep the paper background continuous.
+                        val edge = size.height - footerHeight.toPx()
+                        drawRect(Brush.verticalGradient(
+                            0f to Color.White, 0.35f to Color.White.copy(alpha = 0.8f),
+                            0.7f to Color.White.copy(alpha = 0.25f), 1f to Color.Transparent,
+                            startY = edge - 16.dp.toPx(), endY = edge + 16.dp.toPx(),
+                        ), blendMode = BlendMode.DstIn)
+                    },
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = footerHeight + 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    Text(
+                        "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${project.path}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                items(rows, key = { it.message.id }) { row ->
+                    val message = row.message
+                    ChatScrollItem(scroll, message.id) {
+                        CodingMessageBubble(message, header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
+                            if (busy && statusMessageId != null &&
+                                (message.id == statusMessageId || row.planCard?.id == statusMessageId)
+                            ) status()
+                            if (planningService != null && message.planning != null) {
                                 Spacer(Modifier.height(6.dp))
-                                PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                                PlanningChatMessage(message, session.session, messages, planningService, onOpenSession)
                             }
+                            row.planCard?.let { card ->
+                                Spacer(Modifier.height(12.dp))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                Spacer(Modifier.height(12.dp))
+                                ChatMarkdown(card.text)
+                                if (planningService != null) {
+                                    Spacer(Modifier.height(6.dp))
+                                    PlanningChatMessage(card, session.session, messages, planningService, onOpenSession)
+                                }
+                            }
+                            message.inputStatus?.let { Text(it.inputLabel(), style = MaterialTheme.typography.labelSmall) }
+                            if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
                         }
-                        if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                if (hasDraft || (busy && statusMessageId == null)) {
+                    item(key = "draft") {
+                        ChatScrollItem(scroll, "draft") { DraftBubble(draft, if (busy) status else null) }
                     }
                 }
             }
-            if (hasDraft || (busy && statusMessageId == null)) {
-                item(key = "draft") {
-                    ChatScrollItem(scroll, "draft") { DraftBubble(draft, if (busy) status else null) }
-                }
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
+                CodingApprovalDock(approvals, onApproval, onStopApproval,
+                    Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 12.dp, vertical = 4.dp))
+                if (planningService != null && approvals.isEmpty()) PlanningQuestionsDock(
+                    planningQuestionsSession.session, planningQuestionsSession.messages, planningService,
+                    false,
+                    Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
+                )
+                if (planningService != null && approvals.isEmpty()) PlanningBlockerDock(
+                    planningQuestionsSession.session, planningQuestionsSession.messages, planningService, busy,
+                    Modifier.fillMaxWidth().heightIn(max = blockerHeight).padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+                CodingComposer(
+                    enabled = engineReady && (!busy || allowQueue),
+                    busy = busy && !allowQueue,
+                    controls = modelChip,
+                    planning = session.session.planningMode,
+                    onPlanning = onPlanning,
+                    onSend = onSend,
+                    onAbort = onAbort,
+                    onSkills = onSkills,
+                    onPickAttachments = onPickAttachments,
+                )
             }
-        }
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
-            CodingApprovalDock(approvals, onApproval, onStopApproval,
-                Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 12.dp, vertical = 4.dp))
-            if (planningService != null && approvals.isEmpty()) PlanningQuestionsDock(
-                planningQuestionsSession.session, planningQuestionsSession.messages, planningService,
-                planningService.drafts.collectAsState().value[planningQuestionsSession.session.id]?.active == true,
-                Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(bottom = 4.dp),
-            )
-            if (planningService != null && approvals.isEmpty()) PlanningBlockerDock(
-                planningQuestionsSession.session, planningQuestionsSession.messages, planningService, busy,
-                Modifier.fillMaxWidth().heightIn(max = blockerHeight).padding(horizontal = 12.dp, vertical = 4.dp),
-            )
-            CodingComposer(
-                enabled = engineReady && (!busy || allowQueue),
-                busy = busy && !allowQueue,
-                controls = modelChip,
-                planning = session.session.planningMode,
-                onPlanning = onPlanning,
-                onSend = onSend,
-                onAbort = onAbort,
-                onSkills = onSkills,
-                onPickAttachments = onPickAttachments,
-            )
         }
     }
 }
 
 /** Бабл записи журнала: лента прогона в хронологическом порядке либо просто текст. */
 @Composable
-private fun CodingMessageBubble(message: CodingMessage, footer: (@Composable () -> Unit)? = null) {
+private fun CodingMessageBubble(message: CodingMessage, header: (@Composable () -> Unit)? = null, footer: (@Composable () -> Unit)? = null) {
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -937,6 +949,7 @@ private fun CodingMessageBubble(message: CodingMessage, footer: (@Composable () 
                 .background(bubbleColor)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
+            header?.invoke()
             if (isUser) {
                 SelectionContainer { Text(message.text, style = MaterialTheme.typography.bodyLarge) }
                 // Прикреплённые к запросу файлы (лежат в изолированной папке рантайма).

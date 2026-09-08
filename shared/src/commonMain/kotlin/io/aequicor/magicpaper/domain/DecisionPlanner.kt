@@ -8,14 +8,14 @@ import kotlinx.serialization.json.Json
 /** Structured refinement: only validated proposals can replace the current tree. */
 class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }) {
     @Serializable private data class Proposal(
-        val isolatedWorkspace: Boolean? = null, val reply: String = "", val questions: List<PlanningQuestion> = emptyList(), val tree: List<DecisionNode> = emptyList(), val milestones: List<Milestone> = emptyList(),
+        val isolatedWorkspace: Boolean? = null, val reply: String = "", val questions: List<PlanningQuestion> = emptyList(), val tree: List<DecisionNode> = emptyList(), val milestones: List<Milestone> = emptyList(), val questionStageIds: List<String> = emptyList(),
     )
     suspend fun refine(plan: Plan, message: String, planner: LlmProfile?, profiles: List<LlmProfile>, dossiers: List<ModelDossier>, searchContext: String = "", onActivity: (CodingStep) -> Unit = {}): Plan {
         require(planner?.configured == true) { "Подключите модель для автоматического планирования. Дерево можно редактировать вручную." }
         val roster = profiles.filter { it.connectionConfigured && it.supportsCoding }
         val messages = mutableListOf(
             LlmMessage(LlmChatRole.SYSTEM, """
-                Ты планировщик дерева решений проекта. Сначала уточняй критерии успеха и существенные ограничения,
+                Ты оркестратор дерева решений проекта. Сначала уточняй критерии успеха и существенные ограничения,
                 задавая не более трёх вопросов за раз. Когда данных достаточно или пользователь просит построить варианты,
                 предложи альтернативы на уровне проекта и там, где полезно, внутри этапов. Оцени этапы и варианты:
                 quality, speed, economy, safety: 0 неизвестно, 1 низко, 2 средне, 3 высоко (больше лучше), complexity: 0..3.
@@ -24,6 +24,7 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                 Уточняющие вопросы возвращай также в questions (не более 3):
                 [{"id":"стабильный id","title":"вопрос","kind":"SINGLE|MULTIPLE|TEXT","options":[{"id":"a","label":"вариант"}]}].
                 Для SINGLE и MULTIPLE дай минимум два варианта; для TEXT options пустые. При ответе пользователя учитывай его выбранные варианты и комментарий.
+                questionStageIds: список идентификаторов этапов, для которых нужен ответ; [] — вся цель. Используй только существующие этапы или этапы дерева этого предложения.
                 Если только задаёшь вопросы, tree и milestones пустые. Иначе верни полное дерево.
                 Узел дерева: {"id":"стабильный id", "title":"имя", "kind":"GOAL|GROUP|CHOICE|OPTION|STAGE",
                 "children":["id"], "selectedOptionId":"id варианта или null", "dependsOn":["id узла"],
@@ -34,6 +35,7 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                 "assignment":{"profileId":"id источника","modelId":"ключ модели","effort":"default|low|medium|high и т.д.","explanation":"почему эта модель и этот effort оптимальны для этапа"}, "dependsOn":["id этапа"], "assessment":{...}}.
                 complexityPoints — относительная сложность в условных единицах (например 1, 2, 3, 5, 8, 13). Оцени каждый этап, включая альтернативные; это не часы. Сохраняй заданные пользователем оценки.
                 Зависимости не должны образовывать циклы или вести в невыбранные альтернативы.
+                Названия цели и этапов делай краткими и конкретными: результат или задача, обычно 2–6 слов. Не повторяй общую цель в названии каждого этапа и не добавляй префикс «Продолжение». Для доработки укажи continuationOf — id исходного этапа.
                 Сохраняй идентификаторы существующих узлов, ручные выборы и уже начатые этапы.
                 Если пользователь явно попросил отдельную ветку или рабочую копию, верни isolatedWorkspace=true; иначе не задавай это поле.
                 Для изменений начатого или завершённого этапа добавляй новый зависимый этап-продолжение. Не переписывай историю.
@@ -59,9 +61,10 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                 val proposal = json.decodeFromString<Proposal>(raw.substring(start, end + 1))
                 require(proposal.questions.size <= 3 && proposal.questions.map { it.id }.distinct().size == proposal.questions.size) { "Допустимо до трёх вопросов с разными id" }
                 require(proposal.questions.all { q -> q.id.isNotBlank() && q.title.isNotBlank() && (q.kind == QuestionKind.TEXT || q.options.size >= 2) && q.options.all { it.id.isNotBlank() && it.label.isNotBlank() } && q.options.map { it.id }.distinct().size == q.options.size }) { "Некорректные варианты уточняющих вопросов" }
-                require(proposal.reply.isNotBlank()) { "Нет вопросов или объяснения планировщика" }
+                require(proposal.questionStageIds.all { id -> (plan.milestones + proposal.milestones).any { it.id == id } }) { "Неизвестный этап уточнения" }
+                require(proposal.reply.isNotBlank()) { "Нет вопросов или объяснения оркестратора" }
                 val dialogue = (if (plan.dialogue.lastOrNull()?.let { it.role == "user" && it.text == message } == true) plan.dialogue
-                    else plan.dialogue + PlanningMessage(Id.new(), "user", message)) + PlanningMessage(Id.new(), "assistant", proposal.reply, questions = proposal.questions)
+                    else plan.dialogue + PlanningMessage(Id.new(), "user", message)) + PlanningMessage(Id.new(), "assistant", proposal.reply, questions = proposal.questions, questionStageIds = proposal.questionStageIds)
                 if (proposal.tree.isEmpty()) return plan.copy(dialogue = dialogue, wizardStep = PlanningStep.CLARIFY, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace)
                 val existing = plan.milestones.associateBy { it.id }
                 val bound = proposal.milestones.map { stage ->
@@ -69,6 +72,7 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
                     if (old != null && (old.attempts.isNotEmpty() || old.status != MilestoneStatus.PENDING)) old
                     else stage.copy(status = MilestoneStatus.PENDING, report = "", checkNote = "", attempts = emptyList(),
                         complexityPoints = stage.complexityPoints ?: old?.complexityPoints,
+                        displayNumber = old?.displayNumber, displayName = old?.displayName, continuationOf = stage.continuationOf ?: old?.continuationOf,
                         assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities))
                 }
                 val nodes = proposal.tree.map { n ->

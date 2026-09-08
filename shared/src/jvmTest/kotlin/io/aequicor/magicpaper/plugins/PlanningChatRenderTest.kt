@@ -92,6 +92,7 @@ class PlanningChatRenderTest {
 
     @OptIn(ExperimentalComposeUiApi::class)
     @Test fun projectAndPlanStayVisibleWhenStagesScroll() = runTest {
+        java.io.File("build/reports/planning-chat").mkdirs()
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {
             val project = CodingProject("p", "Закреплённый проект", "/project", 1)
@@ -116,7 +117,7 @@ class PlanningChatRenderTest {
                     it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == text } == true
                 }.boundsInRoot
                 val projectTitle = title(project.name)
-                val planTitle = title("🔀 ${parent.name}")
+                val planTitle = title(parent.name)
                 assertTrue(projectTitle.top >= 0)
                 assertTrue(planTitle.top >= projectTitle.bottom, "The pinned plan must remain below its project")
                 assertTrue(planTitle.bottom <= 620, "Both pinned titles must remain visible")

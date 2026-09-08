@@ -140,7 +140,9 @@ class MagicPaperViewModel(
         val workerRunning = plan?.milestones?.firstOrNull { it.id == session.stageId }?.let {
             plan.isStageWorking(it)
         } == true
-        return item.copy(plan = plan, draft = service.drafts.value[session.id]
+        return item.copy(plan = plan, awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
+            session.stageId == null || it.stageIds.isEmpty() || session.stageId in it.stageIds
+        }, draft = service.drafts.value[session.id]
             ?: if (plan != null || session.planningMode) CodingDraft() else item.draft,
             running = workerRunning || service.drafts.value[session.id]?.active == true || codingJobs[session.id]?.isActive == true)
     }
@@ -1075,6 +1077,7 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return
         val coding = _state.value.coding
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
+        if (target.session.stageId != null && planningChat != null) { planningChat.archiveSession(id); return }
         scope.launch {
             codingRuntime?.abort(id)
             codingJobs.remove(id)?.cancel()

@@ -89,7 +89,7 @@ class ProjectsPanelStickyTest {
         assertEquals(0, p.projectInfo().offset, "Session headers must never displace their project")
         assertEquals(height, p.projectInfo().size, "Pinning must preserve row height")
         val title = p.text("magicpaper").boundsInRoot
-        val session = p.text("🔀 Plan 0").boundsInRoot
+        val session = p.text("Plan 0").boundsInRoot
         assertTrue(title.top >= 49f)
         assertTrue(session.top >= 49f + height, "Session must be below its project")
         p.snapshot("two-level-pinned")
@@ -105,7 +105,7 @@ class ProjectsPanelStickyTest {
         val title = p.text("magicpaper").boundsInRoot
         p.item(25)
         assertEquals(title, p.text("magicpaper").boundsInRoot)
-        p.click(p.text("🔀 Plan 1").boundsInRoot.center)
+        p.click(p.text("Plan 1").boundsInRoot.center)
         assertEquals("plan-1", p.ui.value.currentSessionId)
         p.snapshot("second-session")
         // After both 17-row groups, a normal session must not inherit Plan 1's overlay.
@@ -141,7 +141,7 @@ class ProjectsPanelStickyTest {
     @Test fun scrollingOverPinnedSessionAndCollapsingItsChildrenStillWork() = Panel().use { p ->
         p.item(9)
         val before = p.list.firstVisibleItemIndex to p.list.firstVisibleItemScrollOffset
-        p.wheel(p.text("🔀 Plan 0").boundsInRoot.center)
+        p.wheel(p.text("Plan 0").boundsInRoot.center)
         assertNotEquals(before, p.list.firstVisibleItemIndex to p.list.firstVisibleItemScrollOffset,
             "The overlay must forward scrolling to the list")
         p.click(p.disclosure().boundsInRoot.center)
