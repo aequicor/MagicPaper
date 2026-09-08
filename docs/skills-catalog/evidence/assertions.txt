@@ -1,0 +1,1 @@
+PASS: exact GET request bytes for API and ZIP; no body; no private markers; no credential/cookie callbacks; no Authorization, Cookie, Referer, Content-Length or Proxy-Authorization. Synthetic data; no live packet capture.

@@ -5,6 +5,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.*
 import java.nio.charset.CharacterCodingException
 import java.nio.channels.FileChannel
 import java.nio.file.*
@@ -24,6 +25,8 @@ private data class StoredSnapshot(
     val active: Map<String, String> = emptyMap(),
     val previousActive: Map<String, String>? = null,
     val projects: Map<String, Map<String, String>> = emptyMap(),
+    val projectTextConsents: Map<String, Map<String, String>> = emptyMap(),
+    val previousProjects: Map<String, Map<String, String>> = emptyMap(),
 )
 @Serializable
 private data class SkillBackup(val state: StoredSnapshot, val packages: Map<String, Map<String, String>>)
@@ -101,16 +104,60 @@ class LocalSkillRepository(
         machine.bindProject(projectId, checksums, consent)
     }
 
-    suspend fun projectInstructions(projectId: String): List<SkillInstruction> = mutex.withLock {
+    /** Revalidates installed bytes before committing the previous exact project composition. */
+    suspend fun rollbackProject(projectId: String, consent: SkillActivationConsent) = mutex.withLock {
+        checkHealthy()
+        val target = machine.snapshot().previousProjects[projectId] ?: error("No project rollback snapshot")
+        target.forEach { (key, hash) ->
+            require(validator.validateDirectory(releasePath(hash), hash).key == key) { "Unavailable project rollback release" }
+        }
+        machine.rollbackProject(projectId, consent)
+    }
+
+    suspend fun projectInstructions(projectId: String): List<SkillInstruction> = projectCodingSelection(projectId).instructions
+
+    suspend fun projectCodingSelection(projectId: String): CodingSkillSelection = mutex.withLock {
         checkHealthy()
         val s = machine.snapshot()
         val releases = s.projects[projectId].orEmpty().map { (key, hash) -> s.installed.getValue(key).also {
             require(it.pkg.checksum == hash && it.status == SkillCandidateStatus.VERIFIED && it.improvement?.passed != false) { "Project binding failed verification" }
         } }
         SkillPackageFormat.validateGraph(releases.map { it.pkg.manifest }, host)
-        releases.map { val m = it.pkg.manifest
+        val instructions = releases.map { val m = it.pkg.manifest
             SkillInstruction(m.id, m.version, it.pkg.checksum, m.name, m.description, m.permissions.toSet(), instructions(it.pkg))
         }
+        CodingSkillSelection(instructions,
+            trustedText = s.projectTextConsents[projectId] == s.projects[projectId] && projectId in s.projectTextConsents,
+            freshSession = projectId in s.projectTextConsents)
+    }
+
+    /** Immutable local audit, separate from learning payload and package snapshot/backup. */
+    suspend fun recordCodingRun(record: CodingSkillRunRecord) = mutex.withLock {
+        checkHealthy()
+        require(record.runId.matches(Regex("[a-zA-Z0-9-]{1,80}")))
+        val directory = root.resolve("coding-runs")
+        Files.createDirectories(directory)
+        require(!Files.isSymbolicLink(directory))
+        val file = directory.resolve("${record.runId}.json")
+        val data = buildJsonObject {
+            put("runId", record.runId); put("projectId", record.projectId); put("sessionId", record.sessionId)
+            put("adapter", record.adapter); put("status", "prepared-not-confirmed")
+            put("trustedText", record.selection.trustedText); put("freshSession", record.selection.freshSession)
+            put("skills", buildJsonArray {
+                record.selection.instructions.forEach { skill -> add(buildJsonObject {
+                    put("id", skill.id); put("version", skill.version); put("checksum", skill.checksum); put("text", skill.text)
+                    put("declaredPermissions", buildJsonArray { skill.permissions.sortedBy { it.name }.forEach { add(it.name) } })
+                }) }
+            })
+        }.toString().encodeToByteArray()
+        require(data.size <= MAX_STATE)
+        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
+            // Recovery reuses the checkpoint identity. Accept an exact replay without
+            // rewriting its audit; changed pins or routing must never replace it.
+            require(readLimited(file, MAX_STATE).contentEquals(data)) { "Run snapshot is immutable" }
+            return@withLock
+        }
+        atomicWrite(file, data)
     }
 
     suspend fun snapshot() = mutex.withLock {
@@ -130,18 +177,41 @@ class LocalSkillRepository(
         machine.rollback(consent)
     }
 
+    /**
+     * Commits a package prepared by any source reducer. Importing only records a
+     * quarantined release; review, activation and project pins remain separate
+     * explicit operations.
+     */
+    suspend fun install(imported: ValidatedSkillImport, improvement: SkillImprovementCheck? = null, beforeNewInstall: () -> Unit = {}): SkillReleaseSnapshot = mutex.withLock {
+        checkHealthy()
+        val owned = imported.entriesForPersistence()
+        val pkg = validator.validate(owned, imported.pkg.checksum)
+        require(pkg.checksum == imported.pkg.checksum && pkg.manifest == imported.pkg.manifest) { "Prepared package changed after validation" }
+        installValidated(pkg, owned, imported.source, improvement, beforeNewInstall)
+    }
+
+    /** Legacy/programmatic producer entry point. External importers must prepare first. */
     suspend fun install(entries: List<SkillArchiveEntry>, source: SkillObservedSource, expectedChecksum: String? = null, improvement: SkillImprovementCheck? = null, beforeNewInstall: () -> Unit = {}): SkillReleaseSnapshot = mutex.withLock {
         checkHealthy()
-
         val owned = entries.map { it.copy(bytes = it.bytes.copyOf()) }
         val pkg = validator.validate(owned, expectedChecksum)
+        installValidated(pkg, owned, source, improvement, beforeNewInstall)
+    }
+
+    private suspend fun installValidated(
+        pkg: ValidatedSkillPackage,
+        owned: List<SkillArchiveEntry>,
+        source: SkillObservedSource,
+        improvement: SkillImprovementCheck?,
+        beforeNewInstall: () -> Unit,
+    ): SkillReleaseSnapshot {
         val old = machine.snapshot().installed[pkg.key]
         require(old == null || old.pkg.checksum == pkg.checksum) { "Version is immutable" }
         require(improvement == null || old == null) { "Improvement version already exists" }
         beforeNewInstall()
         persistPackage(pkg, owned)
         if (old == null) sources[pkg.key] = source
-        machine.install(pkg, improvement)
+        return machine.install(pkg, improvement)
     }
 
     internal suspend fun recordImprovement(key: String, check: SkillImprovementCheck) = mutex.withLock {
@@ -273,9 +343,13 @@ class LocalSkillRepository(
         val restored = validateSnapshot(data.state) { byChecksum.getValue(it) }
         checked.forEach { (pkg, entries) -> persistPackage(pkg, entries, repairCorrupt = true) }
         // Recovery is a new generation, so pre-recovery approvals can never be reused.
-        val next = restored.copy(generation = maxOf(machine.snapshot().generation, restored.generation) + 1)
+        val current = machine.snapshot()
+        // Recovery cannot resurrect text consent or resume history contaminated after backup.
+        val resetConsents = (current.projectTextConsents.keys + current.projects.keys + restored.projectTextConsents.keys + restored.projects.keys)
+            .associateWith { emptyMap<String, String>() }
+        val next = restored.copy(generation = maxOf(current.generation, restored.generation) + 1, projectTextConsents = resetConsents)
         beforeSnapshotCommit()
-        val stateBytes = SkillPackageFormat.json.encodeToString(data.state.copy(generation = next.generation)).encodeToByteArray()
+        val stateBytes = SkillPackageFormat.json.encodeToString(data.state.copy(generation = next.generation, projectTextConsents = resetConsents)).encodeToByteArray()
         require(stateBytes.size <= MAX_STATE)
         try { atomicWrite(stateFile, stateBytes) } catch (e: Throwable) { close(); throw e }
         sources.clear()
@@ -287,7 +361,7 @@ class LocalSkillRepository(
 
     private fun encode(s: SkillReleaseSnapshot) = StoredSnapshot(generation = s.generation,
         installed = s.installed.mapValues { StoredRelease(it.value.pkg.checksum, it.value.review, sources.getValue(it.key), it.value.improvement) },
-        active = s.active, previousActive = s.previousActive, projects = s.projects)
+        active = s.active, previousActive = s.previousActive, projects = s.projects, projectTextConsents = s.projectTextConsents, previousProjects = s.previousProjects)
 
     private fun decode(bytes: ByteArray) = SkillPackageFormat.json.decodeFromString<StoredSnapshot>(bytes.decodeToString(throwOnInvalidSequence = true))
     private fun validateSnapshot(
@@ -310,12 +384,15 @@ class LocalSkillRepository(
             }.pkg.manifest }
             SkillPackageFormat.validateGraph(releases, host)
         }
-        s.projects.forEach { (project, pins) ->
+        (s.projects.entries + s.previousProjects.entries).forEach { (project, pins) ->
             require(project.isNotBlank())
             val releases = pins.map { (key, checksum) -> installed.getValue(key).also { require(it.pkg.checksum == checksum) }.pkg.manifest }
             SkillPackageFormat.validateGraph(releases, host)
         }
-        return SkillReleaseSnapshot(s.generation, installed, s.active, s.previousActive, s.projects)
+        s.projectTextConsents.forEach { (project, pins) ->
+            require(project.isNotBlank() && (pins.isEmpty() || pins == s.projects[project])) { "Corrupt trusted-text consent" }
+        }
+        return SkillReleaseSnapshot(s.generation, installed, s.active, s.previousActive, s.projects, s.projectTextConsents, s.previousProjects)
     }
 
     private fun releasePath(checksum: String): Path {

@@ -40,6 +40,10 @@ data class SkillReleaseSnapshot(
     val active: Map<String, String> = emptyMap(),
     val previousActive: Map<String, String>? = null,
     val projects: Map<String, Map<String, String>> = emptyMap(),
+    /** Presence remains after revocation: never resume potentially contaminated history. */
+    val projectTextConsents: Map<String, Map<String, String>> = emptyMap(),
+    /** One previous exact composition per project; absent means no rollback, empty means disconnect. */
+    val previousProjects: Map<String, Map<String, String>> = emptyMap(),
 )
 
 /** Approval binds the preview to both the current generation and the complete target set. */
@@ -48,6 +52,7 @@ data class SkillActivationConsent(
     val targetChecksums: Map<String, String>,
     val reviewedChanges: Boolean,
     val permissions: Set<SkillPermission>,
+    val trustedCodingText: Boolean = false,
 )
 
 /**
@@ -60,7 +65,7 @@ class SkillReleaseStore(
     private val persist: (SkillReleaseSnapshot, SkillReleaseSnapshot) -> Unit = { _, _ -> },
 ) {
     private val mutex = Mutex()
-    private var state = initial.copy(installed = initial.installed.toMap(), active = initial.active.toMap(), previousActive = initial.previousActive?.toMap(), projects = initial.projects.mapValues { it.value.toMap() })
+    private var state = initial.copy(installed = initial.installed.toMap(), active = initial.active.toMap(), previousActive = initial.previousActive?.toMap(), projects = initial.projects.mapValues { it.value.toMap() }, projectTextConsents = initial.projectTextConsents.mapValues { it.value.toMap() }, previousProjects = initial.previousProjects.mapValues { it.value.toMap() })
 
     private fun commit(next: SkillReleaseSnapshot) {
         persist(copySnapshot(), next)
@@ -70,7 +75,7 @@ class SkillReleaseStore(
     suspend fun snapshot(): SkillReleaseSnapshot = mutex.withLock { copySnapshot() }
 
     private fun copySnapshot() = state.copy(
-        installed = state.installed.toMap(), active = state.active.toMap(), previousActive = state.previousActive?.toMap(), projects = state.projects.mapValues { it.value.toMap() },
+        installed = state.installed.toMap(), active = state.active.toMap(), previousActive = state.previousActive?.toMap(), projects = state.projects.mapValues { it.value.toMap() }, projectTextConsents = state.projectTextConsents.mapValues { it.value.toMap() }, previousProjects = state.previousProjects.mapValues { it.value.toMap() },
     )
 
     suspend fun install(pkg: ValidatedSkillPackage, improvement: SkillImprovementCheck? = null): SkillReleaseSnapshot = mutex.withLock {
@@ -106,7 +111,8 @@ class SkillReleaseStore(
             } }.keys
             invalid.forEach(active::remove)
         } while (invalid.isNotEmpty())
-        commit(state.copy(generation = state.generation + 1, installed = installed, active = active, previousActive = null))
+        commit(state.copy(generation = state.generation + 1, installed = installed, active = active, previousActive = null,
+            previousProjects = state.previousProjects.filterValues { pins -> pins.keys.none { it in keys } }))
         copySnapshot()
     }
 
@@ -122,6 +128,16 @@ class SkillReleaseStore(
     }
 
     suspend fun bindProject(projectId: String, checksums: Map<String, String>, consent: SkillActivationConsent): SkillReleaseSnapshot = mutex.withLock {
+        switchProject(projectId, checksums.toMap(), consent, rollback = false)
+    }
+
+    /** New approval is required even for a previously approved release. Never restores text opt-in. */
+    suspend fun rollbackProject(projectId: String, consent: SkillActivationConsent): SkillReleaseSnapshot = mutex.withLock {
+        switchProject(projectId, state.previousProjects[projectId] ?: error("No project rollback snapshot"),
+            consent.copy(trustedCodingText = false), rollback = true)
+    }
+
+    private fun switchProject(projectId: String, checksums: Map<String, String>, consent: SkillActivationConsent, rollback: Boolean): SkillReleaseSnapshot {
         require(projectId.isNotBlank())
         require(consent.generation == state.generation && consent.reviewedChanges && consent.targetChecksums == checksums) { "Stale or missing project approval" }
         val releases = checksums.map { (key, hash) -> state.installed.getValue(key).also {
@@ -131,13 +147,20 @@ class SkillReleaseStore(
         val old = state.projects[projectId].orEmpty().keys.mapNotNull { state.installed[it] }.associateBy { it.pkg.manifest.id }
         releases.filter { it.pkg.key !in state.projects[projectId].orEmpty() }.forEach { release ->
             release.improvement?.let { check ->
-                require(old[release.pkg.manifest.id]?.pkg?.key == check.baseline) { "Project evaluation baseline changed" }
+                require(rollback || old[release.pkg.manifest.id]?.pkg?.key == check.baseline) { "Project evaluation baseline changed" }
             }
         }
         val added = releases.flatMap { it.pkg.manifest.permissions - old[it.pkg.manifest.id]?.pkg?.manifest?.permissions.orEmpty() }.toSet()
         require(consent.permissions.containsAll(added)) { "New permissions require separate consent" }
-        commit(state.copy(generation = state.generation + 1, projects = state.projects + (projectId to checksums.toMap())))
-        copySnapshot()
+        val textConsents = if (consent.trustedCodingText || projectId in state.projectTextConsents)
+            state.projectTextConsents + (projectId to if (consent.trustedCodingText) checksums.toMap() else emptyMap())
+        else state.projectTextConsents
+        val previous = if (checksums != state.projects[projectId].orEmpty())
+            state.previousProjects + (projectId to state.projects[projectId].orEmpty().toMap())
+        else state.previousProjects // Changing only consent must not destroy the rollback target.
+        commit(state.copy(generation = state.generation + 1, projects = state.projects + (projectId to checksums.toMap()),
+            projectTextConsents = textConsents, previousProjects = previous))
+        return copySnapshot()
     }
 
     suspend fun activate(target: Map<String, String>, consent: SkillActivationConsent): SkillReleaseSnapshot = mutex.withLock {

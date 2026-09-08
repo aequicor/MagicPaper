@@ -1,0 +1,16 @@
+GET /repos/owner/repo/commits/HEAD HTTP/1.1
+Host: api.github.com
+User-Agent: MagicPaper-Skill-Catalog/1
+Accept: */*
+Accept-Encoding: identity
+Connection: close
+
+
+---
+GET /owner/repo/zip/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1
+Host: codeload.github.com
+User-Agent: MagicPaper-Skill-Catalog/1
+Accept: */*
+Accept-Encoding: identity
+Connection: close
+

@@ -1,0 +1,22 @@
+Production Compose UI + real GitHub; headless semantics, not manual desktop
+CLICK: Добавить скилы из репозиториев
+INPUT[0]: debugging
+CLICK: Выбрать источник
+CONSENT: anonymous source GET
+CLICK: Найти пакеты по ссылке
+CLICK: skills/systematic-debugging/SKILL.md
+CLICK: Импортировать без подключения
+SEARCH IMPORT: installed=1
+CLICK: skills/systematic-debugging/SKILL.md
+CLICK: Импортировать без подключения
+REPEAT UI IMPORT: complete snapshot unchanged; installed=1
+INPUT[0]:
+INPUT[1]: https://github.com/obra/superpowers/tree/v4.0.0
+CONSENT: anonymous source GET
+CLICK: Найти пакеты по ссылке
+CLICK: skills/verification-before-completion/SKILL.md
+CLICK: Импортировать без подключения
+TYPED LINK IMPORT: installed=2; full SHA/source/checksum persisted; license=null; QUARANTINED; no review/active/project/opt-in
+CLICK: Назад к проекту
+OFFLINE REOPEN: new repository without network transport; both searches=1; exact keys/checksums preserved; instructions read; no active/project/opt-in
+PASS

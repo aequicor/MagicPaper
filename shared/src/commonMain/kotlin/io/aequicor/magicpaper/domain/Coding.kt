@@ -75,6 +75,8 @@ data class CodingRunCheckpoint(
     val intent: ExecutionIntent = ExecutionIntent.RUN,
     val responseId: String = "",
     val stoppedByUser: Boolean = false,
+    /** Persisted with the request; copies/recovery retain the same identity. */
+    val runId: String = messageId,
 )
 
 /** Older logs have no checkpoint; only an unanswered or failed turn can be resumed. */

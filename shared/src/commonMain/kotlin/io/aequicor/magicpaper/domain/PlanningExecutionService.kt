@@ -549,7 +549,8 @@ class PlanningExecutionService(
                 var ended = false
                 var lastSave = 0L
                 var lastDisplay = 0L
-                val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine)
+                val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
+                    pendingRun = CodingRunCheckpoint("${attempt.id}-turn-${attempt.turnIndex}", ""))
                 if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                 val activityRecorder = CodingRunRecorder()
@@ -687,7 +688,8 @@ class PlanningExecutionService(
                         attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING)
                         saveAttempt(id, stageId, attempt)
                         journal(id, "conflict-agent-intent", stageId, attempt.id)
-                        val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())))
+                        val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                            pendingRun = CodingRunCheckpoint("${attempt.id}-merge", ""))
                         var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                         val activityRecorder = CodingRunRecorder()
@@ -782,7 +784,8 @@ class PlanningExecutionService(
                 val event = received.getOrNull() ?: break
                 silentTicks = 0
                 send(event)
-                if (event == CodingEvent.Finished) break
+                // Drain normal completion so runtime cleanup and independent experience checks finish.
+                // Cancelling the producer at Finished would misclassify completed runs as cancellation.
             }
         } finally { events.cancel() }
     }

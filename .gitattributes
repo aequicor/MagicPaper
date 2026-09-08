@@ -1,0 +1,2 @@
+# Preserve the recorded HTTP request bytes, including CRLF and its terminal blank line.
+docs/skills-catalog/evidence/outbound-http.txt -text whitespace=cr-at-eol,-blank-at-eof

@@ -18,10 +18,12 @@ actual fun createMagicPaperDependencies(): MagicPaperDependencies {
     val skillPackages = io.aequicor.magicpaper.plugins.builtin.LocalSkillsPlugin(
         java.nio.file.Path.of(System.getProperty("user.home"), ".MagicPaper", "skill-packages"),
     )
+    var experience: io.aequicor.magicpaper.data.skills.LocalSkillExperience? = null
     val runtime = DesktopCodingRuntime(PiCodingRuntime(computerUse = computer, subscriptionToken = subscription::subscriptionAccessToken), subscription,
         io.aequicor.magicpaper.plugins.builtin.ProjectSkillsPanel { skillPackages.repo() },
-        { projectId -> skillPackages.repo().projectInstructions(projectId) })
-    var experience: io.aequicor.magicpaper.data.skills.LocalSkillExperience? = null
+        skillSelection = { projectId -> skillPackages.repo().projectCodingSelection(projectId) },
+        recordSkillRun = { record -> skillPackages.repo().recordCodingRun(record) },
+        experience = { experience })
     val experienceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     val dependencies = buildDependencies(
         store = store,

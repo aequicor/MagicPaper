@@ -27,6 +27,7 @@ class LocalExperiencePlugin(
         val scope = rememberCoroutineScope()
         var rows by remember { mutableStateOf<List<ExperienceOutcome>>(emptyList()) }
         var candidates by remember { mutableStateOf<List<ExperienceCandidate>>(emptyList()) }
+        var suggestions by remember { mutableStateOf<List<ExperienceSuggestion>>(emptyList()) }
         var available by remember { mutableStateOf<List<LlmProfile>>(emptyList()) }
         var selectedProfile by remember { mutableStateOf<LlmProfile?>(null) }
         var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -42,9 +43,10 @@ class LocalExperiencePlugin(
         var deleteConfirm by remember { mutableStateOf(false) }
         suspend fun refresh() {
             legacy = withContext(Dispatchers.IO) { experience.hasLegacyData() }
-            if (legacy) { rows = emptyList(); candidates = emptyList(); return }
+            if (legacy) { rows = emptyList(); candidates = emptyList(); suggestions = emptyList(); return }
             rows = withContext(Dispatchers.IO) { experience.search(query) }
             candidates = withContext(Dispatchers.IO) { experience.candidates() }
+            suggestions = withContext(Dispatchers.IO) { experience.suggestions() }
         }
         fun action(block: suspend () -> Unit) {
             if (busy) return
@@ -61,6 +63,9 @@ class LocalExperiencePlugin(
                 available = profiles.load().filter { it.configured && it.provider != ProviderType.OPENAI_SUBSCRIPTION }
                 refresh()
                 if (!legacy) days = withContext(Dispatchers.IO) { experience.retentionDays().toString() }
+                experience.changes.collect { refresh() }
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) { notice = "Локальный опыт недоступен; существующие данные сохранены." }
         }
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -89,12 +94,12 @@ class LocalExperiencePlugin(
             }
             OutlinedTextField(query, { query = it }, label = { Text("Локальный поиск") })
             TextButton(enabled = !busy, onClick = { action { } }) { Text("Найти") }
-            Text("Повторы: " + rows.groupingBy { it.scenario }.eachCount().filterValues { it >= 2 }.toString())
+            Text("Записей одного типа (все исходы): " + rows.mapNotNull { it.scenario }.groupingBy { it }.eachCount().filterValues { it >= 2 }.toString())
             rows.forEach { row ->
                 Row {
                     Checkbox(row.id in selected, { checked -> selected = if (checked) selected + row.id else selected - row.id; preview = null })
                     Column(Modifier.weight(1f)) {
-                        Text("${row.scenario.label} · ${if (row.success) "успех" else "неуспех"}")
+                        Text("${row.scenario?.label ?: "Сценарий не определён"} · ${row.result.label}")
                         Text(row.features.joinToString("\n") { it.label }, maxLines = 5)
                     }
                 }
@@ -120,6 +125,14 @@ class LocalExperiencePlugin(
             }) { Text("Удалить весь опыт") }
             Text("Для кандидата выберите от 2 до 6 результатов одного типа. Программа назначит ID, версию и семь синтетических проверок: 4 фиксированные, 3 отложенные. Контекст ограничен 24 000 символами.")
             available.forEach { profile -> TextButton(enabled = !busy, onClick = { selectedProfile = profile; preview = null }) { Text("${if (selectedProfile?.id == profile.id) "✓ " else ""}${profile.provider} · ${profile.modelId}") } }
+            Text("Автоматические предложения: минимум 3 подтверждённых успеха с одинаковым сценарием и признаками. Ошибки, отмены и непроверенные исходы не учитываются. Использованный опыт повторно не предлагается.")
+            suggestions.forEach { suggestion ->
+                Text("${suggestion.scenario.label}: " + suggestion.features.joinToString { it.label }.ifEmpty { "без дополнительных признаков" })
+                Text(suggestion.explanation)
+                TextButton(enabled = !busy && !legacy && selectedProfile != null, onClick = { action {
+                    preview = withContext(Dispatchers.IO) { experience.previewSuggestion(suggestion.sources, requireNotNull(selectedProfile)) }
+                } }) { Text("Предпросмотр предложенного SKILL.md") }
+            }
             TextButton(enabled = !busy && !legacy && selectedProfile != null, onClick = { action {
                 preview = withContext(Dispatchers.IO) { experience.preview(selected, requireNotNull(selectedProfile)) }
             } }) { Text("Предпросмотр отправки") }

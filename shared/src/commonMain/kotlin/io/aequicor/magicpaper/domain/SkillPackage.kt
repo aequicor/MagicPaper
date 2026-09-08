@@ -30,7 +30,8 @@ data class SkillPackageDependency(val id: String, val version: String)
 enum class SkillPermission { READ_PROJECT, WRITE_PROJECT, NETWORK, RUN_PROCESS }
 
 @Serializable
-enum class SkillImportKind { LOCAL_DIRECTORY, ZIP, GIT, HTTPS_PACKAGE }
+/** Transport kind shared by a publisher-declared origin and the separately stored observed source. */
+enum class SkillImportKind { LOCAL_DIRECTORY, ZIP, GIT, HTTPS_PACKAGE, READY_TEXT }
 
 @Serializable
 data class SkillPackageOrigin(
