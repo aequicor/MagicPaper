@@ -61,9 +61,9 @@ class ProjectsPanelCollapseTest {
 
     @Test fun childCollapseSurvivesUpdatesSelectionAndProjectRoundTrip() = Panel().use { p ->
         assertTrue("session-child" in p.keys())
-        p.click("session-parent", 335f)
+        p.click("session-parent")
         assertFalse("session-child" in p.keys(), "Child disclosure must hide the stage")
-        assertEquals(0, p.sessionClicks, "Disclosure must not select the parent session")
+        assertEquals(1, p.sessionClicks, "Clicking the row selects the parent and toggles its stages")
         p.ui.value = p.ui.value.copy(sessions = p.ui.value.sessions.map { it.copy(running = it.session.id == "child") })
         p.render()
         assertFalse("session-child" in p.keys(), "Live status must not reopen the collapsed group")
@@ -76,6 +76,7 @@ class ProjectsPanelCollapseTest {
         assertFalse("session-child" in p.keys(), "Returning to the project preserves collapsed children")
         p.click("session-parent", 335f)
         assertTrue("session-child" in p.keys())
+        assertEquals("parent", p.ui.value.currentSessionId, "The arrow uses the same action as the whole row")
         p.click("session-child")
         assertEquals("child", p.ui.value.currentSessionId)
         p.snapshot("children-reopened")

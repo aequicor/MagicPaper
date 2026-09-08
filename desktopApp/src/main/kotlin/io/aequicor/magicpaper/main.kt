@@ -17,6 +17,7 @@ import io.aequicor.magicpaper.ui.window.DesktopWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowScope
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
+import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import io.aequicor.magicpaper.ui.window.LocalWindowsTitleBarController
 import io.aequicor.magicpaper.ui.window.WindowsTitleBarController
 import java.awt.Frame
@@ -94,6 +95,8 @@ fun main() {
                 LocalWindowChrome provides chrome,
                 LocalWindowScope provides this,
                 LocalWindowTitleBarInsets provides titleBarInsets,
+                // macOS: одна строка с нативным «светофором», без второго ряда ниже.
+                LocalWindowToolbarHeight provides if (mode == DesktopWindowMode.MAC_SYSTEM) MacTitleBarHeight else 40.dp,
                 LocalWindowsTitleBarController provides windowsTitleBar,
             ) {
                 App()

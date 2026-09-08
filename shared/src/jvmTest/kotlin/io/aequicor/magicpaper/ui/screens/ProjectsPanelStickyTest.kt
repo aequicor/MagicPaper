@@ -108,6 +108,7 @@ class ProjectsPanelStickyTest {
         p.click(p.text("Plan 1").boundsInRoot.center)
         assertEquals("plan-1", p.ui.value.currentSessionId)
         p.snapshot("second-session")
+        p.click(p.text("Plan 1").boundsInRoot.center)
         // After both 17-row groups, a normal session must not inherit Plan 1's overlay.
         p.item(35, -p.projectInfo().size)
         p.click(p.text("Ordinary session").boundsInRoot.center)

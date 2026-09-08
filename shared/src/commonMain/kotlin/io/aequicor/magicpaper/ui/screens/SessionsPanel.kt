@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
+import io.aequicor.magicpaper.ui.components.FadingSingleLineText
 
 /** Боковая панель со списком свитков (сессий). */
 @Composable
@@ -68,11 +69,10 @@ private fun SessionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f).padding(horizontal = 8.dp)) {
-            Text(
+            FadingSingleLineText(
                 session.title,
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
             )
         }
         TextButton(onClick = onDelete) {

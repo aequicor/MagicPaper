@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.verticalScroll
@@ -137,6 +140,7 @@ import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
+import io.aequicor.magicpaper.ui.components.FadingSingleLineText
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
 import io.aequicor.magicpaper.ui.components.chatDisclosure
 import io.aequicor.magicpaper.ui.components.CodingAttachments
@@ -470,7 +474,17 @@ internal fun ProjectsPanel(
                 { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
                 { onAbortSession(session.session.id) },
                 childCount = group.children.size, expanded = group.expanded,
-                onToggleChildren = { collapsed[session.session.id] = group.expanded })
+                onToggleChildren = {
+                    if (group.expanded) {
+                        val visible = listState.layoutInfo.visibleItemsInfo
+                        val project = visible.firstOrNull { it.key == "project-${session.session.projectId}" }
+                        val top = project?.let { (it.offset + it.size).coerceAtLeast(0) } ?: 0
+                        val header = visible.firstOrNull { it.key == "session-${session.session.id}" }
+                        // Keep a pinned card visible when its scrolled-away children disappear.
+                        if (header == null || header.offset < top) listState.requestScrollToItem(group.index, -top)
+                    }
+                    collapsed[session.session.id] = group.expanded
+                })
         }
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -584,34 +598,38 @@ private fun ProjectRow(
     onDelete: () -> Unit,
     onDeleteAllSessions: () -> Unit = {},
 ) {
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    var menuOpen by rememberSaveable(project.id) { mutableStateOf(false) }
+    val showActions = hovered || menuOpen
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .clip(MaterialTheme.shapes.small)
+            .hoverable(hoverInteraction)
             .clickable(onClick = onSelect)
             .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Стрелка-маркер: под выбранным проектом раскрыт список его сессий.
-        Text(
-            if (expanded) "▾" else "▸",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.width(14.dp),
-        )
+        // Keep the title aligned when the disclosure appears on hover.
+        Box(Modifier.width(14.dp)) {
+            if (showActions) Text(
+                if (expanded) "▾" else "▸",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
         StatusTooltip(status) { ActivityDot(status, size = 9) }
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
+            FadingSingleLineText(
                 project.name,
                 fontWeight = FontWeight.SemiBold,
-                overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
             )
-            Text(
+            FadingSingleLineText(
                 buildString {
                     append("$sessionCount ${sessionCountWord(sessionCount)}")
                     if (sessionCount > 0) {
@@ -620,10 +638,13 @@ private fun ProjectRow(
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
             )
         }
-        RowMenu(key = "project-${project.id}", entries = listOf("Удалить все сессии" to onDeleteAllSessions, "Удалить проект" to onDelete))
+        if (showActions) RowMenu(
+            open = menuOpen,
+            onOpenChange = { menuOpen = it },
+            entries = listOf("Удалить все сессии" to onDeleteAllSessions, "Удалить проект" to onDelete),
+        )
     }
 }
 
@@ -644,11 +665,16 @@ private fun SessionRow(
     onToggleChildren: () -> Unit = {},
 ) {
     val status = item.status
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    var menuOpen by rememberSaveable(item.session.id) { mutableStateOf(false) }
+    val showActions = hovered || menuOpen
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = if (nested) 42.dp else 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
             .clip(MaterialTheme.shapes.small)
+            .hoverable(hoverInteraction)
             .background(
                 if (selected) {
                     MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
@@ -656,39 +682,52 @@ private fun SessionRow(
                     Color.Transparent
                 }
             )
-            .clickable(onClick = onSelect)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClickLabel = if (childCount > 0) {
+                    if (expanded) "Свернуть этапы" else "Раскрыть этапы"
+                } else null,
+            ) {
+                onSelect()
+                if (childCount > 0) onToggleChildren()
+            }
             .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusTooltip(status) { ActivityDot(status, size = 8) }
         Spacer(Modifier.width(7.dp))
         Column(Modifier.weight(1f)) {
-            Text(
+            FadingSingleLineText(
                 item.session.name,
                 style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Text(item.session.subtitle(), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-            if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.BLOCKED) || nested) Text(
+            FadingSingleLineText(
+                buildString {
+                    append(item.session.subtitle())
+                    if (childCount > 0) append(" · $childCount ${sessionCountWord(childCount)}")
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.BLOCKED) || nested) FadingSingleLineText(
                 if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
                     "передан оркестратору" else status.label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (childCount > 0) {
-            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
-                .clickable(onClick = onToggleChildren), contentAlignment = Alignment.Center) {
+        if (showActions && childCount > 0) {
+            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" },
+                contentAlignment = Alignment.Center) {
                 Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
             }
-            Text(childCount.toString(), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
         }
-        RowMenu(
-            key = "session-${item.session.id}",
+        if (showActions) RowMenu(
+            open = menuOpen,
+            onOpenChange = { menuOpen = it },
             entries = buildList<Pair<String, () -> Unit>> {
                 if (item.running) add("Прервать прогон" to onAbort)
                 add((if (item.session.stageId != null) "В архив" else "Удалить сессию") to onDelete)
@@ -719,8 +758,7 @@ private fun AddSessionRow(onAdd: () -> Unit) {
 
 /** Якорь «⋯» с выпадающим меню: общий для строк проекта и кодинг-сессии. */
 @Composable
-private fun RowMenu(key: String, entries: List<Pair<String, () -> Unit>>) {
-    var open by rememberSaveable(key) { mutableStateOf(false) }
+private fun RowMenu(open: Boolean, onOpenChange: (Boolean) -> Unit, entries: List<Pair<String, () -> Unit>>) {
     Box {
         Text(
             "⋯",
@@ -728,16 +766,17 @@ private fun RowMenu(key: String, entries: List<Pair<String, () -> Unit>>) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .clip(MaterialTheme.shapes.small)
-                .clickable { open = true }
+                .clickable { onOpenChange(true) }
+                .semantics { contentDescription = "Действия" }
                 .padding(horizontal = 6.dp),
         )
         if (open) {
-            DropdownMenu(expanded = true, onDismissRequest = { open = false }) {
+            DropdownMenu(expanded = true, onDismissRequest = { onOpenChange(false) }) {
                 entries.forEach { (label, action) ->
                     DropdownMenuItem(
                         text = { Text(label) },
                         onClick = {
-                            open = false
+                            onOpenChange(false)
                             action()
                         },
                     )
