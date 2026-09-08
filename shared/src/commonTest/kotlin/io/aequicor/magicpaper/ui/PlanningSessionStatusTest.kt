@@ -14,6 +14,20 @@ class PlanningSessionStatusTest {
     private val question = CodingMessage("question", CodingRole.AGENT, "Уточните формат", createdAt = 1,
         planning = PlanningChatBlock(plan.id, questions = listOf(PlanningQuestion("format", "Формат")), sourceStageId = stage.id))
 
+    @Test fun continueIsOfferedForStoppedOrBlockedWorkButNotQuestionsOrCompletedPlans() {
+        for (intent in listOf(ExecutionIntent.PAUSE, ExecutionIntent.STOP)) {
+            assertTrue(CodingSessionUi(parent, plan = plan.copy(intent = intent)).canResume)
+            assertTrue(CodingSessionUi(worker, plan = plan.copy(intent = intent)).canResume)
+        }
+        val waiting = plan.copy(phase = ExecutionPhase.WAITING)
+        assertTrue(CodingSessionUi(parent, plan = waiting).canResume)
+        assertFalse(CodingSessionUi(parent, listOf(question), plan = waiting).canResume)
+        assertFalse(CodingSessionUi(parent, plan = waiting, awaitingUser = true).canResume)
+        assertFalse(CodingSessionUi(parent, plan = waiting, running = true).canResume)
+        assertFalse(CodingSessionUi(parent, plan = waiting.copy(phase = ExecutionPhase.COMPLETE)).canResume)
+        assertFalse(CodingSessionUi(parent, plan = waiting.copy(confirmedRevision = null)).canResume)
+    }
+
     @Test fun queuedTaskIsGrayDespiteItsUnansweredTaskMessage() {
         val task = CodingMessage("task", CodingRole.USER, "Реализовать этап", createdAt = 1)
         val pending = plan.copy(milestones = listOf(stage.copy(status = MilestoneStatus.PENDING, attempts = emptyList())))

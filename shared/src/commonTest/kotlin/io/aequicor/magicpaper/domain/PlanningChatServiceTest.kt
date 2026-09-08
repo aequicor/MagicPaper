@@ -92,6 +92,113 @@ class PlanningChatServiceTest {
             plannerSelection = parent.modelSelection, milestones = listOf(Milestone("stage", "Stage", description = "Change files", acceptance = "Checks pass", assignment = StageAssignment(profile.id, "m"))),
             tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage")), DecisionNode("stage", "Stage", DecisionKind.STAGE, stageId = "stage"))).also { store.save(it) }
     }
+    @Test fun restartRecoversUnavailableAssignmentsAndCoordinatesCheckpointBeforeStartingAnotherWorkerTurn() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val missing = StageAssignment("removed", "m")
+        val attempt = StageAttempt("a", "plan-p-stage-stage", missing, phase = AttemptPhase.EXECUTING,
+            path = "/shared", report = """{"kind":"RESULT","text":"Saved result","changedFiles":[]}""", awaitingPlanner = true)
+        val completed = Milestone("done", "Finished", status = MilestoneStatus.DONE, assignment = missing,
+            attempts = listOf(attempt.copy(id = "done-attempt", phase = AttemptPhase.COMPLETE)))
+        f.store.save(base.copy(confirmedRevision = 1, runId = "existing-run", intent = ExecutionIntent.RUN,
+            phase = ExecutionPhase.WAITING, status = PlanStatus.RUNNING,
+            plannerSelection = ModelSelection("removed", "m"),
+            issue = PlanningIssue(IssueKind.CONFIGURATION, "Источник этапа недоступен: removed"),
+            milestones = listOf(completed, base.milestones.single().copy(status = MilestoneStatus.ACTIVE,
+                assignment = missing, attempts = listOf(attempt)))))
+        f.execution.shutdown(); runCurrent()
+        val restored = Fixture(this, f.kv)
+        restored.service.bootstrap(); restored.execution.bootstrap()
+        restored.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        val result = restored.store.planFor(base.id)!!
+        assertEquals(PlanStatus.DONE, result.status)
+        assertEquals("existing-run", result.runId)
+        assertEquals(parent.modelSelection, result.plannerSelection)
+        assertEquals(missing, result.milestones.first { it.id == "done" }.assignment)
+        assertEquals(missing, result.milestones.first { it.id == "done" }.attempts.single().assignment)
+        assertEquals(profile.id, result.milestones.first { it.id == "stage" }.attempts.single().assignment.profileId)
+        assertTrue(restored.runtime.calls.none { it.first.id == attempt.sessionId })
+        assertEquals(1, restored.gateway.coordinatorCallbacks.size)
+        restored.execution.shutdown()
+    }
+
+    @Test fun unavailableModelIsVisibleAndRecoveryDoesNotSubstituteAnotherModel() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val base = f.readyPlan("p", f.session("parent"))
+        f.store.save(base.copy(confirmedRevision = 1, milestones = base.milestones.map {
+            it.copy(assignment = StageAssignment("removed", "unavailable-model"))
+        }))
+        f.service.resume(f.projects.sessions(project.id).first { it.id == "parent" }); runCurrent()
+        val result = f.store.planFor(base.id)!!
+        assertTrue(result.issue?.requiresUser == true)
+        assertEquals(IssueKind.CONFIGURATION, result.issue?.kind)
+        assertEquals("unavailable-model", result.milestones.single().assignment?.modelId)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun shutdownRequeuesOrchestratorInputWhileExplicitCancelDoesNot() = runTest {
+        for (stop in listOf(false, true)) {
+            val f = Fixture(this); f.initialize(); runCurrent()
+            val parent = f.session("parent")
+            f.gateway.gate = CompletableDeferred()
+            f.service.send(parent, "Prepare a plan"); runCurrent()
+            assertEquals(OrchestrationInputStatus.PROCESSING, f.service.states.value[parent.id]!!.inputs.single().status)
+            if (stop) { f.service.cancelRequest(parent.id); runCurrent() }
+            f.execution.shutdown(); runCurrent()
+            val restored = Fixture(this, f.kv)
+            restored.service.bootstrap(); runCurrent()
+            assertEquals(if (stop) OrchestrationInputStatus.CANCELLED else OrchestrationInputStatus.DONE,
+                restored.service.states.value[parent.id]!!.inputs.single().status)
+            assertEquals(1, restored.projects.messages(project.id, parent.id).count { it.role == CodingRole.USER })
+            restored.execution.shutdown()
+        }
+    }
+
+    @Test fun continueCanResumeCancelledOrchestratorBeforePlanConfirmation() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.gateway.gate = CompletableDeferred()
+        f.service.send(parent, "Prepare a plan"); runCurrent()
+        f.service.cancelRequest(parent.id); runCurrent()
+        assertEquals(OrchestrationInputStatus.CANCELLED, f.service.states.value[parent.id]!!.inputs.single().status)
+        f.gateway.gate!!.complete(Unit)
+        f.service.resume(parent); runCurrent()
+        assertEquals(OrchestrationInputStatus.DONE, f.service.states.value[parent.id]!!.inputs.single().status)
+        assertNotNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun textEnteredWithContinueReachesWorkerBeforeStoppedPlanResumes() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(confirmedRevision = 1, intent = ExecutionIntent.STOP, runId = "same-run"))
+        f.gateway.userDecision = """{"intent":"INSTRUCT","stageId":"stage"}"""
+        f.service.resume(parent, "Сохрани существующий формат"); runCurrent()
+        val call = f.runtime.calls.single()
+        assertContains(call.second, "Сохрани существующий формат")
+        assertEquals(ExecutionIntent.RUN, f.store.planFor(base.id)!!.intent)
+        assertEquals("same-run", f.store.planFor(base.id)!!.runId)
+        assertEquals(OrchestrationInputStatus.DONE, f.service.states.value[parent.id]!!.inputs.single().status)
+        f.execution.stop(base.id)
+    }
+
+    @Test fun resumeRestartsStoppedPlanInSameRunAndDoesNothingAfterCompletion() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); val base = f.readyPlan("p", parent)
+        f.service.confirm(base.id); runCurrent()
+        val runId = f.store.planFor(base.id)!!.runId
+        f.execution.stop(base.id); runCurrent()
+        f.runtime.gate.complete(Unit)
+        f.service.resume(parent); advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(base.id)!!.status)
+        assertEquals(runId, f.store.planFor(base.id)!!.runId)
+        assertEquals(1, f.store.planFor(base.id)!!.milestones.single().attempts.size)
+        val count = f.runtime.calls.size
+        f.service.resume(parent); advanceTimeBy(1000); runCurrent()
+        assertEquals(count, f.runtime.calls.size)
+    }
+
     @Test fun deletingAllSessionsStopsPlansAndPreservesOtherProjects() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")

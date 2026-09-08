@@ -25,6 +25,7 @@ import kotlinx.serialization.Serializable
     val answers: List<PlanningAnswer> = emptyList(), val replyTo: String? = null,
     val status: OrchestrationInputStatus = OrchestrationInputStatus.QUEUED,
     val decision: UserTurnDecision? = null, val error: String = "",
+    val resumeAfter: Boolean = false,
 )
 
 @Serializable data class OrchestrationQuestion(

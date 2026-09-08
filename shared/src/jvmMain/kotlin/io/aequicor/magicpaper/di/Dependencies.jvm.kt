@@ -55,7 +55,7 @@ actual fun createMagicPaperDependencies(): MagicPaperDependencies {
         },
     )
     Runtime.getRuntime().addShutdownHook(Thread({
-        try { kotlinx.coroutines.runBlocking { dependencies.planning.shutdown() } }
+        try { kotlinx.coroutines.runBlocking { dependencies.viewModel.shutdownCoding(); dependencies.planning.shutdown() } }
         finally { experienceScope.cancel(); experience?.close(); skillPackages.close(); runtime.abortAll(); subscription.close() }
     }, "magicpaper-planning-shutdown"))
     return dependencies

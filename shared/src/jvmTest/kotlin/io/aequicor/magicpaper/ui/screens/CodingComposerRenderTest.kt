@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.ImageComposeScene
@@ -24,6 +25,40 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CodingComposerRenderTest {
+    @Test fun continueWorksWithEmptyComposerAtBothWidthsAndSendStaysDisabled() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            for (width in listOf(390, 1000)) for (resumable in listOf(false, true)) {
+                var bounds = Rect.Zero
+                var resumed = 0
+                var sent = 0
+                ImageComposeScene(width, 72) {
+                    MagicPaperTheme { Surface {
+                        Box(Modifier.onGloballyPositioned { bounds = it.boundsInRoot() }) {
+                            CodingComposer(enabled = true, busy = false, onSend = { _, _ -> sent++ },
+                                onAbort = {}, onPickAttachments = { _, _ -> },
+                                onResume = if (resumable) { { text, attachments ->
+                                    assertEquals("", text); assertTrue(attachments.isEmpty()); resumed++
+                                } } else null)
+                        }
+                    } }
+                }.use { scene ->
+                    repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                    val button = androidx.compose.ui.geometry.Offset(bounds.right - 35, bounds.center.y)
+                    scene.sendPointerEvent(PointerEventType.Press, button)
+                    scene.sendPointerEvent(PointerEventType.Release, button)
+                    scene.render(112_000_000L).close(); runCurrent()
+                    assertEquals(if (resumable) 1 else 0, resumed, "Continue should respond at width $width")
+                    assertEquals(0, sent)
+                    val output = File("build/reports/coding-composer").apply { mkdirs() }
+                    File(output, "resume-$width-$resumable.png").writeBytes(scene.render(128_000_000L).use {
+                        it.encodeToData()!!.use { data -> data.bytes }
+                    })
+                }
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun reasoningStatusRendersWithAndWithoutSummaryDuringCommand() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

@@ -24,6 +24,8 @@ fun List<Plan>.resolvePlan(id: String): Plan? = firstOrNull { it.id == id } ?: f
 enum class StageTurnAction { VERIFY, CONTINUE, WAIT }
 data class StageTurnDecision(val action: StageTurnAction, val report: String, val requestId: String? = null)
 interface PlanningExecutionHooks {
+    suspend fun awaitReady() = Unit
+    suspend fun recoverAssignments(plan: Plan): Plan = plan
     suspend fun blockedStages(plan: Plan): Set<String> = emptySet()
     suspend fun prepareSessions(plan: Plan)
     suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt): String

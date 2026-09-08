@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.ui
 
+import io.aequicor.magicpaper.domain.ExecutionIntent
+import io.aequicor.magicpaper.domain.ExecutionPhase
+import io.aequicor.magicpaper.domain.interruptedCodingRequest
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingDraft
@@ -33,13 +36,31 @@ data class CodingSessionUi(
     val running: Boolean = false,
     val plan: Plan? = null,
     val awaitingUser: Boolean = false,
+    val interruptedRequest: Boolean = false,
 ) {
+    val canResume: Boolean
+        get() {
+            if (running || awaitingUser || draft.awaitingApproval || session.archived) return false
+            if (interruptedRequest) return messages.pendingPlanningQuestion() == null
+            val current = plan
+            if (current != null) {
+                if (current.confirmedRevision == null || current.phase == ExecutionPhase.COMPLETE || current.proposal != null ||
+                    messages.pendingPlanningQuestion(setOf(current.id)) != null ||
+                    current.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForUser != null }) return false
+                return current.intent != ExecutionIntent.RUN || current.issue != null ||
+                    current.phase == ExecutionPhase.WAITING
+            }
+            if (session.planningMode || session.stageId != null) return false
+            return session.pendingRun != null || messages.interruptedCodingRequest() != null
+        }
+
     /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */
     val status: CodingSessionStatus
         get() {
             if (session.archived) return CodingSessionStatus.IDLE
             if (awaitingUser) return CodingSessionStatus.WAITING
             if (draft.awaitingApproval) return CodingSessionStatus.WAITING
+            if (!running && (session.pendingRun != null || interruptedRequest)) return CodingSessionStatus.WAITING
             val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
             if (stage != null) return when {
                 stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.WAITING

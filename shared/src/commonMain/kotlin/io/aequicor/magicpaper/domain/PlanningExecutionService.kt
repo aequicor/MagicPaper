@@ -23,8 +23,9 @@ class PlanningExecutionService(
     private val settings: SettingsRepository,
     private val verifier: MilestoneVerifier,
     private val workspaces: PlanningWorkspace = LocalPlanningWorkspace(),
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
+    private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     var chatHooks: PlanningExecutionHooks? = null
     private val jobs = mutableMapOf<String, Job>()
     private val jobsLock = Mutex()
@@ -45,13 +46,14 @@ class PlanningExecutionService(
     fun bootstrap() {
         if (watcher != null || !runtime.supported) return
         watcher = scope.launch {
+            chatHooks?.awaitReady()
             while (isActive && !closing) {
                 try {
                     if (store.failure.value != null) {
                         jobsLock.withLock { jobs.values.toList() }.joinAll()
                         store.recover()
                     }
-                    store.plans().filter { it.intent == ExecutionIntent.RUN && it.phase != ExecutionPhase.COMPLETE && it.issue?.requiresUser != true }
+                    store.plans().filter { it.intent == ExecutionIntent.RUN && it.phase != ExecutionPhase.COMPLETE && (it.issue?.requiresUser != true || it.issue?.kind == IssueKind.CONFIGURATION) }
                         .forEach { plan ->
                             if ((plan.issue?.retryAt ?: 0) <= Id.now()) launchProject(plan.id)
                         }
@@ -121,6 +123,7 @@ class PlanningExecutionService(
     }
     /** Explicit retry does not erase counters; the caller fixes configuration or acknowledges uncertainty. */
     suspend fun retry(projectId: String) {
+        if (store.planFor(projectId)?.phase == ExecutionPhase.COMPLETE) return
         store.update(projectId) { p -> p.copy(issue = null, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING, status = PlanStatus.RUNNING,
             finalAttempt = p.finalAttempt?.retryAfterUserAction()?.let { if (p.issue?.kind == IssueKind.UNCERTAIN) it.copy(pendingToolExternal = false, pendingTool = "") else it },
             milestones = p.milestones.map { m -> m.copy(attempts = m.attempts.map { a ->
@@ -155,7 +158,9 @@ class PlanningExecutionService(
                 return
             }
             acquiredProject = project
+            chatHooks?.awaitReady()
             var plan = store.planFor(id) ?: return
+            plan = chatHooks?.recoverAssignments(plan) ?: plan
             if (plan.intent != ExecutionIntent.RUN) return
             val graph = DecisionCompiler.compile(plan)
             require(graph.valid) { graph.errors.joinToString("\n") }
@@ -437,17 +442,19 @@ class PlanningExecutionService(
             }
             while (attempt.phase in listOf(AttemptPhase.PREPARED, AttemptPhase.EXECUTING, AttemptPhase.FAILED)) {
                 if (!canRun(id)) return
-                val frozen = attempt.assignment.executionProfile(profiles.load())
                 val plan = store.planFor(id)!!
                 // A completed runtime turn may have been checkpointed before its coordinator finished.
                 // Resume the durable decision, never re-run its file operations just to redeliver a reply.
                 val recorded = plan.coordination.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
-                if (recorded != null && chatHooks != null) {
-                    attempt = attempt.copy(awaitingPlanner = true)
+                val pendingCoordination = attempt.coordinationPending ?: (attempt.awaitingPlanner &&
+                    attempt.report.isNotBlank() && attempt.waitingForUser == null &&
+                    (attempt.turnIndex == 0 || attempt.chatTurns.size > attempt.turnIndex))
+                if ((recorded != null || pendingCoordination) && chatHooks != null) {
+                    attempt = attempt.copy(awaitingPlanner = true, coordinationPending = true)
                     saveAttempt(id, stageId, attempt)
                     val resumed = chatHooks!!.finished(plan, stage, attempt)
                     attempt = attempt.copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
-                        awaitingPlanner = resumed.action == StageTurnAction.WAIT,
+                        awaitingPlanner = resumed.action == StageTurnAction.WAIT, coordinationPending = false,
                         phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
                         waitingForUser = if (resumed.action == StageTurnAction.WAIT) resumed.requestId ?: "legacy" else null, error = null)
                     saveAttempt(id, stageId, attempt)
@@ -459,6 +466,7 @@ class PlanningExecutionService(
                     if (resumed.action == StageTurnAction.VERIFY) break
                     continue
                 }
+                val frozen = attempt.assignment.executionProfile(profiles.load())
                 val context = DecisionCompiler.compile(plan).dependencies[stageId].orEmpty().joinToString("\n") { dep ->
                     plan.milestones.first { it.id == dep }.let { "${it.title}: ${it.report}" }
                 }
@@ -474,7 +482,7 @@ class PlanningExecutionService(
                     Работай только в этой рабочей папке. Не выполняй внешних публикаций.
                     Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
                 """.trimIndent() + "\n" + extraInstructions
-                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false,
+                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false, coordinationPending = false,
                     chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now()))
                 saveAttempt(id, stageId, attempt)
                 journal(id, "agent-intent", stageId, attempt.id)
@@ -540,13 +548,13 @@ class PlanningExecutionService(
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
                 if (chatHooks != null) {
-                    attempt = attempt.copy(awaitingPlanner = true)
+                    attempt = attempt.copy(awaitingPlanner = true, coordinationPending = true)
                     saveAttempt(id, stageId, attempt)
                 }
                 val decision = chatHooks?.finished(store.planFor(id)!!, stage, attempt)
                 if (decision != null) {
                     attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1,
-                        awaitingPlanner = decision.action == StageTurnAction.WAIT)
+                        awaitingPlanner = decision.action == StageTurnAction.WAIT, coordinationPending = false)
                     if (decision.action != StageTurnAction.VERIFY) {
                         attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null,
                             waitingForUser = if (decision.action == StageTurnAction.WAIT) decision.requestId ?: "legacy" else null)
@@ -751,6 +759,6 @@ class PlanningExecutionService(
             "конфликт" in lower || "conflict" in lower -> IssueKind.CONFLICT
             else -> IssueKind.UNCERTAIN
         }
-        return PlanningIssue(kind, message.take(2000), requiresUser = kind !in listOf(IssueKind.CONFIGURATION, IssueKind.TRANSIENT))
+        return PlanningIssue(kind, message.take(2000), requiresUser = kind != IssueKind.TRANSIENT)
     }
 }

@@ -294,6 +294,7 @@ private fun SessionArea(
                 onOpenSession = vm::selectCodingSession,
                 engineReady = true,
                 onSend = { text, attachments -> vm.sendCodingPromptTo(active.session.id, text, attachments) },
+                onResume = { text, attachments -> vm.resumeCodingSession(active.session.id, text, attachments) },
                 onAbort = {
                     when {
                         active.session.stageId != null && active.session.planId != null -> service?.control(active.session.planId, "stop")
@@ -817,6 +818,7 @@ internal fun CodingChat(
     onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
     onStopApproval: (String) -> Unit = {},
     onSkills: (() -> Unit)? = null,
+    onResume: ((String, List<Attachment>) -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val messages = session.messages
@@ -918,6 +920,7 @@ internal fun CodingChat(
                     planning = session.session.planningMode,
                     onPlanning = onPlanning,
                     onSend = onSend,
+                    onResume = onResume?.takeIf { session.canResume },
                     onAbort = onAbort,
                     onSkills = onSkills,
                     onPickAttachments = onPickAttachments,
@@ -1286,7 +1289,7 @@ private fun currentThinkingSummary(thinking: String): String {
 }
 
 @Composable
-private fun CodingComposer(
+internal fun CodingComposer(
     onSkills: (() -> Unit)? = null,
     enabled: Boolean,
     busy: Boolean,
@@ -1296,12 +1299,13 @@ private fun CodingComposer(
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
+    onResume: ((String, List<Attachment>) -> Unit)? = null,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
     var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     fun submit() {
-        if (text.isBlank() && attachments.isEmpty()) return
-        onSend(text, attachments)
+        if (!enabled || busy || (onResume == null && text.isBlank() && attachments.isEmpty())) return
+        (onResume ?: onSend)(text, attachments)
         text = ""
         attachments = emptyList()
     }
@@ -1383,9 +1387,9 @@ private fun CodingComposer(
                     color = MaterialTheme.colorScheme.outlineVariant,
                 )
                 if (busy) TextButton(onClick = onAbort, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Прервать") }
-                else TextButton(enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
+                else TextButton(enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
                     contentPadding = PaddingValues(horizontal = 4.dp)) {
-                    Text(if (enabled) "Отправить" else "Движок не готов", style = MaterialTheme.typography.labelMedium)
+                    Text(if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }

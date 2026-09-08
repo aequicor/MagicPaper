@@ -60,6 +60,8 @@ import kotlinx.serialization.Serializable
     val startedAt: Long = 0, val updatedAt: Long = 0,
     /** The worker has returned its turn; the planner owns the next decision. */
     val awaitingPlanner: Boolean = false,
+    /** null migrates older attempts; false also distinguishes an answered handoff from an unprocessed report. */
+    val coordinationPending: Boolean? = null,
     val waitingForUser: String? = null,
     val chatTurns: List<StageChatTurn> = emptyList(),
     val engine: CodingEngine? = null,

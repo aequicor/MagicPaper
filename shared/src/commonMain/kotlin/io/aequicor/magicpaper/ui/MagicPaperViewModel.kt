@@ -2,7 +2,6 @@ package io.aequicor.magicpaper.ui
 
 import io.aequicor.magicpaper.domain.*
 import androidx.lifecycle.ViewModel
-import kotlinx.coroutines.CancellationException
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.Attachment
@@ -47,6 +46,17 @@ import io.aequicor.magicpaper.domain.chatVisible
 import io.aequicor.magicpaper.domain.codingStatusOf
 import io.aequicor.magicpaper.plugins.PluginRegistry
 import io.aequicor.magicpaper.util.Id
+import io.aequicor.magicpaper.domain.CodingRunCheckpoint
+import io.aequicor.magicpaper.domain.ExecutionIntent
+import io.aequicor.magicpaper.domain.interruptedCodingRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -97,6 +107,8 @@ class MagicPaperViewModel(
 
     /** Активные прогоны по идентификаторам кодинг-сессий (параллельно в разных сессиях). */
     private val codingJobs = mutableMapOf<String, Job>()
+    private val codingSessionLocks = mutableMapOf<String, Mutex>()
+    private var closing = false
 
     init {
         scope.launch { bootstrap() }
@@ -140,7 +152,9 @@ class MagicPaperViewModel(
         val workerRunning = plan?.milestones?.firstOrNull { it.id == session.stageId }?.let {
             plan.isStageWorking(it)
         } == true
-        return item.copy(plan = plan, awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
+        val interruptedRequest = service.states.value[session.id]?.inputs?.lastOrNull()?.status in
+            listOf(io.aequicor.magicpaper.domain.OrchestrationInputStatus.CANCELLED, io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED)
+        return item.copy(plan = plan, interruptedRequest = interruptedRequest, awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
             session.stageId == null || it.stageIds.isEmpty() || session.stageId in it.stageIds
         }, draft = service.drafts.value[session.id]
             ?: if (plan != null || session.planningMode) CodingDraft() else item.draft,
@@ -194,6 +208,7 @@ class MagicPaperViewModel(
         }
         projects.firstOrNull()?.let { project -> openCodingProject(project.id) }
         refreshCodingEngines()
+        restoreCodingRuns(projects)
         if (openAiSubscription != null && profiles.any { it.provider == ProviderType.OPENAI_SUBSCRIPTION }) {
             refreshOpenAiSubscription()
         }
@@ -1111,69 +1126,135 @@ class MagicPaperViewModel(
      * Прогоны разных сессий (в том числе разных проектов) идут параллельно.
      */
     fun sendCodingPromptTo(sessionId: String, text: String, attachments: List<Attachment> = emptyList()) {
-        val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session
-        if (planningChat != null && selected != null && (selected.planningMode || selected.stageId != null)) {
+        val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session ?: return
+        if (planningChat != null && (selected.planningMode || selected.stageId != null)) {
             planningChat.send(selected, text); return
         }
-        val runtime = codingRuntime ?: return
-        val repo = codingProjects ?: return
-        val trimmed = text.trim()
-        if (trimmed.isEmpty() && attachments.isEmpty()) return
-        val coding = _state.value.coding
-        val ui = coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
-        val session = ui.session
-        val project = coding.projects.firstOrNull { it.id == session.projectId } ?: return
-        if (codingJobs[session.id]?.isActive == true) return
+        if (text.isBlank() && attachments.isEmpty()) return
+        launchCodingRun(selected, CodingRunCheckpoint(Id.new(), text.trim(), attachments), recovering = false)
+    }
 
-        val userMessage = CodingMessage(
-            id = Id.new(),
-            role = CodingRole.USER,
-            text = trimmed,
-            createdAt = Id.now(),
-            attachments = attachments.map { it.asMeta() },
-        )
+    fun resumeCodingSession(sessionId: String, text: String = "", attachments: List<Attachment> = emptyList()) {
+        val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (!ui.canResume) return
+        if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
+            planningChat.resume(ui.session, text); return
+        }
+        val request = ui.session.pendingRun ?: ui.messages.interruptedCodingRequest()?.let {
+            CodingRunCheckpoint(it.id, it.text)
+        } ?: return
+        val instruction = text.trim()
+        launchCodingRun(ui.session, request.copy(
+            prompt = request.prompt + if (instruction.isNotEmpty()) "\n\nУточнение пользователя: $instruction" else "",
+            attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.RUN,
+        ), recovering = true, additionalMessage = instruction.takeIf { it.isNotEmpty() || attachments.isNotEmpty() }?.let {
+            CodingMessage(Id.new(), CodingRole.USER, it, createdAt = Id.now(), attachments = attachments.map { attachment -> attachment.asMeta() })
+        })
+    }
+
+    private suspend fun restoreCodingRuns(projects: List<CodingProject>) {
+        if (codingRuntime?.supported != true) return
+        val repo = codingProjects ?: return
+        for (project in projects) for (session in repo.sessions(project.id)) {
+            val request = session.pendingRun ?: continue
+            if (request.intent != ExecutionIntent.RUN || session.archived || session.planningMode || session.stageId != null) continue
+            val response = repo.messages(project.id, session.id).firstOrNull { it.id == request.responseId }
+            if (response != null) {
+                // The reply may have reached disk just before the checkpoint was cleared.
+                updateStoredCodingSession(session) { it.copy(pendingRun = if (response.failed) request.copy(intent = ExecutionIntent.STOP) else null) }
+                continue
+            }
+            if (_state.value.coding.sessions.none { it.session.id == session.id }) {
+                val ui = CodingSessionUi(session, repo.messages(project.id, session.id))
+                _state.update { it.copy(coding = it.coding.copy(sessions = it.coding.sessions + ui)) }
+            }
+            launchCodingRun(session, request, recovering = true)
+        }
+    }
+
+    private suspend fun updateStoredCodingSession(session: CodingSession, change: (CodingSession) -> CodingSession): CodingSession =
+        codingSessionLocks.getOrPut(session.id) { Mutex() }.withLock {
+            val repo = codingProjects ?: error("Хранилище сессий недоступно")
+            val latest = repo.sessions(session.projectId).firstOrNull { it.id == session.id } ?: error("Сессия удалена")
+            change(latest).also { saved ->
+                repo.saveSession(saved)
+                updateCodingSession(saved.id) { it.copy(session = saved) }
+            }
+        }
+
+    private suspend fun appendCodingMessage(session: CodingSession, message: CodingMessage) {
+        val repo = codingProjects ?: return
+        if (planningChat != null) planningChat.append(session.projectId, session.id, message)
+        else {
+            val history = repo.messages(session.projectId, session.id)
+            if (history.none { it.id == message.id }) repo.saveMessages(session.projectId, session.id, history + message)
+        }
+        val history = repo.messages(session.projectId, session.id)
+        updateCodingSession(session.id) { it.copy(messages = history) }
+    }
+
+    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null) {
+        val runtime = codingRuntime ?: return
+        val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
+        if (closing || codingJobs[session.id]?.isActive == true) return
         val recorder = CodingRunRecorder()
-        val requestProfile = codingProfileOf(session)
-        val job = scope.launch {
-            val history = repo.messages(project.id, session.id) + userMessage
-            if (planningChat != null) planningChat.append(project.id, session.id, userMessage) else repo.saveMessages(project.id, session.id, history)
-            updateCodingSession(session.id) {
-                it.copy(messages = history, running = true, draft = recorder.draft(active = true))
-            }
-            var piSessionId = session.piSessionId
-            runtime.run(project, session, trimmed, requestProfile, attachments).collect { event ->
-                if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
-                    piSessionId = event.sessionId
+        val request = checkpoint.copy(responseId = Id.new())
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                var current = updateStoredCodingSession(session) { it.copy(pendingRun = request) }
+                if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
+                    appendCodingMessage(session, CodingMessage(request.messageId, CodingRole.USER,
+                        request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() }))
                 }
-                recorder.apply(event)
-                updateCodingSession(session.id) { it.copy(draft = recorder.draft(active = true)) }
-            }
-            val agentMessage = recorder.message(Id.new(), Id.now())
-            // Перечитываем журнал: за время прогона его никто не должен был менять,
-            // но история берётся из хранилища, а не из снимка — источник истины один.
-            val finalLog = repo.messages(project.id, session.id) + agentMessage
-            if (planningChat != null) planningChat.append(project.id, session.id, agentMessage) else repo.saveMessages(project.id, session.id, finalLog)
-            val latestSession = _state.value.coding.sessions.firstOrNull { it.session.id == session.id }?.session ?: session
-            val updatedSession = latestSession.copy(piSessionId = piSessionId)
-            if (piSessionId != session.piSessionId) repo.saveSession(updatedSession)
-            codingJobs.remove(session.id)
-            updateCodingSession(session.id) {
-                it.copy(
-                    session = updatedSession,
-                    messages = finalLog,
-                    running = false,
-                    draft = io.aequicor.magicpaper.domain.CodingDraft(),
-                )
-            }
-            // Прогон фоновой (не открытой) сессии закончился — запись больше не нужна.
-            if (project.id != _state.value.coding.current?.id) {
-                _state.update {
-                    it.copy(coding = it.coding.copy(sessions = it.coding.sessions.filterNot { s -> s.session.id == session.id }))
+                additionalMessage?.let { appendCodingMessage(session, it) }
+                updateCodingSession(session.id) { it.copy(running = true, draft = recorder.draft(active = true)) }
+                if (recovering) runtime.reconcile(session.id)
+                val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
+                    "результаты команд и состояние файлов; учитывай уже сделанное и не повторяй завершённые действия.\n\n" + request.prompt else request.prompt
+                var ended = false
+                runtime.run(project, current, prompt, codingProfileOf(current), request.attachments).collect { event ->
+                    if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
+                        // Save the native conversation before the first command, not at the end of the turn.
+                        current = updateStoredCodingSession(session) { it.copy(piSessionId = event.sessionId) }
+                    }
+                    if (recorder.apply(event)) ended = true
+                    updateCodingSession(session.id) { it.copy(draft = recorder.draft(active = true)) }
+                }
+                if (!ended) recorder.apply(CodingEvent.Failed("Выполнение прервано. Нажмите «Продолжить»."))
+                val response = recorder.message(request.responseId, Id.now())
+                appendCodingMessage(session, response)
+                updateStoredCodingSession(session) { latest -> latest.copy(pendingRun =
+                    if (response.failed || latest.pendingRun?.intent == ExecutionIntent.STOP) latest.pendingRun?.copy(intent = ExecutionIntent.STOP) else null) }
+            } catch (e: CancellationException) {
+                runtime.abort(session.id)
+                // Shutdown retains RUN; an explicit stop has already persisted STOP.
+                if (recorder.timeline().isNotEmpty()) withContext(NonCancellable) {
+                    recorder.apply(CodingEvent.Failed(if (closing) "Работа продолжится после запуска приложения." else "Работа остановлена. Нажмите «Продолжить»."))
+                    // Partial output is not a completed response checkpoint.
+                    runCatching { appendCodingMessage(session, recorder.message(Id.new(), Id.now())) }
+                }
+                throw e
+            } catch (e: Exception) {
+                recorder.apply(CodingEvent.Failed(e.message ?: "Не удалось продолжить работу"))
+                try {
+                    appendCodingMessage(session, recorder.message(request.responseId, Id.now()))
+                    updateStoredCodingSession(session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP)) }
+                } catch (storageError: Exception) {
+                    if (storageError is CancellationException) throw storageError
+                    _state.update { it.copy(notice = "Не удалось сохранить состояние сессии: ${storageError.message}") }
+                }
+            } finally {
+                codingJobs.remove(session.id)
+                updateCodingSession(session.id) { it.copy(running = false, draft = io.aequicor.magicpaper.domain.CodingDraft()) }
+                withContext(NonCancellable) {
+                    runCatching { refreshProjectStatus(project.id) }.onFailure { failure ->
+                        _state.update { it.copy(notice = "Не удалось прочитать состояние сессии: ${failure.message}") }
+                    }
                 }
             }
-            refreshProjectStatus(project.id)
         }
         codingJobs[session.id] = job
+        job.start()
     }
 
     /** Прервать прогон текущей сессии (процесс её агента). */
@@ -1184,9 +1265,26 @@ class MagicPaperViewModel(
 
     fun abortCodingSession(sessionId: String) {
         codingRuntime?.computerUse?.disable(sessionId)
-        // Процесс убивает рантайм; поток событий сам выдаст Failed+Finished,
-        // и прогон корректно закроет журнал (статус станет жёлтым).
-        codingRuntime?.abort(sessionId)
+        val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
+            planningChat.cancelRequest(ui.session.parentSessionId ?: sessionId)
+            ui.plan?.let { planningChat.control(it.id, "stop") }
+            return
+        }
+        scope.launch {
+            updateStoredCodingSession(ui.session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP)) }
+            codingRuntime?.abort(sessionId)
+            codingJobs[sessionId]?.cancel()
+        }
+    }
+
+    /** Graceful application exit must not turn resumable work into a user stop. */
+    suspend fun shutdownCoding() {
+        closing = true
+        val jobs = codingJobs.values.toList()
+        jobs.forEach { it.cancel() }
+        jobs.joinAll()
+        scope.cancel()
     }
 
     fun respondCodingApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) {
@@ -1222,6 +1320,8 @@ class MagicPaperViewModel(
     }
 
     override fun onCleared() {
+        closing = true
+        scope.cancel()
         codingRuntime?.computerUse?.disable()
         openAiSubscription?.close()
         super.onCleared()

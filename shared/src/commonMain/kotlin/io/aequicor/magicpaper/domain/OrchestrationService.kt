@@ -13,8 +13,12 @@ class OrchestrationService(
     val store: PlanningStore, val execution: PlanningExecutionService,
     private val projects: CodingProjectRepository, private val profiles: LlmProfileRepository,
     private val settings: SettingsRepository, private val composer: PlanComposer, private val gateway: LlmGateway,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
 ) : PlanningExecutionHooks {
+    private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+    private val ready = CompletableDeferred<Unit>()
+    private var closing = false
+    override suspend fun awaitReady() { ready.await() }
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val _persistenceErrors = MutableStateFlow<Map<String, String>>(emptyMap())
     val persistenceErrors: StateFlow<Map<String, String>> = _persistenceErrors.asStateFlow()
@@ -72,7 +76,7 @@ class OrchestrationService(
         } finally { clearingProjects.remove(projectId) }
     }
 
-    fun shutdown() { scope.cancel() }
+    suspend fun shutdown() { closing = true; scope.coroutineContext[Job]?.cancelAndJoin() }
     fun cancelRequest(sessionId: String) {
         jobs[sessionId]?.cancel()
         val coordinatingPlans = coordinatorActivity.value.values.filter { it.sessionId == sessionId }.map { it.planId }.distinct()
@@ -87,15 +91,21 @@ class OrchestrationService(
     fun bootstrap() {
         execution.chatHooks = this
         launch {
-            refreshSessions()
-            migrate()
-            refreshSessions()
-            _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }.forEach { session ->
-                try {
-                    updateState(session.id, session.projectId) { it }
-                    replaySessionCommands(session)
-                    drainInputs(session)
-                } catch (_: OrchestrationPersistenceException) { /* Keep other orchestrators available. */ }
+            try {
+                refreshSessions()
+                migrate()
+                refreshSessions()
+                _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }.forEach { session ->
+                    try {
+                        updateState(session.id, session.projectId) { it }
+                        replaySessionCommands(session)
+                        drainInputs(session)
+                    } catch (_: OrchestrationPersistenceException) { /* Keep other orchestrators available. */ }
+                }
+                ready.complete(Unit)
+            } catch (e: Exception) {
+                ready.completeExceptionally(e)
+                throw e
             }
             store.plans.collect { plans ->
                 plans.filter { it.parentSessionId.isNotBlank() }.forEach { projectPlan ->
@@ -196,7 +206,7 @@ class OrchestrationService(
             ?: store.plans().filter { it.parentSessionId == session.id }.maxByOrNull { it.updatedAt }
     }
 
-    fun send(session: CodingSession, text: String, answers: List<PlanningAnswer> = emptyList(), replyTo: String? = null) {
+    fun send(session: CodingSession, text: String, answers: List<PlanningAnswer> = emptyList(), replyTo: String? = null, resumeAfter: Boolean = false) {
         if (text.isBlank() && answers.isEmpty()) return
         if (session.projectId in clearingProjects || session.planId in deletedPlans) return
         if (session.stageId != null && session.planId != null) {
@@ -209,7 +219,7 @@ class OrchestrationService(
             }
             return
         }
-        val input = OrchestrationInput(Id.new(), text.trim(), Id.now(), answers, replyTo)
+        val input = OrchestrationInput(Id.new(), text.trim(), Id.now(), answers, replyTo, resumeAfter = resumeAfter)
         launch {
             refreshSessions()
             try {
@@ -236,7 +246,7 @@ class OrchestrationService(
     }
 
     private fun drainInputs(session: CodingSession) {
-        if (jobs[session.id]?.isActive == true || session.id in _persistenceErrors.value) return
+        if (closing || jobs[session.id]?.isActive == true || session.id in _persistenceErrors.value) return
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 while (true) {
@@ -246,6 +256,7 @@ class OrchestrationService(
                     setInputStatus(session, input.id, OrchestrationInputStatus.PROCESSING)
                     try {
                         processInput(session, input)
+                        if (input.resumeAfter) currentPlan(session)?.takeIf { it.confirmedRevision != null && it.proposal == null }?.let { resumePlan(it.id) }
                         setInputStatus(session, input.id, OrchestrationInputStatus.DONE)
                     } catch (e: TimeoutCancellationException) {
                         val message = "Модель не успела ответить за отведённое время. Сообщение сохранено; повторите обработку."
@@ -253,7 +264,7 @@ class OrchestrationService(
                         append(session.projectId, session.id, CodingMessage("${input.id}-error", CodingRole.AGENT,
                             message, failed = true, createdAt = Id.now(), steps = listOf(CodingStep(CodingStepKind.ERROR, message))))
                     } catch (e: CancellationException) {
-                        withContext(NonCancellable) { setInputStatus(session, input.id, OrchestrationInputStatus.CANCELLED) }
+                        withContext(NonCancellable) { setInputStatus(session, input.id, if (closing) OrchestrationInputStatus.QUEUED else OrchestrationInputStatus.CANCELLED) }
                         throw e
                     } catch (e: Exception) {
                         val message = e.message ?: "Не удалось обработать сообщение"
@@ -336,7 +347,7 @@ class OrchestrationService(
                     "stop" -> execution.stop(current.id)
                     "resume" -> {
                         require(current.confirmedRevision != null) { "Сначала подтвердите план" }
-                        execution.start(current.id)
+                        resumePlan(current.id)
                     }
                     "confirm" -> confirmNow(current.id, decision.proposalId)
                     else -> error("Неизвестная команда управления")
@@ -570,6 +581,81 @@ class OrchestrationService(
         execution.start(id)
     }
 
+    /** Resume the existing run; text entered with Continue is processed before scheduling work. */
+    fun resume(session: CodingSession, text: String = "") = launch {
+        val interrupted = state(session.id, session.projectId).inputs.lastOrNull()?.takeIf {
+            it.status in listOf(OrchestrationInputStatus.CANCELLED, OrchestrationInputStatus.FAILED)
+        }
+        if (interrupted != null && session.stageId == null) {
+            updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
+                if (it.id == interrupted.id) it.copy(status = OrchestrationInputStatus.QUEUED, error = "", resumeAfter = true,
+                    decision = if (text.isBlank()) it.decision else null,
+                    text = it.text + if (text.isNotBlank()) "\n\nУточнение пользователя: $text" else "") else it
+            }) }
+            if (text.isNotBlank()) append(session.projectId, session.id, CodingMessage(Id.new(), CodingRole.USER, text, createdAt = Id.now()))
+            drainInputs(session)
+            return@launch
+        }
+        val plan = session.planId?.let { store.planFor(it) } ?: currentPlan(session) ?: return@launch
+        if (text.isNotBlank()) {
+            if (session.stageId != null) queueWorker(session, text)
+            else { send(session, text, resumeAfter = true); return@launch }
+        }
+        resumePlan(plan.id)
+    }
+
+    private suspend fun resumePlan(id: String) {
+        val plan = store.planFor(id) ?: return
+        require(plan.confirmedRevision != null) { "Сначала подтвердите план" }
+        require(plan.parentSessionId !in _persistenceErrors.value) { "Сначала восстановите хранилище оркестратора" }
+        if (plan.canExtendAfterFinalVerification) { control(id, "retry"); return }
+        recoverAssignments(plan)
+        val current = store.planFor(id) ?: return
+        if (current.issue != null || current.finalAttempt?.error != null || current.selectedMilestones.any { it.attempts.lastOrNull()?.error != null }) execution.retry(id)
+        else execution.start(id)
+    }
+
+    override suspend fun recoverAssignments(plan: Plan): Plan {
+        val roster = profiles.load()
+        val sessions = projects.sessions(plan.projectId)
+        val parent = sessions.firstOrNull { it.id == plan.parentSessionId }
+        val selected = parent?.modelSelection?.let { ProfileResolver.selection(it, roster) }
+        val replacement = selected?.takeIf { it.configured && it.supportsCoding }
+        fun recover(assignment: StageAssignment, stage: Milestone? = null): StageAssignment {
+            if (runCatching { assignment.executionProfile(roster) }.isSuccess) return assignment
+            val workerChoice = stage?.let { m -> sessions.firstOrNull { it.planId == plan.id && it.stageId == m.id }?.modelSelection }
+            val workerProfile = workerChoice?.let { ProfileResolver.selection(it, roster) }?.takeIf { it.configured && it.supportsCoding }
+            val candidate = when {
+                workerProfile != null -> assignment.copy(profileId = workerProfile.id, modelId = workerChoice.modelId,
+                    effort = workerChoice.effort, effectiveEffort = EffortSelection.Default, options = null)
+                replacement != null -> assignment.copy(profileId = replacement.id)
+                else -> return assignment
+            }
+            return candidate.takeIf { runCatching { it.executionProfile(roster) }.isSuccess } ?: assignment
+        }
+        val next = plan.copy(plannerSelection = parent?.modelSelection?.takeIf { selected != null } ?: plan.plannerSelection,
+            milestones = plan.milestones.map { stage -> if (stage.completed) stage else stage.copy(
+                assignment = stage.assignment?.let { recover(it, stage) },
+                attempts = stage.attempts.map { attempt -> if (attempt.phase == AttemptPhase.COMPLETE) attempt else attempt.copy(
+                    assignment = recover(attempt.assignment, stage), mergeAssignment = attempt.mergeAssignment?.let { recover(it, stage) }) }) },
+            finalAttempt = plan.finalAttempt?.takeIf { it.phase != AttemptPhase.COMPLETE }?.let { it.copy(
+                assignment = recover(it.assignment), mergeAssignment = it.mergeAssignment?.let(::recover)) } ?: plan.finalAttempt)
+        if (next == plan) return plan
+        val saved = store.update(plan.id) { latest ->
+            // Scheduling has not started yet. Do not overwrite concurrent dialogue or input changes.
+            latest.copy(plannerSelection = next.plannerSelection, milestones = latest.milestones.map { stage ->
+                val recovered = next.milestones.firstOrNull { it.id == stage.id } ?: return@map stage
+                stage.copy(assignment = recovered.assignment, attempts = stage.attempts.map { attempt ->
+                    recovered.attempts.firstOrNull { it.id == attempt.id }?.let { attempt.copy(assignment = it.assignment, mergeAssignment = it.mergeAssignment) } ?: attempt
+                }) }, finalAttempt = latest.finalAttempt?.let { attempt -> next.finalAttempt?.takeIf { it.id == attempt.id }?.let {
+                    attempt.copy(assignment = it.assignment, mergeAssignment = it.mergeAssignment)
+                } ?: attempt })
+        }
+        if (next.milestones != plan.milestones || next.finalAttempt != plan.finalAttempt) append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-models-${saved.plannerSelection.hashCode()}-${saved.milestones.map { it.assignment }.hashCode()}",
+            CodingRole.AGENT, "Назначения недоступных моделей восстановлены по текущему выбору сессии. Продолжаем сохранённый запуск.", createdAt = Id.now()))
+        return saved
+    }
+
     fun control(id: String, command: String) = launch {
         if (id in deletedPlans) return@launch
         val before = store.planFor(id) ?: return@launch
@@ -582,7 +668,7 @@ class OrchestrationService(
                 "Если данных достаточно, продолжи выполнение; иначе задай необходимые вопросы.")
             return@launch
         }
-        when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id); else -> execution.start(id) }
+        when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id); else -> resumePlan(id) }
         val plan = store.planFor(id) ?: return@launch
         val text = when (command) {
             "pause" -> "Оркестратор приостановил выдачу новых заданий. Текущие ходы завершатся."
@@ -1121,7 +1207,10 @@ class OrchestrationService(
                 if (parent != null) {
                     projects.saveSession(parent.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true))
                     updateState(parent.id, parent.projectId) { old ->
-                        if (plan.pendingRequest.isBlank() || old.inputs.any { it.id == plan.requestId }) old
+                        if (plan.pendingRequest.isBlank()) old
+                        else if (old.inputs.any { it.id == plan.requestId }) old.copy(inputs = old.inputs.map {
+                            if (it.id == plan.requestId && it.status == OrchestrationInputStatus.CANCELLED) it.copy(status = OrchestrationInputStatus.QUEUED) else it
+                        })
                         else old.copy(inputs = old.inputs + OrchestrationInput(plan.requestId, plan.pendingRequest, plan.updatedAt))
                     }
                 }

@@ -61,8 +61,24 @@ data class CodingSession(
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     /** Immutable after creation; null is only a legacy migration marker. */
     val engine: CodingEngine? = null,
+    /** Durable request, retained until completion; STOP is an explicit user action. */
+    val pendingRun: CodingRunCheckpoint? = null,
 
 )
+
+@Serializable
+data class CodingRunCheckpoint(
+    val messageId: String,
+    val prompt: String,
+    val attachments: List<Attachment> = emptyList(),
+    val intent: ExecutionIntent = ExecutionIntent.RUN,
+    val responseId: String = "",
+)
+
+/** Older logs have no checkpoint; only an unanswered or failed turn can be resumed. */
+fun List<CodingMessage>.interruptedCodingRequest(): CodingMessage? =
+    if (lastOrNull()?.let { it.role == CodingRole.USER || it.failed } == true)
+        lastOrNull { it.role == CodingRole.USER } else null
 
 /**
  * Состояние активности кодинг-сессии для индикатора-кружка.
