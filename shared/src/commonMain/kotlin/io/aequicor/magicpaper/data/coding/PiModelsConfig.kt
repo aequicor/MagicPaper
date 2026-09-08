@@ -95,11 +95,11 @@ object PiModelsConfig {
     )
 
     /** Итоговый `models.json` провайдера — тот же JSON, что пишет мост. */
-    fun json(profile: LlmProfile, providerId: String = PROVIDER_ID): String =
-        root(profile, providerId).toString()
+    fun json(profile: LlmProfile, providerId: String = PROVIDER_ID, imageInput: Boolean = false): String =
+        root(profile, providerId, imageInput).toString()
 
     /** То же деревом: тестам удобнее читать поля, чем подстроки. */
-    fun root(profile: LlmProfile, providerId: String = PROVIDER_ID) = buildJsonObject {
+    fun root(profile: LlmProfile, providerId: String = PROVIDER_ID, imageInput: Boolean = false) = buildJsonObject {
         put("providers", buildJsonObject {
             put(providerId, buildJsonObject {
                 put("baseUrl", profile.baseUrl.trimEnd('/'))
@@ -121,6 +121,8 @@ object PiModelsConfig {
                     add(buildJsonObject {
                         put("id", profile.modelId)
                         put("name", profile.modelId)
+                        // pi otherwise defaults custom provider models to text and drops tool images.
+                        if (imageInput) put("input", buildJsonArray { add("text"); add("image") })
                         put("reasoning", reasoning.enabled)
                         put("contextWindow", contextWindow(profile))
                         put("maxTokens", reasoning.maxTokens)

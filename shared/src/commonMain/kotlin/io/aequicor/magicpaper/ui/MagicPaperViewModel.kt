@@ -98,6 +98,11 @@ class MagicPaperViewModel(
 
     init {
         scope.launch { bootstrap() }
+        codingRuntime?.computerUse?.let { computer -> scope.launch {
+            computer.state.collect { value ->
+                _state.update { it.copy(coding = it.coding.copy(computer = value, computerSupported = computer.supported)) }
+            }
+        } }
         codingRuntime?.let { runtime -> scope.launch {
             runtime.approvals.collect { requests ->
                 _state.update { state -> state.copy(coding = state.coding.copy(approvals = requests)) }
@@ -107,6 +112,10 @@ class MagicPaperViewModel(
             service.changes.collect {
                 val repo = codingProjects ?: return@collect
                 val stored = repo.all().flatMap { repo.sessions(it.id) }
+                codingRuntime?.computerUse?.let { computer ->
+                    val owner = stored.firstOrNull { it.id == computer.state.value.sessionId }
+                    if (owner == null || owner.planningMode || owner.stageId != null) computer.disable()
+                }
                 val old = _state.value.coding.sessions.associateBy { it.session.id }
                 val sessions = stored.map { session ->
                     val previous = old[session.id] ?: CodingSessionUi(session)
@@ -1165,6 +1174,7 @@ class MagicPaperViewModel(
     }
 
     fun abortCodingSession(sessionId: String) {
+        codingRuntime?.computerUse?.disable(sessionId)
         // Процесс убивает рантайм; поток событий сам выдаст Failed+Finished,
         // и прогон корректно закроет журнал (статус станет жёлтым).
         codingRuntime?.abort(sessionId)
@@ -1173,6 +1183,21 @@ class MagicPaperViewModel(
     fun respondCodingApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) {
         scope.launch { codingRuntime?.respondApproval(id, decision) }
     }
+
+    fun enableComputerUse(sessionId: String, access: io.aequicor.magicpaper.domain.ComputerAccess) {
+        val session = state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (session.running || session.session.stageId != null || session.session.planningMode) return
+        scope.launch {
+            codingRuntime?.computerUse?.let { computer ->
+                computer.enable(sessionId, access)
+                computer.preview(sessionId)
+            }
+        }
+    }
+
+    fun disableComputerUse(sessionId: String) { codingRuntime?.computerUse?.disable(sessionId) }
+    fun previewComputerUse(sessionId: String) { scope.launch { codingRuntime?.computerUse?.preview(sessionId) } }
+    fun openComputerSystemSettings() { codingRuntime?.computerUse?.openSystemSettings() }
 
     /** Точечное обновление сессии в состоянии (по id, где бы она ни лежала). */
     private fun updateCodingSession(sessionId: String, transform: (CodingSessionUi) -> CodingSessionUi) {
@@ -1188,6 +1213,7 @@ class MagicPaperViewModel(
     }
 
     override fun onCleared() {
+        codingRuntime?.computerUse?.disable()
         openAiSubscription?.close()
         super.onCleared()
     }

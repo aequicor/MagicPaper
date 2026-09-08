@@ -239,6 +239,15 @@ private fun SessionArea(
         val draft = serviceDrafts[active.session.id] ?: stageChat.draft
         val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
             running = stageChat.running || draft.active)
+        if (ui.computerSupported && !active.session.planningMode && active.session.stageId == null) {
+            io.aequicor.magicpaper.ui.components.ComputerUsePanel(
+                state = ui.computer, sessionId = active.session.id, running = effective.running,
+                onEnable = { vm.enableComputerUse(active.session.id, it) },
+                onDisable = { vm.disableComputerUse(active.session.id) },
+                onPreview = { vm.previewComputerUse(active.session.id) },
+                onSettings = vm::openComputerSystemSettings,
+            )
+        }
             CodingChat(
                 project = project,
                 session = effective,

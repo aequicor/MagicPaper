@@ -105,7 +105,7 @@ class PlanningChatRenderTest {
                 assertTrue(state.firstVisibleItemIndex >= 10)
                 assertTrue(state.layoutInfo.visibleItemsInfo.any { it.key == "session-plan" && it.offset == 0 })
                 val bytes = scene.render(200_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } }
-                File("build/reports/planning-chat/sticky-sidebar.png").writeBytes(bytes)
+                File("build/reports/planning-chat/sticky-sidebar.png").apply { parentFile.mkdirs() }.writeBytes(bytes)
             }
         } finally { Dispatchers.resetMain() }
     }

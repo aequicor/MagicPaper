@@ -40,6 +40,7 @@ compose.desktop {
         javaHome = jbr21.get().metadata.installationPath.asFile.absolutePath
 
         nativeDistributions {
+            modules("jdk.httpserver")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "MagicPaper"
             packageVersion = "1.0.0"

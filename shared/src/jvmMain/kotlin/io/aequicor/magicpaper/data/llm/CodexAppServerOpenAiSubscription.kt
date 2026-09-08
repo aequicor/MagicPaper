@@ -68,6 +68,7 @@ class CodexAppServerOpenAiSubscription(
     private val json: Json,
     private val appHome: Path = defaultAppHome(),
     private val commandOverride: String? = System.getenv("MAGICPAPER_CODEX_PATH"),
+    val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
 ) : OpenAiSubscriptionService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startMutex = Mutex()
@@ -243,15 +244,21 @@ class CodexAppServerOpenAiSubscription(
         attachments: List<io.aequicor.magicpaper.domain.Attachment>,
     ): Flow<CodingEvent> = channelFlow {
         var confirmedFinished = false
+        var computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null
         try {
             check(File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
             check(profile.configured) { "Не настроена модель OpenAI по подписке." }
             check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
             val codingProfile = profile.forCoding()
             val permissions = CodexCodingPermissions(Paths.get(project.path))
+            computerBridge = computerUse?.bridge(session.id)
+            val threadConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(permissions.threadConfig(), computerBridge)
             val instructions = listOf(CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride)
                 .filter { it.isNotBlank() }.joinToString("\n\n")
             val resumed = session.piSessionId.takeIf { it.isNotBlank() }?.let { oldId ->
+                // A loaded Codex thread keeps its MCP clients on resume. Unload the completed
+                // thread first so the new per-turn endpoint/token is applied without losing history.
+                if (computerUse != null) request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })
                 runCatching {
                     request(
                         "thread/resume",
@@ -261,7 +268,7 @@ class CodexAppServerOpenAiSubscription(
                             put("model", codingProfile.modelId)
                             with(permissions) { approvals() }
                             put("sandbox", "workspace-write")
-                            put("config", permissions.threadConfig())
+                            put("config", threadConfig)
                             put("developerInstructions", instructions)
                         },
                     ).jsonObject["thread"]?.jsonObject?.string("id")
@@ -274,7 +281,7 @@ class CodexAppServerOpenAiSubscription(
                     put("model", codingProfile.modelId)
                     with(permissions) { approvals() }
                     put("sandbox", "workspace-write")
-                    put("config", permissions.threadConfig())
+                    put("config", threadConfig)
                     put("serviceName", "MagicPaper Coding")
                     put("developerInstructions", instructions)
                 },
@@ -314,6 +321,7 @@ class CodexAppServerOpenAiSubscription(
             send(CodingEvent.Failed(error.message ?: "Codex coding завершился с ошибкой."))
             send(CodingEvent.Finished)
         } finally {
+            computerBridge?.close()
             // Keep ownership after interruption: recovery must reconcile an uncertain turn.
             if (confirmedFinished) {
                 val threadId = codingSessions.remove(session.id)
@@ -328,6 +336,7 @@ class CodexAppServerOpenAiSubscription(
     }
 
     fun abortCoding(sessionId: String) {
+        computerUse?.disable(sessionId)
         val threadId = codingSessions[sessionId] ?: return
         val run = codingRuns[threadId] ?: return
         approvalBroker.clearTurn(threadId)
@@ -342,6 +351,7 @@ class CodexAppServerOpenAiSubscription(
     fun abortAllCoding() = codingSessions.keys.toList().forEach(::abortCoding)
 
     override fun close() {
+        computerUse?.disable()
         approvalBroker.clear()
         pending.values.forEach { it.cancel() }
         turns.values.forEach { it.done.cancel() }
@@ -720,6 +730,10 @@ class CodexAppServerOpenAiSubscription(
                     CodingEvent.ToolStarted("command", item.string("command").orEmpty(), id, isExec = true),
                 )
                 "fileChange" -> emit(CodingEvent.ToolStarted("edit", fileSummary(item), id))
+                "mcpToolCall" -> if (item.string("server") == "magicpaper_computer") {
+                    emit(CodingEvent.ToolStarted("computer", io.aequicor.magicpaper.data.computer.ComputerTool.label(
+                        (item["arguments"] as? JsonObject)?.string("action").orEmpty()), id))
+                }
             }
         }
 
@@ -728,6 +742,16 @@ class CodexAppServerOpenAiSubscription(
             items.remove(id)
             when (item.string("type")) {
                 "agentMessage" -> item.string("text")?.takeIf { it.isNotBlank() }?.let { emit(CodingEvent.FinalText(it)) }
+                "mcpToolCall" -> if (item.string("server") == "magicpaper_computer") {
+                    val result = item["result"] as? JsonObject
+                    emit(CodingEvent.ToolFinished("computer",
+                        isError = item.string("status") in listOf("failed", "declined") || result?.get("isError") == JsonPrimitive(true),
+                        callId = id,
+                        resultPreview = (result?.get("content") as? JsonArray).orEmpty().mapNotNull { block ->
+                            (block as? JsonObject)?.takeIf { it.string("type") == "text" }?.string("text")
+                        }.joinToString("\n").take(2000),
+                    ))
+                }
                 "reasoning" -> {
                     val text = (item["summary"] as? JsonArray).orEmpty()
                         .mapNotNull { it.jsonPrimitive.contentOrNull }

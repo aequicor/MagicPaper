@@ -45,6 +45,11 @@ class PiModelsConfigTest {
 
     private val qwen get() = profile("qwen3.8-flash")
 
+    @Test fun computerUseKeepsToolImagesInPiModelInput() {
+        assertEquals(listOf("text", "image"), PiModelsConfig.root(qwen, imageInput = true).model()["input"]!!.jsonArray.map { it.toString().trim('"') })
+        assertNull(PiModelsConfig.root(qwen).model()["input"])
+    }
+
     private fun section(parsed: LlmProfile) =
         PiModelsConfig.reasoning(parsed)
 

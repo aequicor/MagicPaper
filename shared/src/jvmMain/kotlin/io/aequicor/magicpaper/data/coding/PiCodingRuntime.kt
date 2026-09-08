@@ -43,6 +43,7 @@ import kotlinx.coroutines.withContext
  */
 class PiCodingRuntime(
     rootDir: File = File(File(System.getProperty("user.home"), ".MagicPaper"), "coding"),
+    override val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
 ) : CodingRuntime {
 
     override val supported: Boolean = true
@@ -75,6 +76,7 @@ class PiCodingRuntime(
     private val abortedSessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     override fun abort(sessionId: String) {
+        computerUse?.disable(sessionId)
         abortedSessions.add(sessionId)
         runningProcesses.remove(sessionId)?.let { process ->
             process.destroy()
@@ -83,6 +85,7 @@ class PiCodingRuntime(
     }
 
     override fun abortAll() {
+        computerUse?.disable()
         runningProcesses.keys.forEach { abort(it) }
     }
 
@@ -175,7 +178,7 @@ class PiCodingRuntime(
         // Кодинг-контур: модель и всё, что из неё выводится (models.json,
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = profile.forCoding()
-        writePiConfig(codingProfile, sessionHome(session.id))
+        writePiConfig(codingProfile, sessionHome(session.id), imageInput = computerUse?.grant(session.id) != null)
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
@@ -200,9 +203,13 @@ class PiCodingRuntime(
         // Инициализатор формален: тело цикла выполняется раньше проверки выхода.
         var outcome = AttemptOutcome(launchError = "агент не запущен")
         val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
+        val computerBridge = computerUse?.bridge(session.id)
         try {
+            if (computerBridge != null) {
+                writeAtomically(File(sessionHome(session.id), "computer-use.mjs"), io.aequicor.magicpaper.data.computer.PiComputerExtension.source)
+            }
             while (true) {
-                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
@@ -217,6 +224,7 @@ class PiCodingRuntime(
                 )
             }
         } finally {
+            computerBridge?.close()
             abortedSessions.remove(session.id)
         }
         if (!outcome.answerSeen) {
@@ -238,6 +246,7 @@ class PiCodingRuntime(
         prompt: String,
         piSessionId: String?,
         emit: suspend (CodingEvent) -> Unit,
+        computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null,
     ): AttemptOutcome {
         val args = mutableListOf(
             node.absolutePath, piCli.absolutePath,
@@ -255,6 +264,7 @@ class PiCodingRuntime(
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
         args += listOf("--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
+        if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)
         // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит
         // (PI_REASONING_LEVEL — то, что pi отдаёт инструментам, а не вход запуска),
         // а без него включается дефолт pi, и рассуждающая модель молча съедает maxTokens.
@@ -273,7 +283,15 @@ class PiCodingRuntime(
             process = ProcessBuilder(args)
                 .directory(dir)
                 .redirectError(stderrFile)
-                .apply { environment().putAll(piEnv(node, sessionHome(session.id))) }
+                .apply {
+                    environment().putAll(piEnv(node, sessionHome(session.id)))
+                    environment().remove("MAGICPAPER_COMPUTER_URL")
+                    environment().remove("MAGICPAPER_COMPUTER_TOKEN")
+                    if (computerBridge != null) {
+                        environment()["MAGICPAPER_COMPUTER_URL"] = computerBridge.url
+                        environment()["MAGICPAPER_COMPUTER_TOKEN"] = computerBridge.token
+                    }
+                }
                 .start()
             // Persist ownership before sending a prompt that can change files.
             ownedProcesses.record(session.id, process)
@@ -814,7 +832,7 @@ class PiCodingRuntime(
     }
 
     /** Модель из профиля подключения мостится в конфиг пи изолированно. */
-    private fun writePiConfig(profile: LlmProfile, home: File) {
+    private fun writePiConfig(profile: LlmProfile, home: File, imageInput: Boolean = false) {
         home.mkdirs()
         writePiHomeDefaults(home)
         sessionsDir.mkdirs()
@@ -822,7 +840,7 @@ class PiCodingRuntime(
         // reasoning и thinkingLevelMap согласованы с возможностями модели), там же
         // и тестируется. Атомарная замена (tmp+rename): параллельные прогоны сессий
         // не должны прочитать наполовину записанный models.json.
-        writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile))
+        writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile, imageInput = imageInput))
         writeAtomically(File(home, "model-options.mjs"), PiModelOptions.extension(profile))
         if (profile.advanced.systemPromptOverride.isNotBlank()) File(home, HINTS_FILE).appendText("\n\n" + profile.advanced.systemPromptOverride)
 

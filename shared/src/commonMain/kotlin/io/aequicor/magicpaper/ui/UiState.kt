@@ -66,6 +66,8 @@ data class CodingSessionUi(
 
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
+    val computerSupported: Boolean = false,
+    val computer: io.aequicor.magicpaper.domain.ComputerUseState = io.aequicor.magicpaper.domain.ComputerUseState(),
     val approvals: List<io.aequicor.magicpaper.domain.CodingApproval> = emptyList(),
     val projects: List<CodingProject> = emptyList(),
     val current: CodingProject? = null,
