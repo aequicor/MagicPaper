@@ -16,16 +16,31 @@ internal data class PlanningBlocker(
     val stage: Milestone? = null,
     val attempt: StageAttempt? = null,
 ) {
+    private val acceptance: AcceptanceRecord? get() = attempt?.acceptanceRecord.takeIf { issue.kind == IssueKind.VERIFICATION }
+    val needsWorker: Boolean get() = issue.kind == IssueKind.VERIFICATION && (acceptance == null || acceptance?.canRetryWithWorker == true)
+    val canSkipVerification: Boolean get() = issue.kind == IssueKind.VERIFICATION && acceptance?.canSkipByUser == true &&
+        attempt?.phase == AttemptPhase.VERIFYING && attempt.pendingTool.isBlank() && !attempt.pendingToolExternal && attempt.mergePhase == null
     val messageId: String get() = "$planId-blocked-${stage?.id ?: "plan"}-${attempt?.id.orEmpty()}-${attempt?.repairRetries ?: 0}-${issue.hashCode()}"
     val title: String get() = when {
+        acceptance?.status == AcceptanceStatus.PARTIAL && stage != null -> "Этап «${stage.title}»: не хватает подтверждений"
+        acceptance?.status == AcceptanceStatus.PARTIAL -> "Итоговая проверка: не хватает подтверждений"
+        acceptance?.status == AcceptanceStatus.STALE -> "Результат нужно проверить заново"
         issue.kind == IssueKind.VERIFICATION && stage != null -> "Этап «${stage.title}» не прошёл проверку"
         issue.kind == IssueKind.VERIFICATION -> "Итоговая проверка не пройдена"
         stage != null -> "Этап «${stage.title}» остановлен"
         else -> "Выполнение плана остановлено"
     }
-    val text: String get() = "$title.\n\n${issue.message}" +
+    val text: String get() = "$title.\n\n${acceptance?.userSummary() ?: issue.message}" +
         if (issue.kind == IssueKind.VERIFICATION && stage != null && (attempt?.repairRetries ?: 0) >= 2)
             "\n\nАвтоматические попытки исправления исчерпаны (${attempt?.repairRetries})." else ""
+}
+
+internal fun List<PlanningBlocker>.recoveryActionLabel(): String = when {
+    isNotEmpty() && all { it.canSkipVerification } -> "Проверить автоматически"
+    any { it.stage == null && it.issue.kind == IssueKind.VERIFICATION } -> "Доработать план"
+    any { it.needsWorker } -> "Исправить и проверить"
+    any { it.issue.kind == IssueKind.VERIFICATION } -> "Повторить проверку"
+    else -> "Повторить запуск"
 }
 
 /** Execution errors remain actionable even when the planner has not asked a question. */

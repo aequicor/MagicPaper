@@ -10,7 +10,8 @@ class LlmTransportException(val statusCode: Int, val retryAfter: String?, detail
 /** A rejected result needs another worker turn; unavailable verification only needs another check. */
 internal fun StageAttempt.retryAfterUserAction(): StageAttempt = copy(
     verificationSnapshot = null,
-    phase = if (error?.kind == IssueKind.VERIFICATION && phase == AttemptPhase.VERIFYING) AttemptPhase.FAILED else phase,
+    phase = if (error?.kind == IssueKind.VERIFICATION && phase == AttemptPhase.VERIFYING &&
+        (acceptanceRecord == null || acceptanceRecord.canRetryWithWorker)) AttemptPhase.FAILED else phase,
     error = error?.copy(requiresUser = false),
 )
 

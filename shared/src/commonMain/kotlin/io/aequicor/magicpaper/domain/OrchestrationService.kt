@@ -433,7 +433,12 @@ class OrchestrationService(
                 require(plan != null && plan.parentSessionId == session.id) { "План недоступен" }
                 val blockers = plan.blockingIssues(projects.messages(session.projectId, session.id))
                 require(request.id == "blocker:${blockers.map { it.messageId }.sorted().joinToString(":")}") { "Причина остановки изменилась" }
-                if ("leave" !in answer.selected && !answer.skipped) {
+                if ("skip_verification" in answer.selected) {
+                    require(blockers.isNotEmpty() && blockers.all { it.canSkipVerification }) { "Пропуск проверки недоступен" }
+                    execution.continueWithoutVerification(plan.id, blockers.map { it.messageId }.toSet())
+                    append(session.projectId, session.id, CodingMessage(request.id + "-verification-skipped", CodingRole.USER,
+                        "Продолжить без проверки. Неподтверждённые проверки пропущены по моему решению.", createdAt = clock()))
+                } else if ("leave" !in answer.selected && !answer.skipped) {
                     if (answer.text.isNotBlank()) {
                         append(session.projectId, session.id, CodingMessage(request.id + "-instructions", CodingRole.USER, answer.text, createdAt = clock()))
                         plan.selectedMilestones.filterNot { it.completed }.filter { m -> blockers.any { it.stage == null || it.stage.id == m.id } }.forEach { m ->

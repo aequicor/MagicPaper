@@ -63,6 +63,26 @@ class AcceptanceTest {
         assertEquals(EvidenceEnvironment.REAL_BACKEND, evidence.environment)
     }
 
+    @Test fun explicitUserSkipPermitsProgressWithoutInventingAPass() {
+        val original = record(listOf(live), CheckStatus.SKIPPED)
+        val waiver = AcceptanceWaiver(original.runId, live, original.attemptId, original.snapshotId, 1)
+        val waived = original.copy(waivers = listOf(waiver))
+        val restored = Json.decodeFromString<AcceptanceRecord>(Json.encodeToString(AcceptanceRecord.serializer(), waived))
+        val result = AcceptanceGate.evaluate(restored, listOf(live), "snapshot")
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, result.status)
+        assertTrue(result.permitsProgress)
+        assertEquals(CheckStatus.SKIPPED, result.findings.single().status)
+        assertTrue(result.evidence.isEmpty())
+        assertContains(result.userSummary(), "по решению пользователя")
+        assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(original, listOf(live), "snapshot").status)
+        assertFalse(AcceptanceGate.evaluate(waived.copy(runId = "next-run"), listOf(live), "snapshot").permitsProgress)
+        assertEquals(AcceptanceStatus.STALE, AcceptanceGate.evaluate(waived, listOf(live), "changed").status)
+        assertFalse(AcceptanceGate.evaluate(waived.copy(criteria = listOf(live.copy(description = "New requirement"))),
+            listOf(live.copy(description = "New requirement")), "snapshot").permitsProgress)
+        val failed = waived.copy(findings = listOf(waived.findings.single().copy(status = CheckStatus.FAIL)))
+        assertEquals(AcceptanceStatus.FAILED, AcceptanceGate.evaluate(failed, listOf(live), "snapshot").status)
+    }
+
     @Test fun overallPassedFlagCannotOverrideStructuredBlocker() = runTest {
         val profile = LlmProfile("p", "P", baseUrl = "http://test", modelId = "m")
         val gateway = object : LlmGateway {

@@ -130,12 +130,13 @@ internal fun buildDependencies(
     // Планирование: свой стор поверх того же хранилища (как у навыков);
     // исполнитель — поверх кодинг-рантайма, проверка — моделью через шлюз.
     val planningStore = PlanningStore(JsonPlanningRepository(store, json))
+    val acceptanceChecks = io.aequicor.magicpaper.domain.AcceptanceChecks()
     val planComposer = PlanComposer(gateway, json, search,
         io.aequicor.magicpaper.domain.RuntimePlanningGateway(codingRuntime ?: NoopCodingRuntime),
-        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } })
+        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks)
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, codingRuntime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
-        LlmMilestoneVerifier(gateway, json), planningWorkspace,
+        LlmMilestoneVerifier(gateway, json), planningWorkspace, acceptanceChecks = acceptanceChecks,
     )
     val planner = CodingPlanningPlugin(
         store = planningStore,

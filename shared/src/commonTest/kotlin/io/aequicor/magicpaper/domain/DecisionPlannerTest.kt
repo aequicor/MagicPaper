@@ -55,6 +55,51 @@ class DecisionPlannerTest {
         assertEquals(plan(), original)
     }
 
+    @Test fun unregisteredMandatoryChecksAreCorrectedBeforeOfferingAPlan() = runTest {
+        val original = plan()
+        val invalid = original.copy(milestones = original.milestones.map { it.copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("layout", "Button precedes menu", environment = EvidenceEnvironment.MANUAL))) })
+        val corrected = invalid.copy(milestones = invalid.milestones.map { it.copy(acceptanceCriteria =
+            it.acceptanceCriteria.map { criterion -> criterion.copy(environment = EvidenceEnvironment.REVIEW) }) })
+        val gateway = Gateway(response(invalid), response(corrected))
+        val result = textPlanComposer(gateway).refine(original, "Move the new session button", profile, listOf(profile), emptyList())
+        assertEquals(2, gateway.calls)
+        assertContains(gateway.requests.last().last().content, "недоступные обязательные проверки")
+        assertTrue(result.milestones.all { it.acceptanceCriteria.single().environment == EvidenceEnvironment.REVIEW })
+    }
+
+    @Test fun explicitUnavailableAcceptanceCanAskAQuestionWithoutChangingRequirements() = runTest {
+        val original = plan()
+        val invalid = original.copy(milestones = original.milestones.map { it.copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("live", "Require a live receipt", environment = EvidenceEnvironment.REAL_BACKEND))) })
+        val gateway = Gateway(response(invalid), """{"reply":"Подключите проверку реального сервиса","questions":[{"id":"access","title":"Какая проверка доступна?","kind":"TEXT"}]}""")
+        val result = textPlanComposer(gateway).refine(original, "Require a live receipt", profile, listOf(profile), emptyList())
+        assertEquals(original.milestones, result.milestones)
+        assertEquals(PlanningStep.CLARIFY, result.wizardStep)
+        assertEquals("access", result.dialogue.last().questions.single().id)
+    }
+
+    @Test fun registeredChecksMustMatchTheRequiredEnvironment() = runTest {
+        val original = plan()
+        val proposed = original.copy(milestones = original.milestones.map { it.copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("layout", "Button precedes menu", environment = EvidenceEnvironment.LOCAL_TEST, checkId = "layout"))) })
+        val registry = AcceptanceChecks(mapOf("layout" to RegisteredAcceptanceCheck(EvidenceEnvironment.LOCAL_TEST) { error("Planning must not execute checks") }))
+        val planner = DecisionPlanner(completePlanning = { _, _, _, _ -> response(proposed) }, acceptanceChecks = registry)
+        val result = planner.refine(original, "Move button", profile, listOf(profile), emptyList())
+        assertEquals(proposed.milestones.map { it.acceptanceCriteria }, result.milestones.map { it.acceptanceCriteria })
+        val wrong = proposed.copy(milestones = proposed.milestones.map { it.copy(acceptanceCriteria =
+            it.acceptanceCriteria.map { c -> c.copy(environment = EvidenceEnvironment.MANUAL) }) })
+        val invalidPlanner = DecisionPlanner(completePlanning = { _, _, _, _ -> response(wrong) }, acceptanceChecks = registry)
+        assertFailsWith<IllegalStateException> { invalidPlanner.refine(original, "Move button", profile, listOf(profile), emptyList()) }
+    }
+
+    @Test fun previouslyApprovedUnavailableCriteriaRemainUnchanged() = runTest {
+        val original = plan().let { p -> p.copy(milestones = p.milestones.map { it.copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("live", "Require a live receipt", environment = EvidenceEnvironment.REAL_BACKEND))) }) }
+        val result = textPlanComposer(Gateway(response(original))).refine(original, "Keep current requirements", profile, listOf(profile), emptyList())
+        assertEquals(original.milestones.map { it.acceptanceCriteria }, result.milestones.map { it.acceptanceCriteria })
+    }
+
     @Test fun refinementDoesNotSendNestedExecutionArchivesOrModifySavedHistory() = runTest {
         val log = "execution-log-".repeat(90_000)
         val attempt = StageAttempt("attempt", "worker", StageAssignment("agent", "gpt-5.4"), report = log)

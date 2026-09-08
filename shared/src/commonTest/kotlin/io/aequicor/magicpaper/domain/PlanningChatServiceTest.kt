@@ -131,6 +131,26 @@ class PlanningChatServiceTest {
         CodingUi(sessions = listOf(CodingSessionUi(parent, projects.messages(project.id, parent.id)))),
         store.plans.value, service.states.value, service.persistenceErrors.value)
 
+    @Test fun explicitVerificationSkipIsRoutedWithoutAskingTheModelAndRecordedInHistory() = runTest {
+        val f = Fixture(this); f.initialize()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("plan", parent)
+        val criteria = plan.milestones.single().criteria()
+        val record = AcceptanceRecord("run", "attempt", "fixture-snapshot", criteria,
+            criteria.map { AcceptanceFinding(it.id, CheckStatus.NOT_RUN, it.description, "Missing check") }, status = AcceptanceStatus.PARTIAL)
+        val issue = PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment(profile.id, "m"), phase = AttemptPhase.VERIFYING,
+            report = "Implementation is ready", error = issue, acceptanceRecord = record, path = "/shared")
+        f.store.save(plan.copy(runId = "run", phase = ExecutionPhase.WAITING, issue = issue, confirmedRevision = 1,
+            milestones = plan.milestones.map { it.copy(attempts = listOf(attempt)) }))
+        val request = f.interactions(parent).single { it.kind == InteractionKind.RECOVER_PLAN }
+        f.service.submitInteraction(request, listOf(PlanningAnswer("decision", listOf("skip_verification"))))
+        assertEquals(criteria, f.store.planFor(plan.id)!!.acceptanceWaivers.map { it.criterion })
+        assertTrue(f.gateway.requests.isEmpty())
+        assertTrue(f.projects.messages(project.id, parent.id).any { it.role == CodingRole.USER && it.text.contains("Продолжить без проверки") })
+        assertFailsWith<IllegalArgumentException> { f.service.submitInteraction(request, listOf(PlanningAnswer("decision", listOf("skip_verification")))) }
+    }
+
     @Test fun confirmedAllSkippedQuestionnaireClosesOriginalRequestAndPersistsExplicitSkips() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")

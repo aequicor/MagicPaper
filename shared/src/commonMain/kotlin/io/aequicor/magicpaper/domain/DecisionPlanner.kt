@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 /** Structured refinement: only validated proposals can replace the current tree. */
 class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true },
     private val completePlanning: suspend (Plan, LlmProfile, List<LlmMessage>, (CodingStep) -> Unit) -> String = { _, _, _, _ -> error("Планировщик проекта не подключён.") },
+    private val acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
 ) {
     @Serializable private data class Proposal(
         val isolatedWorkspace: Boolean? = null, val reply: String = "", val questions: List<PlanningQuestion> = emptyList(), val tree: List<DecisionNode> = emptyList(), val milestones: List<Milestone> = emptyList(), val questionStageIds: List<String> = emptyList(),
@@ -39,8 +40,12 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 complexityPoints — относительная сложность в условных единицах (например 1, 2, 3, 5, 8, 13). Оцени каждый этап, включая альтернативные; это не часы. Сохраняй заданные пользователем оценки.
                 Для каждого этапа укажи acceptanceCriteria=[{id:"стабильный ID",description:"точное требование",required:true,
                 environment:"REVIEW|LOCAL_TEST|HERMETIC|REAL_BACKEND|MANUAL",checkId:"ID зарегистрированной проверки приложения либо пусто"}].
-                REVIEW — только смысловая оценка отчёта. Тесты требуют LOCAL_TEST/HERMETIC, реальные сервисы — REAL_BACKEND, ручная приёмка — MANUAL.
-                Не заменяй требуемую среду более слабой. Отсутствие зарегистрированной проверки означает NOT_RUN, а не разрешение заменить её REVIEW.
+                Для обычных изменений кода и вёрстки используй REVIEW: проверяющий оценивает результат по отчёту исполнителя, ссылкам на код и результатам соразмерных задаче проверок.
+                REVIEW не является независимой квитанцией приложения о запуске тестов или реального сервиса. Исполнитель сам запускает нужные проверки и прикладывает подтверждения; пользователь не должен проверять его сессию.
+                LOCAL_TEST/HERMETIC/REAL_BACKEND/MANUAL означают отдельную проверяющую функцию приложения, а не просто команду теста или снимок экрана в отчёте. Они требуют checkId из реестра с совпадающей средой.
+                Реестр проверок приложения: ${acceptanceChecks.planningCatalog()}
+                Не добавляй обязательную ручную приёмку только потому, что меняется интерфейс. Не добавляй недоступные проверки по собственной инициативе.
+                Если пользователь явно требует среду, для которой нет зарегистрированной проверки, объясни ограничение и задай вопрос до составления плана (tree и milestones пустые). Не ослабляй явно заданные требования и критерии уже начатых этапов.
                 required=false допустим только для явно необязательного результата пользователя. Критерии начатого этапа неизменны.
                 Зависимости не должны образовывать циклы или вести в невыбранные альтернативы.
                 Названия цели и этапов делай краткими и конкретными: результат или задача, обычно 2–6 слов. Не повторяй общую цель в названии каждого этапа и не добавляй префикс «Продолжение». Для доработки укажи continuationOf — id исходного этапа.
@@ -93,6 +98,14 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 val updated = recommendChoices(plan.copy(tree = nodes, milestones = bound, dialogue = dialogue, wizardStep = PlanningStep.REVIEW, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace))
                 DecisionCompiler.validateEdit(plan, updated)
                 require(updated.milestones.all { it.title.isNotBlank() && it.acceptance.isNotBlank() }) { "Каждому этапу нужны название и критерии проверки" }
+                val unavailable = updated.milestones.flatMap { stage -> stage.acceptanceCriteria.filter { criterion ->
+                    criterion.required && !acceptanceChecks.supports(criterion) &&
+                        criterion !in existing[stage.id]?.acceptanceCriteria.orEmpty()
+                } }
+                require(unavailable.isEmpty()) {
+                    "Предложены недоступные обязательные проверки: ${unavailable.joinToString { it.description }}. " +
+                        "Для обычной задачи задай оценку результата по отчёту (REVIEW); если пользователь явно требует отдельную среду, объясни ограничение и задай вопрос без нового дерева. Не ослабляй его требования."
+                }
                 return updated.allocateTaskIdentifiers(plan)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {

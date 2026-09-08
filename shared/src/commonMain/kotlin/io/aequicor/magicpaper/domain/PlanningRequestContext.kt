@@ -19,6 +19,7 @@ internal data class PlanningRequestContext(
     val milestones: List<Milestone>,
     val dialogue: List<PlanningMessage>,
     val acceptance: AcceptanceRecord? = null,
+    val acceptanceWaivers: List<AcceptanceWaiver> = emptyList(),
 ) {
     companion object {
         fun from(plan: Plan) = PlanningRequestContext(
@@ -27,6 +28,7 @@ internal data class PlanningRequestContext(
             plan.milestones.map { it.copy(attempts = emptyList(), report = "") },
             plan.dialogue.map { it.copy(activity = emptyList()) },
             plan.finalAttempt?.acceptanceRecord ?: plan.finalAttemptHistory.lastOrNull()?.acceptanceRecord,
+            plan.acceptanceWaivers.filter { it.runId == plan.runId },
         )
     }
 }

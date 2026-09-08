@@ -4,7 +4,16 @@ import kotlinx.serialization.Serializable
 
 @Serializable enum class EvidenceEnvironment { REVIEW, LOCAL_TEST, HERMETIC, REAL_BACKEND, MANUAL }
 @Serializable enum class CheckStatus { PASS, FAIL, NOT_RUN, SKIPPED, BLOCKED, STALE }
-@Serializable enum class AcceptanceStatus { UNKNOWN, ACCEPTED, PARTIAL, FAILED, BLOCKED, STALE }
+@Serializable enum class AcceptanceStatus { UNKNOWN, ACCEPTED, PARTIAL, FAILED, BLOCKED, STALE, ACCEPTED_WITH_SKIPS }
+
+/** Created only by an explicit questionnaire answer, scoped to this run and exact criterion. */
+@Serializable data class AcceptanceWaiver(
+    val runId: String,
+    val criterion: AcceptanceCriterion,
+    val attemptId: String,
+    val snapshotId: String,
+    val createdAt: Long,
+)
 
 internal fun EvidenceEnvironment.label(): String = when (this) {
     EvidenceEnvironment.REVIEW -> "оценка результата"
@@ -49,13 +58,60 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
     val findings: List<AcceptanceFinding>,
     val evidence: List<AcceptanceEvidence> = emptyList(),
     val status: AcceptanceStatus = AcceptanceStatus.UNKNOWN,
+    val waivers: List<AcceptanceWaiver> = emptyList(),
 ) {
+    internal val permitsProgress: Boolean get() = status in setOf(AcceptanceStatus.ACCEPTED, AcceptanceStatus.ACCEPTED_WITH_SKIPS)
+    internal val canSkipByUser: Boolean get() = status in setOf(AcceptanceStatus.PARTIAL, AcceptanceStatus.BLOCKED) &&
+        snapshotId.isNotBlank() && criteria.any { it.required } && criteria.filter { it.required }.all { criterion ->
+            findings.singleOrNull { it.criterionId == criterion.id }?.status in
+                setOf(CheckStatus.PASS, CheckStatus.NOT_RUN, CheckStatus.SKIPPED, CheckStatus.BLOCKED)
+        }
     fun summary(): String = "Приёмка: $status. " + findings.filter { it.status != CheckStatus.PASS }
         .joinToString("; ") { "${it.criterionId}: ${it.status} — ${it.observed}" }
+
+    /** Missing host evidence cannot be supplied by another worker report. */
+    internal val canRetryWithWorker: Boolean get() = status in setOf(AcceptanceStatus.FAILED, AcceptanceStatus.PARTIAL) &&
+        criteria.filter { it.required }.all { criterion ->
+            val finding = findings.singleOrNull { it.criterionId == criterion.id }
+            finding?.status == CheckStatus.PASS ||
+                finding?.status in setOf(CheckStatus.FAIL, CheckStatus.NOT_RUN, CheckStatus.SKIPPED) &&
+                (criterion.environment == EvidenceEnvironment.REVIEW || evidence.any {
+                    it.criterionId == criterion.id && it.environment == criterion.environment && it.snapshotId == snapshotId &&
+                        it.status in setOf(CheckStatus.PASS, CheckStatus.FAIL) && it.artifacts.isNotEmpty()
+                })
+        }
+
+    internal fun userSummary(): String = buildString {
+        append(when (status) {
+            AcceptanceStatus.ACCEPTED -> "Результат подтверждён."
+            AcceptanceStatus.ACCEPTED_WITH_SKIPS -> "Продолжено без проверки по решению пользователя."
+            AcceptanceStatus.FAILED -> "Проверка обнаружила несоответствие требованиям."
+            AcceptanceStatus.STALE -> "Файлы изменились после проверки. Нужно проверить актуальный результат."
+            else -> "Результат пока не подтверждён: не все обязательные проверки выполнены."
+        })
+        criteria.filter { it.required }.forEach { criterion ->
+            val finding = findings.singleOrNull { it.criterionId == criterion.id }
+            if (finding?.status == CheckStatus.PASS) return@forEach
+            val proof = evidence.singleOrNull { it.criterionId == criterion.id && it.environment == criterion.environment && it.snapshotId == snapshotId }
+            val unavailable = criterion.environment != EvidenceEnvironment.REVIEW &&
+                (proof == null || proof.status == CheckStatus.NOT_RUN && proof.artifacts.isEmpty())
+            append("\n\n• ${criterion.description}\n")
+            if (finding?.status == CheckStatus.SKIPPED && waivers.any { it.runId == runId && it.criterion == criterion })
+                append("Проверка пропущена по решению пользователя.")
+            else if (unavailable) append("${criterion.environment.label().replaceFirstChar { it.uppercaseChar() }}: в приложении не подключён способ подтверждения. Можно повторить автоматическую проверку или продолжить без неё.")
+            else append(finding?.observed ?: "Исполнитель должен предоставить подтверждение этого результата.")
+        }
+    }
 }
 
 /** Only host code can register collectors. Backend reports have no write path to this registry. */
 class AcceptanceChecks(private val checks: Map<String, RegisteredAcceptanceCheck> = emptyMap()) {
+    internal fun supports(criterion: AcceptanceCriterion): Boolean = criterion.environment == EvidenceEnvironment.REVIEW ||
+        checks[criterion.checkId]?.environment == criterion.environment
+
+    internal fun planningCatalog(): String = checks.entries.joinToString("\n") { "${it.key}: ${it.value.environment}" }
+        .ifBlank { "Зарегистрированных проверок приложения нет." }
+
     suspend fun collect(criteria: List<AcceptanceCriterion>, path: String, snapshotId: String): List<AcceptanceEvidence> =
         criteria.filter { it.environment != EvidenceEnvironment.REVIEW }.map { criterion ->
             val check = checks[criterion.checkId]?.takeIf { it.environment == criterion.environment }
@@ -96,12 +152,17 @@ object AcceptanceGate {
                     criterion.description, proof?.detail ?: "Нет подтверждения приложения для ${criterion.environment}", proof?.artifacts.orEmpty())
             }
         }
-        val required = findings.filter { f -> criteria.single { it.id == f.criterionId }.required }
+        val requiredFindings = findings.filter { f -> criteria.single { it.id == f.criterionId }.required }
+        val waived = requiredFindings.filter { f -> f.status == CheckStatus.SKIPPED && record.waivers.any {
+            it.runId == record.runId && it.criterion == criteria.single { c -> c.id == f.criterionId }
+        } }
+        val required = requiredFindings - waived.toSet()
         val status = when {
             required.any { it.status == CheckStatus.STALE } -> AcceptanceStatus.STALE
             required.any { it.status == CheckStatus.FAIL } -> AcceptanceStatus.FAILED
             required.any { it.status == CheckStatus.BLOCKED } -> AcceptanceStatus.BLOCKED
             required.any { it.status != CheckStatus.PASS } -> AcceptanceStatus.PARTIAL
+            waived.isNotEmpty() -> AcceptanceStatus.ACCEPTED_WITH_SKIPS
             else -> AcceptanceStatus.ACCEPTED
         }
         return record.copy(findings = findings, status = status)

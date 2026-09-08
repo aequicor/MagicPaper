@@ -72,16 +72,13 @@ internal fun interactionCandidates(
         }
         val blockers = plan.blockingIssues(history)
         if (blockers.isNotEmpty()) {
-            val action = when {
-                blockers.any { it.stage == null && it.issue.kind == IssueKind.VERIFICATION } -> "Доработать план"
-                blockers.any { it.stage != null && it.issue.kind == IssueKind.VERIFICATION } -> "Исправить и проверить"
-                else -> "Повторить запуск"
-            }
+            val action = blockers.recoveryActionLabel()
             val affected = sessions.filter { it.parentSessionId == parent.id && it.planId == plan.id &&
                 blockers.any { b -> b.stage == null || b.stage.id == it.stageId } }.map { it.id }
             add(recoveryInteraction("blocker:${blockers.map { it.messageId }.sorted().joinToString(":")}", parent,
                 InteractionKind.RECOVER_PLAN, "Выполнение остановлено. Как продолжить?", blockers.joinToString("\n\n") { it.text }, action,
-                sourceId = plan.id).copy(planId = plan.id, affectedSessionIds = (affected + parent.id).toSet()))
+                sourceId = plan.id, allowSkipVerification = blockers.all { it.canSkipVerification })
+                .copy(planId = plan.id, affectedSessionIds = (affected + parent.id).toSet()))
         }
         val pendingQuestions = any { it.kind == InteractionKind.QUESTION && it.planId == plan.id }
         val initialReady = plan.confirmedRevision == null && plan.wizardStep != PlanningStep.CLARIFY &&
@@ -116,7 +113,11 @@ internal fun interactionCandidates(
 }
 
 private fun recoveryInteraction(id: String, session: CodingSession, kind: InteractionKind, title: String, details: String,
-    retry: String, sourceId: String = id) = UserInteractionRequest(id, session.projectId, session.id, kind,
+    retry: String, sourceId: String = id, allowSkipVerification: Boolean = false) = UserInteractionRequest(id, session.projectId, session.id, kind,
     listOf(PlanningQuestion("decision", title, QuestionKind.SINGLE,
-        listOf(QuestionOption("retry", retry), QuestionOption("leave", "Оставить остановленной")))),
+        buildList {
+            add(QuestionOption("retry", retry))
+            if (allowSkipVerification) add(QuestionOption("skip_verification", "Продолжить без проверки"))
+            add(QuestionOption("leave", "Оставить остановленной"))
+        })),
     sourceId = sourceId, context = session.name, details = details)

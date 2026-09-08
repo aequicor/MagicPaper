@@ -58,14 +58,15 @@ class PlanningExecutionServiceTest {
         override suspend fun prepare(project: CodingProject, runId: String) = PlanWorkspace("/fake", "/fake", git = parallel)
         override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace { applied++; return workspace.copy(applied = true) }
     }
-    private suspend fun TestScope.fixture(runtime: Runtime = Runtime(), workspace: PlanningWorkspace = Workspaces(), verifier: MilestoneVerifier = pass): Triple<PlanningStore, PlanningExecutionService, Runtime> {
+    private suspend fun TestScope.fixture(runtime: Runtime = Runtime(), workspace: PlanningWorkspace = Workspaces(), verifier: MilestoneVerifier = pass,
+        acceptanceChecks: AcceptanceChecks = AcceptanceChecks()): Triple<PlanningStore, PlanningExecutionService, Runtime> {
         val kv = InMemoryKeyValueStore()
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val profiles = JsonLlmProfileRepository(kv, json).also { it.save(profile) }
         val projects = JsonCodingProjectRepository(kv, json).also { it.save(project) }
         val settings = JsonSettingsRepository(kv, json)
         return Triple(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope,
-            outputClock = { testScheduler.currentTime }), runtime)
+            outputClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks), runtime)
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
@@ -260,6 +261,61 @@ class PlanningExecutionServiceTest {
         assertEquals(3, runtime.calls.size)
         assertEquals(2, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
+    @Test fun missingReviewEvidenceReturnsToWorkerBeforeAskingUser() = runTest {
+        var reviews = 0
+        val verifier = object : MilestoneVerifier by pass {
+            override suspend fun review(milestone: Milestone, criteria: List<AcceptanceCriterion>, goal: String, report: String, profile: LlmProfile?): AcceptanceReview {
+                val status = if (milestone.id == "a" && reviews++ == 0) CheckStatus.NOT_RUN else CheckStatus.PASS
+                return AcceptanceReview(criteria.map { AcceptanceFinding(it.id, status, it.description,
+                    if (status == CheckStatus.NOT_RUN) "Provide the layout source and check output" else "Source and checks reviewed") })
+            }
+        }
+        val (store, service, runtime) = fixture(verifier = verifier)
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(AcceptanceCriterion("layout", "Button precedes the project menu")))))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        val attempt = saved.milestones.single().attempts.single()
+        assertEquals(2, runtime.calls.count { it == attempt.sessionId })
+        assertEquals(1, attempt.repairRetries)
+        assertContains(attempt.prompt, "Provide the layout source and check output")
+        assertContains(attempt.prompt, "Button precedes the project menu")
+        assertEquals(AcceptanceStatus.ACCEPTED, attempt.acceptanceRecord?.status)
+    }
+
+    @Test fun missingReviewEvidenceExhaustsTwoRepairsWithoutAcceptingTheStage() = runTest {
+        val verifier = object : MilestoneVerifier by pass {
+            override suspend fun review(milestone: Milestone, criteria: List<AcceptanceCriterion>, goal: String, report: String, profile: LlmProfile?) =
+                AcceptanceReview(criteria.map { AcceptanceFinding(it.id, CheckStatus.NOT_RUN, it.description, "No source evidence") })
+        }
+        val (store, service, runtime) = fixture(verifier = verifier)
+        store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(3, runtime.calls.size)
+        assertEquals(2, saved.milestones.single().attempts.single().repairRetries)
+        assertEquals(AcceptanceStatus.PARTIAL, saved.milestones.single().attempts.single().acceptanceRecord?.status)
+        assertTrue(saved.issue!!.requiresUser)
+        service.retry(project.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(4, runtime.calls.size)
+        assertEquals(2, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
+    }
+
+    @Test fun registeredCheckFailureCanBeRepairedByTheWorker() = runTest {
+        var checks = 0
+        val registry = AcceptanceChecks(mapOf("layout" to RegisteredAcceptanceCheck(EvidenceEnvironment.LOCAL_TEST) {
+            AcceptanceCheckResult(if (checks++ == 0) CheckStatus.FAIL else CheckStatus.PASS, "Button position", listOf("layout-test.log"))
+        }))
+        val (store, service, runtime) = fixture(acceptanceChecks = registry)
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("layout", "Button precedes menu", environment = EvidenceEnvironment.LOCAL_TEST, checkId = "layout")))))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        val attempt = saved.milestones.single().attempts.single()
+        assertEquals(1, attempt.repairRetries)
+        assertEquals(2, runtime.calls.count { it == attempt.sessionId })
     }
 
     @Test fun explicitRepairRetryRunsOneAdditionalTurnWithoutResettingAutomaticLimit() = runTest {
@@ -534,6 +590,10 @@ class PlanningExecutionServiceTest {
         advanceTimeBy(60_000); runCurrent()
         assertEquals(calls, runtime.calls.size)
         assertTrue(saved.messageEvents.none { it.kind == MessageEventKind.RUN_COMPLETED })
+        service.retry(project.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(calls, runtime.calls.size, "Retrying an unavailable host check must not rerun file changes")
+        assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+        assertEquals(0, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
     }
 
     @Test fun sourceChangeDuringFinalReviewInvalidatesAcceptanceAndPreventsApply() = runTest {
@@ -555,6 +615,46 @@ class PlanningExecutionServiceTest {
         assertEquals(AcceptanceStatus.STALE, saved.finalAttempt?.acceptanceRecord?.status)
         assertEquals(PlanStatus.FAILED, saved.status)
         assertEquals("before", saved.finalAttempt?.acceptanceRecord?.snapshotId)
+    }
+
+    @Test fun explicitSkipContinuesTheStageAndFinalAcceptanceWithoutRerunningImplementation() = runTest {
+        val workspace = Workspaces()
+        val (store, service, runtime) = fixture(workspace = workspace)
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("layout", "Button precedes menu", environment = EvidenceEnvironment.MANUAL)))))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val blocked = store.planFor(project.id)!!
+        assertEquals(1, runtime.calls.size)
+        val ids = blocked.blockingIssues(emptyList()).map { it.messageId }.toSet()
+        assertFailsWith<IllegalArgumentException> { service.continueWithoutVerification(blocked.id, setOf("stale")) }
+        service.continueWithoutVerification(blocked.id, ids); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(1, runtime.calls.size, "Neither file changes nor explicitly skipped final checks should run again")
+        assertEquals(1, workspace.applied)
+        assertEquals(1, saved.acceptanceWaivers.size)
+        assertEquals(CheckStatus.SKIPPED, saved.finalAttempt!!.acceptanceRecord!!.findings.single().status)
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, saved.finalAttempt.acceptanceRecord!!.status)
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, saved.milestones.single().attempts.single().acceptanceRecord!!.status)
+        assertContains(saved.milestones.single().checkNote, "по решению пользователя")
+        val restored = json.decodeFromString<Plan>(json.encodeToString(Plan.serializer(), saved))
+        assertEquals(saved.acceptanceWaivers, restored.acceptanceWaivers)
+        assertFailsWith<IllegalArgumentException> { service.continueWithoutVerification(saved.id, ids) }
+    }
+
+    @Test fun skippingOneStageDoesNotSkipOtherStageChecks() = runTest {
+        val (store, service, runtime) = fixture()
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("manual", "Inspect layout", environment = EvidenceEnvironment.MANUAL))), stage("b", listOf("a"))))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val blocked = store.planFor(project.id)!!
+        service.continueWithoutVerification(blocked.id, blocked.blockingIssues(emptyList()).map { it.messageId }.toSet())
+        advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(3, runtime.calls.size, "Other stage and its final verification must still run")
+        assertEquals(CheckStatus.PASS, saved.finalAttempt!!.acceptanceRecord!!.findings.single { it.criterionId == "b/result" }.status)
+        assertEquals(CheckStatus.SKIPPED, saved.finalAttempt.acceptanceRecord!!.findings.single { it.criterionId == "a/manual" }.status)
     }
 
     @Test fun pauseDuringFinalReviewCannotApplyOrCompletePlan() = runTest {

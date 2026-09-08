@@ -12,7 +12,7 @@ enum class MilestoneStatus {
     /** Выполняется прямо сейчас. */
     ACTIVE,
 
-    /** Выполнен и прошёл проверку достижимости. */
+    /** Выполнен; проверен либо пользователь явно разрешил продолжение без проверки. */
     DONE,
 
     /** Не выполнен (сбой агента или проверка не подтвердила результат). */
@@ -71,7 +71,7 @@ enum class PlanStatus {
     /** Выполняется прямо сейчас. */
     RUNNING,
 
-    /** Все мэилстоуны завершены и проверены. */
+    /** Все этапы завершены; пропуски проверок по решению пользователя сохранены в приёмке. */
     DONE,
 
     /** Остановлен: один из мэилстоунов не прошёл проверку. */
@@ -135,6 +135,7 @@ data class Plan(
     val journal: List<PlanJournalEntry> = emptyList(),
     /** Transport failures outside a stage attempt (preflight and workspace preparation). */
     val transportRetries: Int = 0,
+    val acceptanceWaivers: List<AcceptanceWaiver> = emptyList(),
 ) {
     val selectedMilestones: List<Milestone> get() = if (tree.isEmpty()) milestones else {
         val selected = DecisionCompiler.compile(this).stageIds.toSet()

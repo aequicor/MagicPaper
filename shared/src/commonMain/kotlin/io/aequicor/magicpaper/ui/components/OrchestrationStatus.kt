@@ -88,6 +88,7 @@ internal fun OrchestrationStatus(
                     plan?.finalAttempt?.acceptanceRecord?.let { record ->
                         Text(when (record.status) {
                             AcceptanceStatus.ACCEPTED -> "Обязательные критерии приняты"
+                            AcceptanceStatus.ACCEPTED_WITH_SKIPS -> "Завершено с пропуском проверок по вашему решению"
                             AcceptanceStatus.PARTIAL -> "Приёмка частичная: часть проверок не выполнена"
                             AcceptanceStatus.BLOCKED -> "Приёмка заблокирована"
                             AcceptanceStatus.FAILED -> "Приёмка не пройдена"

@@ -27,6 +27,49 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalComposeUiApi::class)
 class OrchestrationFailureRenderTest {
+    @Test fun unavailableVerificationOffersAutomaticCheckAndExplicitSkip() = runTest {
+        val parent = CodingSession("parent", "project", "Кнопка новой сессии", 1, planningMode = true)
+        val criterion = AcceptanceCriterion("stage/layout", "Кнопка находится слева от меню проекта", environment = EvidenceEnvironment.MANUAL)
+        val record = AcceptanceRecord("run", "attempt", "snapshot", listOf(criterion), listOf(
+            AcceptanceFinding(criterion.id, CheckStatus.NOT_RUN, criterion.description, "No check")), status = AcceptanceStatus.PARTIAL)
+        val issue = PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true)
+        val stage = Milestone("stage", "Перенести кнопку", attempts = listOf(StageAttempt("attempt", "worker",
+            StageAssignment("p", "m"), phase = AttemptPhase.VERIFYING, error = issue, acceptanceRecord = record)))
+        val plan = Plan("plan", "project", parent.name, milestones = listOf(stage), parentSessionId = parent.id,
+            confirmedRevision = 1, phase = ExecutionPhase.WAITING, issue = issue)
+        val request = interactionCandidates(CodingUi(sessions = listOf(CodingSessionUi(parent))), listOf(plan), emptyMap(), emptyMap()).single()
+        for (width in listOf(1000, 430)) {
+            var submitted = emptyList<PlanningAnswer>()
+            ImageComposeScene(width, 720) {
+                MagicPaperTheme { Surface {
+                    var draft by remember { mutableStateOf(QuestionnaireDraft()) }
+                    UserInteractionDock(request, draft, { draft = it }, { submitted = it })
+                } }
+            }.use { scene ->
+                var frame = 0L
+                fun render() { repeat(5) { scene.render(++frame * 16_000_000L).close() } }
+                fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                fun nodes() = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }
+                fun click(tag: String) = nodes().single { it.config.getOrNull(SemanticsProperties.TestTag) == tag }
+                    .config[SemanticsActions.OnClick].action!!.invoke()
+                render()
+                for (id in listOf("retry", "skip_verification", "leave")) {
+                    val option = nodes().single { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.option.$id" }
+                    assertTrue(option.boundsInRoot.top >= 0 && option.boundsInRoot.bottom <= 720)
+                    assertNull(option.config.getOrNull(SemanticsProperties.Disabled))
+                }
+                val output = File("build/reports/orchestration").apply { mkdirs() }
+                File(output, "missing-verification-$width.png").writeBytes(scene.render(++frame * 16_000_000L).use {
+                    it.encodeToData()!!.use { data -> data.bytes }
+                })
+                click("questionnaire.option.skip_verification"); render()
+                assertTrue(submitted.isEmpty(), "Selecting an option is a draft")
+                click("questionnaire.confirm"); render()
+                assertEquals(listOf("skip_verification"), submitted.single().selected)
+            }
+        }
+    }
+
     @Test fun failedInputUsesQuestionnaireWhileAWorkerContinues() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {

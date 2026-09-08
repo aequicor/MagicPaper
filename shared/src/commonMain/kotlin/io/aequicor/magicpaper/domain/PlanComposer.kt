@@ -24,8 +24,9 @@ class PlanComposer(
     private val searchEngine: SearchEngine? = null,
     private val planningGateway: PlanningGateway = UnavailablePlanningGateway,
     private val projectLookup: suspend (String) -> CodingProject? = { null },
+    acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
 ) {
-    private val decisions = DecisionPlanner(json, ::completePlanning)
+    private val decisions = DecisionPlanner(json, ::completePlanning, acceptanceChecks)
 
     suspend fun completePlanning(plan: Plan, profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
         val project = projectLookup(plan.projectId) ?: error("Папка проекта плана недоступна. Откройте проект в desktop-приложении.")

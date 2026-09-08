@@ -50,4 +50,23 @@ class UserInteractionStatusTest {
         assertEquals(listOf("retry", "leave"), pending.single().questions.single().options.map { it.id })
         assertTrue(interactionCandidates(CodingUi(sessions = listOf(item.copy(session = plain.copy(pendingRun = checkpoint.copy(stoppedByUser = true))))), emptyList(), emptyMap(), emptyMap()).isEmpty())
     }
+
+    @Test fun missingHostVerificationExplainsThePlanProblemInsteadOfAskingForCodeRepair() {
+        val criterion = AcceptanceCriterion("opaque-id/layout", "Кнопка находится слева от меню", environment = EvidenceEnvironment.MANUAL)
+        val record = AcceptanceRecord("run", "attempt", "snapshot", listOf(criterion), listOf(
+            AcceptanceFinding(criterion.id, CheckStatus.NOT_RUN, criterion.description, "MANUAL NOT_RUN checkId missing")), status = AcceptanceStatus.PARTIAL)
+        val issue = PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true)
+        val stage = Milestone("stage", "Перенести кнопку", attempts = listOf(StageAttempt("attempt", worker.id,
+            StageAssignment("p", "m"), phase = AttemptPhase.VERIFYING, error = issue, acceptanceRecord = record)))
+        val blocked = plan.copy(milestones = listOf(stage), phase = ExecutionPhase.WAITING, issue = issue)
+        val ui = CodingUi(sessions = listOf(CodingSessionUi(parent), CodingSessionUi(worker)))
+        val request = interactionCandidates(ui, listOf(blocked), emptyMap(), emptyMap()).single()
+        assertContains(request.details, "не хватает подтверждений")
+        assertContains(request.details, criterion.description)
+        assertContains(request.details, "не подключён способ подтверждения")
+        assertFalse(request.details.contains("opaque-id"))
+        assertFalse(request.details.contains("NOT_RUN"))
+        assertEquals(listOf("Проверить автоматически", "Продолжить без проверки", "Оставить остановленной"),
+            request.questions.single().options.map { it.label })
+    }
 }
