@@ -11,6 +11,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -23,14 +25,29 @@ import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.components.*
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import java.io.File
+import java.awt.EventQueue
+import javax.imageio.ImageIO
 import kotlin.math.abs
 import kotlin.test.*
 
 class RequestPinsRenderTest {
-    private class Chat : AutoCloseable {
+    // Desktop input and frame dispatch share the UI thread. Mixing render() on the test
+    // thread with wheel animation on AWT can deadlock Compose's two frame-clock locks.
+    private companion object {
+        fun <T> onUi(block: () -> T): T {
+            if (EventQueue.isDispatchThread()) return block()
+            var result: Result<T>? = null
+            EventQueue.invokeAndWait { result = runCatching(block) }
+            return result!!.getOrThrow()
+        }
+    }
+
+    private class Chat(val width: Int = 420) : AutoCloseable {
         val list = LazyListState()
         val tail = mutableStateOf(900)
         val session = mutableStateOf("first")
+        val precedingHeight = mutableStateOf(220)
+        val prefixCount = mutableStateOf(0)
         val groups = mutableStateOf(listOf(
             RequestPinGroup(RequestPin("m0", "Добавить закрепления запросов во все чаты", "Пользователь"),
                 listOf(RequestPin("m2", "Суммаризацию выполняет общая модель по умолчанию", "Пользователь"),
@@ -38,20 +55,23 @@ class RequestPinsRenderTest {
             RequestPinGroup(RequestPin("m6", "Проверить работу интерфейса на узком экране", "Оркестратор 1"),
                 listOf(RequestPin("m8", "Увеличить шрифт и проверить переход к исходнику", "Пользователь"))),
         ))
-        val indices = (0..9).associate { "m$it" to it }
+        val indices get() = (0..9).associate { "m$it" to it + prefixCount.value }
         val tops = mutableMapOf<String, Float>()
         var panelHeight = 0
         lateinit var scroll: ChatScrollState
         private var frame = 0L
-        private val scene = ImageComposeScene(420, 640) {
+        private val scene = onUi { ImageComposeScene(width, 640) {
             MagicPaperTheme {
                 scroll = stickToBottom(list, session.value)
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    LazyColumn(state = list, contentPadding = PaddingValues(16.dp),
+                    LazyColumn(state = list, modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.requestPinsShade(scroll),
+                        contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(prefixCount.value, key = { "prefix$it" }) { Text("Новый шаг", Modifier.height(90.dp)) }
                         items(10, key = { "m$it" }) { index ->
                             ChatScrollItem(scroll, "m$index") {
-                                Box(Modifier.fillMaxWidth().height(220.dp)
+                                Box(Modifier.fillMaxWidth().height(if (index == 7) precedingHeight.value.dp else 220.dp)
                                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                     .onGloballyPositioned { tops["m$index"] = it.positionInRoot().y }) {
                                     Text("Исходное сообщение m$index", Modifier.padding(12.dp))
@@ -61,23 +81,31 @@ class RequestPinsRenderTest {
                         item(key = "draft") { Text("Поток ответа", Modifier.fillMaxWidth().height(tail.value.dp)) }
                     }
                     RequestPinsOverlay(groups.value, indices, list, scroll,
-                        Modifier.align(Alignment.TopCenter).onSizeChanged { panelHeight = it.height })
+                        Modifier.align(Alignment.TopEnd).onSizeChanged { panelHeight = it.height })
                 }
             }
-        }
+        } }
 
         init { render() }
-        fun render() { repeat(16) { scene.render(++frame * 32_000_000L).close(); Thread.sleep(10) } }
-        fun click(y: Float) {
-            scene.sendPointerEvent(PointerEventType.Press, Offset(160f, y))
-            scene.sendPointerEvent(PointerEventType.Release, Offset(160f, y))
+        fun render(frames: Int = 16) { repeat(frames) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(10) } }
+        fun click(y: Float, settle: Boolean = true) {
+            onUi {
+                scene.sendPointerEvent(PointerEventType.Press, Offset(width - 100f, y))
+                scene.sendPointerEvent(PointerEventType.Release, Offset(width - 100f, y))
+            }
+            if (settle) render(24)
+        }
+        fun wheel(delta: Float) {
+            onUi { scene.sendPointerEvent(PointerEventType.Scroll, Offset(width - 100f, 450f), scrollDelta = Offset(0f, delta)) }
             render()
         }
-        fun snapshot(name: String) {
+        fun snapshot(name: String): File = onUi {
             val dir = File("build/reports/request-pins").apply { mkdirs() }
             val rendered = scene.render(++frame * 32_000_000L)
             val data = rendered.encodeToData()!!
-            try { File(dir, "$name.png").writeBytes(data.bytes) } finally { data.close(); rendered.close() }
+            val file = File(dir, "$name.png")
+            try { file.writeBytes(data.bytes) } finally { data.close(); rendered.close() }
+            file
         }
         fun selected(): VisibleRequestPins? = visibleRequestPins(groups.value) { id ->
             val index = indices.getValue(id)
@@ -85,7 +113,59 @@ class RequestPinsRenderTest {
                 it.offset < list.layoutInfo.viewportStartOffset
             } ?: (index < list.firstVisibleItemIndex)
         }
-        override fun close() = scene.close()
+        override fun close() = onUi { scene.close() }
+    }
+
+    @Test fun widePanelIsRightAlignedAndOnlyMessagesNearItFade() = Chat(width = 1040).use { chat ->
+        chat.click(chat.panelHeight - 22f)
+        chat.render()
+        val bounds = assertNotNull(chat.scroll.requestPinsBounds)
+        assertEquals(360f, bounds.left)
+        assertEquals(1040f, bounds.right)
+        val pixels = ImageIO.read(chat.snapshot("wide-right-shade"))
+        val y = chat.panelHeight
+        val unshaded = pixels.getRGB(30, y + 2)
+        assertEquals(unshaded, pixels.getRGB(30, y + 18), "Uncovered messages on the left stay unchanged")
+        assertEquals(unshaded, pixels.getRGB(990, y + 18), "Below the fade the message is fully visible")
+        assertNotEquals(unshaded, pixels.getRGB(990, y + 2), "Content fades as it goes under the pin")
+        assertNotEquals(pixels.getRGB(990, y + 2), pixels.getRGB(990, y + 10), "The edge must be gradual")
+        chat.list.dispatchRawDelta(-10000f)
+        chat.render()
+        assertNull(chat.scroll.requestPinsBounds, "Removing the pin must also remove its shade")
+    }
+
+    @Test fun readerWheelInterruptsNavigationDuringStreaming() = Chat().use { chat ->
+        chat.click(chat.panelHeight - 22f, settle = false)
+        chat.render(5)
+        assertTrue(chat.scroll.navigating)
+        chat.wheel(-2f)
+        assertFalse(chat.scroll.navigating)
+        val index = chat.list.firstVisibleItemIndex
+        val offset = chat.list.firstVisibleItemScrollOffset
+        chat.tail.value += 300
+        chat.render()
+        assertEquals(index, chat.list.firstVisibleItemIndex)
+        assertEquals(offset, chat.list.firstVisibleItemScrollOffset)
+    }
+
+    @Test fun navigationSettlesOnSourceWhileStreamingChangesHeightsAndRowIndices() = Chat().use { chat ->
+        chat.tail.value += 100
+        chat.click(chat.panelHeight - 22f, settle = false)
+        repeat(10) { frame ->
+            chat.tail.value += 80
+            chat.precedingHeight.value += 35
+            if (frame == 2 || frame == 5) chat.prefixCount.value++
+            chat.render(1)
+        }
+        chat.render()
+        val source = chat.list.layoutInfo.visibleItemsInfo.singleOrNull { it.key == "m8" }
+        assertNotNull(source, "Navigate by source identity while rows are added")
+        assertTrue(chat.tops.getValue("m8") in chat.panelHeight.toFloat()..(chat.panelHeight + 40f),
+            "The source must settle just below the pin, not below a growing preceding message: ${chat.tops["m8"]}")
+        val top = chat.tops.getValue("m8")
+        chat.tail.value += 500
+        chat.render()
+        assertEquals(top, chat.tops.getValue("m8"), "Bottom following must stay paused")
     }
 
     @Test fun clickingClarificationThenTitleRevealsEarlierGroupAndPausesStreaming() = Chat().use { chat ->

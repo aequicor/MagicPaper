@@ -106,6 +106,8 @@ import io.aequicor.magicpaper.domain.CodingSessionRole
 import io.aequicor.magicpaper.ui.components.OrchestrationStatus
 import io.aequicor.magicpaper.ui.components.OrchestrationMessageRoute
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
+import io.aequicor.magicpaper.ui.components.requestPinsShade
+import io.aequicor.magicpaper.ui.components.chatScrollInput
 import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.components.inputLabel
@@ -889,8 +891,9 @@ internal fun CodingChat(
             val blockerHeight = maxHeight * 0.4f
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
                     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .requestPinsShade(scroll)
                     .drawWithContent {
                         drawContent()
                         // Fade only the messages; keep the paper background continuous.
@@ -944,7 +947,7 @@ internal fun CodingChat(
                     }
                 }
             }
-            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopCenter))
+            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
                 CodingApprovalDock(approvals, onApproval, onStopApproval,

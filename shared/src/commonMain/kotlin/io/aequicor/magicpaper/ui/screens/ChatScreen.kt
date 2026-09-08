@@ -38,6 +38,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.type
@@ -64,6 +66,8 @@ import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.stickToBottom
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
+import io.aequicor.magicpaper.ui.components.requestPinsShade
+import io.aequicor.magicpaper.ui.components.chatScrollInput
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
@@ -100,7 +104,9 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .requestPinsShade(scroll),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -109,7 +115,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 }
             }
         }
-        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopCenter))
+        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd))
         AnimatedVisibility(
             visible = busy,
             modifier = Modifier.align(Alignment.BottomStart),

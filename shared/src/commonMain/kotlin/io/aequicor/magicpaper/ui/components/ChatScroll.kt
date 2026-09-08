@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.ui.components
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -20,11 +21,16 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Disclosure changes are reader actions, so they must take precedence over following output. */
@@ -35,27 +41,63 @@ internal class ChatScrollState(private val listState: LazyListState) {
     var highlightedKey by mutableStateOf<Any?>(null)
         private set
 
+    var requestPinsBounds by mutableStateOf<Rect?>(null)
+
+    var navigating by mutableStateOf(false)
+        private set
+    private var navigationId = 0
+
+    fun interruptNavigation() {
+        if (!navigating) return
+        navigationId++
+        navigating = false
+        highlightedKey = null
+        disclosureRevision++
+    }
+
     suspend fun navigateToMessage(key: Any, index: () -> Int?, topInset: () -> Int) {
         if (index() == null) return
+        val navigation = ++navigationId
         disclosureRevision++ // Explicit navigation must win over streaming/bottom following.
+        navigating = true
         highlightedKey = key
         try {
+            listState.scrollToItem(index() ?: return, -topInset())
+            // The preceding panel and streamed Markdown can finish measuring after the jump.
+            val started = withFrameNanos { it }
+            withFrameNanos { }
             var clearance = topInset()
-            // A previous group can be taller. Only grow the clearance, avoiding a layout loop.
-            for (pass in 0..2) {
-                listState.scrollToItem(index() ?: return, -clearance)
-                // Frame callbacks precede layout: let the newly selected panel finish measuring.
-                repeat(2) { withFrameNanos { } }
-                if (topInset() <= clearance) break
-                clearance = topInset()
+            var stableFrames = 0
+            for (pass in 0 until 60) {
+                val frame = withFrameNanos { it }
+                if (navigationId != navigation || listState.isScrollInProgress) return
+                // After the first layout, only grow clearance to avoid short adjacent requests
+                // repeatedly showing/hiding their panel as its height changes the scroll position.
+                clearance = maxOf(clearance, topInset())
+                val target = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+                if (target == null) {
+                    listState.scrollToItem(index() ?: return, -clearance)
+                    stableFrames = 0
+                } else {
+                    // Verify the measured source key: row indices can change as a draft is committed.
+                    val delta = target.offset - clearance
+                    val moved = if (abs(delta) > 1) listState.scrollBy(delta.toFloat()) else 0f
+                    stableFrames = if (abs(moved) > 1f) 0 else stableFrames + 1
+                }
+                if (stableFrames >= 3 && frame - started >= 500_000_000L) break
             }
+            navigating = false
             delay(1400)
         } finally {
-            if (highlightedKey == key) highlightedKey = null
+            if (navigationId == navigation) {
+                navigating = false
+                highlightedKey = null
+            }
         }
     }
 
     fun preserveDisclosure(itemKey: Any, item: LayoutCoordinates?, header: LayoutCoordinates?) {
+        interruptNavigation()
         disclosureRevision++
         if (item?.isAttached != true || header?.isAttached != true) return
         val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == itemKey } ?: return
@@ -67,6 +109,18 @@ internal class ChatScrollState(private val listState: LazyListState) {
         // Apply with the height change, before LazyColumn can skip the shrunken message.
         listState.requestScrollToItem(info.index, (headerInItem - target).roundToInt())
     }
+}
+
+/** Wheel/drag input immediately hands control back to the reader during a pin jump. */
+internal fun Modifier.chatScrollInput(scroll: ChatScrollState): Modifier = composed {
+    nestedScroll(remember(scroll) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available != Offset.Zero) scroll.interruptNavigation()
+                return Offset.Zero
+            }
+        }
+    })
 }
 
 private val LocalChatDisclosure = staticCompositionLocalOf<(LayoutCoordinates?) -> Unit> { {} }
@@ -128,11 +182,11 @@ internal fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit): Cha
     val scroll = remember(listState, resetKey) { ChatScrollState(listState) }
     LaunchedEffect(listState, scroll) {
         var following = true
-        // Открыли чат — сразу на дно, не дожидаясь изменений ленты.
-        listState.pinToEnd()
-        var anchor = listState.anchor()
         var disclosureRevision = scroll.disclosureRevision
-        snapshotFlow { listState.wakeUp() to scroll.disclosureRevision }
+        // Открыли чат — сразу на дно, не дожидаясь изменений ленты.
+        listState.pinToEnd { scroll.disclosureRevision == disclosureRevision && !scroll.navigating }
+        var anchor = listState.anchor()
+        snapshotFlow { Triple(listState.wakeUp(), scroll.disclosureRevision, scroll.navigating) }
             .distinctUntilChanged()
             .collect {
                 // Размер ленты может обновиться внутри layout: прокручиваем после его завершения.
@@ -140,14 +194,14 @@ internal fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit): Cha
                 val atEnd = !listState.canScrollForward
                 val now = listState.anchor()
                 when {
-                    scroll.disclosureRevision != disclosureRevision -> following = false
+                    scroll.navigating || scroll.disclosureRevision != disclosureRevision -> following = false
                     atEnd -> following = true
                     now.before(anchor) -> following = false
                 }
                 disclosureRevision = scroll.disclosureRevision
                 anchor = now
                 if (following && !atEnd && !listState.isScrollInProgress) {
-                    listState.pinToEnd()
+                    listState.pinToEnd { scroll.disclosureRevision == disclosureRevision && !scroll.navigating }
                     anchor = listState.anchor()
                 }
             }
@@ -161,8 +215,9 @@ internal fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit): Cha
  * ровно на дне (с учётом нижнего `contentPadding` и отступов между элементами).
  * Нулевой offset — это как раз «прыгнуть в начало сообщения».
  */
-private suspend fun LazyListState.pinToEnd() {
+private suspend fun LazyListState.pinToEnd(keepFollowing: () -> Boolean) {
     repeat(MAX_PIN_PASSES) {
+        if (!keepFollowing()) return
         val info = layoutInfo
         val lastIndex = info.totalItemsCount - 1
         if (lastIndex < 0) return
