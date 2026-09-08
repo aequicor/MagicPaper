@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.verticalScroll
@@ -469,7 +470,17 @@ internal fun ProjectsPanel(
                 { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
                 { onAbortSession(session.session.id) },
                 childCount = group.children.size, expanded = group.expanded,
-                onToggleChildren = { collapsed[session.session.id] = group.expanded })
+                onToggleChildren = {
+                    if (group.expanded) {
+                        val visible = listState.layoutInfo.visibleItemsInfo
+                        val project = visible.firstOrNull { it.key == "project-${session.session.projectId}" }
+                        val top = project?.let { (it.offset + it.size).coerceAtLeast(0) } ?: 0
+                        val header = visible.firstOrNull { it.key == "session-${session.session.id}" }
+                        // Keep a pinned card visible when its scrolled-away children disappear.
+                        if (header == null || header.offset < top) listState.requestScrollToItem(group.index, -top)
+                    }
+                    collapsed[session.session.id] = group.expanded
+                })
         }
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -655,7 +666,16 @@ private fun SessionRow(
                     Color.Transparent
                 }
             )
-            .clickable(onClick = onSelect)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClickLabel = if (childCount > 0) {
+                    if (expanded) "Свернуть этапы" else "Раскрыть этапы"
+                } else null,
+            ) {
+                onSelect()
+                if (childCount > 0) onToggleChildren()
+            }
             .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -669,8 +689,14 @@ private fun SessionRow(
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Text(item.session.subtitle(), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+            Text(
+                buildString {
+                    append(item.session.subtitle())
+                    if (childCount > 0) append(" · $childCount ${sessionCountWord(childCount)}")
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+            )
             if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.BLOCKED) || nested) Text(
                 if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
                     "передан оркестратору" else status.label,
@@ -679,12 +705,10 @@ private fun SessionRow(
             )
         }
         if (childCount > 0) {
-            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
-                .clickable(onClick = onToggleChildren), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(24.dp).semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" },
+                contentAlignment = Alignment.Center) {
                 Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
             }
-            Text(childCount.toString(), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
         }
         RowMenu(
             key = "session-${item.session.id}",
