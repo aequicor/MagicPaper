@@ -92,6 +92,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.domain.Attachment
+import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingApproval
 import io.aequicor.magicpaper.domain.CodingApprovalDecision
@@ -145,9 +146,11 @@ fun CodingScreen(
     profiles: List<LlmProfile> = emptyList(),
     activeProfileId: String = "",
 ) {
+    if (ui.creatingSession) {
+        val state by vm.state.collectAsState()
+        NewCodingSessionDialog(state.settings.defaultCodingEngine, vm::cancelCodingSessionCreation, vm::addCodingSession)
+    }
     Column(modifier = Modifier.fillMaxSize()) {
-        RuntimeBar(ui.runtime, ui.installing, vm::prepareCodingRuntime, vm::uninstallCodingRuntime)
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         ResizableProjectPanels(modifier = Modifier.weight(1f), sidebar = { panelModifier ->
             ProjectsPanel(
                 ui = ui,
@@ -156,7 +159,7 @@ fun CodingScreen(
                 onDeleteProject = vm::deleteCodingProject,
                 onDeleteAllSessions = vm::deleteAllCodingSessions,
                 onSelectSession = vm::selectCodingSession,
-                onAddSession = vm::addCodingSession,
+                onAddSession = vm::requestCodingSession,
                 onDeleteSession = vm::deleteCodingSession,
                 onAbortSession = vm::abortCodingSession,
                 modifier = panelModifier,
@@ -259,10 +262,7 @@ private fun SessionArea(
                 planningService = service,
                 planningQuestionsSession = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId } ?: effective,
                 onOpenSession = vm::selectCodingSession,
-                engineReady = active.session.planningMode || active.session.stageId != null || ui.runtime.ready || (
-                    vm.codingProfileOf(active.session)?.provider == ProviderType.OPENAI_SUBSCRIPTION &&
-                        vm.openAiSubscriptionSignedIn()
-                    ),
+                engineReady = true,
                 onSend = { text, attachments -> vm.sendCodingPromptTo(active.session.id, text, attachments) },
                 onAbort = {
                     when {
@@ -285,6 +285,8 @@ private fun SessionArea(
                             }
                         }
                     }
+                    Text(active.session.engine?.title.orEmpty(), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     CodingModelChip(
                         profile = vm.codingProfileOf(active.session),
                         overridden = active.session.llmProfileId != null,
@@ -330,71 +332,6 @@ private fun SessionTab(label: String, selected: Boolean, onClick: () -> Unit) {
             },
         )
     }
-}
-
-@Composable
-private fun RuntimeBar(
-    runtime: RuntimeStatus,
-    installing: Boolean,
-    onPrepare: () -> Unit,
-    onUninstall: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            runtimeGlyph(runtime),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                buildString {
-                    append("Движок: ")
-                    append(runtimeLabel(runtime))
-                    if (runtime.version.isNotBlank()) append(" · v${runtime.version}")
-                },
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                runtime.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-            )
-        }
-        if (installing) {
-            CircularProgressIndicator(
-                modifier = Modifier.padding(end = 8.dp).height(16.dp).width(16.dp),
-                strokeWidth = 2.dp,
-            )
-        } else if (!runtime.ready) {
-            TextButton(onClick = onPrepare, modifier = Modifier.heightIn(min = 40.dp)) {
-                Text("Подготовить движок")
-            }
-        }
-        TextButton(onClick = onUninstall, modifier = Modifier.heightIn(min = 40.dp)) {
-            Text("Удалить зависимости")
-        }
-    }
-}
-
-private fun runtimeGlyph(runtime: RuntimeStatus): String = when {
-    runtime.ready -> "✦"
-    runtime.phase == RuntimePhase.ERROR -> "✕"
-    runtime.phase == RuntimePhase.UNSUPPORTED -> "✕"
-    else -> "◷"
-}
-
-private fun runtimeLabel(runtime: RuntimeStatus): String = when (runtime.phase) {
-    RuntimePhase.READY -> "готов"
-    RuntimePhase.CHECKING -> "проверка"
-    RuntimePhase.INSTALLING -> "установка"
-    RuntimePhase.ERROR -> "ошибка"
-    RuntimePhase.UNSUPPORTED -> "недоступен на этой платформе"
-    RuntimePhase.UNKNOWN -> "неизвестно"
 }
 
 // ---- Кружок активности ----------------------------------------------------

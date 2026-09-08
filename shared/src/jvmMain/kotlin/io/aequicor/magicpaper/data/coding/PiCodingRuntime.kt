@@ -24,6 +24,7 @@ import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,7 +45,28 @@ import kotlinx.coroutines.withContext
 class PiCodingRuntime(
     rootDir: File = File(File(System.getProperty("user.home"), ".MagicPaper"), "coding"),
     override val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
+    private val subscriptionToken: (suspend () -> String)? = null,
 ) : CodingRuntime {
+
+    internal fun piAiDirectory(): File {
+        val agent = File(prefix, "node_modules/@earendil-works/pi-coding-agent")
+        return listOf(File(agent, "node_modules/@earendil-works/pi-ai/dist"), File(prefix, "node_modules/@earendil-works/pi-ai/dist"))
+            .firstOrNull { File(it, "index.js").isFile } ?: error("Подготовьте зависимости движков в настройках")
+    }
+    @Synchronized internal fun resourceScript(name: String): File {
+        val content = checkNotNull(javaClass.getResourceAsStream("/coding/$name")) { "Нет адаптера $name" }.use { it.readBytes() }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(content).take(8).joinToString("") { "%02x".format(it) }
+        val target = File(root, "adapters/$digest/$name")
+        target.parentFile.mkdirs()
+        if (!target.isFile) target.writeBytes(content)
+        return target
+    }
+    internal suspend fun startProviderBridge(profile: LlmProfile): CodexProviderBridge {
+        val state = ensureReady().last()
+        check(state.ready) { state.detail }
+        return CodexProviderBridge.start(checkNotNull(findNode { }), resourceScript("provider-bridge.mjs"), piAiDirectory(), profile)
+    }
+    internal val hasActiveRuns: Boolean get() = runningProcesses.isNotEmpty()
 
     override val supported: Boolean = true
     override val rootPath: String get() = root.absolutePath
@@ -163,8 +185,8 @@ class PiCodingRuntime(
             emit(CodingEvent.Finished)
             return@flow
         }
-        if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
-            emit(CodingEvent.Failed("Кодинг-агент работает только с OpenAI-совместимыми серверами (сейчас выбран: ${profile.name})."))
+        if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION && subscriptionToken == null) {
+            emit(CodingEvent.Failed("Подписка ChatGPT не подключена в настройках движков."))
             emit(CodingEvent.Finished)
             return@flow
         }
@@ -248,6 +270,7 @@ class PiCodingRuntime(
         emit: suspend (CodingEvent) -> Unit,
         computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null,
     ): AttemptOutcome {
+        var tokenBroker: SubscriptionTokenBroker? = null
         val args = mutableListOf(
             node.absolutePath, piCli.absolutePath,
             "--mode", "json",
@@ -280,6 +303,10 @@ class PiCodingRuntime(
         var capturedId: String? = null
         var streamBroken: String? = null
         try {
+            if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
+                args += listOf("--extension", resourceScript("subscription-provider.mjs").absolutePath)
+                tokenBroker = SubscriptionTokenBroker(checkNotNull(subscriptionToken))
+            }
             process = ProcessBuilder(args)
                 .directory(dir)
                 .redirectError(stderrFile)
@@ -291,6 +318,7 @@ class PiCodingRuntime(
                         environment()["MAGICPAPER_COMPUTER_URL"] = computerBridge.url
                         environment()["MAGICPAPER_COMPUTER_TOKEN"] = computerBridge.token
                     }
+                    tokenBroker?.let { environment().putAll(it.environment); environment()["MAGICPAPER_PI_AI"] = piAiDirectory().toURI().toString() }
                 }
                 .start()
             // Persist ownership before sending a prompt that can change files.
@@ -354,6 +382,7 @@ class PiCodingRuntime(
                 launchError = e.message ?: e.javaClass.simpleName,
             )
         } finally {
+            tokenBroker?.close()
             stderrFile.delete()
             runningProcesses.remove(session.id, process)
             process?.let { running ->

@@ -12,7 +12,7 @@ actual fun createMagicPaperDependencies(): MagicPaperDependencies {
     val store = FileKeyValueStore()
     val computer = io.aequicor.magicpaper.data.computer.DesktopComputerUse()
     val subscription = CodexAppServerOpenAiSubscription(appJson, computerUse = computer)
-    val runtime = DesktopCodingRuntime(PiCodingRuntime(computerUse = computer), subscription)
+    val runtime = DesktopCodingRuntime(PiCodingRuntime(computerUse = computer, subscriptionToken = subscription::subscriptionAccessToken), subscription)
     val dependencies = buildDependencies(
         store = store,
         bridge = DesktopProfileBridge(),

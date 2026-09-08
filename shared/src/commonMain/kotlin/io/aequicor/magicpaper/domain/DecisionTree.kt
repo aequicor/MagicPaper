@@ -61,6 +61,7 @@ import kotlinx.serialization.Serializable
     /** The worker has returned its turn; the planner owns the next decision. */
     val awaitingPlanner: Boolean = false,
     val chatTurns: List<StageChatTurn> = emptyList(),
+    val engine: CodingEngine? = null,
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",
@@ -167,6 +168,7 @@ object DecisionCompiler {
 
     fun validateEdit(old: Plan, updated: Plan) {
         require(old.id == updated.id && old.projectId == updated.projectId) { "Нельзя изменить принадлежность плана" }
+        require(old.engine == updated.engine) { "Движок существующего плана изменить нельзя" }
         val graph = compile(updated)
         require(graph.valid) { graph.errors.joinToString("\n") }
         val oldGraph = compile(old)

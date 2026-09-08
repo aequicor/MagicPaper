@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.ui
 
 import io.aequicor.magicpaper.domain.*
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.CancellationException
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.Attachment
@@ -189,9 +190,7 @@ class MagicPaperViewModel(
             )
         }
         projects.firstOrNull()?.let { project -> openCodingProject(project.id) }
-        codingRuntime?.let { runtime ->
-            _state.update { it.copy(coding = it.coding.copy(runtime = runtime.status())) }
-        }
+        refreshCodingEngines()
         if (openAiSubscription != null && profiles.any { it.provider == ProviderType.OPENAI_SUBSCRIPTION }) {
             refreshOpenAiSubscription()
         }
@@ -257,6 +256,22 @@ class MagicPaperViewModel(
     }
 
     // ---- Навигация -------------------------------------------------------
+
+    fun openEnginesSettings() { _state.update { it.copy(screen = Screen.SETTINGS, enginesSettingsOpen = true) }; refreshCodingEngines() }
+    fun closeEnginesSettings() = _state.update { it.copy(enginesSettingsOpen = false) }
+    fun requestCodingSession() = _state.update { it.copy(coding = it.coding.copy(creatingSession = true)) }
+    fun cancelCodingSessionCreation() = _state.update { it.copy(coding = it.coding.copy(creatingSession = false)) }
+    fun refreshCodingEngines() {
+        val runtime = codingRuntime ?: return
+        scope.launch {
+            for (engine in CodingEngine.entries) {
+                val status = try { runtime.status(engine) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { RuntimeStatus(RuntimePhase.ERROR, e.message.orEmpty()) }
+                _state.update { it.copy(coding = it.coding.copy(engines = it.coding.engines + (engine to status))) }
+            }
+        }
+    }
 
     fun openModelsSettings() = _state.update { it.copy(screen = Screen.SETTINGS, modelsSettingsOpen = true) }
     fun closeModelsSettings() = _state.update { it.copy(modelsSettingsOpen = false) }
@@ -870,46 +885,32 @@ class MagicPaperViewModel(
 
     // ---- Проекты и код ------------------------------------------------------
 
-    /** Подготовка движка: автоустановка изолированных зависимостей. */
-    fun prepareCodingRuntime() {
+    fun prepareCodingRuntime(engine: CodingEngine = CodingEngine.PI) {
         val runtime = codingRuntime ?: return
-        if (_state.value.coding.installing) return
-        _state.update { it.copy(coding = it.coding.copy(installing = true)) }
+        if (engine in _state.value.coding.preparingEngines) return
+        _state.update { it.copy(coding = it.coding.copy(preparingEngines = it.coding.preparingEngines + engine)) }
         scope.launch {
-            runtime.ensureReady().collect { status ->
-                _state.update {
-                    it.copy(
-                        coding = it.coding.copy(
-                            runtime = status,
-                            installing = status.phase == RuntimePhase.CHECKING ||
-                                status.phase == RuntimePhase.INSTALLING,
-                        )
-                    )
+            try {
+                runtime.ensureReady(engine).collect { status ->
+                    _state.update { it.copy(coding = it.coding.copy(engines = it.coding.engines + (engine to status),
+                        runtime = if (engine == CodingEngine.PI) status else it.coding.runtime)) }
                 }
-            }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message) } }
+            finally { _state.update { it.copy(coding = it.coding.copy(preparingEngines = it.coding.preparingEngines - engine)) } }
         }
     }
 
-    /** Полное удаление изолированных зависимостей движка (останавливая все прогоны). */
-    fun uninstallCodingRuntime() {
+    fun uninstallCodingRuntime(engine: CodingEngine = CodingEngine.PI) {
         val runtime = codingRuntime ?: return
+        // Dependency removal is unavailable while any work is using the shared adapters.
+        if (_state.value.coding.sessions.any { it.running } || planningChat?.execution?.live?.value?.isNotEmpty() == true) {
+            _state.update { it.copy(notice = "Сначала остановите выполняющиеся сессии и планы.") }; return
+        }
         scope.launch {
-            runtime.abortAll()
-            runtime.uninstall()
-            codingJobs.values.forEach { it.cancel() }
-            codingJobs.clear()
-            _state.update {
-                it.copy(
-                    coding = it.coding.copy(
-                        runtime = runtime.status(),
-                        installing = false,
-                        sessions = it.coding.sessions.map { s ->
-                            s.copy(running = false, draft = io.aequicor.magicpaper.domain.CodingDraft())
-                        },
-                    ),
-                    notice = "Зависимости движка удалены из папки данных.",
-                )
-            }
+            try { runtime.uninstall(engine); refreshCodingEngines() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message) } }
         }
     }
 
@@ -933,8 +934,10 @@ class MagicPaperViewModel(
                 createdAt = Id.now(),
             )
             repo.save(project)
+            repo.sessions(project.id).forEach { repo.deleteSession(project.id, it.id) }
             _state.update { it.copy(coding = it.coding.copy(projects = repo.all())) }
             openCodingProject(project.id)
+            requestCodingSession()
         }
     }
 
@@ -1007,7 +1010,7 @@ class MagicPaperViewModel(
     // ---- Кодинг-сессии проекта ------------------------------------------------
 
     /** Новая кодинг-сессия в текущем проекте: отдельный контекст и журнал. */
-    fun addCodingSession() {
+    fun addCodingSession(engine: CodingEngine = _state.value.settings.defaultCodingEngine) {
         val repo = codingProjects ?: return
         val project = _state.value.coding.current ?: return
         scope.launch {
@@ -1016,6 +1019,7 @@ class MagicPaperViewModel(
                 id = Id.new(),
                 projectId = project.id,
                 name = "Сессия $ordinal",
+                engine = engine,
                 createdAt = Id.now(),
                 modelSelection = project.modelSelection ?: ProfileResolver.favoriteDefault(_state.value.settings, _state.value.availableLlmProfiles, coding = true),
             )
@@ -1025,6 +1029,7 @@ class MagicPaperViewModel(
                     coding = it.coding.copy(
                         sessions = it.coding.sessions + CodingSessionUi(session = session),
                         currentSessionId = session.id,
+                        creatingSession = false,
                     ),
                 )
             }

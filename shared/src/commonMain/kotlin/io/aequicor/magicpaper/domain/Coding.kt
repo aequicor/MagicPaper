@@ -3,6 +3,13 @@ package io.aequicor.magicpaper.domain
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
+@Serializable
+enum class CodingEngine(val title: String) { PI("pi"), CODEX("Codex") }
+
+/** Used only when migrating sessions created before engine selection existed. */
+fun legacyCodingEngine(profile: LlmProfile?): CodingEngine =
+    if (profile?.provider == ProviderType.OPENAI_SUBSCRIPTION) CodingEngine.CODEX else CodingEngine.PI
+
 /**
  * Проект кодинг-агента. Это не отдельный файл, а рабочая директория:
  * агент выполняет запросы внутри неё и читает её файлы.
@@ -46,6 +53,8 @@ data class CodingSession(
     val stageId: String? = null,
     val planningMode: Boolean = false,
     val searchProvider: SearchProvider = SearchProvider.AUTO,
+    /** Immutable after creation; null is only a legacy migration marker. */
+    val engine: CodingEngine? = null,
 
 )
 
@@ -459,6 +468,10 @@ interface CodingRuntime {
     suspend fun respondApproval(id: String, decision: CodingApprovalDecision) = Unit
     /** Verify engine prerequisites without starting a stage executor. */
     suspend fun preflight(profile: LlmProfile) = Unit
+    suspend fun preflight(engine: CodingEngine, profile: LlmProfile) = preflight(profile)
+    suspend fun status(engine: CodingEngine): RuntimeStatus = status()
+    fun ensureReady(engine: CodingEngine): Flow<RuntimeStatus> = ensureReady()
+    suspend fun uninstall(engine: CodingEngine) = uninstall()
     /** Reconcile a prior run before reusing its workspace after application restart. */
     suspend fun reconcile(sessionId: String) = Unit
     /** Поддерживается ли бэкенд на этой платформе (веб и Android — нет). */

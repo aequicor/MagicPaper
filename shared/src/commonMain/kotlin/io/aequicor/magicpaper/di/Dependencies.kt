@@ -180,4 +180,8 @@ internal fun buildDependencies(
  * передавать его в [buildDependencies].
  */
 fun codingProjectRepository(store: KeyValueStore, json: Json): CodingProjectRepository =
-    JsonCodingProjectRepository(store, json)
+    JsonCodingProjectRepository(store, json) { session, project ->
+        val profiles = JsonLlmProfileRepository(store, json).load()
+        val settings = JsonSettingsRepository(store, json).load()
+        io.aequicor.magicpaper.domain.legacyCodingEngine(io.aequicor.magicpaper.domain.ProfileResolver.coding(session, project, settings, profiles))
+    }

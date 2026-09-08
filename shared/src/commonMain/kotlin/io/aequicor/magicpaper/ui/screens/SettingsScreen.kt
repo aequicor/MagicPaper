@@ -73,6 +73,8 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         return
     }
 
+    if (state.enginesSettingsOpen) { EnginesSettings(vm, state); return }
+
     if (state.modelsSettingsOpen) { ModelsSettings(vm, state); return }
 
     Column(
@@ -143,6 +145,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         Spacer(Modifier.height(12.dp))
 
         NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }
+        NavEntry("⚙", "Движки", "pi, Codex и движок новых сессий") { vm.openEnginesSettings() }
 
         Spacer(Modifier.height(12.dp))
         Section("Поисковый движок")
@@ -378,7 +381,7 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
 
 /** Авторизация и квоты OpenAI-подписки. URL OAuth открывается вызывающим composable. */
 @Composable
-private fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
+internal fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
     val auth = state.openAiSubscription
     var showDetails by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
