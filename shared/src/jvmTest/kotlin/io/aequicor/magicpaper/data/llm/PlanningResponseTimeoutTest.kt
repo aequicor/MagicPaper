@@ -1,12 +1,34 @@
 package io.aequicor.magicpaper.data.llm
 
 import io.aequicor.magicpaper.domain.CodingStep
+import io.aequicor.magicpaper.domain.CodingStepKind
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlanningResponseTimeoutTest {
+    @Test fun messageDeltasReachTheChatBeforeItemOrTurnCompletion() = runTest {
+        val steps = mutableListOf<CodingStep>()
+        val turn = CodexAppServerOpenAiSubscription.TurnAccumulator(steps::add)
+        turn.textDelta("Проверяю ", "comment")
+        turn.textDelta("файлы", "comment")
+        assertFalse(turn.done.isCompleted)
+        assertEquals("Проверяю файлы", steps.last().title)
+        assertEquals("comment", steps.last().callId)
+        turn.accept("Проверяю файлы проекта", "commentary", "comment")
+        assertFalse(steps.last().running)
+        turn.textDelta("Готово", "final")
+        assertEquals("Готово", steps.last().title)
+        assertEquals("final", steps.last().callId)
+        assertEquals(CodingStepKind.ANSWER, steps.last().kind)
+        turn.accept("Готово!", "final_answer", "final")
+        assertFalse(turn.done.isCompleted)
+        assertEquals("Готово!", steps.last().title)
+        turn.finish(null)
+        assertEquals("Готово!", turn.awaitResult(0))
+    }
+
     @Test fun activeResponseCanExceedTimeoutAndReportsProgress() = runTest {
         val steps = mutableListOf<CodingStep>()
         val turn = CodexAppServerOpenAiSubscription.TurnAccumulator(steps::add)
@@ -18,7 +40,7 @@ class PlanningResponseTimeoutTest {
             runCurrent()
             assertTrue(result.isActive)
         }
-        assertEquals("Модель формирует ответ… Получено 12 символов", steps.last().title)
+        assertEquals("partpartpart", steps.last().title)
         assertTrue(steps.last().running)
         turn.accept("Complete plan", "final_answer")
         turn.finish(null)

@@ -472,14 +472,21 @@ internal fun ProjectsPanel(
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         val collapsed = remember { mutableStateMapOf<String, Boolean>() }
+        // Disclosure is local UI state: never reload a project or reset its active session.
+        // Selecting another project opens its list; status updates preserve disclosure.
+        var projectCollapsed by remember(ui.current?.id) { mutableStateOf(false) }
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
             var position = 0
             ui.projects.forEach { project ->
-                val expanded = project.id == ui.current?.id
+                val selected = project.id == ui.current?.id
+                val expanded = selected && !projectCollapsed
                 val own = ui.sessionsOf(project.id)
                 val projectHeader: @Composable (Boolean) -> Unit = { compact ->
-                    ProjectRow(project, expanded, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
-                        { onSelectProject(project.id) }, { onDeleteProject(project.id) }, compact, { onDeleteAllSessions(project.id) })
+                    ProjectRow(project, selected, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
+                        {
+                            if (selected) projectCollapsed = !projectCollapsed
+                            else onSelectProject(project.id)
+                        }, { onDeleteProject(project.id) }, compact, { onDeleteAllSessions(project.id) })
                 }
                 val projectPosition = position
                 stickyHeader(key = "project-${project.id}") {
@@ -1019,7 +1026,7 @@ private fun ThinkingStepRow(step: CodingStep) {
     }
 }
 
-/** Строка рассуждения модели: сворачиваемый «💭 …» с полным текстом по тапу. */
+/** Команда или действие: часы до завершения, полный текст и вывод по тапу. */
 @Composable
 private fun ToolStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable(step.callId.ifBlank { step.title }) { mutableStateOf(false) }
@@ -1038,7 +1045,7 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Row(
-            Modifier.then(if (hasDetail) Modifier.chatDisclosure { expanded = !expanded } else Modifier),
+            Modifier.fillMaxWidth().chatDisclosure { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Canvas(
@@ -1079,19 +1086,17 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
                 maxLines = if (expanded) Int.MAX_VALUE else 2,
                 modifier = Modifier.weight(1f),
             )
-            if (hasDetail) {
-                Text(
-                    if (expanded) "▴" else "▾",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (step.running && live && step.result.isBlank()) {
             Text(
-                "выполняется…",
+                if (expanded) "▴" else "▾",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (step.running && live) {
+            Text(
+                if (step.kind == CodingStepKind.EXEC) "Выполняется команда…" else "Выполняется действие…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (expanded && hasDetail) {

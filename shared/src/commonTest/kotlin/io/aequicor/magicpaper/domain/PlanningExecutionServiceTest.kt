@@ -17,7 +17,11 @@ class PlanningExecutionServiceTest {
     private val pass = object : MilestoneVerifier {
         override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "checked")
     }
-    private class Runtime(private val gate: CompletableDeferred<Unit>? = null, private val failure: String? = null) : CodingRuntime {
+    private class Runtime(
+        private val gate: CompletableDeferred<Unit>? = null,
+        private val failure: String? = null,
+        private val commandGate: CompletableDeferred<Unit>? = null,
+    ) : CodingRuntime {
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
         override val supported = true; override val rootPath = "/fake"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
@@ -31,6 +35,11 @@ class PlanningExecutionServiceTest {
             emit(CodingEvent.ThinkingDelta("Проверяю критерии"))
             emit(CodingEvent.ToolStarted("read", "Чтение проекта", "read-1"))
             emit(CodingEvent.ToolFinished("read", false, "read-1", "Файлы прочитаны"))
+            if (commandGate != null) {
+                emit(CodingEvent.ToolStarted("command", "./gradlew :shared:jvmTest", "command-1", isExec = true))
+                commandGate.await()
+                emit(CodingEvent.ToolFinished("command", false, "command-1", "BUILD SUCCESSFUL"))
+            }
             gate?.await()
             if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText("Verified result"))
             emit(CodingEvent.Finished)
@@ -53,6 +62,26 @@ class PlanningExecutionServiceTest {
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
+
+    @Test fun commandAppearsInLiveMessageBeforeOutputAndUpdatesOnCompletion() = runTest {
+        val commandGate = CompletableDeferred<Unit>()
+        val (store, service) = fixture(Runtime(gate = CompletableDeferred(), commandGate = commandGate))
+        store.save(plan(stage("a")))
+        service.start(project.id); runCurrent()
+        val attemptId = store.planFor(project.id)!!.milestones.single().attempts.single().id
+        val running = service.live.value[attemptId]!!.steps.single { it.kind == CodingStepKind.EXEC }
+        assertTrue(running.running)
+        assertContains(running.title, "./gradlew :shared:jvmTest")
+        assertEquals("", running.result)
+
+        commandGate.complete(Unit); runCurrent()
+        val finished = service.live.value[attemptId]!!.steps.single { it.kind == CodingStepKind.EXEC }
+        assertEquals(running.callId, finished.callId)
+        assertFalse(finished.running)
+        assertTrue(finished.ok)
+        assertEquals("BUILD SUCCESSFUL", finished.result)
+        service.stop(project.id); runCurrent()
+    }
 
     @Test fun parallelStagesStartTogetherAndJoinWaits() = runTest {
         val gate = CompletableDeferred<Unit>(); val runtime = Runtime(gate)
@@ -324,6 +353,96 @@ class PlanningExecutionServiceTest {
         assertTrue(runtime.calls.isEmpty())
         assertEquals(IssueKind.UNCERTAIN, store.planFor(project.id)!!.issue!!.kind)
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
+    private fun rejectedFinalPlan(): Plan {
+        val issue = PlanningIssue(IssueKind.VERIFICATION, "Integration is missing", requiresUser = true)
+        val done = stage("a").copy(status = MilestoneStatus.DONE, report = "Original work",
+            attempts = listOf(StageAttempt("done", "worker", StageAssignment("agent", "m"), phase = AttemptPhase.COMPLETE)))
+        return DecisionCompiler.migrate(plan(done)).copy(intent = ExecutionIntent.RUN, runId = "run",
+            phase = ExecutionPhase.WAITING, status = PlanStatus.FAILED, issue = issue,
+            finalAttempt = StageAttempt("run-final", "run-final-session", StageAssignment("agent", "m"),
+                phase = AttemptPhase.VERIFYING, report = "Original verification", error = issue, transportRetries = 2))
+    }
+
+    private fun withFollowup(plan: Plan): Plan = plan.copy(
+        milestones = plan.milestones + stage("followup", listOf("a")),
+        tree = plan.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + "followup") else it } +
+            DecisionNode("followup", "Followup", DecisionKind.STAGE, stageId = "followup"))
+
+    @Test fun rejectedFinalCanBeExtendedAndRecheckedWithoutRepeatingCompletedWork() = runTest {
+        val (store, service, runtime) = fixture()
+        store.save(rejectedFinalPlan())
+        val base = store.planFor(project.id)!!
+        val revised = service.applyProposal(base, withFollowup(base))
+        assertNull(revised.issue)
+        assertNull(revised.finalAttempt)
+        assertEquals(listOf(base.finalAttempt), revised.finalAttemptHistory)
+        assertEquals(base.milestones.single(), revised.milestones.first())
+        // A reload must retain the previous report and its retry budget.
+        assertEquals(revised, json.decodeFromString<Plan>(json.encodeToString(revised)))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val complete = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, complete.status)
+        assertEquals(2, runtime.calls.size)
+        assertFalse("worker" in runtime.calls)
+        assertEquals("run-final-2-session", runtime.calls.last())
+        assertEquals(base.finalAttempt, complete.finalAttemptHistory.single())
+    }
+
+    @Test fun manualExtensionPreservesPauseAndCompletedStageHistory() = runTest {
+        val (store, service, runtime) = fixture()
+        store.save(rejectedFinalPlan().copy(intent = ExecutionIntent.PAUSE))
+        val base = store.planFor(project.id)!!
+        val revised = service.edit(base.id, base.revision, ::withFollowup)
+        assertEquals(ExecutionIntent.PAUSE, revised.intent)
+        assertNull(revised.finalAttempt)
+        assertEquals(base.milestones.single(), revised.milestones.first())
+        service.bootstrap(); advanceTimeBy(6000); runCurrent()
+        assertTrue(runtime.calls.isEmpty())
+    }
+
+    @Test fun dialogueOrInactiveChangesDoNotDismissFailedFinalVerification() = runTest {
+        val (store, service) = fixture()
+        store.save(rejectedFinalPlan())
+        val base = store.planFor(project.id)!!
+        val discussed = service.applyProposal(base, base.copy(dialogue = listOf(PlanningMessage("reply", "assistant", "Уточните требования"))))
+        assertEquals(base.finalAttempt, discussed.finalAttempt)
+        assertEquals(base.issue, discussed.issue)
+        val relabelled = service.edit(discussed.id, discussed.revision) { p ->
+            p.copy(tree = p.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(title = "New label") else it })
+        }
+        assertEquals(base.finalAttempt, relabelled.finalAttempt)
+        assertEquals(base.issue, relabelled.issue)
+    }
+
+    @Test fun extensionCannotRewriteCompletedWorkOrRaceActiveFinalVerification() = runTest {
+        val (store, service) = fixture()
+        store.save(rejectedFinalPlan())
+        val base = store.planFor(project.id)!!
+        assertFailsWith<IllegalArgumentException> {
+            service.edit(base.id, base.revision) { p -> withFollowup(p).let { it.copy(milestones = it.milestones.map { m -> m.copy(report = "Rewritten") }) } }
+        }
+        assertEquals(base, store.planFor(project.id))
+        // The LLM started while blocked, but a check resumed before its reply arrived.
+        store.update(base.id) { it.copy(phase = ExecutionPhase.VERIFYING, issue = null) }
+        assertFailsWith<IllegalArgumentException> { service.applyProposal(base, withFollowup(base)) }
+        assertEquals(base.finalAttempt, store.planFor(project.id)!!.finalAttempt)
+    }
+
+    @Test fun extensionCannotClearUncertainCommandsOrAnAppliedWorkspace() = runTest {
+        val (store, service) = fixture()
+        val rejected = rejectedFinalPlan()
+        for (blocked in listOf(
+            rejected.copy(finalAttempt = rejected.finalAttempt!!.copy(pendingTool = "deploy", pendingToolExternal = true)),
+            rejected.copy(issue = PlanningIssue(IssueKind.UNCERTAIN, "Unknown result", requiresUser = true)),
+            rejected.copy(workspace = PlanWorkspace("/fake", "/fake", applied = true)),
+        )) {
+            store.save(blocked)
+            val base = store.planFor(project.id)!!
+            assertFailsWith<IllegalArgumentException> { service.applyProposal(base, withFollowup(base)) }
+            assertEquals(base, store.planFor(project.id))
+        }
     }
 
     @Test fun finalVerifierThrownErrorRetainsAttemptAndRetryBudget() = runTest {
