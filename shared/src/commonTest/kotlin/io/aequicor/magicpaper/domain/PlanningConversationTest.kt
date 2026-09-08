@@ -32,7 +32,7 @@ class PlanningConversationTest {
             }
         }
         val progress = mutableListOf<String>()
-        val result = PlanComposer(gateway, searchEngine = search).refine(plan, "Сначала задай вопросы", profile,
+        val result = textPlanComposer(gateway, searchEngine = search).refine(plan, "Сначала задай вопросы", profile,
             listOf(profile), emptyList(), AppSettings(searchProvider = SearchProvider.GOOGLE), onProgress = progress::add)
         assertEquals(profile, usedProfile)
         assertEquals(SearchProvider.WIKIPEDIA, usedSettings?.searchProvider)
@@ -55,7 +55,7 @@ class PlanningConversationTest {
             override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> = error("Must not search")
         }
         val failure = assertFailsWith<IllegalArgumentException> {
-            PlanComposer(gateway, searchEngine = search).refine(plan.copy(searchProvider = SearchProvider.QUERIT),
+            textPlanComposer(gateway, searchEngine = search).refine(plan.copy(searchProvider = SearchProvider.QUERIT),
                 "Questions", profile, listOf(profile), emptyList(), AppSettings())
         }
         assertContains(failure.message.orEmpty(), "API-ключ")
@@ -66,7 +66,7 @@ class PlanningConversationTest {
             override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>) = """{"reply":"Какой формат экспорта нужен?"}"""
         }
         val existing = plan.copy(wizardStep = PlanningStep.REVIEW, milestones = listOf(Milestone("export", "Экспорт")))
-        val result = PlanComposer(gateway).refine(existing, "Хочу уточнить", profile, listOf(profile), emptyList())
+        val result = textPlanComposer(gateway).refine(existing, "Хочу уточнить", profile, listOf(profile), emptyList())
         assertEquals(PlanningStep.CLARIFY, result.currentPlanningStep)
         assertEquals(existing.milestones, result.milestones)
     }
@@ -90,7 +90,7 @@ class PlanningConversationTest {
         }
         val activity = mutableListOf<CodingStep>()
         val router = io.aequicor.magicpaper.data.llm.RoutingLlmGateway(mapOf(profile.provider to gateway))
-        PlanComposer(router).refine(plan, "Вопросы", profile, listOf(profile), emptyList(), onActivity = activity::add)
+        textPlanComposer(router).refine(plan, "Вопросы", profile, listOf(profile), emptyList(), onActivity = activity::add)
         assertEquals("Уточняю критерии", activity.single().title)
     }
 

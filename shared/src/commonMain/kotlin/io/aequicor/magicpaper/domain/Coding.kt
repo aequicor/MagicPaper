@@ -381,17 +381,18 @@ class CodingRunRecorder {
         return snapshot + live
     }
 
-    fun draft(active: Boolean): CodingDraft =
-        CodingDraft(
-            steps = timeline(),
+    fun draft(active: Boolean): CodingDraft {
+        val timeline = timeline()
+        return CodingDraft(
+            steps = timeline,
             failedMessage = failed,
             active = active,
             awaitingModel = active && awaiting,
-            thinking = thinking.toString().ifBlank {
-                steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.THINKING && it.id in sourceSteps.values }?.title.orEmpty()
-            },
+            thinking = if (thinking.isNotBlank()) timeline.last { it.kind == CodingStepKind.THINKING }.title else
+                steps.lastOrNull()?.takeIf { it.kind == CodingStepKind.THINKING && it.id in sourceSteps.values }?.title.orEmpty(),
             timelineId = timelineId,
         )
+    }
 
     fun message(id: String, createdAt: Long): CodingMessage {
         flushThinking()
@@ -627,6 +628,13 @@ interface CodingRuntime {
         profile: LlmProfile?,
         attachments: List<Attachment> = emptyList(),
     ): Flow<CodingEvent>
+
+    /** Fresh planning context with enforced read-only tools; never falls back to execution. */
+    fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> =
+        kotlinx.coroutines.flow.flow {
+            emit(CodingEvent.Failed("Чтение проекта при планировании недоступно на этой платформе."))
+            emit(CodingEvent.Finished)
+        }
 
     /** Прервать прогон конкретной сессии (остановить её процесс агента). */
     fun abort(sessionId: String)

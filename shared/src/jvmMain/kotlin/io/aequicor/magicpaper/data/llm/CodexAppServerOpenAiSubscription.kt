@@ -53,6 +53,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
+import io.aequicor.magicpaper.domain.forModel
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
@@ -289,6 +291,7 @@ class CodexAppServerOpenAiSubscription(
         attachments: List<io.aequicor.magicpaper.domain.Attachment>,
         modelProvider: String = "openai",
         providerConfig: JsonObject = JsonObject(emptyMap()),
+        planning: Boolean = false,
     ): Flow<CodingEvent> = channelFlow {
         var confirmedFinished = false
         var computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null
@@ -297,14 +300,19 @@ class CodexAppServerOpenAiSubscription(
             check(File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
             check(profile.configured) { "Не настроено подключение модели." }
             if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
-            val codingProfile = profile.forCoding()
-            val permissions = CodexCodingPermissions(Paths.get(project.path))
-            computerBridge = computerUse?.bridge(session.id)
-            questionnaireBridge = QuestionnaireBridge(questionnaireRegistry, session)
-            val threadConfig = questionnaireBridge.codexConfig(io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(JsonObject(permissions.threadConfig() + providerConfig), computerBridge))
-            val instructions = listOf(CODING_INSTRUCTIONS, QuestionnaireTool.instructions, codingProfile.advanced.systemPromptOverride)
+            val codingProfile = if (planning) profile.forModel() else profile.forCoding()
+            val permissions = if (planning) null else CodexCodingPermissions(Paths.get(project.path))
+            fun JsonObjectBuilder.applyApprovals() {
+                if (permissions != null) with(permissions) { approvals() } else with(CodexPlanningPermissions) { approvals() }
+            }
+            computerBridge = if (planning) null else computerUse?.bridge(session.id)
+            val baseConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(
+                if (planning) JsonObject(providerConfig + CodexPlanningPermissions.threadConfig()) else JsonObject(permissions!!.threadConfig() + providerConfig), computerBridge)
+            questionnaireBridge = if (planning) null else QuestionnaireBridge(questionnaireRegistry, session)
+            val threadConfig = questionnaireBridge?.codexConfig(baseConfig) ?: baseConfig
+            val instructions = listOf(if (planning) "" else QuestionnaireTool.instructions, if (planning) io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS else CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride)
                 .filter { it.isNotBlank() }.joinToString("\n\n")
-            val resumed = session.piSessionId.takeIf { it.isNotBlank() }?.let { oldId ->
+            val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
                 if (computerUse != null && oldId in codingThreads) {
                     request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })
                     codingThreads.remove(oldId)
@@ -315,7 +323,7 @@ class CodexAppServerOpenAiSubscription(
                         put("threadId", oldId)
                         put("cwd", project.path)
                         put("model", codingProfile.modelId)
-                        with(permissions) { approvals() }
+                        applyApprovals()
                         put("sandbox", "workspace-write")
                         put("modelProvider", modelProvider)
                         put("config", threadConfig)
@@ -329,18 +337,19 @@ class CodexAppServerOpenAiSubscription(
                 buildJsonObject {
                     put("cwd", project.path)
                     put("model", codingProfile.modelId)
-                    with(permissions) { approvals() }
-                    put("sandbox", "workspace-write")
+                    applyApprovals()
+                    put("sandbox", if (planning) "read-only" else "workspace-write")
                     put("modelProvider", modelProvider)
                     put("config", threadConfig)
-                    put("serviceName", "MagicPaper Coding")
+                    put("serviceName", if (planning) "MagicPaper Planning" else "MagicPaper Coding")
+                    if (planning) put("baseInstructions", io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS)
                     put("developerInstructions", instructions)
                 },
             ).jsonObject["thread"]?.jsonObject?.requireString("id")
                 ?: error("Codex не вернул идентификатор coding-сессии.")
             codingThreads.add(threadId)
             send(CodingEvent.SessionStarted(threadId))
-            val accumulator = CodingAccumulator()
+            val accumulator = CodingAccumulator(planning)
             approvalBroker.clearTurn(threadId)
             questionnaireBroker.clearTurn(threadId)
             codingRuns[threadId] = accumulator
@@ -357,9 +366,9 @@ class CodexAppServerOpenAiSubscription(
                     effort?.let { put("effort", it) }
                     // Request readable summaries explicitly instead of inheriting a disabled default.
                     put("summary", "auto")
-                    with(permissions) { approvals() }
+                    applyApprovals()
                     put("cwd", project.path)
-                    put("sandboxPolicy", permissions.sandboxPolicy())
+                    put("sandboxPolicy", permissions?.sandboxPolicy() ?: CodexPlanningPermissions.sandboxPolicy())
                 },
             ).jsonObject
             accumulator.turnId = turn["turn"]?.jsonObject?.string("id")
@@ -600,6 +609,7 @@ class CodexAppServerOpenAiSubscription(
         if (params == null) return false
         val threadId = params.string("threadId") ?: return false
         val run = codingRuns[threadId]?.takeUnless { it.done.isCompleted } ?: return false
+        if (run.planning) return false // Read-only requests must never open the coding approval broker.
         val session = codingContexts[threadId] ?: return false
         val turnId = params.string("turnId") ?: return false
         if (run.turnId != null && run.turnId != turnId) return false
@@ -657,7 +667,10 @@ class CodexAppServerOpenAiSubscription(
                 codingRuns[params.string("threadId")]?.emit(CodingEvent.TextDelta(delta, params.string("itemId").orEmpty()))
             }
             "item/reasoning/textDelta", "item/reasoning/summaryTextDelta" -> {
-                codingRuns[params.string("threadId")]?.reasoningDelta(params, summary = method == "item/reasoning/summaryTextDelta")
+                codingRuns[params.string("threadId")]?.let { run ->
+                    if (run.planning && method == "item/reasoning/textDelta") run.emit(CodingEvent.Notice(""))
+                    else run.reasoningDelta(params, summary = method == "item/reasoning/summaryTextDelta")
+                }
                 turns[params.string("threadId")]?.heartbeat()
                 // Planning displays the provider's public reasoning summary only.
                 if (method == "item/reasoning/summaryTextDelta") turns[params.string("threadId")]?.summary(params.string("delta").orEmpty(),
@@ -797,7 +810,7 @@ class CodexAppServerOpenAiSubscription(
         val text: String get() = parts.values.joinToString("\n\n")
     }
 
-    private class CodingAccumulator {
+    private class CodingAccumulator(val planning: Boolean = false) {
         private class Reasoning {
             val content = IndexedText()
             val summary = IndexedText()
@@ -860,7 +873,7 @@ class CodexAppServerOpenAiSubscription(
                         .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.joinToString("\n\n")
                     val streamed = reasoning.remove(id)
                     val summary = text("summary").ifBlank { streamed?.summary?.text.orEmpty() }
-                    val content = text("content").ifBlank { streamed?.content?.text.orEmpty() }
+                    val content = if (planning) "" else text("content").ifBlank { streamed?.content?.text.orEmpty() }
                     if (summary.isNotBlank()) emit(CodingEvent.FinalThinking(summary, id, summary = true))
                     if (content.isNotBlank()) emit(CodingEvent.FinalThinking(content, id))
                 }

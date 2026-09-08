@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.data.planning
 
 import io.aequicor.magicpaper.domain.checkpointMessageEvents
 import io.aequicor.magicpaper.domain.ModelDossier
+import io.aequicor.magicpaper.domain.DecisionCompiler
 import io.aequicor.magicpaper.domain.Plan
 import io.aequicor.magicpaper.domain.resolvePlan
 import io.aequicor.magicpaper.domain.PlanningRepository
@@ -41,42 +42,48 @@ class PlanningStore(private val repo: PlanningRepository) : PlanningRepository {
             val restored = repo.plans()
             restored.firstOrNull()?.let { repo.save(it) }
             _plans.value = restored
+            plansLoaded = true
             _failure.value = null
         }
     }
 
     suspend fun update(projectId: String, expectedRevision: Long? = null, change: (Plan) -> Plan): Plan = lock.withLock {
         requireWritable()
-        val old = persisted { repo.planFor(projectId) } ?: error("План не найден")
+        val old = currentPlans().resolvePlan(projectId) ?: error("План не найден")
         require(expectedRevision == null || old.revision == expectedRevision) { "План изменился; повторите правку" }
         val at = Id.now()
         val next = change(old).checkpointMessageEvents(old, at).copy(revision = old.revision + 1, updatedAt = at)
         persisted { repo.save(next) }
-        refreshPlans()
+        publishSaved(next)
         next
     }
 
     private val _plans = MutableStateFlow<List<Plan>>(emptyList())
     val plans: StateFlow<List<Plan>> = _plans.asStateFlow()
+    // This store owns plan writes. Keep one canonical snapshot between commits:
+    // rereading JSON on every status lookup also forces deep equality on the UI thread.
+    private var plansLoaded = false
 
     private val _dossiers = MutableStateFlow<List<ModelDossier>>(emptyList())
     val dossiers: StateFlow<List<ModelDossier>> = _dossiers.asStateFlow()
 
-    override suspend fun plans(): List<Plan> = lock.withLock { refreshPlans() }
+    override suspend fun plans(): List<Plan> = lock.withLock { currentPlans() }
 
-    override suspend fun planFor(projectId: String): Plan? = lock.withLock { refreshPlans().resolvePlan(projectId) }
+    override suspend fun planFor(projectId: String): Plan? = lock.withLock { currentPlans().resolvePlan(projectId) }
 
     override suspend fun save(plan: Plan) = lock.withLock {
         requireWritable()
-        persisted { repo.save(plan.checkpointMessageEvents(repo.planFor(plan.id), Id.now())) }
-        refreshPlans()
+        val saved = plan.checkpointMessageEvents(currentPlans().resolvePlan(plan.id), Id.now())
+        persisted { repo.save(saved) }
+        publishSaved(saved)
         Unit
     }
 
     override suspend fun deletePlan(projectId: String) = lock.withLock {
         requireWritable()
+        val target = currentPlans().resolvePlan(projectId) ?: return@withLock
         persisted { repo.deletePlan(projectId) }
-        refreshPlans()
+        _plans.value = _plans.value.filterNot { it.id == target.id }
         Unit
     }
 
@@ -87,16 +94,25 @@ class PlanningStore(private val repo: PlanningRepository) : PlanningRepository {
         refreshDossiers()
     }
 
-    override suspend fun wipe() {
-        repo.wipe()
-        refreshPlans()
+    override suspend fun wipe() = lock.withLock {
+        persisted { repo.wipe() }
+        _plans.value = emptyList()
+        plansLoaded = true
         refreshDossiers()
+        Unit
     }
 
-    private suspend fun refreshPlans(): List<Plan> {
-        val list = persisted { repo.plans() }
-        _plans.value = list
-        return list
+    private suspend fun currentPlans(): List<Plan> {
+        if (!plansLoaded) {
+            _plans.value = persisted { repo.plans() }
+            plansLoaded = true
+        }
+        return _plans.value
+    }
+
+    private fun publishSaved(plan: Plan) {
+        _plans.value = (_plans.value.filterNot { it.id == plan.id } + DecisionCompiler.migrate(plan))
+            .sortedByDescending { it.updatedAt }
     }
 
     private suspend fun refreshDossiers(): List<ModelDossier> {

@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.domain.OrchestrationService
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
+import io.aequicor.magicpaper.data.coding.BackgroundCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
 import io.aequicor.magicpaper.data.llm.AnthropicGateway
@@ -129,13 +130,16 @@ internal fun buildDependencies(
     // Планирование: свой стор поверх того же хранилища (как у навыков);
     // исполнитель — поверх кодинг-рантайма, проверка — моделью через шлюз.
     val planningStore = PlanningStore(JsonPlanningRepository(store, json))
+    val planComposer = PlanComposer(gateway, json, search,
+        io.aequicor.magicpaper.domain.RuntimePlanningGateway(codingRuntime ?: NoopCodingRuntime),
+        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } })
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, codingRuntime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
         LlmMilestoneVerifier(gateway, json), planningWorkspace,
     )
     val planner = CodingPlanningPlugin(
         store = planningStore,
-        composer = PlanComposer(gateway, json, search),
+        composer = planComposer,
         researcher = DossierResearcher(gateway, search, json),
         execution = planningExecution,
         runtime = codingRuntime ?: NoopCodingRuntime,
@@ -151,7 +155,7 @@ internal fun buildDependencies(
         .apply { experiencePlugin?.let { register(it(gateway, profileRepo)) } }
         .register(planner)
     platformPlugins.forEach(registry::register)
-    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, PlanComposer(gateway, json, search), gateway) }
+    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway) }
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,
@@ -187,8 +191,8 @@ internal fun buildDependencies(
  * передавать его в [buildDependencies].
  */
 fun codingProjectRepository(store: KeyValueStore, json: Json): CodingProjectRepository =
-    JsonCodingProjectRepository(store, json) { session, project ->
+    BackgroundCodingProjectRepository(JsonCodingProjectRepository(store, json) { session, project ->
         val profiles = JsonLlmProfileRepository(store, json).load()
         val settings = JsonSettingsRepository(store, json).load()
         io.aequicor.magicpaper.domain.legacyCodingEngine(io.aequicor.magicpaper.domain.ProfileResolver.coding(session, project, settings, profiles))
-    }
+    })

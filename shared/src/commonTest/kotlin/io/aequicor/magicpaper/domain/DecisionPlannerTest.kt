@@ -27,7 +27,7 @@ class DecisionPlannerTest {
     private fun response(p: Plan) = """{"reply":"Evaluated alternatives","tree":${Json.encodeToString(ListSerializer(DecisionNode.serializer()), p.tree)},"milestones":${Json.encodeToString(ListSerializer(Milestone.serializer()), p.milestones)}}"""
 
     @Test fun prioritiesChangeRecommendationAndManualChoiceIsPreserved() {
-        val planner = DecisionPlanner(Gateway())
+        val planner = DecisionPlanner()
         val p = plan()
         assertEquals("one", planner.recommendChoices(p).tree.first { it.id == "choice" }.selectedOptionId)
         val fast = p.copy(priorities = PlanningPriorities(quality = 0, speed = 3, economy = 0, safety = 0))
@@ -41,7 +41,7 @@ class DecisionPlannerTest {
         val assignment = StageAssignment("agent", "gpt-5.4", EffortSelection.of(ReasoningEffort.LOW), manual = true)
         val original = plan().let { p -> p.copy(milestones = p.milestones.map { if (it.id == "a") it.copy(assignment = assignment) else it }) }
         val gateway = Gateway("{broken", response(original))
-        val result = PlanComposer(gateway).refine(original, "Develop alternatives", profile, listOf(profile), emptyList())
+        val result = textPlanComposer(gateway).refine(original, "Develop alternatives", profile, listOf(profile), emptyList())
         assertEquals(2, gateway.calls)
         assertEquals(assignment, result.milestones.first { it.id == "a" }.assignment)
         assertTrue(DecisionCompiler.compile(result).valid)
@@ -50,7 +50,7 @@ class DecisionPlannerTest {
     @Test fun correctionLimitLeavesTheLastValidPlanUntouched() = runTest {
         val gateway = Gateway("{}")
         val original = plan()
-        assertFailsWith<IllegalStateException> { PlanComposer(gateway).refine(original, "Refine", profile, listOf(profile), emptyList()) }
+        assertFailsWith<IllegalStateException> { textPlanComposer(gateway).refine(original, "Refine", profile, listOf(profile), emptyList()) }
         assertEquals(3, gateway.calls)
         assertEquals(plan(), original)
     }
@@ -68,7 +68,7 @@ class DecisionPlannerTest {
             dialogue = listOf(PlanningMessage("user", "user", "Keep all acceptance criteria",
                 activity = listOf(CodingStep(CodingStepKind.THINKING, log)))))
         val gateway = Gateway("""{"reply":"Уточните модель"}""")
-        val result = PlanComposer(gateway).refine(original, "Change models", profile, listOf(profile), emptyList())
+        val result = textPlanComposer(gateway).refine(original, "Change models", profile, listOf(profile), emptyList())
         val context = gateway.requests.single().last().content
         assertTrue(context.length < 20_000, "Only current specifications should be sent, got ${context.length} characters")
         assertFalse(context.contains("execution-log-"))
@@ -87,7 +87,7 @@ class DecisionPlannerTest {
     @Test fun repeatedRepairsReplacePreviousLargeResponses() = runTest {
         val gateway = Gateway(" ".repeat(510_000) + "{}")
         assertFailsWith<IllegalStateException> {
-            PlanComposer(gateway).refine(plan(), "Refine", profile, listOf(profile), emptyList())
+            textPlanComposer(gateway).refine(plan(), "Refine", profile, listOf(profile), emptyList())
         }
         assertEquals(3, gateway.calls)
         assertTrue(gateway.requests.drop(1).all { request -> request.count { it.role == LlmChatRole.ASSISTANT } == 1 })
@@ -96,7 +96,7 @@ class DecisionPlannerTest {
     @Test fun oversizedEssentialContextFailsBeforeCallingTheModel() = runTest {
         val gateway = Gateway("{}")
         val failure = assertFailsWith<IllegalArgumentException> {
-            PlanComposer(gateway).refine(plan(), "x".repeat(1_048_577), profile, listOf(profile), emptyList())
+            textPlanComposer(gateway).refine(plan(), "x".repeat(1_048_577), profile, listOf(profile), emptyList())
         }
         assertContains(failure.message!!, "Контекст планирования слишком большой")
         assertEquals(0, gateway.calls)
@@ -104,7 +104,7 @@ class DecisionPlannerTest {
 
     @Test fun refinementKeepsDurationsWhenTheResponseOmitsThem() = runTest {
         val original = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(complexityPoints = 2.5) }) }
-        val result = PlanComposer(Gateway(response(plan()))).refine(original, "Refine", profile, listOf(profile), emptyList())
+        val result = textPlanComposer(Gateway(response(plan()))).refine(original, "Refine", profile, listOf(profile), emptyList())
         assertTrue(result.milestones.all { it.complexityPoints == 2.5 })
         val restored = Json.decodeFromString(Plan.serializer(), Json.encodeToString(Plan.serializer(), result))
         assertEquals(result, restored)
@@ -115,7 +115,7 @@ class DecisionPlannerTest {
         val original = plan()
         val proposal = original.copy(tree = original.tree.map { if (it.id == "b") it.copy(title = "unwanted change") else it },
             milestones = original.milestones.map { it.copy(description = "proposed change") })
-        val result = PlanComposer(Gateway(response(proposal))).recalculate(original, "a", profile, listOf(profile), emptyList())
+        val result = textPlanComposer(Gateway(response(proposal))).recalculate(original, "a", profile, listOf(profile), emptyList())
         assertEquals(original.tree.first { it.id == "b" }, result.tree.first { it.id == "b" })
         assertEquals(original.milestones.first { it.id == "b" }, result.milestones.first { it.id == "b" })
         assertEquals("proposed change", result.milestones.first { it.id == "a" }.description)
@@ -133,7 +133,7 @@ class DecisionPlannerTest {
         val p = profile.copy(modelLibraryVersion = 1, favoriteModels = listOf("gpt-5.4"))
         val proposal = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(
             assignment = StageAssignment(p.id, "gpt-5.4", EffortSelection.of(ReasoningEffort.LOW), explanation = "A small edit")) }) }
-        val result = PlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", p, listOf(p), emptyList())
+        val result = textPlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", p, listOf(p), emptyList())
         assertTrue(result.milestones.all { it.assignment?.modelId == "gpt-5.4" && it.assignment?.effort?.level == ReasoningEffort.LOW })
     }
 
@@ -141,7 +141,7 @@ class DecisionPlannerTest {
         val p = profile.copy(modelId = "not-favorite", favoriteModels = listOf("gpt-5.4"), modelLibraryVersion = 1)
         val proposal = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(
             assignment = StageAssignment(p.id, "not-favorite", EffortSelection.of(ReasoningEffort.HIGH))) }) }
-        val result = PlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", p, listOf(p), emptyList())
+        val result = textPlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", p, listOf(p), emptyList())
         assertTrue(result.milestones.all { it.assignment?.modelId == "gpt-5.4" })
     }
 

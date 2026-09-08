@@ -21,6 +21,7 @@ class PlanningExecutionServiceTest {
         private val gate: CompletableDeferred<Unit>? = null,
         private val failure: String? = null,
         private val commandGate: CompletableDeferred<Unit>? = null,
+        private val trailingDelta: String? = null,
         private val report: String = "Verified result",
     ) : CodingRuntime {
         val engines = mutableListOf<CodingEngine?>()
@@ -43,6 +44,7 @@ class PlanningExecutionServiceTest {
                 commandGate.await()
                 emit(CodingEvent.ToolFinished("command", false, "command-1", "BUILD SUCCESSFUL"))
             }
+            trailingDelta?.let { emit(CodingEvent.TextDelta(it)) }
             gate?.await()
             if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText(report))
             emit(CodingEvent.Finished)
@@ -62,7 +64,8 @@ class PlanningExecutionServiceTest {
         val profiles = JsonLlmProfileRepository(kv, json).also { it.save(profile) }
         val projects = JsonCodingProjectRepository(kv, json).also { it.save(project) }
         val settings = JsonSettingsRepository(kv, json)
-        return Triple(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope), runtime)
+        return Triple(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope,
+            outputClock = { testScheduler.currentTime }), runtime)
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
@@ -118,9 +121,28 @@ class PlanningExecutionServiceTest {
         store.save(plan(stage("a")))
         service.start(project.id); runCurrent()
         advanceTimeBy(2500); runCurrent()
+        val saved = store.planFor(project.id)!!
+        val live = service.live.value
+        advanceTimeBy(5000); runCurrent()
+        assertSame(saved, store.planFor(project.id), "Silent flush ticks must not rewrite the plan or invalidate saved history")
+        assertSame(live, service.live.value, "Silence must not allocate and publish new activity snapshots")
         val attempt = store.planFor(project.id)!!.milestones.single().attempts.single()
         assertTrue(attempt.steps.isNotEmpty())
         assertTrue(attempt.steps.none { it.kind == CodingStepKind.INFO && it.title.isBlank() })
+        service.stop(project.id); runCurrent()
+    }
+
+    @Test fun trailingOutputIsDisplayedAndCheckpointedOnceWhileAgentIsSilent() = runTest {
+        val (store, service) = fixture(Runtime(CompletableDeferred(), trailingDelta = "Partial answer"))
+        store.save(plan(stage("a")))
+        service.start(project.id); runCurrent()
+        advanceTimeBy(150); runCurrent()
+        assertEquals("Partial answer", service.live.value.values.single().report)
+        advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals("Partial answer", saved.milestones.single().attempts.single().report)
+        advanceTimeBy(5000); runCurrent()
+        assertSame(saved, store.planFor(project.id))
         service.stop(project.id); runCurrent()
     }
 

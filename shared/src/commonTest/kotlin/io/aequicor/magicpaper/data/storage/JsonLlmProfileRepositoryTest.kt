@@ -4,11 +4,13 @@ import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.ReasoningEffort
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
+import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 class JsonLlmProfileRepositoryTest {
 
@@ -70,6 +72,30 @@ class JsonLlmProfileRepositoryTest {
         val profile = JsonLlmProfileRepository(store, json).load().single()
         assertEquals(EffortSelection.of(ReasoningEffort.HIGH), profile.effort)
         assertTrue(profile.favoriteModels.isEmpty())
+    }
+
+    @Test
+    fun legacyNullTokenLimitDoesNotHideProfilesOrLoseThemOnSave() = runTest {
+        val store = InMemoryKeyValueStore()
+        val raw = """[{"id":"legacy","name":"Мой сервер","baseUrl":"http://test/v1","apiKey":"test-key","modelId":"m","effort":"MEDIUM","advanced":{"temperature":null,"topP":null,"maxTokens":null,"timeoutSeconds":60,"contextMessages":8}},
+            {"id":"other","name":"Other","baseUrl":"http://other/v1","modelId":"n","advanced":{"maxTokens":16384}}]"""
+        store.write("llm_profiles", raw)
+        val repository = JsonLlmProfileRepository(store, json)
+        val loaded = repository.load()
+        assertEquals(listOf("legacy", "other"), loaded.map { it.id })
+        val legacy = loaded.first()
+        assertTrue(legacy.configured)
+        assertEquals("test-key", legacy.apiKey)
+        assertEquals(EffortSelection.of(ReasoningEffort.MEDIUM), legacy.effort)
+        assertEquals(AdvancedLlmOptions().maxTokens, legacy.advanced.maxTokens)
+        assertNull(legacy.advanced.temperature)
+        assertNull(legacy.advanced.topP)
+        assertEquals(60, legacy.advanced.timeoutSeconds)
+        assertEquals(16384, loaded.last().advanced.maxTokens)
+        assertEquals(raw, store.read("llm_profiles"))
+
+        repository.save(loaded.last().copy(name = "Renamed"))
+        assertEquals(listOf(legacy, loaded.last().copy(name = "Renamed")), repository.load())
     }
 
     @Test

@@ -10,6 +10,9 @@ import io.aequicor.magicpaper.domain.SettingsRepository
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 
 /** Реализация хранилища настроек поверх KeyValueStore. */
 class JsonSettingsRepository(
@@ -58,7 +61,18 @@ class JsonLlmProfileRepository(
 
     override suspend fun load(): List<LlmProfile> {
         val raw = store.read(KEY_PROFILES) ?: return emptyList()
-        return runCatching { json.decodeFromString(serializer, raw) }.getOrDefault(emptyList())
+        return runCatching {
+            val saved = json.parseToJsonElement(raw) as JsonArray
+            val compatible = JsonArray(saved.map { element ->
+                val profile = element as? JsonObject ?: return@map element
+                val advanced = profile["advanced"] as? JsonObject ?: return@map profile
+                // Older settings used null for an unset token limit. Keep nullable sampling
+                // options intact and let only this absent limit use its current default.
+                if (advanced["maxTokens"] != JsonNull) profile else
+                    JsonObject(profile + ("advanced" to JsonObject(advanced - "maxTokens")))
+            })
+            json.decodeFromJsonElement(serializer, compatible)
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun save(profile: LlmProfile) {

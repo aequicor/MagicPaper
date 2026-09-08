@@ -73,7 +73,7 @@ class PlanningWizardRenderTest {
                     dialogue = listOf(PlanningMessage("q", "assistant", "Какие форматы документов нужны?\n\nКак будем проверять готовность?", listOf(CodingStep(CodingStepKind.INFO, "Поиск источников завершён")))),
                     tree = listOf(DecisionNode("root", "Редактор документов", DecisionKind.GOAL, milestones.map { it.id })) + milestones.map { DecisionNode(it.id, it.title, DecisionKind.STAGE, stageId = it.id) }))
                 val service = PlanningExecutionService(store, NoopCodingRuntime, null, profiles, settings, verifier, scope = backgroundScope)
-                val plugin = CodingPlanningPlugin(store, PlanComposer(gateway), DossierResearcher(gateway, search), service, NoopCodingRuntime, null, profiles, settings)
+                val plugin = CodingPlanningPlugin(store, textPlanComposer(gateway), DossierResearcher(gateway, search), service, NoopCodingRuntime, null, profiles, settings)
                 ImageComposeScene(width, 1000) {
                     MagicPaperTheme { Surface { plugin.SessionPanel(project, Modifier) } }
                 }.use { scene ->

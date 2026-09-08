@@ -24,6 +24,7 @@ class PlanningExecutionService(
     private val verifier: MilestoneVerifier,
     private val workspaces: PlanningWorkspace = LocalPlanningWorkspace(),
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val outputClock: () -> Long = Id::now,
     private val acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
 ) {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
@@ -549,6 +550,8 @@ class PlanningExecutionService(
                 var ended = false
                 var lastSave = 0L
                 var lastDisplay = 0L
+                var outputPendingSave = false
+                var outputPendingDisplay = false
                 val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
                     pendingRun = CodingRunCheckpoint("${attempt.id}-turn-${attempt.turnIndex}", ""))
                 if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
@@ -556,6 +559,25 @@ class PlanningExecutionService(
                 val activityRecorder = CodingRunRecorder()
                 var deliveryAcknowledged = false
                 monitoredRun(project.copy(path = attempt.path), session, prompt, frozen).collect { event ->
+                    val now = outputClock()
+                    if (event is CodingEvent.Notice && event.message.isBlank()) {
+                        // Silence is a flush opportunity, not new output. Rewriting a large
+                        // plan every second also makes the orchestrator reload all histories.
+                        if (outputPendingDisplay && now - lastDisplay >= 100) {
+                            val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
+                            liveState.update { it + (attempt.id to preview) }
+                            lastDisplay = now
+                            outputPendingDisplay = false
+                        }
+                        if (outputPendingSave && now - lastSave >= 1000) {
+                            saveAttempt(id, stageId, attempt)
+                            lastSave = now
+                            outputPendingSave = false
+                        }
+                        return@collect
+                    }
+                    outputPendingSave = true
+                    outputPendingDisplay = true
                     if (!deliveryAcknowledged && (event is CodingEvent.SessionStarted || event is CodingEvent.MessageStarted ||
                             event is CodingEvent.TextDelta || event is CodingEvent.FinalText)) {
                         chatHooks?.started(store.planFor(id)!!, stage, attempt)
@@ -566,18 +588,15 @@ class PlanningExecutionService(
                     when (event) {
                         is CodingEvent.SessionStarted -> {
                             attempt = attempt.copy(engineSessionId = event.sessionId)
-                            saveAttempt(id, stageId, attempt)
                         }
                         is CodingEvent.TextDelta -> attempt = attempt.copy(report = attempt.report + event.delta)
                         is CodingEvent.FinalText -> attempt = attempt.copy(report = event.text)
                         is CodingEvent.ToolStarted -> {
                             attempt = attempt.copy(activity = "${event.tool}: ${event.summary}", pendingTool = event.summary,
                                 pendingToolExternal = event.isExec && !PlanningRetryPolicy.localCheck(event.summary))
-                            saveAttempt(id, stageId, attempt)
                         }
                         is CodingEvent.ToolFinished -> {
                             attempt = attempt.copy(activity = "${event.tool}: ${event.resultPreview.take(1500)}", pendingTool = "", pendingToolExternal = false)
-                            saveAttempt(id, stageId, attempt)
                         }
                         is CodingEvent.Notice -> if (event.message.isNotBlank()) attempt = attempt.copy(activity = event.message)
                         is CodingEvent.Failed -> failure = event.message
@@ -585,11 +604,17 @@ class PlanningExecutionService(
                         else -> Unit
                     }
                     currentAttempt = attempt
-                    if (boundary(event) || Id.now() - lastDisplay >= 100) {
+                    if (boundary(event) || now - lastDisplay >= 100) {
                         val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
-                        liveState.update { it + (attempt.id to preview) }; lastDisplay = Id.now()
+                        liveState.update { it + (attempt.id to preview) }; lastDisplay = now
+                        outputPendingDisplay = false
                     }
-                    if (Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
+                    if (event is CodingEvent.SessionStarted || event is CodingEvent.ToolStarted ||
+                        event is CodingEvent.ToolFinished || now - lastSave >= 1000) {
+                        saveAttempt(id, stageId, attempt)
+                        lastSave = now
+                        outputPendingSave = false
+                    }
                 }
                 attempt = attempt.copy(chatTurns = attempt.chatTurns.dropLast(1) + attempt.chatTurns.last().copy(completedAt = Id.now()))
                 currentAttempt = attempt

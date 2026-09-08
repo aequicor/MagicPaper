@@ -22,8 +22,18 @@ class PlanComposer(
     private val gateway: LlmGateway,
     private val json: Json = DEFAULT_JSON,
     private val searchEngine: SearchEngine? = null,
+    private val planningGateway: PlanningGateway = UnavailablePlanningGateway,
+    private val projectLookup: suspend (String) -> CodingProject? = { null },
 ) {
-    private val decisions = DecisionPlanner(gateway, json)
+    private val decisions = DecisionPlanner(json, ::completePlanning)
+
+    suspend fun completePlanning(plan: Plan, profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
+        val project = projectLookup(plan.projectId) ?: error("Папка проекта плана недоступна. Откройте проект в desktop-приложении.")
+        require(project.id == plan.projectId) { "План принадлежит другому проекту." }
+        // Null is the legacy migration marker; explicit saved engines always win over provider type.
+        val engine = plan.engine ?: legacyCodingEngine(profile)
+        return planningGateway.completeWithActivity(project, engine, plan.requestId.ifBlank { plan.id }, profile, messages, onActivity)
+    }
 
     suspend fun refine(
         plan: Plan, message: String, profile: LlmProfile?, candidates: List<LlmProfile>, dossiers: List<ModelDossier>,

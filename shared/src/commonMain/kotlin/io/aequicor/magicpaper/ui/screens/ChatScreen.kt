@@ -38,8 +38,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.type
@@ -70,7 +68,6 @@ import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
 import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
-import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
 
 /** Экран чата: лента сообщений и поле заклинаний. */
@@ -97,7 +94,9 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier, pins: List<RequestPinGroup> = emptyList()) {
     val messages = session?.messages.orEmpty()
-    val listState = rememberLazyListState()
+    val listState = androidx.compose.runtime.key(session?.id) {
+        rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
+    }
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = stickToBottom(listState, session?.id)
@@ -110,13 +109,11 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .requestPinsShade(scroll),
+                modifier = Modifier.fillMaxSize().chatScrollInput(scroll),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(messages, key = { it.id }) { message ->
+                items(messages, key = { it.id }, contentType = { it.role }) { message ->
                     ChatScrollItem(scroll, message.id) {
                         MessageBubble(message, pinNumbers[message.id]) { browserMessageId = message.id }
                     }

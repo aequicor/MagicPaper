@@ -44,7 +44,7 @@ class QueuedMessageCancellationRenderTest {
                             Verdict(true, "Checked")
                     }, scope = backgroundScope)
                 val service = OrchestrationService(store, execution, projects, profiles, settings,
-                    PlanComposer(gateway), gateway, backgroundScope)
+                    textPlanComposer(gateway), gateway, backgroundScope)
                 val project = CodingProject("project", "MagicPaper", "/project", 1)
                 val parent = CodingSession("parent", project.id, "План проекта", 1, planningMode = true)
                 val profile = LlmProfile("model", "Planner", baseUrl = "http://test/v1", modelId = "m")

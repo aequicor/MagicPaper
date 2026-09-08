@@ -130,6 +130,34 @@ class MessageSchedulerTest {
         assertEquals(ScheduledMessageStatus.CANCELLED, register().copy(phase = ExecutionPhase.COMPLETE).advanceScheduledMessages(300).scheduledMessages.single().status)
     }
 
+    @Test fun validationChecksInboxReceiptBeforeRuleStatusAndPreservesCommittedCommands() = runTest {
+        val store = PlanningStore(JsonPlanningRepository(InMemoryKeyValueStore(), Json { encodeDefaults = true }))
+        val original = register(trigger = MessageTrigger(MessageTriggerKind.AT_TIME, at = 200)).advanceScheduledMessages(300)
+        val rule = original.scheduledMessages.single()
+        store.save(original)
+        var delivered = true
+        var dispatches = 0
+        val scheduler = MessageScheduler(store, backgroundScope, { _, _ -> dispatches++; true }, { 300 },
+            hasReceipt = { _, _ -> delivered })
+        val cancel = listOf(ScheduleCommand(ScheduleOperation.CANCEL, rule.id))
+        assertContains(scheduler.validationProblem(original.id, cancel, "cancel", "orchestrator", emptySet())!!,
+            "Сообщение уже поставлено в очередь")
+        assertFailsWith<IllegalArgumentException> { scheduler.apply(original.id, cancel, "cancel", "orchestrator", emptySet()) }
+        assertEquals(original, store.planFor(original.id))
+        assertEquals(0, dispatches)
+
+        delivered = false
+        val edit = listOf(ScheduleCommand(ScheduleOperation.UPDATE, rule.id,
+            MessageTrigger(MessageTriggerKind.AT_TIME, at = 400), text = "Changed"))
+        assertNull(scheduler.validationProblem(original.id, edit, "edit", "orchestrator", emptySet()))
+        scheduler.apply(original.id, edit, "edit", "orchestrator", emptySet())
+        delivered = true
+        val committed = store.update(original.id) { it.copy(scheduledMessages = it.scheduledMessages.map { r -> r.copy(status = ScheduledMessageStatus.QUEUED) }) }
+        assertNull(scheduler.validationProblem(original.id, edit, "edit", "orchestrator", emptySet()))
+        assertEquals(committed, scheduler.apply(original.id, edit, "edit", "orchestrator", emptySet()))
+        assertEquals(0, dispatches)
+    }
+
     @Test fun eventsCommitWithSourceStateAndSkippedTaskDoesNotSucceed() = runTest {
         val kv = InMemoryKeyValueStore()
         val json = Json { encodeDefaults = true }

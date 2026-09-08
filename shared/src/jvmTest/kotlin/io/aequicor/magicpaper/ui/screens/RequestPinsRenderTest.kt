@@ -10,9 +10,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -26,6 +27,7 @@ import io.aequicor.magicpaper.ui.components.*
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import java.io.File
 import java.awt.EventQueue
+import java.io.ByteArrayInputStream
 import javax.imageio.ImageIO
 import kotlin.math.abs
 import kotlin.test.*
@@ -42,7 +44,7 @@ class RequestPinsRenderTest {
         }
     }
 
-    private class Chat(val width: Int = 420) : AutoCloseable {
+    private class Chat(val width: Int = 420, denseHistory: Boolean = false) : AutoCloseable {
         val list = LazyListState()
         val tail = mutableStateOf(900)
         val session = mutableStateOf("first")
@@ -64,8 +66,7 @@ class RequestPinsRenderTest {
             MagicPaperTheme {
                 scroll = stickToBottom(list, session.value)
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    LazyColumn(state = list, modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
-                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.requestPinsShade(scroll),
+                    LazyColumn(state = list, modifier = Modifier.fillMaxSize().chatScrollInput(scroll),
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(prefixCount.value, key = { "prefix$it" }) { Text("Новый шаг", Modifier.height(90.dp)) }
@@ -74,7 +75,8 @@ class RequestPinsRenderTest {
                                 Box(Modifier.fillMaxWidth().height(if (index == 7) precedingHeight.value.dp else 220.dp)
                                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                     .onGloballyPositioned { tops["m$index"] = it.positionInRoot().y }) {
-                                    Text("Исходное сообщение m$index", Modifier.padding(12.dp))
+                                    Text(if (denseHistory) ("Исходное сообщение m$index. Текст у края закрепления становится мягче, а цвет сообщения сохраняется.\n").repeat(12)
+                                        else "Исходное сообщение m$index", Modifier.padding(12.dp))
                                 }
                             }
                         }
@@ -116,22 +118,74 @@ class RequestPinsRenderTest {
         override fun close() = onUi { scene.close() }
     }
 
-    @Test fun widePanelIsRightAlignedAndOnlyMessagesNearItFade() = Chat(width = 1040).use { chat ->
+    @Test fun widePanelIsRightAlignedAndRemovingItClearsItsBounds() = Chat(width = 1040, denseHistory = true).use { chat ->
         chat.click(chat.panelHeight - 22f)
         chat.render()
         val bounds = assertNotNull(chat.scroll.requestPinsBounds)
         assertEquals(360f, bounds.left)
         assertEquals(1040f, bounds.right)
-        val pixels = ImageIO.read(chat.snapshot("wide-right-shade"))
-        val y = chat.panelHeight
-        val unshaded = pixels.getRGB(30, y + 2)
-        assertEquals(unshaded, pixels.getRGB(30, y + 18), "Uncovered messages on the left stay unchanged")
-        assertEquals(unshaded, pixels.getRGB(990, y + 18), "Below the fade the message is fully visible")
-        assertNotEquals(unshaded, pixels.getRGB(990, y + 2), "Content fades as it goes under the pin")
-        assertNotEquals(pixels.getRGB(990, y + 2), pixels.getRGB(990, y + 10), "The edge must be gradual")
+        chat.snapshot("wide-right-soft-shadow")
         chat.list.dispatchRawDelta(-10000f)
         chat.render()
-        assertNull(chat.scroll.requestPinsBounds, "Removing the pin must also remove its shade")
+        assertNull(chat.scroll.requestPinsBounds, "Removing the pin must also remove its bounds")
+    }
+
+    @Test fun softShadowNeverBleachesMessagesOrTheirText() {
+        for ((paper, alpha) in listOf(Color(0xFFF4EAD4) to 1f, Color(0xFF302B38) to .55f)) {
+            val visible = mutableStateOf(true)
+            val fill = mutableStateOf(Color(0xFF9C8ECB).copy(alpha = alpha))
+            val height = mutableIntStateOf(0)
+            val group = RequestPinGroup(RequestPin("root", "Исходный запрос", "Пользователь"),
+                listOf(RequestPin("clarification", "Ближайшее уточнение", "Пользователь")))
+            val scene = onUi { ImageComposeScene(800, 300) {
+                MagicPaperTheme {
+                    Box(Modifier.fillMaxSize().background(paper)) {
+                        Box(Modifier.fillMaxSize().drawBehind {
+                            drawRect(fill.value)
+                            drawRect(Color.Black, Offset(20f, height.intValue + 8f), Size(740f, 2f))
+                        })
+                        if (visible.value) RequestPinsPanel(VisibleRequestPins(group, 0), {},
+                            Modifier.align(Alignment.TopEnd).onSizeChanged { height.intValue = it.height })
+                    }
+                }
+            } }
+            var frame = 0L
+            fun pixels() = onUi {
+                repeat(4) { scene.render(++frame * 32_000_000L).close() }
+                scene.render(++frame * 32_000_000L).use { rendered ->
+                    rendered.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
+                }
+            }
+            fun assertOnlyDarkens(plain: Int, shadow: Int) {
+                assertTrue(listOf(0, 8, 16).all { shift ->
+                    (shadow ushr shift and 255) <= (plain ushr shift and 255)
+                }, "The shadow must not bleach the message into paper (alpha=$alpha)")
+                assertEquals(plain ushr 24, shadow ushr 24, "The message keeps its opacity")
+            }
+            try {
+                pixels()
+                val y = height.intValue
+                visible.value = false
+                val plain = pixels()
+                visible.value = true
+                val shadowed = pixels()
+                val near = shadowed.getRGB(400, y + 1)
+                val middle = shadowed.getRGB(400, y + 12)
+                assertOnlyDarkens(plain.getRGB(400, y + 1), near)
+                assertOnlyDarkens(plain.getRGB(400, y + 12), middle)
+                assertTrue((near and 255) < (middle and 255), "The blurred shadow gradually softens away from the panel")
+                assertEquals(plain.getRGB(400, y + 8), shadowed.getRGB(400, y + 8), "Dark text stays dark below the panel")
+                assertEquals(plain.getRGB(50, y + 1), shadowed.getRGB(50, y + 1), "Uncovered messages on the left stay unchanged")
+                assertEquals(plain.getRGB(400, y + 32), shadowed.getRGB(400, y + 32), "The shadow remains local to the panel")
+                fill.value = Color(0xFF79B6AD).copy(alpha = alpha)
+                val updated = pixels()
+                assertNotEquals(near, updated.getRGB(400, y + 1), "Message updates must render under the existing shadow")
+                visible.value = false
+                val updatedPlain = pixels()
+                assertOnlyDarkens(updatedPlain.getRGB(400, y + 1), updated.getRGB(400, y + 1))
+                assertEquals(updatedPlain.getRGB(400, y + 1), updatedPlain.getRGB(50, y + 1), "Removing the pin also removes its shadow")
+            } finally { onUi { scene.close() } }
+        }
     }
 
     @Test fun readerWheelInterruptsNavigationDuringStreaming() = Chat().use { chat ->

@@ -12,13 +12,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
@@ -28,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.DpOffset
 import io.aequicor.magicpaper.domain.RequestPin
 import io.aequicor.magicpaper.domain.RequestPinGroup
 import kotlinx.coroutines.Job
@@ -82,7 +80,7 @@ internal fun RequestPinsOverlay(
         navigation?.cancel()
         scroll.requestPinsBounds = null
     } }
-    val fade = with(LocalDensity.current) { 16.dp.toPx() }
+    val clearance = with(LocalDensity.current) { 16.dp.toPx() }
     val currentIndices by rememberUpdatedState(itemIndices)
     val currentKeys by rememberUpdatedState(itemKeys)
     val entries = remember(groups, itemIndices) { requestPinEntries(groups, itemIndices.keys) }
@@ -93,7 +91,7 @@ internal fun RequestPinsOverlay(
         navigation = scope.launch {
             scroll.navigateToMessage({ currentKeys[pin.messageId] ?: pin.messageId },
                 index = { currentIndices[pin.messageId] },
-                topInset = { scroll.requestPinsBounds?.let { (it.bottom + fade).roundToInt() } ?: 0 })
+                topInset = { scroll.requestPinsBounds?.let { (it.bottom + clearance).roundToInt() } ?: 0 })
         }
     }
     val selection = visible
@@ -113,42 +111,20 @@ internal fun RequestPinsOverlay(
     }
 }
 
-/** Apply inside the list's offscreen layer, so only messages fade and paper stays continuous. */
-internal fun Modifier.requestPinsShade(scroll: ChatScrollState): Modifier = drawWithContent {
-    drawContent()
-    val bounds = scroll.requestPinsBounds ?: return@drawWithContent
-    val feather = 20.dp.toPx()
-    val left = bounds.left - 8.dp.toPx()
-    val right = bounds.right + 8.dp.toPx()
-    val area = Rect(left, 0f, right, bounds.bottom + 16.dp.toPx())
-    val sideStop = (feather / area.width).coerceAtMost(.5f)
-    drawIntoCanvas { canvas ->
-        // Multiplying two gradients gives a soft bottom edge and soft sides without
-        // washing out the uncovered left half of a wide conversation.
-        canvas.saveLayer(area, Paint().apply { blendMode = BlendMode.DstOut })
-        drawRect(Brush.verticalGradient(listOf(Color.White, Color.Transparent),
-            startY = bounds.bottom - 4.dp.toPx(), endY = area.bottom),
-            topLeft = area.topLeft, size = area.size)
-        drawRect(Brush.horizontalGradient(
-            0f to Color.Transparent, sideStop to Color.White,
-            1f - sideStop to Color.White, 1f to Color.Transparent,
-            startX = left, endX = right), topLeft = area.topLeft, size = area.size,
-            blendMode = BlendMode.DstIn)
-        canvas.restore()
-    }
-}
-
 @Composable
 internal fun RequestPinsPanel(
     selection: VisibleRequestPins,
     onNavigate: (RequestPin) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(16.dp)
     Surface(
-        modifier = modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            // Blur the panel's shadow without changing the message's opacity.
+            .dropShadow(shape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = .18f), offset = DpOffset(0.dp, 3.dp))),
+        shape = shape,
         color = MaterialTheme.colorScheme.primaryContainer,
-        shadowElevation = 2.dp,
+        shadowElevation = 0.dp,
     ) {
         Column {
             PinText(selection.group.request, title = true,

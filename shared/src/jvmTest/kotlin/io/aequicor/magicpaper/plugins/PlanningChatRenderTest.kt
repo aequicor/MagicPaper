@@ -162,7 +162,8 @@ class PlanningChatRenderTest {
             val gateway = object : LlmGateway { override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("No network in render test") }
             val verifier = object : MilestoneVerifier { override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "Checked") }
             val execution = PlanningExecutionService(store, NoopCodingRuntime, repo, profiles, settings, verifier, scope = backgroundScope)
-            val service = PlanningChatService(store, execution, repo, profiles, settings, PlanComposer(gateway), gateway, backgroundScope)
+            val service = PlanningChatService(store, execution, repo, profiles, settings, textPlanComposer(gateway), gateway, backgroundScope,
+                workerDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
             val project = CodingProject("project", "Документы", "/project", 1)
             val session = CodingSession("parent", project.id, "Редактор", 1, planningMode = true)
             val stages = listOf(Milestone("one", "Редактор", description = "Создать редактор", acceptance = "Открывает документы"), Milestone("two", "Экспорт", dependsOn = listOf("one"), acceptance = "Сохраняет PDF"))

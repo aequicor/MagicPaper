@@ -49,6 +49,7 @@ import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.domain.CodingRunCheckpoint
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.interruptedCodingRequest
+import io.aequicor.magicpaper.domain.recordDrafts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
@@ -66,6 +67,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -98,6 +101,7 @@ class MagicPaperViewModel(
     val planningChat: PlanningChatService? = null,
     private val searchConnectionChecker: SearchConnectionChecker? = null,
     requestPinRepository: RequestPinRepository? = null,
+    private val workerDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
     val projectSkills get() = codingRuntime?.projectSkills
 
@@ -217,9 +221,14 @@ class MagicPaperViewModel(
     }
 
     /** Активные прогоны по идентификаторам кодинг-сессий (параллельно в разных сессиях). */
-    private val codingJobs = mutableMapOf<String, Job>()
-    private val codingSessionLocks = mutableMapOf<String, Mutex>()
-    private var closing = false
+    private val codingJobs = MutableStateFlow<Map<String, Job>>(emptyMap())
+    private val codingSessionLocks = MutableStateFlow<Map<String, Mutex>>(emptyMap())
+    private val closingState = MutableStateFlow(false)
+    private var closing: Boolean
+        get() = closingState.value
+        set(value) { closingState.value = value }
+    private val idleCodingDraft = CodingDraft()
+    private fun removeCodingJob(id: String): Job? = codingJobs.getAndUpdate { it - id }[id]
 
     init {
         scope.launch { _state.collect { refreshInteractions() } }
@@ -233,6 +242,10 @@ class MagicPaperViewModel(
         scope.launch { bootstrap() }
         requestPins?.let { pins -> scope.launch {
             var previousOpen: PinConversation? = null
+            // Draft/status updates keep the same saved message list. Do not rebuild
+            // every pin and rescan every conversation on each streamed token.
+            val pinSources = mutableMapOf<PinConversation, Any>()
+            var previousProfile: LlmProfile? = null
             _state.collect { state ->
                 val opened = when (state.screen) {
                     Screen.CHAT -> state.current?.let { PinConversation(it.id) }
@@ -242,17 +255,31 @@ class MagicPaperViewModel(
                 // Same operational model used by generateModelDescriptions, independent of chat overrides.
                 val profile = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
                     ?.takeIf { it.provider != ProviderType.OPENAI_SUBSCRIPTION || state.openAiSubscription.account?.signedIn == true }
+                if (profile != previousProfile) pinSources.clear()
+                previousProfile = profile
+                val existingPins = state.sessions.map { PinConversation(it.id) } +
+                    state.coding.sessions.map { PinConversation(it.session.id, it.session.projectId) }
+                pinSources.keys.retainAll(existingPins.toSet())
                 state.sessions.forEach { session ->
                     val key = PinConversation(session.id)
                     if (key == opened || pins.isTracking(key)) {
                         val current = state.current?.takeIf { it.id == session.id } ?: session
-                        pins.sync(key, current.pinMessages(), profile, reopened = key == opened && key != previousOpen)
+                        val reopened = key == opened && key != previousOpen
+                        if (reopened || pinSources[key] !== current.messages) {
+                            pins.sync(key, current.pinMessages(), profile, reopened = reopened)
+                            pinSources[key] = current.messages
+                        }
                     }
                 }
                 state.coding.sessions.forEach { session ->
                     val key = PinConversation(session.session.id, session.session.projectId)
-                    if (key == opened || session.running || pins.isTracking(key))
-                        pins.sync(key, session.messages.pinMessages(), profile, reopened = key == opened && key != previousOpen)
+                    if (key == opened || session.running || pins.isTracking(key)) {
+                        val reopened = key == opened && key != previousOpen
+                        if (reopened || pinSources[key] !== session.messages) {
+                            pins.sync(key, session.messages.pinMessages(), profile, reopened = reopened)
+                            pinSources[key] = session.messages
+                        }
+                    }
                 }
                 previousOpen = opened
             }
@@ -279,13 +306,31 @@ class MagicPaperViewModel(
                 old.values.filter { item -> stored.none { it.id == item.session.id } }.forEach {
                     requestPins?.remove(PinConversation(it.session.id, it.session.projectId))
                 }
-                val sessions = stored.map { session ->
-                    val previous = old[session.id] ?: CodingSessionUi(session)
-                    if (session.stageId != null || session.planningMode || service.store.plans.value.any { it.parentSessionId == session.id })
-                        withPlanningState(previous.copy(session = session, messages = repo.messages(session.projectId, session.id)))
-                    else previous.copy(session = session, messages = if (session.id in old) previous.messages else repo.messages(session.projectId, session.id))
+                val histories = buildMap {
+                    for (session in stored) {
+                        if (session.id !in old || session.stageId != null || session.planningMode ||
+                            service.store.plans.value.any { it.parentSessionId == session.id })
+                            put(session.id, repo.messages(session.projectId, session.id))
+                    }
                 }
-                _state.update { state -> state.copy(coding = state.coding.copy(sessions = sessions)) }
+                _state.update { state ->
+                    // Repository reads suspend. Merge into the latest draft rather than
+                    // overwriting output received while the history was being loaded.
+                    val current = state.coding.sessions.associateBy { it.session.id }
+                    state.copy(coding = state.coding.copy(sessions = stored.map { session ->
+                        val previous = current[session.id] ?: CodingSessionUi(session)
+                        withPlanningState(previous.copy(session = session, messages = histories[session.id] ?: previous.messages))
+                    }))
+                }
+            }
+        } }
+        planningChat?.let { service -> scope.launch {
+            @OptIn(kotlinx.coroutines.FlowPreview::class)
+            combine(service.drafts, service.execution.live) { _, _ -> Unit }.sample(50).collect {
+                // Live activity updates statuses using saved history already in memory.
+                // Only service.changes reloads persisted messages.
+                _state.update { state -> state.copy(coding = state.coding.copy(
+                    sessions = state.coding.sessions.map(::withPlanningState))) }
             }
         } }
 
@@ -304,11 +349,16 @@ class MagicPaperViewModel(
         val failedRequest = inputStatus == io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED
         val interruptedRequest = inputStatus in
             listOf(io.aequicor.magicpaper.domain.OrchestrationInputStatus.CANCELLED, io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED)
-        return item.copy(plan = plan, interruptedRequest = interruptedRequest, failedRequest = failedRequest, awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
+        val awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
             session.stageId == null || it.stageIds.isEmpty() || session.stageId in it.stageIds
-        }, draft = service.drafts.value[session.id]
-            ?: if (plan != null || session.planningMode) CodingDraft() else item.draft,
-            running = workerRunning || service.drafts.value[session.id]?.active == true || codingJobs[session.id]?.isActive == true)
+        }
+        val draft = service.drafts.value[session.id]
+            ?: if (plan != null || session.planningMode) idleCodingDraft else item.draft
+        val running = workerRunning || service.drafts.value[session.id]?.active == true || codingJobs.value[session.id]?.isActive == true
+        if (item.plan === plan && item.draft === draft && item.interruptedRequest == interruptedRequest && item.failedRequest == failedRequest &&
+            item.awaitingUser == awaitingUser && item.running == running) return item
+        return item.copy(plan = plan, interruptedRequest = interruptedRequest, failedRequest = failedRequest,
+            awaitingUser = awaitingUser, draft = draft, running = running)
     }
 
     private suspend fun bootstrap() {
@@ -390,7 +440,7 @@ class MagicPaperViewModel(
     private suspend fun refreshProjectStatus(projectId: String) {
         val repo = codingProjects ?: return
         val statuses = repo.sessions(projectId).map { session ->
-            val active = codingJobs[session.id]
+            val active = codingJobs.value[session.id]
             if (active != null && active.isActive) {
                 _state.value.coding.sessions.firstOrNull { it.session.id == session.id }?.status
                     ?: CodingSessionStatus.WORKING
@@ -552,15 +602,15 @@ class MagicPaperViewModel(
         )
         val requestProfile = ProfileResolver.resolve(updated, settings, _state.value.availableLlmProfiles)
         val operationalProfile = ProfileResolver.resolve(null as ChatSession?, settings, _state.value.availableLlmProfiles)
-        scope.launch {
+        _state.update { st ->
+            st.copy(
+                current = updated,
+                sessions = st.sessions.map { if (it.id == updated.id) updated else it },
+                busy = true,
+            )
+        }
+        scope.launch(workerDispatcher) {
             chats.save(updated)
-            _state.update { st ->
-                st.copy(
-                    current = updated,
-                    sessions = st.sessions.map { if (it.id == updated.id) updated else it },
-                    busy = true,
-                )
-            }
             val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile)
             val agentMessage = ChatMessage(
                 id = Id.new(),
@@ -1143,7 +1193,7 @@ class MagicPaperViewModel(
             withPlanningState(CodingSessionUi(
                 session = session,
                 messages = repo.messages(projectId, session.id),
-                running = codingJobs[session.id]?.isActive == true,
+                running = codingJobs.value[session.id]?.isActive == true,
             ))
         }
         _state.update { st ->
@@ -1173,7 +1223,7 @@ class MagicPaperViewModel(
             repo.sessions(id).forEach { session ->
                 requestPins?.remove(PinConversation(session.id, id))
                 codingRuntime?.abort(session.id)
-                codingJobs.remove(session.id)?.cancel()
+                removeCodingJob(session.id)?.cancel()
             }
             repo.delete(id)
             val rest = repo.all()
@@ -1248,7 +1298,7 @@ class MagicPaperViewModel(
             repo.sessions(projectId).forEach { session ->
                 requestPins?.remove(PinConversation(session.id, projectId))
                 codingRuntime?.abort(session.id)
-                codingJobs.remove(session.id)?.let { job -> job.cancel(); job.join() }
+                removeCodingJob(session.id)?.let { job -> job.cancel(); job.join() }
             }
             if (planningChat != null) planningChat.deleteProjectSessions(projectId)
             else repo.sessions(projectId).forEach { repo.deleteSession(projectId, it.id) }
@@ -1270,7 +1320,7 @@ class MagicPaperViewModel(
         scope.launch {
             requestPins?.remove(PinConversation(id, target.session.projectId))
             codingRuntime?.abort(id)
-            codingJobs.remove(id)?.cancel()
+            removeCodingJob(id)?.cancel()
             repo.deleteSession(target.session.projectId, id)
             val rest = coding.sessions.filterNot { it.session.id == id }
             _state.update {
@@ -1347,8 +1397,9 @@ class MagicPaperViewModel(
         }
     }
 
-    private suspend fun updateStoredCodingSession(session: CodingSession, change: (CodingSession) -> CodingSession): CodingSession =
-        codingSessionLocks.getOrPut(session.id) { Mutex() }.withLock {
+    private suspend fun updateStoredCodingSession(session: CodingSession, change: (CodingSession) -> CodingSession): CodingSession {
+        codingSessionLocks.update { if (session.id in it) it else it + (session.id to Mutex()) }
+        return codingSessionLocks.value.getValue(session.id).withLock {
             val repo = codingProjects ?: error("Хранилище сессий недоступно")
             val latest = repo.sessions(session.projectId).firstOrNull { it.id == session.id } ?: error("Сессия удалена")
             change(latest).also { saved ->
@@ -1356,6 +1407,7 @@ class MagicPaperViewModel(
                 updateCodingSession(saved.id) { it.copy(session = saved) }
             }
         }
+    }
 
     private suspend fun appendCodingMessage(session: CodingSession, message: CodingMessage) {
         val repo = codingProjects ?: return
@@ -1374,10 +1426,12 @@ class MagicPaperViewModel(
     private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null) {
         val runtime = codingRuntime ?: return
         val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
-        if (closing || codingJobs[session.id]?.isActive == true) return
+        // A cancelled job still owns the session while its runtime and saved output
+        // are being cleaned up. Its finally block releases this entry.
+        if (closing || session.id in codingJobs.value) return
         val recorder = CodingRunRecorder()
         val request = checkpoint.copy(responseId = Id.new())
-        val job = scope.launch(start = CoroutineStart.LAZY) {
+        val job = scope.launch(workerDispatcher, start = CoroutineStart.LAZY) {
             try {
                 var current = updateStoredCodingSession(session) { it.copy(pendingRun = request) }
                 if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
@@ -1390,13 +1444,14 @@ class MagicPaperViewModel(
                 val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                     "результаты команд и состояние файлов; учитывай уже сделанное и не повторяй завершённые действия.\n\n" + request.prompt else request.prompt
                 var ended = false
-                runtime.run(project, current, prompt, codingProfileOf(current), request.attachments).collect { event ->
+                recorder.recordDrafts(runtime.run(project, current, prompt, codingProfileOf(current), request.attachments), onEvent = { event ->
                     if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                         // Save the native conversation before the first command, not at the end of the turn.
                         current = updateStoredCodingSession(session) { it.copy(piSessionId = event.sessionId) }
                     }
-                    if (recorder.apply(event)) ended = true
-                    updateCodingSession(session.id) { it.copy(draft = recorder.draft(active = true)) }
+                    if (event is CodingEvent.Finished) ended = true
+                }).collect { draft ->
+                    updateCodingSession(session.id) { it.copy(draft = draft) }
                 }
                 if (!ended) recorder.apply(CodingEvent.Failed("Выполнение прервано. Нажмите «Продолжить»."))
                 val response = recorder.message(request.responseId, Id.now())
@@ -1422,8 +1477,14 @@ class MagicPaperViewModel(
                     _state.update { it.copy(notice = "Не удалось сохранить состояние сессии: ${storageError.message}") }
                 }
             } finally {
-                codingJobs.remove(session.id)
-                updateCodingSession(session.id) { it.copy(running = false, draft = io.aequicor.magicpaper.domain.CodingDraft()) }
+                fun clearRun() {
+                    codingJobs.update { it - session.id }
+                    updateCodingSession(session.id) { it.copy(running = false, draft = idleCodingDraft) }
+                }
+                // Keep cleanup atomic with respect to UI starts. A shutdown hook can
+                // run while AWT is exiting, so shutdown must not wait for the UI thread.
+                if (closing) clearRun()
+                else withContext(NonCancellable + Dispatchers.Main.immediate) { clearRun() }
                 withContext(NonCancellable) {
                     runCatching { refreshProjectStatus(project.id) }.onFailure { failure ->
                         _state.update { it.copy(notice = "Не удалось прочитать состояние сессии: ${failure.message}") }
@@ -1431,7 +1492,7 @@ class MagicPaperViewModel(
                 }
             }
         }
-        codingJobs[session.id] = job
+        codingJobs.update { it + (session.id to job) }
         job.start()
     }
 
@@ -1452,14 +1513,14 @@ class MagicPaperViewModel(
         scope.launch {
             updateStoredCodingSession(ui.session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP, stoppedByUser = true)) }
             codingRuntime?.abort(sessionId)
-            codingJobs[sessionId]?.cancel()
+            codingJobs.value[sessionId]?.cancel()
         }
     }
 
     /** Graceful application exit must not turn resumable work into a user stop. */
     suspend fun shutdownCoding() {
         closing = true
-        val jobs = codingJobs.values.toList()
+        val jobs = codingJobs.value.values.toList()
         jobs.forEach { it.cancel() }
         jobs.joinAll()
         scope.cancel()

@@ -95,8 +95,9 @@ class CodingPlanningPlugin(
             if (plan != null && !running) action { store.update(plan.projectId) { it.copy(wizardStep = target) } }
         }
         fun record(event: CodingStep) {
-            activity = if (event.kind in listOf(CodingStepKind.THINKING, CodingStepKind.SUMMARY) && activity.lastOrNull()?.let { it.kind == event.kind && it.callId == event.callId } == true)
-                activity.dropLast(1) + event else activity + event
+            val index = if (event.callId.isNotBlank()) activity.indexOfLast { it.kind == event.kind && it.callId == event.callId }
+                else activity.lastIndex.takeIf { event.kind in listOf(CodingStepKind.THINKING, CodingStepKind.SUMMARY) && activity.lastOrNull()?.kind == event.kind } ?: -1
+            activity = if (index < 0) activity + event else activity.mapIndexed { i, old -> if (i == index) event else old }
         }
         fun doRefine(message: String, nodeId: String? = null, initial: Plan? = null) {
             val current = initial ?: plan ?: return
@@ -420,7 +421,7 @@ private fun attemptLabel(phase: AttemptPhase) = when (phase) {
     AttemptPhase.FAILED -> "Ошибка"
 }
 
-private const val INITIAL_PLANNING_MESSAGE = "Сначала задай до трёх уточняющих вопросов о критериях успеха и существенных ограничениях цели. Дождись моих ответов, прежде чем строить варианты."
+private const val INITIAL_PLANNING_MESSAGE = "Изучи проект и подготовь план достижения цели. Задавай уточняющие вопросы, когда считаешь необходимым; если данных достаточно, сразу предложи план."
 private fun searchLabel(provider: SearchProvider) = when (provider) {
     SearchProvider.AUTO -> "Авто"
     SearchProvider.WIKIPEDIA -> "Wikipedia"

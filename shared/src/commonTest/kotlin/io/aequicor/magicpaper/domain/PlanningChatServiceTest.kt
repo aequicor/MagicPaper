@@ -86,6 +86,15 @@ class PlanningChatServiceTest {
         val profiles = JsonLlmProfileRepository(kv, json)
         val settings = JsonSettingsRepository(kv, json)
         val gateway = Gateway()
+        val planningCalls = mutableListOf<Pair<CodingProject, CodingEngine>>()
+        val composer = PlanComposer(gateway, planningGateway = object : PlanningGateway {
+            override suspend fun completeWithActivity(project: CodingProject, engine: CodingEngine, requestId: String,
+                profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
+                planningCalls += project to engine
+                onActivity(CodingStep(CodingStepKind.TOOL, "Прочитан source.kt", tool = "read", callId = "$requestId-read", result = "code", running = false))
+                return gateway.completeWithActivity(profile, messages, onActivity)
+            }
+        }, projectLookup = { id -> projects.all().firstOrNull { it.id == id } })
         val runtime = Runtime()
         var verdict = Verdict(true, "Checked")
         val verificationReports = mutableListOf<Pair<String, String>>()
@@ -98,7 +107,8 @@ class PlanningChatServiceTest {
         }, workspaces = object : PlanningWorkspace by LocalPlanningWorkspace() {
             override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
         }, scope = scope.backgroundScope)
-        val service = PlanningChatService(store, execution, projects, profiles, settings, PlanComposer(gateway), gateway, scope.backgroundScope)
+        val service = PlanningChatService(store, execution, projects, profiles, settings, composer, gateway, scope.backgroundScope,
+            workerDispatcher = StandardTestDispatcher(scope.testScheduler))
         suspend fun initialize() {
             projects.save(project); profiles.save(profile); settings.save(AppSettings(activeLlmProfileId = profile.id))
             service.bootstrap()
@@ -564,6 +574,42 @@ class PlanningChatServiceTest {
         return store.planFor(blocked.id)!!
     }
 
+    @Test fun failedFinalDiscussionIncludesSavedFailureAndReportWithoutRestartingWork() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val blocked = f.rejectedFinal(parent)
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Итоговая проверка не пройдена: отсутствует интеграция."}"""
+        f.service.send(parent, "Разберись и напиши, почему возник блокер"); runCurrent()
+
+        val context = f.gateway.lastMessages.last().content
+        assertContains(context, blocked.issue!!.message)
+        assertContains(context, blocked.finalAttempt!!.report)
+        assertContains(context, "статус=FAILED")
+        val saved = f.store.planFor(blocked.id)!!
+        assertEquals(blocked.issue, saved.issue)
+        assertEquals(blocked.finalAttempt, saved.finalAttempt)
+        assertEquals(blocked.milestones, saved.milestones)
+        assertEquals(blocked.intent, saved.intent)
+        assertNull(saved.proposal)
+        assertTrue(f.runtime.calls.isEmpty())
+        assertEquals(OrchestrationInputStatus.DONE, f.projects.orchestration(parent.id)!!.inputs.single().status)
+    }
+
+    @Test fun discussionUsesAvailableProfileWithLegacyNullLimitWhenSavedSourceIsGone() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent", engine = CodingEngine.CODEX)
+        val blocked = f.rejectedFinal(parent)
+        f.kv.write("llm_profiles", """[{"id":"legacy","name":"Мой сервер","baseUrl":"http://test/v1","modelId":"m","effort":"MEDIUM","advanced":{"temperature":null,"maxTokens":null,"timeoutSeconds":60}}]""")
+        f.settings.save(AppSettings(activeLlmProfileId = "legacy"))
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Причина остановки сохранена в итоговой проверке."}"""
+        f.service.send(parent, "Что с состоянием оркестратора?"); runCurrent()
+
+        assertEquals(OrchestrationInputStatus.DONE, f.projects.orchestration(parent.id)!!.inputs.single().status)
+        assertEquals(project to CodingEngine.CODEX, f.planningCalls.single())
+        assertEquals(blocked.finalAttempt, f.store.planFor(blocked.id)!!.finalAttempt)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
     @Test fun failedFinalAcceptsUserContinuationOrRepairButtonAndResumesInSameSession() = runTest {
         for (useRetry in listOf(false, true)) {
             val f = Fixture(this); f.initialize(); runCurrent()
@@ -743,15 +789,18 @@ class PlanningChatServiceTest {
         f.gateway.gate = gate
         f.service.send(parent, "Создай план"); runCurrent()
         val callback = assertNotNull(f.gateway.requestCallback)
+        val storedRevision = f.service.changes.value
         callback(CodingStep(CodingStepKind.ANSWER, """{"reply":"Уточним""", callId = "response", running = true))
         runCurrent()
         assertEquals("Уточним", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
         callback(CodingStep(CodingStepKind.ANSWER, """{"reply":"Уточним результат","questions":['""", callId = "response", running = true))
         runCurrent()
         assertEquals("Уточним результат", f.service.drafts.value[parent.id]!!.steps.single { it.kind == CodingStepKind.ANSWER }.title)
+        assertEquals(storedRevision, f.service.changes.value, "Streaming must not trigger reloading persisted chat history")
         assertNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
         gate.complete(Unit); runCurrent()
         val question = assertNotNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+        assertTrue(f.service.changes.value > storedRevision, "The completed message must invalidate persisted history")
         assertEquals(listOf("Уточним результат"), question.steps.filter { it.kind == CodingStepKind.ANSWER }.map { it.title })
         assertNull(f.service.drafts.value[parent.id])
     }
@@ -1619,6 +1668,24 @@ class PlanningChatServiceTest {
         val parent = f.session("parent", engine = CodingEngine.CODEX)
         f.service.send(parent, "Сделай редактор"); runCurrent()
         assertEquals(CodingEngine.CODEX, f.store.plans.value.single().engine)
+        assertEquals(project to CodingEngine.CODEX, f.planningCalls.single())
+    }
+
+    @Test fun firstTurnCanPublishPlanWithoutQuestionsAndDiscussionReadsProjectToo() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent", engine = CodingEngine.CODEX)
+        f.gateway.overrideReply = """{"reply":"Изучен source.kt. План готов.","tree":[{"id":"root","title":"Fix","kind":"GOAL","children":["stage"]},{"id":"stage","title":"Update","kind":"STAGE","stageId":"stage"}],"milestones":[{"id":"stage","title":"Update","description":"Change source.kt","acceptance":"Checks pass"}]}"""
+        f.service.send(parent, "Изучи изменения и составь план"); runCurrent()
+        val plan = f.store.plans.value.single()
+        assertTrue(plan.milestones.isNotEmpty())
+        assertNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+        assertTrue(f.gateway.lastMessages.none { it.content.contains("Пока не строй дерево этапов") })
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Проверил текущий source.kt."}"""
+        f.service.send(parent, "Изучи сам: что сейчас в файле?"); runCurrent()
+        assertEquals(2, f.planningCalls.size)
+        assertTrue(f.planningCalls.all { it == project to CodingEngine.CODEX })
+        assertTrue(f.store.planFor(plan.id)!!.dialogue.last().activity.any { it.tool == "read" })
+        assertEquals(plan.milestones, f.store.planFor(plan.id)!!.milestones)
     }
 
     @Test fun eventWaitReleasesSlotAndWakesWorkerOnceWithoutStatusModelCalls() = runTest {
@@ -1698,6 +1765,140 @@ class PlanningChatServiceTest {
         repeat(3) { f.service.messageScheduler.tick(); runCurrent() }
         assertEquals(1, f.projects.orchestration(parent.id)!!.inputs.count { it.scheduledRuleId == rule.id })
         assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun invalidScheduleIsRepairedBeforeCachingTheUserDecision() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("model", "m"))
+        f.store.save(base.copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.PAUSE,
+            milestones = base.milestones.map { it.copy(attempts = listOf(attempt)) }))
+        f.gateway.userDecisions += """{"intent":"SCHEDULE","schedules":[{"trigger":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"stage","attemptId":"attempt","turnIndex":0},"text":"Explain result"}]}"""
+        f.gateway.userDecision = """{"intent":"SCHEDULE","schedules":[{"trigger":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"stage"},"text":"Explain result"}]}"""
+        f.service.send(parent, "Объясни итог после проверки этапа"); runCurrent()
+
+        val input = f.projects.orchestration(parent.id)!!.inputs.single()
+        assertEquals(OrchestrationInputStatus.DONE, input.status)
+        assertNull(input.decision!!.schedules.single().trigger!!.attemptId)
+        assertEquals(2, f.gateway.requests.size)
+        assertContains(f.gateway.lastMessages.last().content, "Это событие не относится к отдельному ходу")
+        val saved = f.store.planFor(base.id)!!
+        assertEquals(1, saved.scheduledMessages.size)
+        assertEquals(1, saved.scheduleReceipts.size)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun retryAfterRestartReconsidersInvalidCachedScheduleWithoutRerunningWorker() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("model", "m"),
+            report = "Saved worker result", awaitingPlanner = true)
+        f.store.save(base.copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.PAUSE,
+            milestones = base.milestones.map { it.copy(attempts = listOf(attempt)) }))
+        val cached = UserTurnDecision(UserTurnIntent.SCHEDULE, schedules = listOf(ScheduleCommand(
+            trigger = MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.TASK_SUCCEEDED,
+                taskId = "stage", attemptId = attempt.id, turnIndex = 0), text = "Explain result")))
+        val input = OrchestrationInput("failed-input", "Explain result after verification", 1,
+            status = OrchestrationInputStatus.FAILED, decision = cached, error = "Это событие не относится к отдельному ходу")
+        f.projects.saveOrchestration(OrchestrationState(parent.id, project.id, activePlanId = base.id, inputs = listOf(input)))
+        f.execution.shutdown(); runCurrent()
+
+        val restored = Fixture(this, f.kv)
+        restored.gateway.userDecision = """{"intent":"SCHEDULE","schedules":[{"trigger":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"stage"},"text":"Explain result"}]}"""
+        restored.service.bootstrap(); runCurrent()
+        assertTrue(restored.gateway.requests.isEmpty())
+        restored.service.retryInput(parent.id, input.id); runCurrent()
+        assertEquals(OrchestrationInputStatus.DONE, restored.projects.orchestration(parent.id)!!.inputs.single().status)
+        assertContains(restored.gateway.lastMessages.last().content, "Сохранённое решение нельзя применить")
+        val saved = restored.store.planFor(base.id)!!
+        assertEquals(1, saved.scheduledMessages.size)
+        assertEquals(attempt, saved.milestones.single().attempts.single())
+        assertTrue(restored.runtime.calls.isEmpty())
+        val worker = restored.projects.sessions(project.id).single { it.id == attempt.sessionId }
+        assertEquals(parent.id, worker.parentSessionId)
+        assertEquals(base.id, worker.planId)
+        restored.service.retryInput(parent.id, input.id); runCurrent()
+        assertEquals(1, restored.gateway.requests.size)
+        assertEquals(1, restored.store.planFor(base.id)!!.scheduledMessages.size)
+        restored.execution.shutdown()
+    }
+
+    @Test fun restartedCoordinatorRepairsCachedCancellationOfDeliveredRule() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("model", "m"),
+            report = """{"kind":"RESULT","text":"Saved worker result"}""", awaitingPlanner = true)
+        val rule = ScheduledMessage("rule", base.id, "run", parent.id,
+            MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.RESULT_RETURNED, taskId = "stage"),
+            parent.id, null, "Handle result", 1, status = ScheduledMessageStatus.READY, deliveryId = "delivered")
+        val record = CoordinationRecord("attempt-turn-0", "stage", StageReply(StageReplyKind.RESULT, "Saved worker result"),
+            decision = CoordinatorReply("Cancel old wait", schedules = listOf(ScheduleCommand(ScheduleOperation.CANCEL, rule.id))),
+            runId = "run", attemptId = attempt.id, sourceSessionId = attempt.sessionId)
+        f.store.save(base.copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.PAUSE,
+            milestones = base.milestones.map { it.copy(attempts = listOf(attempt)) },
+            coordination = listOf(record), scheduledMessages = listOf(rule)))
+        f.projects.saveOrchestration(OrchestrationState(parent.id, project.id, activePlanId = base.id,
+            inputs = listOf(OrchestrationInput(rule.deliveryId, rule.text, 1, status = OrchestrationInputStatus.DONE,
+                scheduledRuleId = rule.id, sourcePlanId = base.id, sourceRunId = "run"))))
+        f.execution.shutdown(); runCurrent()
+
+        val restored = Fixture(this, f.kv)
+        restored.gateway.coordinator = """{"reply":"Keep delivered message; await verification","schedules":[{"trigger":{"kind":"EVENT","event":"TASK_SUCCEEDED","taskId":"stage"},"text":"Explain verified result"}]}"""
+        restored.service.bootstrap(); runCurrent()
+        val current = restored.store.planFor(base.id)!!
+        assertEquals(StageTurnAction.VERIFY, restored.service.finished(current, current.milestones.single(), attempt).action)
+        val saved = restored.store.planFor(base.id)!!
+        assertEquals(2, saved.scheduledMessages.size)
+        assertEquals(rule, saved.scheduledMessages.first { it.id == rule.id })
+        assertContains(restored.gateway.lastMessages.last().content, "Сообщение уже поставлено в очередь")
+        assertEquals(attempt.report, saved.milestones.single().attempts.single().report)
+        assertTrue(restored.runtime.calls.isEmpty())
+        assertEquals(StageTurnAction.VERIFY, restored.service.finished(saved, saved.milestones.single(), attempt).action)
+        assertEquals(1, restored.gateway.coordinatorCallbacks.size)
+        assertEquals(2, restored.store.planFor(base.id)!!.scheduledMessages.size)
+        assertEquals(1, restored.projects.orchestration(parent.id)!!.inputs.count { it.id == rule.deliveryId })
+        restored.execution.shutdown()
+    }
+
+    @Test fun retryStoppedPlanAfterRestartChecksSavedResultWithoutAnotherWorkerTurn() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val issue = PlanningIssue(IssueKind.UNCERTAIN, "Сообщение уже поставлено в очередь; изменять его правило нельзя", requiresUser = true)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("model", "m"), phase = AttemptPhase.EXECUTING,
+            path = project.path, report = """{"kind":"RESULT","text":"Saved worker result"}""",
+            awaitingPlanner = true, coordinationPending = true, error = issue)
+        val rule = ScheduledMessage("rule", base.id, "run", parent.id,
+            MessageTrigger(MessageTriggerKind.EVENT, event = MessageEventKind.RESULT_RETURNED, taskId = "stage"),
+            parent.id, null, "Handle result", 1, status = ScheduledMessageStatus.QUEUED, deliveryId = "delivered")
+        f.store.save(base.copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.RUN,
+            phase = ExecutionPhase.WAITING, status = PlanStatus.RUNNING, issue = issue,
+            milestones = base.milestones.map { it.copy(status = MilestoneStatus.FAILED, attempts = listOf(attempt)) },
+            scheduledMessages = listOf(rule), coordination = listOf(CoordinationRecord("attempt-turn-0", "stage",
+                StageReply(StageReplyKind.RESULT, "Saved worker result"),
+                decision = CoordinatorReply("Cancel old wait", schedules = listOf(ScheduleCommand(ScheduleOperation.CANCEL, rule.id))),
+                runId = "run", attemptId = attempt.id, sourceSessionId = attempt.sessionId))))
+        f.execution.shutdown(); runCurrent()
+
+        val restored = Fixture(this, f.kv)
+        restored.service.bootstrap(); restored.execution.bootstrap(); runCurrent()
+        assertTrue(restored.gateway.requests.isEmpty())
+        assertTrue(restored.runtime.calls.isEmpty())
+        restored.runtime.gate.complete(Unit)
+        restored.service.control(base.id, "retry"); advanceTimeBy(1000); runCurrent()
+        val saved = restored.store.planFor(base.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertNull(saved.issue)
+        assertEquals("run", saved.runId)
+        assertEquals(attempt.id, saved.milestones.single().attempts.single().id)
+        assertEquals(MilestoneStatus.DONE, saved.milestones.single().status)
+        assertEquals(1, restored.gateway.coordinatorCallbacks.size)
+        assertTrue(restored.runtime.calls.none { it.first.id == attempt.sessionId })
+        assertEquals(rule, saved.scheduledMessages.single())
+        restored.execution.shutdown()
     }
 
     @Test fun userCreatesRuleThroughChatAndCancellationUsesNoModel() = runTest {

@@ -53,8 +53,9 @@ class JsonPlanningRepository(
 
     override suspend fun save(plan: Plan) {
         // Each chat owns its plan; replacing one never removes sibling plans.
-        val current = plans().filterNot { it.id == plan.id } + plan
-        val previous = json.encodeToString(plansSerializer, plans())
+        val existing = plans()
+        val current = existing.filterNot { it.id == plan.id } + plan
+        val previous = json.encodeToString(plansSerializer, existing)
         // Write-ahead checkpoint includes the operation journal; index/snapshot can be rebuilt.
         store.write("coding-plan-v2-${plan.id}", json.encodeToString(Checkpoint.serializer(), Checkpoint(plan.projectId, plan)))
         store.write("$KEY_PLANS-backup", previous)
@@ -62,8 +63,9 @@ class JsonPlanningRepository(
     }
 
     override suspend fun deletePlan(projectId: String) {
-        val target = plans().resolvePlan(projectId) ?: return
-        val current = plans().filterNot { it.id == target.id }
+        val existing = plans()
+        val target = existing.resolvePlan(projectId) ?: return
+        val current = existing.filterNot { it.id == target.id }
         store.write("coding-plan-v2-${target.id}", json.encodeToString(Checkpoint.serializer(), Checkpoint(projectId, null)))
         store.write(KEY_PLANS, json.encodeToString(plansSerializer, current))
     }

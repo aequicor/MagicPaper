@@ -60,6 +60,38 @@ class DesktopCodingRuntime(
         }
     }
     override suspend fun reconcile(sessionId: String) { pi.reconcile(sessionId); (clients[sessionId] ?: subscription).reconcileCoding(sessionId) }
+    override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> = flow {
+        require(session.projectId == project.id) { "План принадлежит другому проекту." }
+        check(java.io.File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
+        val engine = checkNotNull(session.engine) { "Движок планировщика не сохранён." }
+        check(active.add(session.id)) { "Запрос планирования уже выполняется." }
+        val fresh = session.copy(piSessionId = "")
+        try {
+            preflight(engine, profile)
+            when (engine) {
+                CodingEngine.PI -> pi.runPlanning(project, fresh, prompt, profile).collect { emit(it) }
+                CodingEngine.CODEX -> {
+                    val client = subscription.newCodingClient()
+                    clients[session.id] = client
+                    try {
+                        if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
+                            client.runCoding(project, fresh, prompt, profile, emptyList(), planning = true).collect { emit(it) }
+                        } else pi.startProviderBridge(profile.forModel()).use { bridge ->
+                            client.runCoding(project, fresh, prompt, profile, emptyList(), bridge.providerId, bridge.configuration,
+                                planning = true).collect { emit(it) }
+                        }
+                    } finally {
+                        withContext(NonCancellable) {
+                            try { client.abortCoding(session.id); client.close() }
+                            finally { clients.remove(session.id) }
+                        }
+                    }
+                }
+            }
+        } catch (e: CancellationException) { abort(session.id); throw e }
+        finally { active.remove(session.id) }
+    }.flowOn(Dispatchers.IO)
+
     override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> {
         val runId = session.pendingRun?.let { skillRunIdentity(session.id, it.runId) } ?: java.util.UUID.randomUUID().toString()
         return runIdentified(runId, project, session, prompt, profile, attachments)

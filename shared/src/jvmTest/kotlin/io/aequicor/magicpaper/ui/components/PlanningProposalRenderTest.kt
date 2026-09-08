@@ -41,7 +41,7 @@ class PlanningProposalRenderTest {
                 object : MilestoneVerifier {
                     override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "Checked")
                 }, scope = backgroundScope)
-            val service = OrchestrationService(store, execution, projects, profiles, settings, PlanComposer(gateway), gateway, backgroundScope)
+            val service = OrchestrationService(store, execution, projects, profiles, settings, textPlanComposer(gateway), gateway, backgroundScope)
             val project = CodingProject("project", "MagicPaper", "/project", 1)
             val parent = CodingSession("parent", project.id, "Система навыков", 1, planningMode = true)
             projects.save(project); projects.saveSession(parent)

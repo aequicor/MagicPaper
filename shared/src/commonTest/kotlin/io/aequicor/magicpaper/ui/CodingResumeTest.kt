@@ -17,6 +17,7 @@ class CodingResumeTest {
         val attachments = mutableListOf<List<Attachment>>()
         val reconciled = mutableListOf<String>()
         val gate = CompletableDeferred<Unit>()
+        var stopGate: CompletableDeferred<Unit>? = null
         var failure = false
         var reply = listOf<CodingEvent>(CodingEvent.FinalText("Done"))
         override val supported = true
@@ -31,9 +32,46 @@ class CodingResumeTest {
             calls += session to prompt
             this@Runtime.attachments += attachments
             emit(CodingEvent.SessionStarted("native-${session.id}"))
-            gate.await()
-            if (failure) emit(CodingEvent.Failed("Offline")) else reply.forEach { emit(it) }
-            emit(CodingEvent.Finished)
+            try {
+                gate.await()
+                if (failure) emit(CodingEvent.Failed("Offline")) else reply.forEach { emit(it) }
+                emit(CodingEvent.Finished)
+            } finally {
+                stopGate?.let { withContext(NonCancellable) { it.await() } }
+            }
+        }
+    }
+
+    @Test fun cancelledRunKeepsItsSessionUntilCleanupFinishes() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val stopGate = CompletableDeferred<Unit>()
+        var vm: MagicPaperViewModel? = null
+        try {
+            val f = ModelSettingsFixture(); val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project); repo.saveSession(session)
+            val runtime = Runtime().also { it.stopGate = stopGate }
+            val model = f.prepare(runtime, repo)
+            vm = model
+            runCurrent()
+            model.sendCodingPromptTo(session.id, "First request"); runCurrent()
+            model.abortCodingSession(session.id); runCurrent()
+
+            // Cancellation has begun, but the native runtime is still shutting down.
+            model.sendCodingPromptTo(session.id, "Premature request"); runCurrent()
+            assertEquals(1, runtime.calls.size, "A stopping run still owns its native session")
+            assertEquals("First request", repo.sessions(project.id).single().pendingRun?.prompt)
+
+            stopGate.complete(Unit); runCurrent()
+            assertFalse(model.state.value.coding.currentSession!!.running)
+            model.resumeCodingSession(session.id); runCurrent()
+            assertEquals(2, runtime.calls.size)
+            assertTrue(model.state.value.coding.currentSession!!.running)
+            runtime.gate.complete(Unit); runCurrent()
+            assertNull(repo.sessions(project.id).single().pendingRun)
+        } finally {
+            stopGate.complete(Unit)
+            vm?.shutdownCoding()
+            Dispatchers.resetMain()
         }
     }
 

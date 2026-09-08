@@ -45,6 +45,13 @@ Codex `textDelta`/`content` и `summaryTextDelta`/`summary` обрабатыва
 
 ## Проверка
 
+Проверка планирования с настоящими установленными движками и локальной тестовой
+моделью (без аккаунтов и платных запросов):
+`./gradlew :shared:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
+Она проходит через production runtime, проверяет чтение текущего кода и Git,
+получение валидного плана, выбранную модель и блокировку записи.
+Отдельно: `node --test shared/src/jvmTest/resources/coding/planning-tools.test.mjs`.
+
 Основная проверка: `./gradlew :shared:jvmTest :desktopApp:compileKotlin :shared:compileKotlinJs :shared:compileKotlinWasmJs`.
 
 Локальные проверки JavaScript находятся в `shared/src/jvmTest/resources/coding/`:

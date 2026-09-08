@@ -118,7 +118,6 @@ import io.aequicor.magicpaper.ui.components.OrchestrationMessageInputStatus
 import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
 import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
-import io.aequicor.magicpaper.ui.components.requestPinsShade
 import io.aequicor.magicpaper.ui.components.chatScrollInput
 import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
@@ -284,34 +283,36 @@ private fun SessionArea(
     profiles: List<LlmProfile>,
     activeProfileId: String,
 ) {
+    val sessionInfo = active.session
     // Переключатель источника/модели/усилия активной сессии.
-    var switcherOpen by rememberSaveable(active.session.id) { mutableStateOf(false) }
+    var switcherOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
         val service = vm.planningChat
         val scope = rememberCoroutineScope()
         val serviceDrafts = service?.drafts?.collectAsState()?.value.orEmpty()
+        val latestServiceDrafts = androidx.compose.runtime.rememberUpdatedState(serviceDrafts)
         val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
         val live = service?.execution?.live?.collectAsState()?.value.orEmpty()
-        val workerPlan = plans.firstOrNull { it.id == active.session.planId } ?: active.plan
-        val parentMessages = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId }?.messages.orEmpty()
+        val workerPlan = plans.firstOrNull { it.id == sessionInfo.planId } ?: active.plan
+        val parentMessages = ui.sessions.firstOrNull { it.session.id == sessionInfo.parentSessionId }?.messages.orEmpty()
         val stageChat = active.withStageChat(workerPlan, live, parentMessages)
-        val draft = serviceDrafts[active.session.id] ?: stageChat.draft
+        val draft = serviceDrafts[sessionInfo.id] ?: stageChat.draft
         val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
             running = stageChat.running || draft.active)
         val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
-        if (ui.computerSupported && !active.session.planningMode && active.session.stageId == null) {
+        if (ui.computerSupported && !sessionInfo.planningMode && sessionInfo.stageId == null) {
             io.aequicor.magicpaper.ui.components.ComputerUsePanel(
-                state = ui.computer, sessionId = active.session.id, running = effective.running,
-                onEnable = { vm.enableComputerUse(active.session.id, it) },
-                onDisable = { vm.disableComputerUse(active.session.id) },
-                onPreview = { vm.previewComputerUse(active.session.id) },
+                state = ui.computer, sessionId = sessionInfo.id, running = effective.running,
+                onEnable = { vm.enableComputerUse(sessionInfo.id, it) },
+                onDisable = { vm.disableComputerUse(sessionInfo.id) },
+                onPreview = { vm.previewComputerUse(sessionInfo.id) },
                 onSettings = vm::openComputerSystemSettings,
             )
         }
             CodingChat(
                 project = project,
                 session = effective,
-                pins = pins[PinConversation(active.session.id, active.session.projectId)].orEmpty(),
+                pins = pins[PinConversation(sessionInfo.id, sessionInfo.projectId)].orEmpty(),
                 approvals = ui.approvals.filter { it.projectId == project.id },
                 onApproval = vm::respondCodingApproval,
                 interactions = ui.interactions.filter { it.affects(active.session) },
@@ -322,40 +323,32 @@ private fun SessionArea(
                 composerDraft = vm.composerDrafts.getOrPut(active.session.id) { CodingComposerDraft() },
                 onStopApproval = vm::abortCodingSession,
                 busy = effective.running,
-                allowQueue = active.session.stageId != null || active.session.planningMode,
+                allowQueue = sessionInfo.stageId != null || sessionInfo.planningMode,
                 planningService = service,
-                planningQuestionsSession = ui.sessions.firstOrNull { it.session.id == active.session.parentSessionId } ?: effective,
+                planningQuestionsSession = ui.sessions.firstOrNull { it.session.id == sessionInfo.parentSessionId } ?: effective,
                 onOpenSession = vm::selectCodingSession,
                 engineReady = true,
-                onSend = { text, attachments -> vm.sendCodingPromptTo(active.session.id, text, attachments) },
-                onResume = { text, attachments -> vm.resumeCodingSession(active.session.id, text, attachments) },
+                onSend = { text, attachments -> vm.sendCodingPromptTo(sessionInfo.id, text, attachments) },
+                onResume = { text, attachments -> vm.resumeCodingSession(sessionInfo.id, text, attachments) },
                 onAbort = {
                     when {
-                        active.session.stageId != null && active.session.planId != null -> service?.control(active.session.planId, "stop")
-                        serviceDrafts[active.session.id]?.active == true -> service?.cancelRequest(active.session.id)
-                        else -> vm.abortCodingSession(active.session.id)
+                        sessionInfo.stageId != null && sessionInfo.planId != null -> service?.control(sessionInfo.planId, "stop")
+                        latestServiceDrafts.value[sessionInfo.id]?.active == true -> service?.cancelRequest(sessionInfo.id)
+                        else -> vm.abortCodingSession(sessionInfo.id)
                     }
                 },
                 onSkills = onSkills,
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
-                onPlanning = if (service != null && active.session.stageId == null) {
-                    { scope.launch { service.configure(active.session, planning = true) } }
+                onPlanning = if (service != null && sessionInfo.stageId == null) {
+                    { scope.launch { service.configure(sessionInfo, planning = true) } }
+                } else null,
+                onSearchProvider = if (service != null && sessionInfo.planningMode && sessionInfo.stageId == null) {
+                    { provider -> scope.launch { service.configure(sessionInfo, search = provider) } }
                 } else null,
                 modelChip = {
-                    if (service != null && active.session.planningMode && active.session.stageId == null) {
-                        var searchMenu by remember { mutableStateOf(false) }
-                        Box {
-                            TextButton(onClick = { searchMenu = true }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("${active.session.searchProvider.name} ▾", style = MaterialTheme.typography.labelMedium) }
-                            DropdownMenu(searchMenu, { searchMenu = false }) {
-                                SearchProvider.entries.forEach { provider -> DropdownMenuItem(text = { Text(provider.name) }, onClick = { searchMenu = false; scope.launch { service.configure(active.session, search = provider) } }) }
-                            }
-                        }
-                    }
-                    Text(active.session.engine?.title.orEmpty(), style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     CodingModelChip(
-                        profile = vm.codingProfileOf(active.session, workerPlan),
-                        overridden = active.session.llmProfileId != null,
+                        profile = vm.codingProfileOf(sessionInfo, workerPlan),
+                        overridden = sessionInfo.llmProfileId != null,
                         onClick = { switcherOpen = true },
                     )
                 },
@@ -364,10 +357,10 @@ private fun SessionArea(
     if (switcherOpen) {
         CodingModelSwitcherDialog(
             vm = vm,
-            sessionId = active.session.id,
+            sessionId = sessionInfo.id,
             profiles = profiles,
             activeProfileId = activeProfileId,
-            sessionProfileId = active.session.llmProfileId,
+            sessionProfileId = sessionInfo.llmProfileId,
             onDismiss = { switcherOpen = false },
         )
     }
@@ -887,6 +880,7 @@ internal fun CodingChat(
     onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
     onStopApproval: (String) -> Unit = {},
     onSkills: (() -> Unit)? = null,
+    onSearchProvider: ((SearchProvider) -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     interactions: List<UserInteractionRequest> = session.interactions,
     questionnaireDrafts: Map<String, QuestionnaireDraft> = emptyMap(),
@@ -947,7 +941,6 @@ internal fun CodingChat(
                 state = listState,
                 modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
                     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .requestPinsShade(scroll)
                     .drawWithContent {
                         drawContent()
                         // Fade only the messages; keep the paper background continuous.
@@ -1009,6 +1002,9 @@ internal fun CodingChat(
                     controls = modelChip,
                     planning = session.session.planningMode,
                     onPlanning = onPlanning,
+                    engine = session.session.engine,
+                    searchProvider = session.session.searchProvider,
+                    onSearchProvider = onSearchProvider,
                     onSend = onSend,
                     onResume = onResume?.takeIf { session.canResume },
                     onAbort = onAbort,
@@ -1451,10 +1447,11 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
 /** Use the latest heading supplied by the agent as the short activity label. */
 internal fun currentThinkingSummary(thinking: String): String {
     if (thinking.isBlank()) return ""
+    val tail = thinking.takeLast(4096)
     val heading = Regex("(?m)^\\s*(?:#{1,6}\\s+([^\\n]+)|\\*\\*([^*\\n]+)\\*\\*)")
-        .findAll(thinking).lastOrNull()
+        .findAll(tail).lastOrNull()
         ?.let { it.groupValues[1].ifBlank { it.groupValues[2] } }
-    val summary = heading ?: thinking.trim().substringAfterLast("\n\n").lineSequence().firstOrNull().orEmpty()
+    val summary = heading ?: tail.trim().substringAfterLast("\n\n").lineSequence().firstOrNull().orEmpty()
     return summary.replace(Regex("[*_`#]"), "").replace(Regex("\\s+"), " ").trim().take(120)
         .ifBlank { "Обдумывает задачу" }
 }
@@ -1468,6 +1465,9 @@ internal fun CodingComposer(
     controls: (@Composable () -> Unit)? = null,
     planning: Boolean = false,
     onPlanning: (() -> Unit)? = null,
+    engine: CodingEngine? = null,
+    searchProvider: SearchProvider = SearchProvider.AUTO,
+    onSearchProvider: ((SearchProvider) -> Unit)? = null,
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
@@ -1493,33 +1493,81 @@ internal fun CodingComposer(
             PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box {
-                    var addMenuOpen by remember { mutableStateOf(false) }
-                    TextButton(onClick = { addMenuOpen = true },
-                        modifier = Modifier.size(32.dp).semantics { contentDescription = "Добавить" },
-                        contentPadding = PaddingValues(0.dp)) {
-                        Text("+", style = MaterialTheme.typography.titleLarge)
+                    var menuOpen by remember { mutableStateOf(false) }
+                    var searchMenuOpen by remember { mutableStateOf(false) }
+                    fun closeMenu() {
+                        menuOpen = false
+                        searchMenuOpen = false
                     }
-                    DropdownMenu(addMenuOpen, { addMenuOpen = false }) {
-                        DropdownMenuItem(text = { Text("SKILLS") }, enabled = onSkills != null,
-                            onClick = { addMenuOpen = false; onSkills?.invoke() })
-                        DropdownMenuItem(
-                            text = { Text("Прикрепить файлы") },
-                            leadingIcon = { Text("📎") },
-                            onClick = {
-                                addMenuOpen = false
-                                onPickAttachments(attachments.size) { attachments = attachments + it }
-                            },
-                        )
-                        if (onPlanning != null) {
+                    TextButton(onClick = { searchMenuOpen = false; menuOpen = true },
+                        modifier = Modifier.size(32.dp).semantics { contentDescription = "Инструменты и параметры сессии" },
+                        contentPadding = PaddingValues(0.dp)) {
+                        val iconColor = MaterialTheme.colorScheme.primary
+                        Canvas(Modifier.size(18.dp)) {
+                            drawCircle(iconColor, style = Stroke(width = 1.5.dp.toPx()))
+                            drawCircle(iconColor, radius = 1.dp.toPx(), center = Offset(center.x, size.height * 0.3f))
+                            drawLine(iconColor, Offset(center.x, size.height * 0.48f),
+                                Offset(center.x, size.height * 0.73f), strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                        }
+                    }
+                    DropdownMenu(menuOpen, ::closeMenu) {
+                        if (searchMenuOpen && onSearchProvider != null) {
                             DropdownMenuItem(
-                                text = { Text("Режим планирования") },
-                                leadingIcon = { Text("🔀") },
-                                trailingIcon = if (planning) { { Text("✓") } } else null,
+                                text = { Text("Поисковый движок") },
+                                leadingIcon = { Text("‹") },
+                                onClick = { searchMenuOpen = false },
+                            )
+                            HorizontalDivider()
+                            SearchProvider.entries.forEach { provider ->
+                                DropdownMenuItem(
+                                    text = { Text(provider.menuLabel) },
+                                    trailingIcon = if (searchProvider == provider) { { Text("✓") } } else null,
+                                    onClick = { closeMenu(); onSearchProvider(provider) },
+                                )
+                            }
+                        } else {
+                            DropdownMenuItem(text = { Text("SKILLS") }, enabled = onSkills != null,
+                                onClick = { closeMenu(); onSkills?.invoke() })
+                            DropdownMenuItem(
+                                text = { Text("Прикрепить файлы") },
+                                leadingIcon = { Text("📎") },
                                 onClick = {
-                                    addMenuOpen = false
-                                    if (!planning) onPlanning()
+                                    closeMenu()
+                                    onPickAttachments(attachments.size) { attachments = attachments + it }
                                 },
                             )
+                            if (onPlanning != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Режим планирования") },
+                                    leadingIcon = { Text("🔀") },
+                                    trailingIcon = if (planning) { { Text("✓") } } else null,
+                                    onClick = {
+                                        closeMenu()
+                                        if (!planning) onPlanning()
+                                    },
+                                )
+                            }
+                            if (onSearchProvider != null || engine != null) HorizontalDivider()
+                            if (onSearchProvider != null) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text("Поисковый движок")
+                                            Text(searchProvider.menuLabel, style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    },
+                                    trailingIcon = { Text("›") },
+                                    onClick = { searchMenuOpen = true },
+                                )
+                            }
+                            if (engine != null) {
+                                Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                                    Text("Backend coding agent", style = MaterialTheme.typography.bodyLarge)
+                                    Text(engine.title, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     }
                 }
@@ -1567,3 +1615,11 @@ internal fun CodingComposer(
         }
     }
 }
+
+private val SearchProvider.menuLabel: String
+    get() = when (this) {
+        SearchProvider.AUTO -> "Авто"
+        SearchProvider.WIKIPEDIA -> "Wikipedia"
+        SearchProvider.QUERIT -> "Querit"
+        SearchProvider.GOOGLE -> "Google"
+    }

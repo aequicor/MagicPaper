@@ -6,7 +6,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /** Structured refinement: only validated proposals can replace the current tree. */
-class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }) {
+class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true },
+    private val completePlanning: suspend (Plan, LlmProfile, List<LlmMessage>, (CodingStep) -> Unit) -> String = { _, _, _, _ -> error("Планировщик проекта не подключён.") },
+) {
     @Serializable private data class Proposal(
         val isolatedWorkspace: Boolean? = null, val reply: String = "", val questions: List<PlanningQuestion> = emptyList(), val tree: List<DecisionNode> = emptyList(), val milestones: List<Milestone> = emptyList(), val questionStageIds: List<String> = emptyList(),
     )
@@ -15,8 +17,9 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
         val roster = profiles.filter { it.connectionConfigured && it.supportsCoding }
         val messages = mutableListOf(
             LlmMessage(LlmChatRole.SYSTEM, """
-                Ты оркестратор дерева решений проекта. Сначала уточняй критерии успеха и существенные ограничения,
-                задавая не более трёх вопросов за раз. Когда данных достаточно или пользователь просит построить варианты,
+                Ты оркестратор дерева решений проекта. Изучай код и существующие изменения инструментами чтения.
+                Уточняй критерии успеха и существенные ограничения, когда считаешь необходимым, задавая не более трёх вопросов за раз.
+                Не задавай обязательных вопросов, если данных достаточно. Когда данных достаточно или пользователь просит построить варианты,
                 предложи альтернативы на уровне проекта и там, где полезно, внутри этапов. Оцени этапы и варианты:
                 quality, speed, economy, safety: 0 неизвестно, 1 низко, 2 средне, 3 высоко (больше лучше), complexity: 0..3.
                 Объясни оценки и рекомендацию. Не выдумывай точные цены и время.
@@ -61,7 +64,7 @@ class DecisionPlanner(private val gateway: LlmGateway, private val json: Json = 
         var lastError = "Некорректный ответ"
         repeat(3) { attempt ->
             requirePlanningRequestSize(messages)
-            val raw = gateway.completeWithActivity(planner!!, messages, onActivity)
+            val raw = completePlanning(plan, planner!!, messages, onActivity)
             try {
                 val start = raw.indexOf('{'); val end = raw.lastIndexOf('}')
                 require(start >= 0 && end > start) { "Ожидается JSON объект" }

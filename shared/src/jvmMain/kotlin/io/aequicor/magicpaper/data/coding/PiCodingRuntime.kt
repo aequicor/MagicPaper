@@ -13,6 +13,7 @@ import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
+import io.aequicor.magicpaper.domain.forModel
 import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
@@ -175,7 +176,13 @@ class PiCodingRuntime(
         prompt: String,
         profile: LlmProfile?,
         attachments: List<Attachment>,
-    ): Flow<CodingEvent> = flow {
+    ): Flow<CodingEvent> = runAgent(project, session, prompt, profile, attachments, planning = false)
+
+    override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> =
+        runAgent(project, session.copy(piSessionId = ""), prompt, profile, emptyList(), planning = true)
+
+    private fun runAgent(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?,
+        attachments: List<Attachment>, planning: Boolean): Flow<CodingEvent> = flow {
         val dir = File(project.path)
         if (!piCli.isFile) {
             emit(CodingEvent.Failed("Движок не установлен. Нажмите «Подготовить движок»."))
@@ -206,15 +213,17 @@ class PiCodingRuntime(
 
         // Кодинг-контур: модель и всё, что из неё выводится (models.json,
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
-        val codingProfile = profile.forCoding()
-        writePiConfig(codingProfile, sessionHome(session.id), imageInput = computerUse?.grant(session.id) != null)
+        val codingProfile = if (planning) profile.forModel() else profile.forCoding()
+        writePiConfig(codingProfile, sessionHome(session.id), imageInput = !planning && computerUse?.grant(session.id) != null)
+        if (planning) writeAtomically(File(sessionHome(session.id), HINTS_FILE), io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS +
+            "\n" + codingProfile.advanced.systemPromptOverride)
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
         val effectivePrompt = promptWithAttachments(prompt, attachedPaths)
         // Лечим и старые установки (до защиты кодировки) — без пересоздания движка.
         ensureFuzzySafety()
-        if (onWindows() && windowsBashProbe() == null) {
+        if (!planning && onWindows() && windowsBashProbe() == null) {
             emit(
                 CodingEvent.Notice(
                     "Рабочего bash не найдено (в WSL нет дистрибутива) — команды агент выполняет " +
@@ -232,15 +241,15 @@ class PiCodingRuntime(
         // Инициализатор формален: тело цикла выполняется раньше проверки выхода.
         var outcome = AttemptOutcome(launchError = "агент не запущен")
         val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
-        val computerBridge = computerUse?.bridge(session.id)
-        val questionnaireBridge = io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
+        val computerBridge = if (planning) null else computerUse?.bridge(session.id)
+        val questionnaireBridge = if (planning) null else io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
         try {
             writeAtomically(File(sessionHome(session.id), "questionnaire.mjs"), io.aequicor.magicpaper.data.questionnaire.PiQuestionnaireExtension.source)
             if (computerBridge != null) {
                 writeAtomically(File(sessionHome(session.id), "computer-use.mjs"), io.aequicor.magicpaper.data.computer.PiComputerExtension.source)
             }
             while (true) {
-                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
@@ -255,7 +264,7 @@ class PiCodingRuntime(
                 )
             }
         } finally {
-            questionnaireBridge.close()
+            questionnaireBridge?.close()
             computerBridge?.close()
             abortedSessions.remove(session.id)
         }
@@ -280,6 +289,7 @@ class PiCodingRuntime(
         emit: suspend (CodingEvent) -> Unit,
         computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null,
         questionnaireBridge: io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge? = null,
+        planning: Boolean = false,
     ): AttemptOutcome {
         var tokenBroker: SubscriptionTokenBroker? = null
         val args = mutableListOf(
@@ -296,7 +306,8 @@ class PiCodingRuntime(
         // Windows ломается при сборке командной строки ProcessBuilder: аргумент
         // распадается на части, и обрывки уходят в «сообщения» — агент видит
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
-        args += listOf("--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
+        args += listOf(if (planning) "--system-prompt" else "--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
+        if (planning) args += listOf("--tools", "read,grep,find,ls,planning_git", "--extension", resourceScript("planning-tools.mjs").absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
         if (questionnaireBridge != null) args += listOf("--extension", File(sessionHome(session.id), "questionnaire.mjs").absolutePath)
         if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)

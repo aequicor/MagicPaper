@@ -22,6 +22,9 @@ internal class CodexProviderBridge private constructor(private val process: Proc
             val providerId = "magicpaper-api"
             val provider = PiModelsConfig.root(profile)["providers"]!!.jsonObject[PiModelsConfig.PROVIDER_ID]!!.jsonObject
             val model = JsonObject(provider["models"]!!.jsonArray.first().jsonObject + mapOf(
+                // pi's registry fills these defaults; the direct library bridge must do the same.
+                "input" to (provider["models"]!!.jsonArray.first().jsonObject["input"] ?: buildJsonArray { add("text") }),
+                "cost" to buildJsonObject { put("input", 0); put("output", 0); put("cacheRead", 0); put("cacheWrite", 0) },
                 "api" to provider["api"]!!, "baseUrl" to provider["baseUrl"]!!,
                 "provider" to JsonPrimitive(when (profile.provider) { ProviderType.ANTHROPIC -> "anthropic"; ProviderType.GOOGLE -> "google"; ProviderType.OPENROUTER -> "openrouter"; else -> "magicpaper" }),
                 "compat" to (provider["compat"] ?: JsonObject(emptyMap())),
