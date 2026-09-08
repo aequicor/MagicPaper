@@ -52,6 +52,74 @@ class CodingRunRecorderTest {
     }
 
     @Test
+    fun finalThinkingAndTextReplaceStreamedMessageWithoutDuplicatingEither() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.MessageStarted)
+        recorder.apply(CodingEvent.ThinkingDelta("Черновик рассуждения"))
+        recorder.apply(CodingEvent.TextDelta("Черновик ответа"))
+        recorder.apply(CodingEvent.FinalThinking("Полное рассуждение"))
+        assertEquals(listOf("Полное рассуждение", "Черновик ответа"), recorder.timeline().map { it.title })
+        recorder.apply(CodingEvent.FinalText("Полный ответ"))
+        val expected = listOf(
+            CodingStep(CodingStepKind.THINKING, "Полное рассуждение"),
+            CodingStep(CodingStepKind.ANSWER, "Полный ответ"),
+        )
+        assertEquals(expected, recorder.draft(true).steps)
+        recorder.apply(CodingEvent.AgentEnd)
+        val saved = recorder.message("response", 1)
+        assertEquals(expected, saved.steps)
+        assertEquals("Полный ответ", saved.text)
+    }
+
+    @Test
+    fun finalMessageReconcilesInterleavedThinkingAndTextFragments() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.MessageStarted)
+        recorder.apply(CodingEvent.ThinkingDelta("Первая мысль"))
+        recorder.apply(CodingEvent.TextDelta("Первая часть"))
+        recorder.apply(CodingEvent.ThinkingDelta("Вторая мысль"))
+        recorder.apply(CodingEvent.TextDelta("Вторая часть"))
+        recorder.apply(CodingEvent.FinalThinking("Первая мысль\n\nВторая мысль"))
+        recorder.apply(CodingEvent.FinalText("Первая часть. Вторая часть."))
+        assertEquals(listOf(CodingStepKind.THINKING, CodingStepKind.ANSWER), recorder.timeline().map { it.kind })
+        assertEquals("Первая мысль\n\nВторая мысль", recorder.timeline().first().title)
+        assertEquals("Первая часть. Вторая часть.", recorder.message("response", 1).text)
+    }
+
+    @Test
+    fun identicalTextInSeparateMessagesIsPreservedAndNotConcatenatedWhileStreaming() {
+        for (withThinking in listOf(false, true)) {
+            val recorder = CodingRunRecorder()
+            repeat(2) {
+                recorder.apply(CodingEvent.MessageStarted)
+                if (withThinking) recorder.apply(CodingEvent.ThinkingDelta("Проверяю"))
+                recorder.apply(CodingEvent.TextDelta("Готово"))
+                assertEquals(it + 1, recorder.timeline().count { step -> step.kind == CodingStepKind.ANSWER })
+                if (withThinking) recorder.apply(CodingEvent.FinalThinking("Проверено"))
+                recorder.apply(CodingEvent.FinalText("Готово"))
+            }
+            val expected = if (withThinking) listOf("Проверено", "Готово", "Проверено", "Готово") else listOf("Готово", "Готово")
+            assertEquals(expected, recorder.timeline().map { it.title })
+            assertEquals("Готово\n\nГотово", recorder.message("response", 1).text)
+        }
+    }
+
+    @Test
+    fun finalMessageAfterToolDoesNotReplaceEarlierAnswerOrThinking() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.ThinkingDelta("До инструмента"))
+        recorder.apply(CodingEvent.TextDelta("Проверю файл"))
+        recorder.apply(CodingEvent.ToolStarted("read", "a.txt", callId = "r1"))
+        recorder.apply(CodingEvent.ToolFinished("read", false, callId = "r1", resultPreview = "data"))
+        recorder.apply(CodingEvent.ThinkingDelta("После инструмента"))
+        recorder.apply(CodingEvent.TextDelta("Черновик"))
+        recorder.apply(CodingEvent.FinalThinking("Проверка завершена"))
+        recorder.apply(CodingEvent.FinalText("Готово"))
+        assertEquals(listOf("До инструмента", "Проверю файл", "⚒ read · a.txt", "Проверка завершена", "Готово"),
+            recorder.timeline().map { it.title })
+    }
+
+    @Test
     fun timelineKeepsChronologicalOrder() {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.TextDelta("Сейчас посмотрю файл. "))

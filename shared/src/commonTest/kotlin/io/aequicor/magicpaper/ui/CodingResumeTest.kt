@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui
 
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
+import io.aequicor.magicpaper.data.coding.PiEventParser
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -17,6 +18,7 @@ class CodingResumeTest {
         val reconciled = mutableListOf<String>()
         val gate = CompletableDeferred<Unit>()
         var failure = false
+        var reply = listOf<CodingEvent>(CodingEvent.FinalText("Done"))
         override val supported = true
         override val rootPath = "/fake"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
@@ -30,7 +32,7 @@ class CodingResumeTest {
             this@Runtime.attachments += attachments
             emit(CodingEvent.SessionStarted("native-${session.id}"))
             gate.await()
-            if (failure) emit(CodingEvent.Failed("Offline")) else emit(CodingEvent.FinalText("Done"))
+            if (failure) emit(CodingEvent.Failed("Offline")) else reply.forEach { emit(it) }
             emit(CodingEvent.Finished)
         }
     }
@@ -40,7 +42,7 @@ class CodingResumeTest {
         try {
             val f = ModelSettingsFixture()
             val repo = JsonCodingProjectRepository(f.kv, f.json)
-            repo.save(project); repo.saveSession(session)
+            repo.save(project); repo.saveSession(session.copy(engine = CodingEngine.PI))
             val first = Runtime()
             val vm = f.prepare(first, repo); runCurrent()
             val file = Attachment("file", "notes.txt", "text/plain", 3, "YWJj", AttachmentKind.TEXT)
@@ -48,7 +50,16 @@ class CodingResumeTest {
             assertEquals("native-session", repo.sessions(project.id).single().piSessionId)
             assertEquals(ExecutionIntent.RUN, repo.sessions(project.id).single().pendingRun?.intent)
             vm.shutdownCoding(); runCurrent()
-            val nextRuntime = Runtime()
+            val nextRuntime = Runtime().apply {
+                // Pi streams thinking/text, then repeats both in the final message snapshot.
+                reply = listOf(
+                    """{"type":"message_start","message":{"role":"assistant","content":[]}}""",
+                    """{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Checking saved context"}}""",
+                    """{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Done"}}""",
+                    """{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Checked saved context"},{"type":"text","text":"Done"}],"stopReason":"stop"}}""",
+                    """{"type":"agent_end"}""",
+                ).flatMap(PiEventParser::parseEvents)
+            }
             val next = f.prepare(nextRuntime, JsonCodingProjectRepository(f.kv, f.json)); runCurrent()
             assertEquals(1, nextRuntime.calls.size)
             assertEquals("native-session", nextRuntime.calls.single().first.piSessionId)
@@ -56,6 +67,10 @@ class CodingResumeTest {
             assertEquals(listOf(file), nextRuntime.attachments.single())
             assertEquals(1, repo.messages(project.id, session.id).count { it.role == CodingRole.USER })
             nextRuntime.gate.complete(Unit); runCurrent()
+            val response = repo.messages(project.id, session.id).single { it.role == CodingRole.AGENT }
+            assertEquals("Done", response.text)
+            assertEquals(listOf(CodingStepKind.THINKING, CodingStepKind.ANSWER), response.steps.map { it.kind })
+            assertEquals("Checked saved context", response.steps.first().title)
             assertNull(repo.sessions(project.id).single().pendingRun)
             assertFalse(next.state.value.coding.currentSession!!.canResume)
             next.shutdownCoding()

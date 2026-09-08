@@ -164,6 +164,8 @@ class CodingRunRecorder {
     /** Накопленный текст рассуждения модели (thinking) до его фиксации в ленту. */
     private val thinking = StringBuilder()
     private val steps = mutableListOf<CodingStep>()
+    /** Only fragments of the current model message may be replaced by its final snapshot. */
+    private var messageStartIndex = 0
     private var failed: String? = null
 
     /** Прогон ждёт первого ответа модели (или продолжения после действия). */
@@ -173,7 +175,10 @@ class CodingRunRecorder {
     fun apply(event: CodingEvent): Boolean {
         when (event) {
             is CodingEvent.SessionStarted -> Unit
-            is CodingEvent.MessageStarted -> awaiting = false
+            is CodingEvent.MessageStarted -> {
+                flushMessage()
+                awaiting = false
+            }
             is CodingEvent.TextDelta -> {
                 awaiting = false
                 // Ответ начался — рассуждение до него остаётся в прошлом.
@@ -188,27 +193,20 @@ class CodingRunRecorder {
             }
             is CodingEvent.FinalThinking -> {
                 awaiting = false
-                flushText()
-                // message_end авторитетнее потоковых дельт рассуждения.
-                if (event.text.isNotBlank()) {
-                    thinking.setLength(0)
-                    thinking.append(event.text)
-                }
+                // Pi repeats thinking at message_end, after the answer has already streamed.
+                // Update that message's earlier thinking without committing a second answer.
+                replaceFragment(CodingStepKind.THINKING, thinking, event.text)
             }
             is CodingEvent.FinalText -> {
                 awaiting = false
                 flushThinking()
                 // message_end авторитетнее потоковых дельт текущего сообщения ассистента.
-                if (event.text.isNotBlank()) {
-                    text.setLength(0)
-                    text.append(event.text)
-                }
+                replaceFragment(CodingStepKind.ANSWER, text, event.text)
             }
             is CodingEvent.ToolStarted -> {
                 awaiting = false
                 // Перед действием фиксируем текст: лента остаётся хронологичной.
-                flushThinking()
-                flushText()
+                flushMessage()
                 steps += CodingStep(
                     kind = if (event.isExec) CodingStepKind.EXEC else CodingStepKind.TOOL,
                     title = "⚒ ${event.tool}" + if (event.summary.isNotEmpty()) " · ${event.summary}" else "",
@@ -266,12 +264,32 @@ class CodingRunRecorder {
             }
             is CodingEvent.AgentEnd -> {
                 awaiting = false
-                flushThinking()
-                flushText()
+                flushMessage()
             }
             is CodingEvent.Finished -> return true
         }
         return false
+    }
+
+    private fun flushMessage() {
+        flushThinking()
+        flushText()
+        messageStartIndex = steps.size
+    }
+
+    /** Reconcile both live and already flushed fragments; never deduplicate by text equality. */
+    private fun replaceFragment(kind: CodingStepKind, buffer: StringBuilder, value: String) {
+        if (value.isBlank()) return
+        buffer.setLength(0)
+        val first = (messageStartIndex until steps.size).firstOrNull { steps[it].kind == kind }
+        if (first == null) {
+            buffer.append(value)
+        } else {
+            steps[first] = steps[first].copy(title = value.trim())
+            for (index in steps.lastIndex downTo first + 1) {
+                if (steps[index].kind == kind) steps.removeAt(index)
+            }
+        }
     }
 
     /** Переносит накопленный текст в ленту как шаг ответа. */
