@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.ui.components.MagicFilterChip
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.UiState
@@ -30,7 +31,7 @@ internal fun NewCodingSessionDialog(defaultEngine: CodingEngine, onDismiss: () -
 internal fun EngineChoices(selected: CodingEngine, onSelect: (CodingEngine) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         CodingEngine.entries.forEach { engine ->
-            FilterChip(selected = selected == engine, onClick = { onSelect(engine) }, label = { Text(engine.title) })
+            MagicFilterChip(selected = selected == engine, onClick = { onSelect(engine) }, label = { Text(engine.title) })
         }
     }
 }

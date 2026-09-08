@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.ui.components.MagicFilterChip
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -18,7 +19,7 @@ import kotlinx.coroutines.launch
 internal fun SearchProviderPicker(selected: SearchProvider, onSelect: (SearchProvider) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SearchProvider.entries.forEach { provider ->
-            FilterChip(selected = selected == provider, onClick = { onSelect(provider) }, label = {
+            MagicFilterChip(selected = selected == provider, onClick = { onSelect(provider) }, label = {
                 Text(when (provider) {
                     SearchProvider.AUTO -> "Авто"
                     SearchProvider.WIKIPEDIA -> "Wikipedia"

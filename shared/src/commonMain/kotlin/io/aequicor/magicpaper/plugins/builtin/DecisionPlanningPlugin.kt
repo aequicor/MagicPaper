@@ -12,6 +12,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.aequicor.magicpaper.ui.components.planningGraphProjection
 import io.aequicor.magicpaper.data.planning.PlanningStore
+import io.aequicor.magicpaper.ui.components.MagicFilterChip
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.plugins.CodingSessionPanel
@@ -131,13 +132,13 @@ class CodingPlanningPlugin(
         Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Планирование", style = MaterialTheme.typography.headlineMedium)
             if (locked == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                projects.forEach { p -> FilterChip(project?.id == p.id, { projectId = p.id }, enabled = !busy && !submitting, label = { Text(p.name) }) }
+                projects.forEach { p -> MagicFilterChip(project?.id == p.id, { projectId = p.id }, enabled = !busy && !submitting, label = { Text(p.name) }) }
             }
             if (!loaded) { LinearProgressIndicator(Modifier.fillMaxWidth()); notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }; return@Column }
             if (project == null) { Text("Сначала добавьте проект в разделе «Проекты и код»."); return@Column }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PlanningStep.entries.filter { it != PlanningStep.STATUS }.forEachIndexed { index, target ->
-                    FilterChip(step == target, { navigate(target) }, enabled = !busy && !submitting && when (target) {
+                    MagicFilterChip(step == target, { navigate(target) }, enabled = !busy && !submitting && when (target) {
                         PlanningStep.GOAL -> !running
                         PlanningStep.CLARIFY -> plan != null && !running
                         PlanningStep.REVIEW -> plan?.milestones?.isNotEmpty() == true
@@ -168,12 +169,12 @@ class CodingPlanningPlugin(
                             }
                             Text("Движок сессий", style = MaterialTheme.typography.titleMedium)
                             if (plan == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                CodingEngine.entries.forEach { engine -> FilterChip(selected = (draftEngine ?: settings.defaultCodingEngine) == engine,
+                                CodingEngine.entries.forEach { engine -> MagicFilterChip(selected = (draftEngine ?: settings.defaultCodingEngine) == engine,
                                     onClick = { draftEngine = engine }, enabled = !busy && !submitting, label = { Text(engine.title) }) }
                             } else Text(plan.engine?.title ?: "Закреплён за сессиями", style = MaterialTheme.typography.bodySmall)
                             Text("Search engine", style = MaterialTheme.typography.titleMedium)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SearchProvider.entries.forEach { provider -> FilterChip((plan?.searchProvider ?: draftSearch ?: settings.searchProvider) == provider,
+                                SearchProvider.entries.forEach { provider -> MagicFilterChip((plan?.searchProvider ?: draftSearch ?: settings.searchProvider) == provider,
                                     { if (plan == null) draftSearch = provider else edit { it.copy(searchProvider = provider) } }, enabled = !busy && !submitting, label = { Text(searchLabel(provider)) }) }
                             }
                             Text("Ключи Google и Querit задаются в настройках приложения.", style = MaterialTheme.typography.bodySmall)
@@ -333,7 +334,7 @@ class CodingPlanningPlugin(
             }
         }
         if (node.kind == DecisionKind.CHOICE) plan.tree.filter { it.id in node.children }.forEach { option ->
-            FilterChip(option.id == node.selectedOptionId, { edit { old -> old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(selectedOptionId = option.id, manualSelection = true) else it }) } }, label = { Text(option.title) })
+            MagicFilterChip(option.id == node.selectedOptionId, { edit { old -> old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(selectedOptionId = option.id, manualSelection = true) else it }) } }, label = { Text(option.title) })
         }
         OutlinedTextField(title, { title = it }, enabled = !frozen, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
         if (stage != null) {
@@ -368,7 +369,7 @@ class CodingPlanningPlugin(
             if (frozen) Text("Этап начат. Конфигурация и история закреплены.")
             Text("Зависит от:")
             FlowRow { plan.milestones.filter { it.id != stage.id }.forEach { dep ->
-                FilterChip(dep.id in stage.dependsOn, enabled = !frozen, onClick = { updateStage { it.copy(dependsOn = if (dep.id in it.dependsOn) it.dependsOn - dep.id else it.dependsOn + dep.id) } }, label = { Text(dep.title) })
+                MagicFilterChip(dep.id in stage.dependsOn, enabled = !frozen, onClick = { updateStage { it.copy(dependsOn = if (dep.id in it.dependsOn) it.dependsOn - dep.id else it.dependsOn + dep.id) } }, label = { Text(dep.title) })
             } }
             stage.attempts.forEach { attempt ->
                 Text("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)} · ${attempt.assignment.displayName.ifBlank { attempt.assignment.modelId }} · ${attempt.assignment.effort.shortLabel}")

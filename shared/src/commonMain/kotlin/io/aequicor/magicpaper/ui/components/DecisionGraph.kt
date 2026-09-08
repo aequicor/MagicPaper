@@ -141,8 +141,8 @@ private fun points(value: Double): String {
     val selectedStages = schedule.order.toSet()
     Column(modifier) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(!network, { network = false }, label = { Text("Все варианты") })
-            FilterChip(network, { network = true }, label = { Text("Выбранный путь") })
+            MagicFilterChip(!network, { network = false }, label = { Text("Все варианты") })
+            MagicFilterChip(network, { network = true }, label = { Text("Выбранный путь") })
         }
         Text(when {
             schedule.errors.isNotEmpty() -> schedule.errors.joinToString("; ")
@@ -155,7 +155,7 @@ private fun points(value: Double): String {
                     Text(choice.title, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(180.dp))
                     choice.children.forEach { id -> projected.tree.firstOrNull { it.id == id }?.let { option ->
                         val enabled = remember(sourcePlan, choice.id, id) { runCatching { selectPlanningOption(sourcePlan, choice.id, id) }.isSuccess }
-                        FilterChip(selected = choice.selectedOptionId == id,
+                        MagicFilterChip(selected = choice.selectedOptionId == id,
                             onClick = { onChooseOption?.invoke(choice.id, id) },
                             enabled = onChooseOption != null && enabled,
                             label = { Text(option.title) })
