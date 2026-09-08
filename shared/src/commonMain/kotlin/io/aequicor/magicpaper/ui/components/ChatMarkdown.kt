@@ -26,10 +26,11 @@ import io.aequicor.magicpaper.ui.theme.MagicFonts
  * Парсинг асинхронный: предыдущий текст остаётся видимым до готовности нового.
  */
 @Composable
-fun ChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = false) {
+fun ChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = false, streaming: Boolean = false) {
     val bodyStyle = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge
+    val displayedText = rememberStreamingText(text, streaming)
     // Loading would briefly collapse the message on every streamed chunk and move the scroll anchor.
-    val markdownState = rememberMarkdownState(text, retainState = true)
+    val markdownState = rememberMarkdownState(displayedText, retainState = true)
     val highlightsBuilder = remember {
         Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
     }

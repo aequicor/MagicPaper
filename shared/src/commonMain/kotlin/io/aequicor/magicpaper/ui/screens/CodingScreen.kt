@@ -874,7 +874,9 @@ internal fun CodingChat(
     val hasDraft = visibleDraft.steps.isNotEmpty()
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
     val status: @Composable () -> Unit = {
-        AgentMessageStatus(draft, thinkingExpanded, { thinkingExpanded = !thinkingExpanded })
+        key(session.session.id) {
+            AgentMessageStatus(draft, thinkingExpanded, { thinkingExpanded = !thinkingExpanded })
+        }
     }
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
@@ -943,7 +945,9 @@ internal fun CodingChat(
                 }
                 if (hasDraft || (busy && statusMessageId == null)) {
                     item(key = "draft") {
-                        ChatScrollItem(scroll, "draft") { DraftBubble(visibleDraft, if (busy) status else null) }
+                        ChatScrollItem(scroll, "draft") {
+                            key(session.session.id) { DraftBubble(visibleDraft, if (busy) status else null) }
+                        }
                     }
                 }
             }
@@ -1056,10 +1060,10 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
     when (step.kind) {
         CodingStepKind.ANSWER -> {
             Spacer(Modifier.height(4.dp))
-            ChatMarkdown(text = step.title)
+            ChatMarkdown(text = step.title, streaming = live)
             Spacer(Modifier.height(4.dp))
         }
-        CodingStepKind.THINKING -> ThinkingStepRow(step)
+        CodingStepKind.THINKING -> ThinkingStepRow(step, live)
         CodingStepKind.ERROR -> SelectionContainer {
             Text(
                 "✕ ${step.title}",
@@ -1082,7 +1086,7 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
 
 /** Свёрнутая строка рассуждения в ленте: весь текст — по клику (нижняя панель и так его показывает). */
 @Composable
-private fun ThinkingStepRow(step: CodingStep) {
+private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable("thinking-" + step.title.take(24).hashCode()) { mutableStateOf(false) }
     Column(
         modifier = Modifier
@@ -1113,7 +1117,7 @@ private fun ThinkingStepRow(step: CodingStep) {
         }
         if (expanded) {
             Spacer(Modifier.height(4.dp))
-            ChatMarkdown(step.title)
+            ChatMarkdown(step.title, streaming = live)
         }
     }
 }
@@ -1212,8 +1216,14 @@ private fun DraftBubble(draft: CodingDraft, footer: (@Composable () -> Unit)? = 
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        draft.steps.filter { footer == null || it.kind != CodingStepKind.THINKING }
-            .forEach { CodingStepRow(it, live = true) }
+        draft.steps.forEachIndexed { index, step ->
+            if (footer == null || step.kind != CodingStepKind.THINKING) {
+                key(index, step.kind) {
+                    CodingStepRow(step, live = draft.active &&
+                        (index == draft.steps.lastIndex || step.kind == CodingStepKind.TOOL || step.kind == CodingStepKind.EXEC))
+                }
+            }
+        }
         footer?.invoke()
     }
 }
@@ -1314,9 +1324,9 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, onToggle:
                         }
                         val scroll = rememberScrollState()
                         Box(Modifier.fillMaxWidth().heightIn(max = 190.dp).verticalScroll(scroll)) {
-                            ChatMarkdown(thinking, compact = true)
+                            ChatMarkdown(thinking, compact = true, streaming = draft.active)
                         }
-                        LaunchedEffect(thinking) { scroll.scrollTo(scroll.maxValue) }
+                        LaunchedEffect(scroll.maxValue) { scroll.scrollTo(scroll.maxValue) }
                     }
                 }
             }
