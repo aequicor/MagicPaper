@@ -23,12 +23,13 @@ import io.aequicor.magicpaper.ui.theme.MagicFonts
 /**
  * Markdown ответа агента: заголовки, списки, таблицы, ссылки и блоки кода
  * с подсветкой синтаксиса. У блока кода — шапка с языком и кнопкой копирования.
- * Парсинг асинхронный и переживает рекомпозицию (помнит состояние по тексту).
+ * Парсинг асинхронный: предыдущий текст остаётся видимым до готовности нового.
  */
 @Composable
 fun ChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = false) {
     val bodyStyle = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge
-    val markdownState = rememberMarkdownState(text)
+    // Loading would briefly collapse the message on every streamed chunk and move the scroll anchor.
+    val markdownState = rememberMarkdownState(text, retainState = true)
     val highlightsBuilder = remember {
         Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
     }
