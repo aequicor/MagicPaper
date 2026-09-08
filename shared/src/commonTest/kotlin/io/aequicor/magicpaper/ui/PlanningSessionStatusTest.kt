@@ -13,6 +13,61 @@ class PlanningSessionStatusTest {
         intent = ExecutionIntent.RUN, milestones = listOf(stage))
     private val question = CodingMessage("question", CodingRole.AGENT, "Уточните формат", createdAt = 1,
         planning = PlanningChatBlock(plan.id, questions = listOf(PlanningQuestion("format", "Формат")), sourceStageId = stage.id))
+    private val proposal = PlanProposal("proposal", plan.runId, plan.tree, plan.milestones, plan.tree,
+        plan.milestones + Milestone("followup", "Проверка доработки"), "Переключить оставшуюся работу на другие модели")
+
+    @Test fun proposalDuringExecutionDoesNotAskForAnotherAnswer() {
+        val answer = CodingMessage("answer", CodingRole.USER, "PDF", createdAt = 2,
+            planning = PlanningChatBlock(plan.id, replyTo = question.id))
+        val executing = plan.copy(phase = ExecutionPhase.EXECUTING, proposal = proposal)
+        assertFalse(executing.proposalReadyForConfirmation)
+        val ui = CodingSessionUi(parent, listOf(question, answer), plan = executing)
+        assertEquals(CodingSessionStatus.WORKING, ui.status)
+        assertEquals(CodingSessionStatus.WORKING, ui.copy(running = true).status)
+        assertEquals(CodingSessionStatus.WAITING, ui.copy(messages = listOf(question)).status)
+    }
+
+    @Test fun proposalBecomesAConfirmationOnlyWhenCurrentRunHasSettled() {
+        val finished = plan.copy(phase = ExecutionPhase.COMPLETE, proposal = proposal,
+            milestones = listOf(stage.copy(status = MilestoneStatus.DONE)))
+        assertTrue(finished.proposalReadyForConfirmation)
+        val ui = CodingSessionUi(parent, plan = finished)
+        assertEquals(CodingSessionStatus.CONFIRMATION, ui.status)
+        assertEquals(CodingSessionStatus.WAITING, ui.copy(awaitingUser = true).status)
+        assertEquals(CodingSessionStatus.BLOCKED, ui.copy(failedRequest = true).status)
+        assertEquals(CodingSessionStatus.IDLE, ui.copy(plan = finished.copy(proposal = null)).status)
+        assertEquals(CodingSessionStatus.CONFIRMATION,
+            aggregateCodingStatus(listOf(ui.status, CodingSessionStatus.WORKING)))
+    }
+
+    @Test fun finalChecksRemainWorkingUntilAProposalCanBeConfirmed() {
+        val checked = plan.copy(proposal = proposal, milestones = listOf(stage.copy(status = MilestoneStatus.DONE)))
+        for (phase in listOf(ExecutionPhase.RECOVERING, ExecutionPhase.VERIFYING, ExecutionPhase.APPLYING)) {
+            val current = checked.copy(phase = phase)
+            assertFalse(current.proposalReadyForConfirmation)
+            assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent, plan = current).status)
+        }
+        val issue = PlanningIssue(IssueKind.VERIFICATION, "Требуется доработка", requiresUser = true)
+        val rejected = checked.copy(phase = ExecutionPhase.WAITING, issue = issue,
+            finalAttempt = attempt.copy(phase = AttemptPhase.VERIFYING, error = issue))
+        assertTrue(rejected.proposalReadyForConfirmation)
+        assertEquals(CodingSessionStatus.CONFIRMATION, CodingSessionUi(parent, plan = rejected).status)
+        val uncertain = rejected.copy(finalAttempt = rejected.finalAttempt!!.copy(pendingToolExternal = true))
+        assertFalse(uncertain.proposalReadyForConfirmation)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, plan = uncertain).status)
+    }
+
+    @Test fun unavailableProposalDoesNotHideResumeOrAnEventWait() {
+        for (intent in listOf(ExecutionIntent.PAUSE, ExecutionIntent.STOP)) {
+            val paused = plan.copy(phase = ExecutionPhase.EXECUTING, intent = intent, proposal = proposal)
+            assertTrue(CodingSessionUi(parent, plan = paused).canResume)
+            assertNotEquals(CodingSessionStatus.WAITING, CodingSessionUi(parent, plan = paused).status)
+        }
+        val scheduled = plan.copy(phase = ExecutionPhase.WAITING, proposal = proposal,
+            milestones = listOf(stage.copy(attempts = listOf(attempt.copy(waitingForEvent = "rule")))))
+        assertEquals(CodingSessionStatus.SCHEDULED, CodingSessionUi(parent, plan = scheduled).status)
+        assertFalse(CodingSessionUi(parent, plan = scheduled).canResume)
+    }
 
     @Test fun continueIsOfferedForStoppedOrBlockedWorkButNotQuestionsOrCompletedPlans() {
         for (intent in listOf(ExecutionIntent.PAUSE, ExecutionIntent.STOP)) {

@@ -91,6 +91,9 @@ enum class CodingSessionStatus {
     /** Агент задал вопрос, не подтвердил действие или запрос без ответа — жёлтый. */
     WAITING,
 
+    /** Доработка готова к подтверждению; ответа на вопрос не требуется. */
+    CONFIRMATION,
+
     /** Выполнение остановлено из-за ошибки; это не вопрос пользователю. */
     BLOCKED,
 
@@ -131,10 +134,11 @@ fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSess
     statuses.minByOrNull { when (it) {
         CodingSessionStatus.WAITING -> 0
         CodingSessionStatus.BLOCKED -> 1
-        CodingSessionStatus.WORKING -> 2
-        CodingSessionStatus.QUEUED -> 3
-        CodingSessionStatus.SCHEDULED -> 4
-        CodingSessionStatus.IDLE -> 5
+        CodingSessionStatus.CONFIRMATION -> 2
+        CodingSessionStatus.WORKING -> 3
+        CodingSessionStatus.QUEUED -> 4
+        CodingSessionStatus.SCHEDULED -> 5
+        CodingSessionStatus.IDLE -> 6
     } } ?: CodingSessionStatus.IDLE
 
 /** Фазы состояния кодинг-рантайма (движка пи-агента). */

@@ -709,7 +709,7 @@ class OrchestrationService(
         if (proposalId != null) {
             val proposal = plan.proposal ?: return@withLock
             require(proposal.id == proposalId) { "Предложение изменилось. Проверьте актуальную версию." }
-            require(plan.phase == ExecutionPhase.COMPLETE || plan.canExtendAfterFinalVerification) {
+            require(plan.proposalReadyForConfirmation) {
                 "Предложение сохранено. Дождитесь завершения текущей проверки и переноса результата."
             }
             require(state(plan.parentSessionId, plan.projectId).openQuestions(plan.id).isEmpty()) { "Сначала ответьте на уточнения" }

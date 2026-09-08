@@ -54,7 +54,7 @@ internal fun OrchestrationStatus(
         failedInput != null -> "Ошибка обработки сообщения"
         plan == null -> "Готов обсудить задачу"
         questions.isNotEmpty() -> "Нужен ваш ответ"
-        plan.proposal != null -> "Предложена доработка · нужно подтверждение"
+        plan.proposalReadyForConfirmation -> "Предложение доработки · нужно подтверждение"
         blockers.isNotEmpty() -> "Нужно устранить блокировку"
         plan.phase == ExecutionPhase.COMPLETE -> "Работа завершена · можно задать вопрос или запросить доработку"
         plan.intent == ExecutionIntent.PAUSE -> "Пауза"
@@ -63,7 +63,7 @@ internal fun OrchestrationStatus(
         plan.confirmedRevision == null -> if (plan.milestones.isEmpty()) "Уточнение задачи" else "План готов · нужно подтверждение"
         plan.phase == ExecutionPhase.VERIFYING -> "Итоговая проверка"
         plan.phase == ExecutionPhase.APPLYING -> "Перенос результата в проект"
-        active.isNotEmpty() -> "Выполнение этапов"
+        active.isNotEmpty() -> "Выполнение этапов" + if (plan.proposal != null) " · есть предложение доработки" else ""
         plan.scheduledMessages.any { it.status == ScheduledMessageStatus.WAITING } || plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> "Ожидание события или времени"
         else -> "Ожидание следующего этапа"
     }
@@ -109,6 +109,9 @@ internal fun OrchestrationStatus(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
+            if (plan?.proposal != null) PlanningProposalCard(plan, questions.isNotEmpty()) { proposalId ->
+                service.confirm(plan.id, proposalId)
+            }
             if (expanded) Column(Modifier.heightIn(max = 270.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SessionActions(session.session, service, onOpenSession, allowArchive = false)
@@ -150,7 +153,7 @@ internal fun OrchestrationStatus(
                 Text("Следующий шаг: " + when {
                     failedInput != null -> "повторить обработку сообщения"
                     questions.isNotEmpty() -> "ответить в карточке уточнения под диалогом"
-                    plan?.proposal != null -> "проверить предложение доработки"
+                    plan?.proposalReadyForConfirmation == true -> "проверить и подтвердить предложение доработки"
                     blockers.isNotEmpty() -> "исправить причину блокировки"
                     plan?.phase == ExecutionPhase.COMPLETE -> "обсудить результат или описать доработку"
                     plan?.confirmedRevision == null -> "уточнить и подтвердить план"

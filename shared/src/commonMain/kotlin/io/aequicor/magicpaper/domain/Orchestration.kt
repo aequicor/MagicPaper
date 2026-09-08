@@ -68,6 +68,10 @@ import kotlinx.serialization.Serializable
     val milestones: List<Milestone>, val explanation: String,
 )
 
+/** Execution has settled enough to review a follow-up; open questions are checked separately. */
+internal val Plan.proposalReadyForConfirmation: Boolean
+    get() = proposal != null && (phase == ExecutionPhase.COMPLETE || canExtendAfterFinalVerification)
+
 @Serializable data class PlanRunSnapshot(
     val runId: String, val tree: List<DecisionNode>, val milestones: List<Milestone>,
     val workspace: PlanWorkspace?, val finalAttempt: StageAttempt?, val completedAt: Long,

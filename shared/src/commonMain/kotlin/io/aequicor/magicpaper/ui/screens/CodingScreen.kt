@@ -402,6 +402,7 @@ private val CodingSessionStatus.label: String
     get() = when (this) {
         CodingSessionStatus.WORKING -> "работает"
         CodingSessionStatus.WAITING -> "ждёт вашего ответа"
+        CodingSessionStatus.CONFIRMATION -> "ждёт подтверждения доработки"
         CodingSessionStatus.BLOCKED -> "выполнение остановлено"
         CodingSessionStatus.QUEUED -> "ждёт оркестратора"
         CodingSessionStatus.SCHEDULED -> "ждёт события или времени"
@@ -418,6 +419,7 @@ fun ActivityDot(
     val color = when (status) {
         CodingSessionStatus.WORKING -> StatusWorking
         CodingSessionStatus.WAITING -> StatusWaiting
+        CodingSessionStatus.CONFIRMATION -> StatusWaiting
         CodingSessionStatus.BLOCKED -> Color(0xFFC77843)
         CodingSessionStatus.QUEUED -> StatusQueued
         CodingSessionStatus.SCHEDULED -> StatusQueued
@@ -722,7 +724,7 @@ private fun SessionRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.BLOCKED) || nested) FadingSingleLineText(
+            if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.CONFIRMATION, CodingSessionStatus.BLOCKED, CodingSessionStatus.WORKING) || nested) FadingSingleLineText(
                 if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
                     "передан оркестратору" else status.label,
                 style = MaterialTheme.typography.labelSmall,
