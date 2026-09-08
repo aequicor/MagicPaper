@@ -46,6 +46,19 @@ class PlanningSessionStatusTest {
         assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(parent, plan = plan.copy(milestones = listOf(stage.copy(status = MilestoneStatus.DONE)))).status)
     }
 
+    @Test fun failedInputRemainsBlockedWhileWorkersContinueAndResetsOnRetry() {
+        val failed = CodingMessage("input", CodingRole.USER, "Change models", createdAt = 1,
+            inputStatus = OrchestrationInputStatus.FAILED)
+        val notice = CodingMessage("notice", CodingRole.AGENT, "Worker continues", createdAt = 2)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, listOf(failed, notice), plan = plan).status)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, listOf(notice), running = true,
+            plan = plan, failedRequest = true).status)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent,
+            listOf(failed.copy(inputStatus = OrchestrationInputStatus.PROCESSING), notice), plan = plan, running = true).status)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent,
+            listOf(failed.copy(inputStatus = OrchestrationInputStatus.DONE), notice), plan = plan).status)
+    }
+
     @Test fun stageBlockedForUserIsYellowAndRetryDelayIsGray() {
         fun withIssue(issue: PlanningIssue) = plan.copy(milestones = listOf(stage.copy(attempts = listOf(attempt.copy(error = issue)))))
         assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(worker, plan = withIssue(PlanningIssue(IssueKind.CONFIGURATION, "Источник недоступен", requiresUser = true))).status)

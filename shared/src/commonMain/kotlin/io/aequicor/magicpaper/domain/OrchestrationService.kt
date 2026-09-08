@@ -260,17 +260,14 @@ class OrchestrationService(
                         setInputStatus(session, input.id, OrchestrationInputStatus.DONE)
                     } catch (e: TimeoutCancellationException) {
                         val message = "Модель не успела ответить за отведённое время. Сообщение сохранено; повторите обработку."
-                        setInputStatus(session, input.id, OrchestrationInputStatus.FAILED, message)
-                        append(session.projectId, session.id, CodingMessage("${input.id}-error", CodingRole.AGENT,
-                            message, failed = true, createdAt = Id.now(), steps = listOf(CodingStep(CodingStepKind.ERROR, message))))
+                        failInput(session, input, message)
                     } catch (e: CancellationException) {
                         withContext(NonCancellable) { setInputStatus(session, input.id, if (closing) OrchestrationInputStatus.QUEUED else OrchestrationInputStatus.CANCELLED) }
                         throw e
                     } catch (e: Exception) {
-                        val message = e.message ?: "Не удалось обработать сообщение"
-                        setInputStatus(session, input.id, OrchestrationInputStatus.FAILED, message)
-                        append(session.projectId, session.id, CodingMessage("${input.id}-error", CodingRole.AGENT,
-                            message, failed = true, createdAt = Id.now(), steps = listOf(CodingStep(CodingStepKind.ERROR, message))))
+                        failInput(session, input, planningFailureMessage(e.message ?: "Не удалось обработать сообщение"))
+                    } finally {
+                        _drafts.update { it - session.id }; changed()
                     }
                 }
             } catch (e: OrchestrationPersistenceException) {
@@ -298,6 +295,16 @@ class OrchestrationService(
         val message = projects.messages(session.projectId, session.id).firstOrNull { it.id == id }
             ?: CodingMessage(id, CodingRole.USER, input.text, createdAt = input.createdAt)
         append(session.projectId, session.id, message.copy(inputStatus = status))
+    }
+
+    private suspend fun failInput(session: CodingSession, input: OrchestrationInput, message: String) {
+        setInputStatus(session, input.id, OrchestrationInputStatus.FAILED, message)
+        val id = "${input.id}-error"
+        val existing = projects.messages(session.projectId, session.id).firstOrNull { it.id == id }
+        val steps = existing?.steps ?: _drafts.value[session.id]?.steps.orEmpty()
+        append(session.projectId, session.id, CodingMessage(id, CodingRole.AGENT, message, failed = true,
+            createdAt = existing?.createdAt ?: Id.now(), steps = steps.filter { it.kind != CodingStepKind.ERROR }
+                .map { it.copy(running = false) } + CodingStep(CodingStepKind.ERROR, message)))
     }
 
     private suspend fun processInput(session: CodingSession, input: OrchestrationInput) {
@@ -380,6 +387,7 @@ class OrchestrationService(
                 "Открытые запросы: ${json.encodeToString(kotlinx.serialization.builtins.ListSerializer(OrchestrationQuestion.serializer()), requests)}\nДиалог:\n$history\nСообщение: ${input.text}"))
         repeat(3) { index ->
             _drafts.update { it + (session.id to CodingDraft(active = true, awaitingModel = true)) }
+            requirePlanningRequestSize(messages)
             val raw = gateway.completeWithActivity(profile, messages.toList()) { step ->
                 _drafts.update { it + (session.id to CodingDraft(active = true, steps = listOf(step.planningPreview()))) }
             }
@@ -517,8 +525,8 @@ class OrchestrationService(
             if (e is CancellationException && e !is TimeoutCancellationException) throw e
             val message = if (e is TimeoutCancellationException)
                 "Модель не успела завершить планирование за отведённое время. Отправьте сообщение ещё раз или увеличьте время ожидания в настройках модели."
-            else e.message?.takeIf { it.isNotBlank() } ?: "Ошибка планирования"
-            append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, message, failed = true, createdAt = Id.now(), steps = activity.value + CodingStep(CodingStepKind.ERROR, message)))
+            else planningFailureMessage(e.message?.takeIf { it.isNotBlank() } ?: "Ошибка планирования")
+            append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, message, failed = true, createdAt = Id.now(), steps = activity.value.map { it.copy(running = false) } + CodingStep(CodingStepKind.ERROR, message)))
             store.update(id) { it.copy(pendingRequest = "", requestId = "") }
             throw IllegalStateException(message, e)
         } finally { _drafts.update { it - sessionId }; changed() }

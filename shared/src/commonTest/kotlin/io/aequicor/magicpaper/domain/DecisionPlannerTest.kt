@@ -9,7 +9,11 @@ class DecisionPlannerTest {
     private val profile = LlmProfile("agent", "Agent", baseUrl = "http://test/v1", modelId = "gpt-5.4")
     private class Gateway(private vararg val replies: String) : LlmGateway {
         var calls = 0
-        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>) = replies[calls++.coerceAtMost(replies.lastIndex)]
+        val requests = mutableListOf<List<LlmMessage>>()
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+            requests += messages.toList()
+            return replies[calls++.coerceAtMost(replies.lastIndex)]
+        }
     }
     private fun plan() = Plan("p", "project", "goal", milestones = listOf(
         Milestone("a", "A", acceptance = "Check A"), Milestone("b", "B", acceptance = "Check B"),
@@ -49,6 +53,53 @@ class DecisionPlannerTest {
         assertFailsWith<IllegalStateException> { PlanComposer(gateway).refine(original, "Refine", profile, listOf(profile), emptyList()) }
         assertEquals(3, gateway.calls)
         assertEquals(plan(), original)
+    }
+
+    @Test fun refinementDoesNotSendNestedExecutionArchivesOrModifySavedHistory() = runTest {
+        val log = "execution-log-".repeat(90_000)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("agent", "gpt-5.4"), report = log)
+        val base = plan()
+        val stages = base.milestones.map { it.copy(status = MilestoneStatus.ACTIVE, attempts = listOf(attempt)) }
+        val original = base.copy(milestones = stages,
+            proposal = PlanProposal("proposal", "run", base.tree, stages, base.tree, stages, "Change models"),
+            versions = listOf(PlanVersion(1, base.tree, stages, 1)),
+            runHistory = listOf(PlanRunSnapshot("old-run", base.tree, stages, null, attempt, 1)),
+            finalAttempt = attempt, finalAttemptHistory = listOf(attempt),
+            dialogue = listOf(PlanningMessage("user", "user", "Keep all acceptance criteria",
+                activity = listOf(CodingStep(CodingStepKind.THINKING, log)))))
+        val gateway = Gateway("""{"reply":"Уточните модель"}""")
+        val result = PlanComposer(gateway).refine(original, "Change models", profile, listOf(profile), emptyList())
+        val context = gateway.requests.single().last().content
+        assertTrue(context.length < 20_000, "Only current specifications should be sent, got ${context.length} characters")
+        assertFalse(context.contains("execution-log-"))
+        assertFalse(context.contains("baseMilestones"))
+        assertFalse(context.contains("runHistory"))
+        assertContains(context, "Keep all acceptance criteria")
+        assertContains(context, "Check A")
+        assertContains(context, "ACTIVE")
+        assertEquals(original.milestones, result.milestones)
+        assertEquals(original.proposal, result.proposal)
+        assertEquals(original.versions, result.versions)
+        assertEquals(original.runHistory, result.runHistory)
+        assertEquals(log, original.milestones.first().attempts.single().report)
+    }
+
+    @Test fun repeatedRepairsReplacePreviousLargeResponses() = runTest {
+        val gateway = Gateway(" ".repeat(510_000) + "{}")
+        assertFailsWith<IllegalStateException> {
+            PlanComposer(gateway).refine(plan(), "Refine", profile, listOf(profile), emptyList())
+        }
+        assertEquals(3, gateway.calls)
+        assertTrue(gateway.requests.drop(1).all { request -> request.count { it.role == LlmChatRole.ASSISTANT } == 1 })
+    }
+
+    @Test fun oversizedEssentialContextFailsBeforeCallingTheModel() = runTest {
+        val gateway = Gateway("{}")
+        val failure = assertFailsWith<IllegalArgumentException> {
+            PlanComposer(gateway).refine(plan(), "x".repeat(1_048_577), profile, listOf(profile), emptyList())
+        }
+        assertContains(failure.message!!, "Контекст планирования слишком большой")
+        assertEquals(0, gateway.calls)
     }
 
     @Test fun refinementKeepsDurationsWhenTheResponseOmitsThem() = runTest {

@@ -23,6 +23,7 @@ import io.aequicor.magicpaper.domain.Plan
 import io.aequicor.magicpaper.domain.isStageWorking
 import io.aequicor.magicpaper.domain.pendingPlanningQuestion
 import io.aequicor.magicpaper.domain.isPlannerAnswerWait
+import io.aequicor.magicpaper.domain.OrchestrationInputStatus
 import io.aequicor.magicpaper.plugins.MagicPlugin
 
 /** Экраны минималистичной навигации. */
@@ -37,11 +38,12 @@ data class CodingSessionUi(
     val plan: Plan? = null,
     val awaitingUser: Boolean = false,
     val interruptedRequest: Boolean = false,
+    val failedRequest: Boolean = false,
 ) {
     val canResume: Boolean
         get() {
             if (running || awaitingUser || draft.awaitingApproval || session.archived) return false
-            if (interruptedRequest) return messages.pendingPlanningQuestion() == null
+            if (interruptedRequest || failedRequest) return messages.pendingPlanningQuestion() == null
             val current = plan
             if (current != null) {
                 if (current.confirmedRevision == null || current.phase == ExecutionPhase.COMPLETE || current.proposal != null ||
@@ -61,6 +63,8 @@ data class CodingSessionUi(
 
     private fun computeStatus(): CodingSessionStatus {
         if (session.archived) return CodingSessionStatus.IDLE
+        if (failedRequest || messages.lastOrNull { it.inputStatus != null }?.inputStatus == OrchestrationInputStatus.FAILED)
+            return CodingSessionStatus.BLOCKED
         if (awaitingUser) return CodingSessionStatus.WAITING
         if (draft.awaitingApproval) return CodingSessionStatus.WAITING
         if (!running && (session.pendingRun != null || interruptedRequest)) return CodingSessionStatus.WAITING

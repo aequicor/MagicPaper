@@ -183,9 +183,11 @@ class MagicPaperViewModel(
         val workerRunning = plan?.milestones?.firstOrNull { it.id == session.stageId }?.let {
             plan.isStageWorking(it)
         } == true
-        val interruptedRequest = service.states.value[session.id]?.inputs?.lastOrNull()?.status in
+        val inputStatus = service.states.value[session.id]?.inputs?.lastOrNull()?.status
+        val failedRequest = inputStatus == io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED
+        val interruptedRequest = inputStatus in
             listOf(io.aequicor.magicpaper.domain.OrchestrationInputStatus.CANCELLED, io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED)
-        return item.copy(plan = plan, interruptedRequest = interruptedRequest, awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
+        return item.copy(plan = plan, interruptedRequest = interruptedRequest, failedRequest = failedRequest, awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
             session.stageId == null || it.stageIds.isEmpty() || session.stageId in it.stageIds
         }, draft = service.drafts.value[session.id]
             ?: if (plan != null || session.planningMode) CodingDraft() else item.draft,

@@ -48,8 +48,10 @@ internal fun OrchestrationStatus(
     val done = stages.count { it.completed }
     val blockers = plan?.blockingIssues(session.messages).orEmpty()
     val active = plan?.selectedMilestones.orEmpty().filter { plan?.isStageWorking(it) == true }
+    val failedInput = state?.inputs?.lastOrNull()?.takeIf { it.status == OrchestrationInputStatus.FAILED }
     val phase = when {
         session.session.id in persistenceErrors -> "Ошибка сохранения · выполнение остановлено"
+        failedInput != null -> "Ошибка обработки сообщения"
         plan == null -> "Готов обсудить задачу"
         questions.isNotEmpty() -> "Нужен ваш ответ"
         plan.proposal != null -> "Предложена доработка · нужно подтверждение"
@@ -81,6 +83,9 @@ internal fun OrchestrationStatus(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(phase, style = MaterialTheme.typography.bodyMedium)
+                    failedInput?.let { input ->
+                        OrchestrationInputFailure(input) { service.retryInput(session.session.id, input.id) }
+                    }
                     persistenceErrors[session.session.id]?.let { message ->
                         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         unsavedInputs[session.session.id].orEmpty().forEach { input ->
@@ -138,6 +143,7 @@ internal fun OrchestrationStatus(
                         style = MaterialTheme.typography.bodySmall)
                 }
                 Text("Следующий шаг: " + when {
+                    failedInput != null -> "повторить обработку сообщения"
                     questions.isNotEmpty() -> "ответить в карточке уточнения под диалогом"
                     plan?.proposal != null -> "проверить предложение доработки"
                     blockers.isNotEmpty() -> "исправить причину блокировки"
@@ -155,6 +161,15 @@ internal fun OrchestrationStatus(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun OrchestrationInputFailure(input: OrchestrationInput, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(planningFailureMessage(input.error.ifBlank { "Не удалось обработать сообщение." }),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        TextButton(onRetry) { Text("Повторить обработку") }
     }
 }
 

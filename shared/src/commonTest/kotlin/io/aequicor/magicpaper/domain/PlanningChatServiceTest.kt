@@ -20,6 +20,7 @@ class PlanningChatServiceTest {
         var gate: CompletableDeferred<Unit>? = null
         var overrideReply: String? = null
         var timeout = false
+        var failure: String? = null
         var userDecision = """{"intent":"REFINE"}"""
         var coordinator = """{"reply":"Результат принят","actions":[]}"""
         val coordinatorReplies = mutableListOf<String>()
@@ -41,6 +42,7 @@ class PlanningChatServiceTest {
             lastMessages = messages
             if (timeout) withTimeout(10) { awaitCancellation() }
             gate?.await()
+            failure?.let { error(it) }
             if (messages.first().content.contains("Ты оркестратор диалога")) return userDecision
             overrideReply?.let { return it }
             if (messages.first().content.contains("Ты координатор"))
@@ -701,6 +703,39 @@ class PlanningChatServiceTest {
         assertTrue(history.any { it.text == "План готов" && it.role == CodingRole.AGENT })
         assertEquals(1, history.count { it.planning?.graph == true })
         assertEquals("", f.store.planFor(original.id)!!.pendingRequest)
+    }
+
+    @Test fun inputSizeFailureClearsLiveProgressAndCanRetryTheSavedMessage() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val session = f.session("parent")
+        f.gateway.gate = CompletableDeferred()
+        f.gateway.failure = "Input exceeds the maximum length of 1048576 characters."
+        f.service.send(session, "Change models"); runCurrent()
+        f.gateway.requestCallback!!(CodingStep(CodingStepKind.THINKING, "Checking plan", running = true))
+        runCurrent()
+        assertTrue(f.service.drafts.value[session.id]?.active == true)
+        f.gateway.gate!!.complete(Unit); runCurrent()
+        val input = f.service.states.value.getValue(session.id).inputs.single()
+        assertEquals(OrchestrationInputStatus.FAILED, input.status)
+        assertContains(input.error, "Контекст запроса")
+        assertTrue(f.service.drafts.value.isEmpty())
+        val history = f.projects.messages(project.id, session.id)
+        val failed = history.single { it.failed }
+        assertTrue(failed.steps.any { it.kind == CodingStepKind.THINKING })
+        assertTrue(failed.steps.none { it.running })
+        assertEquals("", f.store.plans.value.single().pendingRequest)
+        val notice = CodingMessage("worker-notice", CodingRole.AGENT, "Worker continues", createdAt = 2)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(session, history + notice,
+            plan = f.store.plans.value.single()).status)
+
+        f.gateway.failure = null
+        f.service.retryInput(session.id, input.id); runCurrent()
+        assertEquals(OrchestrationInputStatus.DONE, f.service.states.value.getValue(session.id).inputs.single().status)
+        assertTrue(f.service.drafts.value.isEmpty())
+        val retried = f.projects.messages(project.id, session.id)
+        assertEquals(1, retried.count { it.role == CodingRole.USER })
+        assertNotEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(session, retried,
+            plan = f.store.plans.value.single()).status)
     }
 
     @Test fun invalidModelResponsePublishesError() = runTest {
