@@ -654,3 +654,20 @@ interface ProjectDirPicker {
 /** Empty service ticks are transport housekeeping, including in older saved timelines. */
 val CodingStep.isVisibleActivity: Boolean
     get() = kind != CodingStepKind.INFO || title.isNotBlank()
+
+/** Assign a useful title once, preserving explicit and worker names. */
+fun CodingSession.namedFromPrompt(prompt: String): CodingSession {
+    val defaultName = name == "Основная" || name.startsWith("Сессия ") || name.startsWith("План:")
+    val title = prompt.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(60)
+    return if (!nameManuallySet && parentSessionId == null && defaultName && title.isNotBlank()) copy(name = title) else this
+}
+
+/** Includes archived workers and nested descendants. */
+fun List<CodingSession>.sessionTreeIds(rootId: String): Set<String> {
+    val ids = mutableSetOf(rootId)
+    do {
+        val added = filter { it.parentSessionId in ids }.map { it.id }.filter { it !in ids }
+        ids.addAll(added)
+    } while (added.isNotEmpty())
+    return ids
+}

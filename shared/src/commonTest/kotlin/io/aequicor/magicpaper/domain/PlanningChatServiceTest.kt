@@ -289,6 +289,35 @@ class PlanningChatServiceTest {
         assertEquals(count, f.runtime.calls.size)
     }
 
+    @Test fun deletingOrchestratorStopsWorkersAndPreservesSiblingSessions() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val sibling = f.session("sibling")
+        val plan = f.readyPlan("plan", parent)
+        f.service.confirm(plan.id); runCurrent()
+        val workers = f.projects.sessions(project.id).filter { it.parentSessionId == parent.id }
+        assertTrue(workers.isNotEmpty())
+        val ids = f.service.deleteSessionTree(project.id, parent.id)
+        f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertTrue(workers.all { it.id in ids })
+        assertTrue(f.projects.sessions(project.id).none { it.id in ids })
+        assertTrue(f.service.sessions.value.none { it.id in ids })
+        assertTrue(ids.all { f.projects.messages(project.id, it).isEmpty() })
+        assertNull(f.store.planFor(plan.id))
+        assertTrue(f.projects.sessions(project.id).any { it.id == sibling.id })
+    }
+
+    @Test fun firstDiscussionNamesSessionBeforePlanConfirmation() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent").copy(name = "Сессия 2")
+        f.projects.saveSession(parent)
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Обсудим"}"""
+        f.service.send(parent, "Добавить поиск по файлам"); runCurrent()
+        assertEquals("Добавить поиск по файлам", f.projects.sessions(project.id).first { it.id == parent.id }.name)
+        f.service.send(parent, "Ещё один запрос"); runCurrent()
+        assertEquals("Добавить поиск по файлам", f.projects.sessions(project.id).first { it.id == parent.id }.name)
+    }
+
     @Test fun deletingAllSessionsStopsPlansAndPreservesOtherProjects() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")

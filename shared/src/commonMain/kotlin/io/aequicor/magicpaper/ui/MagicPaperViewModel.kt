@@ -50,6 +50,7 @@ import io.aequicor.magicpaper.domain.CodingRunCheckpoint
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.interruptedCodingRequest
 import io.aequicor.magicpaper.domain.recordDrafts
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
@@ -1268,7 +1269,7 @@ class MagicPaperViewModel(
             _state.update {
                 it.copy(
                     coding = it.coding.copy(
-                        sessions = it.coding.sessions + CodingSessionUi(session = session),
+                        sessions = listOf(CodingSessionUi(session = session)) + it.coding.sessions,
                         currentSessionId = session.id,
                         creatingSession = false,
                     ),
@@ -1318,22 +1319,23 @@ class MagicPaperViewModel(
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
         if (target.session.stageId != null && planningChat != null) { planningChat.archiveSession(id); return }
         scope.launch {
-            requestPins?.remove(PinConversation(id, target.session.projectId))
-            codingRuntime?.abort(id)
-            removeCodingJob(id)?.cancel()
-            repo.deleteSession(target.session.projectId, id)
-            val rest = coding.sessions.filterNot { it.session.id == id }
-            _state.update {
-                it.copy(
-                    coding = it.coding.copy(
-                        sessions = rest,
-                        currentSessionId = if (it.coding.currentSessionId == id) {
-                            rest.firstOrNull { s -> s.session.projectId == target.session.projectId }?.session?.id
-                        } else {
-                            it.coding.currentSessionId
-                        },
-                    ),
-                )
+            val projectId = target.session.projectId
+            val ids = repo.sessions(projectId).sessionTreeIds(id).toMutableSet()
+            ids.forEach { removedId ->
+                codingRuntime?.abort(removedId)
+                removeCodingJob(removedId)?.cancelAndJoin()
+            }
+            if (planningChat != null) ids.addAll(planningChat.deleteSessionTree(projectId, id))
+            else ids.forEach { repo.deleteSession(projectId, it) }
+            ids.forEach { requestPins?.remove(PinConversation(it, projectId)) }
+            _state.update { state ->
+                val rest = state.coding.sessions.filterNot { it.session.id in ids }
+                state.copy(coding = state.coding.copy(
+                    sessions = rest,
+                    currentSessionId = if (state.coding.currentSessionId in ids)
+                        rest.firstOrNull { it.session.projectId == projectId }?.session?.id
+                    else state.coding.currentSessionId,
+                ))
             }
             refreshProjectStatus(target.session.projectId)
         }
@@ -1433,7 +1435,7 @@ class MagicPaperViewModel(
         val request = checkpoint.copy(responseId = Id.new())
         val job = scope.launch(workerDispatcher, start = CoroutineStart.LAZY) {
             try {
-                var current = updateStoredCodingSession(session) { it.copy(pendingRun = request) }
+                var current = updateStoredCodingSession(session) { it.namedFromPrompt(request.prompt).copy(pendingRun = request) }
                 if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
                     appendCodingMessage(session, CodingMessage(request.messageId, CodingRole.USER,
                         request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() }))

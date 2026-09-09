@@ -40,7 +40,7 @@ class CodingEnginePersistenceTest {
         val repo = JsonCodingProjectRepository(InMemoryKeyValueStore(), json)
         repo.saveSession(CodingSession("a", "p", "A", 1, engine = CodingEngine.PI))
         repo.saveSession(CodingSession("b", "p", "B", 2, engine = CodingEngine.CODEX))
-        assertEquals(listOf(CodingEngine.PI, CodingEngine.CODEX), repo.sessions("p").map { it.engine })
+        assertEquals(mapOf("a" to CodingEngine.PI, "b" to CodingEngine.CODEX), repo.sessions("p").associate { it.id to it.engine })
     }
     @Test fun subscriptionUsesNativePiProtocolWithoutPersistingTokens() {
         val profile = LlmProfile("s", "ChatGPT", provider = ProviderType.OPENAI_SUBSCRIPTION, modelId = "gpt-test", apiKey = "must-not-be-copied")

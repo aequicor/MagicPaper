@@ -36,6 +36,7 @@ class OrchestrationService(
     val sessions: StateFlow<List<CodingSession>> = _sessions.asStateFlow()
     private val messageLock = Mutex()
     private val deletedPlans = mutableSetOf<String>()
+    private val deletedSessions = mutableSetOf<String>()
     private val clearingProjects = mutableSetOf<String>()
     private val requestLocks = mutableMapOf<String, Mutex>()
     private val confirmation = Mutex()
@@ -78,6 +79,24 @@ class OrchestrationService(
             _drafts.update { it - sessionIds }
             changed()
         } finally { clearingProjects.remove(projectId) }
+    }
+
+    suspend fun deleteSessionTree(projectId: String, sessionId: String): Set<String> {
+        val ids = sessionLock.withLock {
+            projects.sessions(projectId).sessionTreeIds(sessionId).also { deletedSessions.addAll(it) }
+        }
+        val plans = store.plans().filter { it.projectId == projectId && it.parentSessionId in ids }
+        deletedPlans.addAll(plans.map { it.id })
+        ids.forEach { jobs.remove(it)?.cancelAndJoin() }
+        plans.forEach { execution.stopAndJoin(it.id) }
+        plans.forEach { store.deletePlan(it.id) }
+        messageLock.withLock { ids.forEach { projects.deleteSession(projectId, it) } }
+        _drafts.update { it - ids }
+        _states.update { it - ids }
+        _unsavedInputs.update { it - ids }
+        _persistenceErrors.update { it - ids }
+        refreshSessions()
+        return ids
     }
 
     suspend fun shutdown() { closing = true; scope.coroutineContext[Job]?.cancelAndJoin() }
@@ -376,7 +395,7 @@ class OrchestrationService(
 
     fun send(session: CodingSession, text: String, answers: List<PlanningAnswer> = emptyList(), replyTo: String? = null, resumeAfter: Boolean = false) {
         if (text.isBlank() && answers.isEmpty()) return
-        if (session.projectId in clearingProjects || session.planId in deletedPlans) return
+        if (session.id in deletedSessions || session.projectId in clearingProjects || session.planId in deletedPlans) return
         if (session.stageId != null && session.planId != null) {
             launch {
                 val plan = store.planFor(session.planId) ?: return@launch
@@ -389,6 +408,11 @@ class OrchestrationService(
         }
         val input = OrchestrationInput(Id.new(), text.trim(), Id.now(), answers, replyTo, resumeAfter = resumeAfter)
         launch {
+            if (session.id in deletedSessions) return@launch
+            sessionLock.withLock {
+                val latest = projects.sessions(session.projectId).firstOrNull { it.id == session.id } ?: return@launch
+                projects.saveSession(latest.namedFromPrompt(text))
+            }
             refreshSessions()
             try {
                 updateState(session.id, session.projectId) { it.copy(inputs = it.inputs + input) }
@@ -1107,6 +1131,7 @@ class OrchestrationService(
     }
 
     private suspend fun performSessionCommand(plan: Plan, command: SessionCommand) = sessionLock.withLock {
+        if (plan.id in deletedPlans || plan.parentSessionId in deletedSessions) return@withLock
         require(plan.parentSessionId.isNotBlank()) { "Не задан оркестратор" }
         val saved = updateState(plan.parentSessionId, plan.projectId) { old ->
             if (old.sessionCommands.any { it.id == command.id }) old else old.copy(sessionCommands = old.sessionCommands + command)
@@ -1587,6 +1612,7 @@ class OrchestrationService(
     }
 
     private suspend fun publish(plan: Plan) {
+        if (plan.id in deletedPlans || plan.parentSessionId in deletedSessions) return
         if (plan.id in deletedPlans || plan.projectId in clearingProjects) return
         val plan = numbered(plan)
         plan.deliveries.forEach { publishDelivery(plan, it) }

@@ -27,6 +27,16 @@ class JsonCodingProjectRepositoryTest {
     private fun agent(id: String, text: String) =
         CodingMessage(id = id, role = CodingRole.AGENT, text = text, createdAt = 2L)
 
+    @Test fun sessionsStayNewestFirstAfterReloadAndRename() = runTest {
+        repo.save(CodingProject("p", "Project", "/p", 1))
+        val older = CodingSession("older", "p", "Older", 2)
+        val newer = CodingSession("newer", "p", "Newer", 3)
+        repo.saveSession(older)
+        repo.saveSession(newer)
+        repo.saveSession(older.copy(name = "Renamed"))
+        assertEquals(listOf("newer", "older"), JsonCodingProjectRepository(store, json).sessions("p").map { it.id })
+    }
+
     @Test
     fun projectsRoundTripAndDelete() = runTest {
         val a = CodingProject(id = "a", name = "app", path = "/tmp/app", createdAt = 1L)

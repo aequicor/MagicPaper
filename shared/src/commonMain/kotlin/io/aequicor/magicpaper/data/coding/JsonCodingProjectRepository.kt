@@ -77,7 +77,7 @@ class JsonCodingProjectRepository(
     // ---- Сессии -----------------------------------------------------------
 
     override suspend fun sessions(projectId: String): List<CodingSession> {
-        val existing = allSessions().filter { it.projectId == projectId }.sortedBy { it.createdAt }
+        val existing = allSessions().filter { it.projectId == projectId }.sortedByDescending { it.createdAt }
         if (existing.isNotEmpty()) return existing
         if (store.read(clearedKey(projectId)) != null) return emptyList()
         val project = all().firstOrNull { it.id == projectId } ?: return emptyList()

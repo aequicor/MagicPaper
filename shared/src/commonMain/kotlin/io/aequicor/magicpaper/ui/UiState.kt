@@ -133,7 +133,7 @@ data class CodingUi(
 
     /** Сессии проекта (в состоянии лежат и фоновые сессии других проектов). */
     fun sessionsOf(projectId: String): List<CodingSessionUi> =
-        sessions.filter { it.session.projectId == projectId }.map { item ->
+        sessions.filter { it.session.projectId == projectId }.sortedByDescending { it.session.createdAt }.map { item ->
             val pending = interactions.filter { it.affects(item.session) }
             if (item.interactions == pending) item else item.copy(interactions = pending)
         }

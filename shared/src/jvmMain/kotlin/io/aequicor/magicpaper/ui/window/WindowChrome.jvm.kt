@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -31,11 +32,11 @@ actual fun WindowDragArea(modifier: Modifier, content: @Composable () -> Unit) {
         // На Windows переносом управляет вся нативная область тайтлбара.
         Box(modifier, propagateMinConstraints = true) { content() }
     } else {
-        // Официальная реализация Compose Desktop: нативный перенос окна через
-        // JBR там, где он доступен (на macOS — как у системных окон), и
-        // AWT-фолбэк. Работает и на нативных декорациях с прозрачным
-        // тайтлбаром (контент нарисован поверх и перехватывает мышь).
-        scope.WindowDraggableArea(modifier = modifier) { content() }
+        // Compose handles dragging through JBR where supported and AWT elsewhere.
+        // Its macOS fallback needs a separate double-click handler.
+        scope.WindowDraggableArea(modifier = if (System.getProperty("os.name").startsWith("Mac")) {
+            modifier.titleBarDoubleClick { DesktopWindowChrome(scope.window).toggleMaximize() }
+        } else modifier) { content() }
     }
 }
 
@@ -82,6 +83,39 @@ private fun Modifier.nativeTitleBarMouseEvents(
                 if (event.type == PointerEventType.Press) inUserControl = true
                 if (event.type == PointerEventType.Release) inUserControl = false
                 titleBar.forceClientHitTest(true)
+            }
+        }
+    }
+}
+
+/** Observe without consuming: native dragging must continue to receive the gesture. */
+private fun Modifier.titleBarDoubleClick(onDoubleClick: () -> Unit): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        var lastClickTime = 0L
+        var lastClickPosition = androidx.compose.ui.geometry.Offset.Zero
+        var pressPosition = androidx.compose.ui.geometry.Offset.Zero
+        var dragged = false
+        var primaryPress = false
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull() ?: continue
+            if (event.type == PointerEventType.Press) {
+                primaryPress = event.buttons.isPrimaryPressed
+                pressPosition = change.position
+                dragged = false
+            }
+            if ((change.position - pressPosition).getDistance() > viewConfiguration.touchSlop) dragged = true
+            if (event.type == PointerEventType.Release && primaryPress) {
+                primaryPress = false
+                val elapsed = change.uptimeMillis - lastClickTime
+                if (!dragged && elapsed in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
+                    (change.position - lastClickPosition).getDistance() <= viewConfiguration.touchSlop) {
+                    onDoubleClick()
+                    lastClickTime = 0L
+                } else {
+                    lastClickTime = if (dragged) 0L else change.uptimeMillis
+                    lastClickPosition = change.position
+                }
             }
         }
     }
