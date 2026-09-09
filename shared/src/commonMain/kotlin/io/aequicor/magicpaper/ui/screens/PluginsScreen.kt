@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,9 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,11 +31,11 @@ fun PluginsScreen(
     activeContent: @Composable () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Плагины", style = MaterialTheme.typography.titleLarge)
-        Text(
+        PaperText("Плагины", style = LocalPaperTypography.current.headline)
+        PaperText(
             "Интерфейс расширяется включёнными плагинами.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = LocalPaperTypography.current.body,
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
         LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
@@ -56,21 +55,21 @@ internal fun PluginRow(plugin: MagicPlugin, enabled: Boolean, onToggle: () -> Un
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surface)
+            .clip(PaperShapes.panel)
+            .background(LocalPaperColors.current.surface)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(plugin.icon, style = MaterialTheme.typography.titleMedium)
+        PaperText(plugin.icon, style = LocalPaperTypography.current.title)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(plugin.title, style = MaterialTheme.typography.bodyLarge)
-            Text(
+            PaperText(plugin.title, style = LocalPaperTypography.current.body)
+            PaperText(
                 plugin.description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
         }
-        Switch(checked = enabled, onCheckedChange = { onToggle() })
+        PaperToggle(checked = enabled, onCheckedChange = { onToggle() })
     }
 }

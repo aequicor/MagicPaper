@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -7,10 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,21 +29,17 @@ object NotesPlugin : MagicPlugin {
     override fun Content() {
         var notes by remember { mutableStateOf("") }
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text(icon + " " + title, style = MaterialTheme.typography.titleMedium)
+            PaperText(icon + " " + title, style = LocalPaperTypography.current.title)
             Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
+            PaperInput(
                 value = notes,
                 onValueChange = { notes = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Записать мысль…") },
+                placeholder = { PaperText("Записать мысль…") },
                 minLines = 3,
                 maxLines = 8,
             )
-            Text(
-                "Заметки хранятся локально и входят в экспорт профиля.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+
         }
     }
 }

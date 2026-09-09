@@ -1,18 +1,17 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.runtime.*
-import com.mikepenz.markdown.model.State
-import com.mikepenz.markdown.model.parseMarkdownFlow
+import io.aequicor.magicpaper.designsystem.PaperMarkdownDocument
+import io.aequicor.magicpaper.designsystem.parsePaperMarkdown
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.ast.ASTNode
 
-internal class ChatMarkdownDocument(val state: State.Success, val blocks: List<ASTNode>) {
-    val source: String get() = state.content
+internal class ChatMarkdownDocument(val document: PaperMarkdownDocument, val blocks: List<ASTNode>) {
+    val source: String get() = document.source
+    val node: ASTNode get() = document.node
     val preview: List<ASTNode> = markdownPreviewBlocks(blocks)
 }
 
@@ -24,8 +23,8 @@ internal object ChatMarkdownDocuments {
     suspend fun load(source: String, cache: Boolean): ChatMarkdownDocument {
         cached(source)?.let { return it }
         val document = withContext(Dispatchers.Default) {
-            val state = parseMarkdownFlow(source).filterIsInstance<State.Success>().first()
-            ChatMarkdownDocument(state, markdownRenderBlocks(state.node, state.content))
+            val document = parsePaperMarkdown(source)
+            ChatMarkdownDocument(document, markdownRenderBlocks(document.node, source))
         }
         if (cache && source.length <= 1_000_000) recent.update { old ->
             var chars = 0

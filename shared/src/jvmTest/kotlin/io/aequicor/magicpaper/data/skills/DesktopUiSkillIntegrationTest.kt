@@ -47,7 +47,7 @@ class DesktopUiSkillIntegrationTest {
                 val unrelatedBefore = repository.snapshot()
 
                 val prepared = SkillPackageImporter(repository, host).prepareDirectory(packageDirectory)
-                assertEquals("magicpaper.desktop-ui@1.0.0", prepared.pkg.key)
+                assertEquals("magicpaper.desktop-ui@1.1.0", prepared.pkg.key)
                 repository.install(prepared)
                 var snapshot = repository.snapshot()
                 assertEquals(SkillCandidateStatus.QUARANTINED, snapshot.installed.getValue(prepared.pkg.key).status)
@@ -85,7 +85,7 @@ class DesktopUiSkillIntegrationTest {
 
                 val selection = repository.projectCodingSelection("MagicPaper")
                 assertTrue(selection.trustedText && selection.freshSession)
-                assertEquals(listOf("magicpaper.desktop-ui@1.0.0"), selection.instructions.map { "${it.id}@${it.version}" })
+                assertEquals(listOf("magicpaper.desktop-ui@1.1.0"), selection.instructions.map { "${it.id}@${it.version}" })
                 val request = "Implement the settings dialog for macOS and Windows using the MagicPaper design system."
                 val preparedRequest = prepareCodingSkillInput(
                     CodingSession("ui-request", "MagicPaper", "Desktop UI", 0, piSessionId = "old-session", engine = CodingEngine.PI),

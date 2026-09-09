@@ -5,6 +5,38 @@ import io.aequicor.magicpaper.domain.tools.ToolCategory
 import kotlin.test.*
 
 class CodingChatRowsTest {
+    @Test fun repeatedScopedCallsHaveOneCardWithTheCompletedResult() {
+        val started = CodingStep(CodingStepKind.EXEC, "Check", tool = "command", callId = "p/s/request/2",
+            running = true, id = "parent-step", toolCategory = ToolCategory.EXEC)
+        val finished = started.copy(id = "child-step", running = false, result = "Done")
+        fun message(id: String, step: CodingStep) = CodingMessage(id, CodingRole.AGENT, "", createdAt = 0, steps = listOf(step))
+        val liveKey = codingHistoryItems(codingChatRows(listOf(message("parent", started)))).single().key
+        for (steps in listOf(listOf(started, finished), listOf(finished, started), listOf(finished, finished))) {
+            val messages = steps.mapIndexed { index, step -> message("message-$index", step) }
+            val item = codingHistoryItems(codingChatRows(messages)).single()
+            assertEquals(liveKey, item.key)
+            assertEquals(finished, item.step)
+            assertEquals(2, messages.sumOf { it.steps.size }) // Stored history is untouched.
+            val withinOneMessage = codingHistoryItems(codingChatRows(listOf(messages.first().copy(steps = steps)))).single()
+            assertEquals(item.key, withinOneMessage.key)
+            assertEquals(finished, withinOneMessage.step)
+        }
+    }
+
+    @Test fun differentToolsWithTheSameCallIdSurviveDraftPersistence() {
+        val read = CodingStep(CodingStepKind.TOOL, "Read", tool = "read", callId = "p/s/request/2",
+            running = true, id = "read", toolCategory = ToolCategory.READ)
+        val command = read.copy(kind = CodingStepKind.EXEC, tool = "command", id = "command", toolCategory = ToolCategory.EXEC)
+        val draft = CodingDraft(active = true, timelineId = "parent", steps = listOf(read, command))
+        val before = codingHistoryItems(listOf(codingDraftRow(draft, emptyList(), "fallback", true, true)!!))
+        assertEquals(2, before.map { it.key }.distinct().size)
+        val saved = CodingMessage("child", CodingRole.AGENT, "", createdAt = 0, steps = listOf(read.copy(running = false)))
+        val pending = codingDraftRow(draft, listOf(saved), "fallback", true, true)!!
+        assertEquals(listOf(command), pending.message.steps)
+        val after = codingHistoryItems(codingChatRows(listOf(saved)) + pending)
+        assertEquals(before.map { it.key }, after.map { it.key })
+    }
+
     @Test fun savedCoordinatorIsRemovedFromAMixedDraftWithoutHidingAnIdenticalParallelAnswer() {
         fun answer(source: String) = CodingStep(CodingStepKind.ANSWER, "Результат передан на проверку", id = "answer",
             sourceTimelineId = source)

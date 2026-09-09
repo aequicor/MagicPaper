@@ -25,6 +25,7 @@ PaperGraphCanvas PaperGraphNode PaperField PaperButton PaperChatTranscript Paper
 PaperMarkdown PaperDialog PaperChoice PaperListRow PaperStatus PaperImage
 PaperAttachmentRow PaperAttachmentChip PaperCodeBlock PaperScroll PaperTooltip
 PaperApprovalDock PaperText PaperReader PaperLink PaperQuestionnaire PaperScheduleEditor
+PaperActivityIndicator PaperWorkspaceHeading PaperWorkspaceComposer PaperPromptField PaperWorkSurface
 PaperPage PaperTab PaperTreeRow PaperSettingsSection PaperMenu'''.split())
 PATTERN = re.compile(
     r'@(?:androidx\.compose\.runtime\.)?Composable\s+'

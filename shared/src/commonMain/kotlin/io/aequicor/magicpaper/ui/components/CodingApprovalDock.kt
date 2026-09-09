@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.*
-import io.aequicor.magicpaper.ui.theme.MagicFonts
+import io.aequicor.magicpaper.designsystem.PaperFonts
 import io.aequicor.magicpaper.designsystem.*
 
 /** Always visible above the composer, including requests from background planning workers. */

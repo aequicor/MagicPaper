@@ -1,9 +1,10 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -122,26 +123,26 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
 
         LaunchedEffect(Unit) { action { "Хранилище открыто. Импортированные версии остаются в карантине до проверки." } }
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleLarge)
-            Text("Активные версии подбираются по задаче в чате. Только текстовый API-профиль, до 6 сообщений и 24 000 символов, без вложений. Скрипты и доступ к файлам/сети отключены: изоляция и ограничения ресурсов не подтверждены. В coding пакеты не передаются.")
-            Text("Пакеты хранятся на этом устройстве. Импорт не запускает скрипты; активация требует отдельной проверки и подтверждения.")
-            if (notice.isNotBlank()) Text(notice)
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            OutlinedTextField(query, { query = it }, label = { Text("Поиск по имени, источнику, лицензии и версии") }, modifier = Modifier.fillMaxWidth())
+            PaperText(title, style = LocalPaperTypography.current.headline)
+            PaperText("Активные версии подбираются по задаче в чате. Только текстовый API-профиль, до 6 сообщений и 24 000 символов, без вложений. Скрипты и доступ к файлам/сети отключены: изоляция и ограничения ресурсов не подтверждены. В coding пакеты не передаются.")
+            PaperText("Пакеты хранятся на этом устройстве. Импорт не запускает скрипты; активация требует отдельной проверки и подтверждения.")
+            if (notice.isNotBlank()) PaperText(notice)
+            if (busy) PaperProgress(Modifier.fillMaxWidth())
+            PaperInput(query, { query = it }, label = { PaperText("Поиск по имени, источнику, лицензии и версии") }, modifier = Modifier.fillMaxWidth())
             entries.filter { entry ->
                 val m = entry.release.pkg.manifest
                 val searchable = "${m.id} ${m.name} ${m.description} ${m.version} ${m.license} ${entry.source.location}".lowercase()
                 query.lowercase().split(Regex("\\s+")).all { it in searchable }
             }.forEach { entry ->
                 val m = entry.release.pkg.manifest
-                Card(Modifier.fillMaxWidth()) {
+                PaperPanel(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp)) {
-                        Text("${m.name} · ${m.version} · ${if (entry.active) "активен" else if (entry.release.status == SkillCandidateStatus.QUARANTINED) "карантин" else "проверен"}")
-                        Text("Источник: ${entry.source.location}${entry.source.revision?.let { " @ $it" }.orEmpty()}")
-                        Text("Заявлено автором: ${m.origin.location ?: "происхождение неизвестно"}; лицензия: ${m.license ?: "неизвестна"}")
-                        Text("Разрешения: ${m.permissions.joinToString().ifEmpty { "не заявлены" }}")
-                        if (entry.active) Text("Выбор в чате: @skill:${m.id} текст задачи")
-                        TextButton(enabled = !busy, onClick = {
+                        PaperText("${m.name} · ${m.version} · ${if (entry.active) "активен" else if (entry.release.status == SkillCandidateStatus.QUARANTINED) "карантин" else "проверен"}")
+                        PaperText("Источник: ${entry.source.location}${entry.source.revision?.let { " @ $it" }.orEmpty()}")
+                        PaperText("Заявлено автором: ${m.origin.location ?: "происхождение неизвестно"}; лицензия: ${m.license ?: "неизвестна"}")
+                        PaperText("Разрешения: ${m.permissions.joinToString().ifEmpty { "не заявлены" }}")
+                        if (entry.active) PaperText("Выбор в чате: @skill:${m.id} текст задачи")
+                        PaperAction(enabled = !busy, onClick = {
                             selected = entry; evidence = ""; originReviewed = false; licenseReviewed = false; contentReviewed = false
                             preview = null; approvedChanges = false; approvedPermissions = false
                             action {
@@ -149,74 +150,74 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
                                 details = describe(diff.after) + "\n" + diff.newInstructions + "\n" + diff.resources.joinToString("\n") { resourceDetails(it) }
                                 "Открыта версия ${entry.release.pkg.key}"
                             }
-                        }) { Text("Просмотр и проверка") }
-                        TextButton(enabled = !busy && entry.release.status == SkillCandidateStatus.VERIFIED, onClick = {
+                        }) { PaperText("Просмотр и проверка") }
+                        PaperAction(enabled = !busy && entry.release.status == SkillCandidateStatus.VERIFIED, onClick = {
                             action {
                                 preview = makePreview(targetWithDependencies(entry.release.pkg.key))
                                 approvedChanges = false; approvedPermissions = false
                                 "Проверьте изменения перед активацией"
                             }
-                        }) { Text("Сравнить и активировать") }
-                        if (entry.active) TextButton(enabled = !busy, onClick = {
+                        }) { PaperText("Сравнить и активировать") }
+                        if (entry.active) PaperAction(enabled = !busy, onClick = {
                             action { preview = makePreview(repo().snapshot().active - m.id); approvedChanges = false; approvedPermissions = false; "Проверьте отключение навыка" }
-                        }) { Text("Отключить…") }
+                        }) { PaperText("Отключить…") }
                     }
                 }
             }
             selected?.let { entry ->
-                Text("Проверка ${entry.release.pkg.key}", style = MaterialTheme.typography.titleMedium)
-                Text("SHA-256: ${entry.release.pkg.checksum}")
-                Text(details)
-                OutlinedTextField(evidence, { evidence = it }, label = { Text("Кем создан пакет, основание лицензии и результат проверки файлов") }, modifier = Modifier.fillMaxWidth())
+                PaperText("Проверка ${entry.release.pkg.key}", style = LocalPaperTypography.current.title)
+                PaperText("SHA-256: ${entry.release.pkg.checksum}")
+                PaperText(details)
+                PaperInput(evidence, { evidence = it }, label = { PaperText("Кем создан пакет, основание лицензии и результат проверки файлов") }, modifier = Modifier.fillMaxWidth())
                 Check("Происхождение установлено", originReviewed) { originReviewed = it }
                 Check("Лицензия установлена", licenseReviewed) { licenseReviewed = it }
                 Check("Инструкции и ресурсы проверены", contentReviewed) { contentReviewed = it }
-                TextButton(enabled = !busy && evidence.isNotBlank(), onClick = {
+                PaperAction(enabled = !busy && evidence.isNotBlank(), onClick = {
                     action {
                         repo().review(entry.release.pkg.key, SkillPackageReview(entry.release.pkg.checksum, "local-user", evidence, originReviewed, licenseReviewed, contentReviewed))
                         selected = null; "Результат проверки сохранён"
                     }
-                }) { Text("Сохранить проверку") }
+                }) { PaperText("Сохранить проверку") }
             }
             preview?.let { p ->
-                Text("Подтверждение изменения", style = MaterialTheme.typography.titleMedium)
-                Text(p.details)
+                PaperText("Подтверждение изменения", style = LocalPaperTypography.current.title)
+                PaperText(p.details)
                 Check("Изменения просмотрены", approvedChanges) { approvedChanges = it }
                 if (p.consent.permissions.isNotEmpty()) {
                     Check("Отдельно разрешаю новые возможности: ${p.consent.permissions.sortedBy { it.name }.joinToString()}", approvedPermissions) { approvedPermissions = it }
                 }
-                TextButton(enabled = !busy && approvedChanges && (p.consent.permissions.isEmpty() || approvedPermissions), onClick = {
+                PaperAction(enabled = !busy && approvedChanges && (p.consent.permissions.isEmpty() || approvedPermissions), onClick = {
                     action {
                         repo().activate(p.target, activationApproval(p.consent, approvedChanges, approvedPermissions))
                         preview = null; "Активный набор сохранён"
                     }
-                }) { Text("Подтвердить активацию") }
+                }) { PaperText("Подтвердить активацию") }
             }
-            TextButton(enabled = !busy, onClick = {
+            PaperAction(enabled = !busy, onClick = {
                 action { preview = makePreview(repo().snapshot().previousActive ?: error("Нет версии для отката")); approvedChanges = false; approvedPermissions = false; "Проверьте откат всего активного набора" }
-            }) { Text("Сравнить с предыдущим набором…") }
-            HorizontalDivider()
-            Text("Импорт", style = MaterialTheme.typography.titleMedium)
+            }) { PaperText("Сравнить с предыдущим набором…") }
+            PaperDivider()
+            PaperText("Импорт", style = LocalPaperTypography.current.title)
             Row { listOf(SkillImportKind.LOCAL_DIRECTORY, SkillImportKind.ZIP, SkillImportKind.GIT, SkillImportKind.HTTPS_PACKAGE).forEach { option ->
-                TextButton(enabled = !busy, onClick = { kind = option; network = false }) {
-                Text(when (option) { SkillImportKind.LOCAL_DIRECTORY -> "Каталог"; SkillImportKind.ZIP -> "ZIP"; SkillImportKind.GIT -> "GitHub"; SkillImportKind.HTTPS_PACKAGE -> "HTTPS"; SkillImportKind.READY_TEXT -> error("Текстовый импорт открывается отдельным редактором") } + if (kind == option) " ✓" else "")
+                PaperAction(enabled = !busy, onClick = { kind = option; network = false }) {
+                PaperText(when (option) { SkillImportKind.LOCAL_DIRECTORY -> "Каталог"; SkillImportKind.ZIP -> "ZIP"; SkillImportKind.GIT -> "GitHub"; SkillImportKind.HTTPS_PACKAGE -> "HTTPS"; SkillImportKind.READY_TEXT -> error("Текстовый импорт открывается отдельным редактором") } + if (kind == option) " ✓" else "")
                 }
             } }
-            OutlinedTextField(location, { location = it; network = false }, label = { Text(if (kind in setOf(SkillImportKind.GIT, SkillImportKind.HTTPS_PACKAGE)) "URL открытого источника" else "Полный путь к каталогу или ZIP") }, modifier = Modifier.fillMaxWidth())
+            PaperInput(location, { location = it; network = false }, label = { PaperText(if (kind in setOf(SkillImportKind.GIT, SkillImportKind.HTTPS_PACKAGE)) "URL открытого источника" else "Полный путь к каталогу или ZIP") }, modifier = Modifier.fillMaxWidth())
             if (kind == SkillImportKind.LOCAL_DIRECTORY || kind == SkillImportKind.GIT) {
-                Text("Для пакета без манифеста задайте метаданные. Автор и лицензия останутся неизвестными. Совместимость: desktop, хост 1.x.")
-                OutlinedTextField(skillId, { skillId = it }, label = { Text("ID навыка, например local.summary") })
-                OutlinedTextField(version, { version = it }, label = { Text("Фиксированная версия") })
-                OutlinedTextField(name, { name = it }, label = { Text("Название") })
-                OutlinedTextField(description, { description = it }, label = { Text("Когда применять") })
+                PaperText("Для пакета без манифеста задайте метаданные. Автор и лицензия останутся неизвестными. Совместимость: desktop, хост 1.x.")
+                PaperInput(skillId, { skillId = it }, label = { PaperText("ID навыка, например local.summary") })
+                PaperInput(version, { version = it }, label = { PaperText("Фиксированная версия") })
+                PaperInput(name, { name = it }, label = { PaperText("Название") })
+                PaperInput(description, { description = it }, label = { PaperText("Когда применять") })
             }
             if (kind == SkillImportKind.GIT || kind == SkillImportKind.HTTPS_PACKAGE) {
-                OutlinedTextField(revision, { revision = it; network = false }, label = { Text(if (kind == SkillImportKind.GIT) "Полный commit SHA (40 символов)" else "SHA-256 манифеста из источника") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(origins, { origins = it; network = false }, label = { Text("Одобренные HTTPS-источники через запятую") }, modifier = Modifier.fillMaxWidth())
-                Text("Для GitHub укажите https://github.com и https://codeload.github.com. Каждый адрес перенаправления также должен быть одобрен.")
+                PaperInput(revision, { revision = it; network = false }, label = { PaperText(if (kind == SkillImportKind.GIT) "Полный commit SHA (40 символов)" else "SHA-256 манифеста из источника") }, modifier = Modifier.fillMaxWidth())
+                PaperInput(origins, { origins = it; network = false }, label = { PaperText("Одобренные HTTPS-источники через запятую") }, modifier = Modifier.fillMaxWidth())
+                PaperText("Для GitHub укажите https://github.com и https://codeload.github.com. Каждый адрес перенаправления также должен быть одобрен.")
                 Check("Разрешаю загрузку с этих источников. Отправляется только запрос пакета", network) { network = it }
             }
-            TextButton(enabled = !busy && location.isNotBlank(), onClick = {
+            PaperAction(enabled = !busy && location.isNotBlank(), onClick = {
                 action {
                     val importer = SkillPackageImporter(repo(), host, origins.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet())
                     val metadata = if (skillId.isNotBlank()) SkillLocalMetadata(skillId, version, name, description, SkillCompatibility("1.0.0", "2.0.0", setOf("desktop"))) else null
@@ -229,26 +230,26 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
                     }
                     network = false; "Пакет импортирован в карантин"
                 }
-            }) { Text("Импортировать в карантин") }
-            HorizontalDivider()
-            Text("Готовый SKILL.md", style = MaterialTheme.typography.titleMedium)
-            Text("Текст и YAML frontmatter проверяются до записи. Метаданные ниже принадлежат этому устройству и не берутся из текста.")
-            OutlinedTextField(readyText, {
+            }) { PaperText("Импортировать в карантин") }
+            PaperDivider()
+            PaperText("Готовый SKILL.md", style = LocalPaperTypography.current.title)
+            PaperText("Текст и YAML frontmatter проверяются до записи. Метаданные ниже принадлежат этому устройству и не берутся из текста.")
+            PaperInput(readyText, {
                 readyText = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
-            }, label = { Text("Полный текст SKILL.md") }, minLines = 8, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(textSkillId, {
+            }, label = { PaperText("Полный текст SKILL.md") }, minLines = 8, modifier = Modifier.fillMaxWidth())
+            PaperInput(textSkillId, {
                 textSkillId = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
-            }, label = { Text("Локальный ID навыка") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(textVersion, {
+            }, label = { PaperText("Локальный ID навыка") }, modifier = Modifier.fillMaxWidth())
+            PaperInput(textVersion, {
                 textVersion = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
-            }, label = { Text("Фиксированная версия") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(textName, {
+            }, label = { PaperText("Фиксированная версия") }, modifier = Modifier.fillMaxWidth())
+            PaperInput(textName, {
                 textName = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
-            }, label = { Text("Локальное название") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(textDescription, {
+            }, label = { PaperText("Локальное название") }, modifier = Modifier.fillMaxWidth())
+            PaperInput(textDescription, {
                 textDescription = it; preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
-            }, label = { Text("Когда применять") }, modifier = Modifier.fillMaxWidth())
-            TextButton(enabled = !busy && readyText.isNotBlank(), onClick = {
+            }, label = { PaperText("Когда применять") }, modifier = Modifier.fillMaxWidth())
+            PaperAction(enabled = !busy && readyText.isNotBlank(), onClick = {
                 action {
                     val metadata = SkillLocalMetadata(textSkillId, textVersion, textName, textDescription,
                         SkillCompatibility("1.0.0", "2.0.0", setOf("desktop")))
@@ -264,33 +265,33 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
                     }
                     "Предпросмотр готов. Импорт ещё не выполнен."
                 }
-            }) { Text("Проверить и показать предпросмотр") }
+            }) { PaperText("Проверить и показать предпросмотр") }
             preparedText?.let { prepared ->
-                Text("Предпросмотр готового текста", style = MaterialTheme.typography.titleSmall)
-                Text(preparedTextDetails)
+                PaperText("Предпросмотр готового текста", style = LocalPaperTypography.current.label)
+                PaperText(preparedTextDetails)
                 Check("Подтверждаю импорт именно этого checksum в карантин", textInstallConfirmed) { textInstallConfirmed = it }
-                TextButton(enabled = !busy && textInstallConfirmed, onClick = {
+                PaperAction(enabled = !busy && textInstallConfirmed, onClick = {
                     action {
                         repo().install(prepared)
                         preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false
                         "Готовый текст сохранён в карантин. Для применения нужны отдельные review и подключение."
                     }
-                }) { Text("Сохранить в карантин") }
-                TextButton(enabled = !busy, onClick = {
+                }) { PaperText("Сохранить в карантин") }
+                PaperAction(enabled = !busy, onClick = {
                     preparedText = null; preparedTextDetails = ""; textInstallConfirmed = false; notice = "Предпросмотр отменён; пакет не сохранён"
-                }) { Text("Отменить предпросмотр") }
+                }) { PaperText("Отменить предпросмотр") }
             }
-            HorizontalDivider()
-            Text("Резервная копия", style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(backupPath, { backupPath = it; recoveryConfirmed = false }, label = { Text("Полный путь к файлу резервной копии") }, modifier = Modifier.fillMaxWidth())
-            TextButton(enabled = !busy && backupPath.isNotBlank(), onClick = {
+            PaperDivider()
+            PaperText("Резервная копия", style = LocalPaperTypography.current.title)
+            PaperInput(backupPath, { backupPath = it; recoveryConfirmed = false }, label = { PaperText("Полный путь к файлу резервной копии") }, modifier = Modifier.fillMaxWidth())
+            PaperAction(enabled = !busy && backupPath.isNotBlank(), onClick = {
                 action { backupHash = repo().backup(Path.of(backupPath)); "Копия сохранена. Сохраните её отпечаток отдельно для восстановления." }
-            }) { Text("Создать копию") }
-            OutlinedTextField(backupHash, { backupHash = it; recoveryConfirmed = false }, label = { Text("Сохранённый SHA-256 резервной копии") }, modifier = Modifier.fillMaxWidth())
+            }) { PaperText("Создать копию") }
+            PaperInput(backupHash, { backupHash = it; recoveryConfirmed = false }, label = { PaperText("Сохранённый SHA-256 резервной копии") }, modifier = Modifier.fillMaxWidth())
             Check("Доверяю этой локальной копии и подтверждаю замену библиотеки и проверок", recoveryConfirmed) { recoveryConfirmed = it }
-            TextButton(enabled = !busy && recoveryConfirmed && backupHash.isNotBlank() && backupPath.isNotBlank(), onClick = {
+            PaperAction(enabled = !busy && recoveryConfirmed && backupHash.isNotBlank() && backupPath.isNotBlank(), onClick = {
                 action { repo().restore(Path.of(backupPath), backupHash, recoveryConfirmed); preview = null; selected = null; recoveryConfirmed = false; "Библиотека восстановлена и проверена" }
-            }) { Text("Восстановить") }
+            }) { PaperText("Восстановить") }
         }
     }
 
@@ -313,6 +314,6 @@ class LocalSkillsPlugin(private val root: Path) : MagicPlugin, AutoCloseable {
 
     @Composable
     private fun Check(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-        Row { Checkbox(checked, onChange); Text(label, modifier = Modifier.padding(top = 12.dp)) }
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { PaperCheck(checked, onChange); PaperText(label) }
     }
 }

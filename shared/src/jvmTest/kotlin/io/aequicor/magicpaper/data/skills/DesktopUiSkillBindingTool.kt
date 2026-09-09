@@ -45,7 +45,7 @@ object DesktopUiSkillBindingTool {
             unrelatedTrust = before.projectTextConsents - projectId
 
             val imported = SkillPackageImporter(repository, host).prepareDirectory(packageDirectory)
-            require(imported.pkg.key == "magicpaper.desktop-ui@1.0.0")
+            require(imported.pkg.key == "magicpaper.desktop-ui@1.1.0")
             checksum = imported.pkg.checksum
             val installed = before.installed[imported.pkg.key]
             if (installed == null) repository.install(imported)
@@ -69,7 +69,7 @@ object DesktopUiSkillBindingTool {
 
             snapshot = repository.snapshot()
             val currentPins = snapshot.projects[projectId].orEmpty()
-            val targetPins = currentPins + (imported.pkg.key to checksum)
+            val targetPins = currentPins.filterKeys { before.installed[it]?.pkg?.manifest?.id != imported.pkg.manifest.id } + (imported.pkg.key to checksum)
             val alreadyTrusted = snapshot.projectTextConsents[projectId] == targetPins
             if (currentPins != targetPins || !alreadyTrusted) {
                 repository.bindProject(
@@ -87,7 +87,7 @@ object DesktopUiSkillBindingTool {
 
             val selection = repository.projectCodingSelection(projectId)
             require(selection.trustedText && selection.freshSession)
-            require(selection.instructions.any { it.id == "magicpaper.desktop-ui" && it.version == "1.0.0" && it.checksum == checksum })
+            require(selection.instructions.any { it.id == "magicpaper.desktop-ui" && it.version == "1.1.0" && it.checksum == checksum })
             val prepared = prepareCodingSkillInput(
                 CodingSession("desktop-ui-binding-check", projectId, "Desktop UI", 0, piSessionId = "old-session", engine = CodingEngine.PI),
                 request,
@@ -108,7 +108,7 @@ object DesktopUiSkillBindingTool {
         LocalSkillRepository(repositoryDirectory, host).use { reopened ->
             val selection = reopened.projectCodingSelection(projectId)
             require(selection.trustedText)
-            require(selection.instructions.any { it.id == "magicpaper.desktop-ui" && it.version == "1.0.0" && it.checksum == checksum })
+            require(selection.instructions.any { it.id == "magicpaper.desktop-ui" && it.version == "1.1.0" && it.checksum == checksum })
             val state = reopened.snapshot()
             require(state.active == unrelatedActive)
             require(state.projects - projectId == unrelatedProjects)
@@ -119,7 +119,7 @@ object DesktopUiSkillBindingTool {
             put("status", "PASS")
             put("repository", projectRoot.relativize(repositoryDirectory).toString())
             put("projectId", projectId)
-            put("installedVersion", "magicpaper.desktop-ui@1.0.0")
+            put("installedVersion", "magicpaper.desktop-ui@1.1.0")
             put("checksum", checksum)
             put("generation", generation)
             put("importedThroughApi", true)
@@ -131,7 +131,7 @@ object DesktopUiSkillBindingTool {
             put("unrelatedBindingsPreserved", true)
             put("unrelatedTrustPreserved", true)
             put("snapshotEditedDirectly", false)
-            put("instructions", buildJsonArray { add(JsonPrimitive("magicpaper.desktop-ui@1.0.0")) })
+            put("instructions", buildJsonArray { add(JsonPrimitive("magicpaper.desktop-ui@1.1.0")) })
         }.toString() + "\n"
         Files.createDirectories(reportFile.parent)
         val pending = Files.createTempFile(reportFile.parent, reportFile.fileName.toString(), ".pending")
@@ -145,6 +145,6 @@ object DesktopUiSkillBindingTool {
         } finally {
             Files.deleteIfExists(pending)
         }
-        println("PASS: magicpaper.desktop-ui@1.0.0 bound to $projectId in $repositoryDirectory; generation=$generation")
+        println("PASS: magicpaper.desktop-ui@1.1.0 bound to $projectId in $repositoryDirectory; generation=$generation")
     }
 }

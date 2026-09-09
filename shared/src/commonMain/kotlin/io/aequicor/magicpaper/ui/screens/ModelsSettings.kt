@@ -2,7 +2,7 @@ package io.aequicor.magicpaper.ui.screens
 
 import io.aequicor.magicpaper.designsystem.*
 
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -76,7 +76,7 @@ fun ModelsSettings(vm: MagicPaperViewModel, state: UiState) {
             var query by remember { mutableStateOf("") }
             val all = (p.modelCatalog.map { it.id } + p.favoriteModels + listOf(p.sourceModelId(p.modelId)))
                 .filter { it.isNotBlank() }.distinct()
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { expanded = !expanded },
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).paperClickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically) {
                 PaperText("${if (expanded) "▾" else "▸"} ${p.name} · ${all.size}", Modifier.weight(1f).padding(vertical = 12.dp), style = paperTextStyle(PaperTextRole.BODY))
                 PaperAction(onClick = { vm.editLlmProfile(p.id) }) { PaperText("Настроить", style = paperTextStyle(PaperTextRole.LABEL)) }
@@ -114,7 +114,7 @@ private fun LibraryModelRow(profile: LlmProfile, model: String, state: UiState, 
     val currentDefault = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
     val isDefault = currentDefault?.id == profile.id && currentDefault.selectionKey == model
     Column {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { expanded = !expanded },
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).paperClickable { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
                 PaperText(profile.modelName(model), style = paperTextStyle(PaperTextRole.BODY))

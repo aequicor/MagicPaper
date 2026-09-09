@@ -41,6 +41,7 @@ class PaperSemanticsTest {
             scene.sendKeyEvent(KeyEvent(Key.Spacebar, KeyEventType.KeyUp))
             assertEquals(2, clicks)
             fraction.value = null
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             scene.render(48_000_000).close()
             assertEquals("—", control().config[SemanticsProperties.StateDescription])
             assertEquals(null, control().config.getOrNull(SemanticsProperties.ProgressBarRangeInfo))

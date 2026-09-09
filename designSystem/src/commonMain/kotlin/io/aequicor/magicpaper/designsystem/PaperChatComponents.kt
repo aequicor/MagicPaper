@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
@@ -78,6 +78,7 @@ public fun PaperMarkdown(text: String, modifier: Modifier = Modifier, compact: B
             h2 = paperTextStyle(if (compact) body else PaperTextRole.TITLE),
             h3 = paperTextStyle(if (compact) body else PaperTextRole.TITLE),
             text = paperTextStyle(body),
+                paragraph = paperTextStyle(body), ordered = paperTextStyle(body), bullet = paperTextStyle(body), list = paperTextStyle(body), table = paperTextStyle(body),
             code = paperTextStyle(PaperTextRole.CODE),
             inlineCode = paperTextStyle(PaperTextRole.CODE),
         ),
@@ -124,7 +125,7 @@ public fun PaperListRow(
         modifier = modifier
             .fillMaxWidth()
             .background(if (selected) colors.selected else colors.surface, RoundedCornerShape(6.dp))
-            .then(if (onClick == null) Modifier else Modifier.clickable(enabled = enabled, onClick = onClick))
+            .then(if (onClick == null) Modifier else Modifier.paperClickable(enabled = enabled, onClick = onClick))
             .semantics { role = Role.Button; contentDescription = label }
             .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -161,12 +162,7 @@ public fun PaperMenuHost(expanded: Boolean, onDismissRequest: () -> Unit, modifi
 
 @Composable
 public fun PaperMenuAction(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, destructive: Boolean = false) {
-    DropdownMenuItem(
-        text = { PaperText(label, role = PaperTextRole.BODY, color = if (destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) },
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier,
-    )
+    PaperRichMenuAction(text = { PaperText(label, role = PaperTextRole.BODY, color = if (destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) }, onClick = onClick, enabled = enabled, modifier = modifier)
 }
 
 /** Slot-based menu item for feature menus with icons and multi-line labels. */
@@ -178,7 +174,15 @@ public fun PaperRichMenuAction(
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
     enabled: Boolean = true,
-) = DropdownMenuItem(text = text, onClick = onClick, modifier = modifier, leadingIcon = leadingIcon, trailingIcon = trailingIcon, enabled = enabled)
+) {
+    Row(modifier.fillMaxWidth().paperClickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        leadingIcon?.invoke()
+        Box(Modifier.weight(1f)) { text() }
+        trailingIcon?.invoke()
+    }
+}
 
 @Composable
 public fun PaperTextAction(
@@ -199,7 +203,11 @@ public fun PaperTooltipHost(
     tooltip: @Composable () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
-) = PaperTooltip(text = "", modifier = modifier) { content() }
+) = androidx.compose.material3.TooltipBox(
+    positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+    tooltip = { PaperTooltipSurface(tooltip) },
+    state = androidx.compose.material3.rememberTooltipState(), modifier = modifier, content = content,
+)
 
 /** Slot-based modal used by feature flows that need domain-specific validation or actions. */
 @Composable
@@ -320,7 +328,7 @@ public fun PaperIndeterminateProgress(modifier: Modifier = Modifier, label: Stri
     LinearProgressIndicator(modifier.fillMaxWidth().semantics { if (label != null) contentDescription = label })
 }
 
-/** Material text-field renderer remains private to the design-system module. */
+/** Composer editing shares compact field geometry and interaction states. */
 @Composable
 public fun PaperComposerField(
     value: String,
@@ -338,7 +346,7 @@ public fun PaperComposerField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
-    androidx.compose.material3.OutlinedTextField(
+    PaperInput(
         value = value, onValueChange = onValueChange, modifier = modifier,
         label = label, placeholder = placeholder, enabled = enabled, singleLine = singleLine, minLines = minLines, maxLines = maxLines,
         textStyle = textStyle, visualTransformation = visualTransformation, trailingIcon = trailingIcon,

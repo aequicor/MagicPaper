@@ -12,14 +12,14 @@ internal const val MESSAGE_PREVIEW_CHARS = 6000
 
 /** Source ranges remain relative to the original document, including reference links. */
 internal class MarkdownBlockNode(
-    val original: ASTNode,
+    override val original: ASTNode,
     override val children: List<ASTNode>,
     override val startOffset: Int = original.startOffset,
     override val endOffset: Int = original.endOffset,
-    val listNumber: Int? = null,
-    val listContinuation: Boolean = false,
-    val code: IntRange? = null,
-) : ASTNode {
+    override val listNumber: Int? = null,
+    override val listContinuation: Boolean = false,
+    override val code: IntRange? = null,
+) : io.aequicor.magicpaper.designsystem.PaperMarkdownSlice {
     override val type: IElementType get() = original.type
     override val parent: ASTNode? get() = original.parent
 }

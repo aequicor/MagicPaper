@@ -3,7 +3,7 @@ name: magicpaper-desktop-ui
 description: Implement or review MagicPaper Compose Multiplatform desktop UI for macOS and Windows. Use for screens, dialogs, navigation, window chrome, interactions, accessibility, or components in this repository; route all visual and interactive UI through the public Paper design-system API. Do not use for backend-only work or unrelated generic Compose applications.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   package-id: "magicpaper.desktop-ui"
 ---
 
@@ -25,6 +25,14 @@ Preserve MagicPaper's warm paper identity while making behavior, density, naviga
 - Foundation/layout primitives may remain outside the design system for feature composition. If a feature invents a reusable interactive primitive, raw visual value, focus treatment, or control state, extend the design system first.
 - Never bypass the boundary with aliases, fully qualified Material calls, wildcard imports, copied private DS implementation, or feature-local lookalike components.
 - Use public API from another module. If existing public API cannot express the required behavior, extend it narrowly in `:designSystem`, document semantics and platform variation, test it, then consume the new public API. Do not make internals public merely to satisfy a call site.
+
+## Brand and interaction
+
+- Read `docs/desktop-ui/BRANDBOOK.md` for the current palette; the earlier contract palette is historical baseline.
+- Pastel sand, lilac, grey, white, ash green and coral are surfaces. Black-burgundy ink and accessible dark accents carry text.
+- Use `paperClickable` or a Paper control for actions. The same shape clips the full hover/pressed fill and focus outline; preserve selected state when the pointer leaves. Do not add ripple, pointer-only handlers or feature-local hover drawing.
+- By default, center button content horizontally and vertically within the hit area; center an icon and label together as one group. Override this only when an explicit component or platform guideline requires different alignment. Align forms and lists to shared leading guides, and use Paper spacing/density rather than arbitrary gaps.
+- UI contains names, actions, brief validation and necessary consequences. Keep descriptions of algorithms, atomic writes, adapters and implementation mechanics in code.
 
 ## Implementation decisions
 

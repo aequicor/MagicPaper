@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
@@ -25,8 +26,9 @@ import kotlinx.coroutines.isActive
 /** One isolated drawing layer. No frame state is read by chat/project composition or layout. */
 @Composable
 fun MagicPaperBackground(enabled: Boolean, modifier: Modifier = Modifier) {
-    val parchment = remember {
-        Brush.verticalGradient(listOf(Color(0xFFFBF7EE), Color(0xFFF5EFE3), Color(0xFFF0E8D9)))
+    val colors = LocalPaperColors.current
+    val parchment = remember(colors) {
+        Brush.verticalGradient(listOf(colors.surface, colors.canvas, colors.raisedSurface))
     }
     Box(modifier.background(parchment)) {
         val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()

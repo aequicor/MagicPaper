@@ -391,7 +391,7 @@ class PlanningChatServiceTest {
         assertTrue(f.projects.sessions(project.id).first { it.id == ordinary.id }.planningMode)
     }
 
-    @Test fun handoffShowsLivePlannerActivityAndGreenWorkerThenUserQuestion() = runTest {
+    @Test fun handoffShowsLivePlannerActivityAndQueuedWorkerThenUserQuestion() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
         val plan = f.readyPlan("p", parent)
@@ -404,7 +404,7 @@ class PlanningChatServiceTest {
         val handedOff = f.store.planFor(plan.id)!!
         assertTrue(handedOff.milestones.single().attempts.last().awaitingPlanner)
         assertFalse(handedOff.isStageWorking(handedOff.milestones.single()))
-        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, plan = handedOff).status)
+        assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, plan = handedOff).status)
         val initial = assertNotNull(f.service.drafts.value[parent.id])
         assertTrue(initial.active)
         assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent, draft = initial, running = initial.active, plan = handedOff).status)

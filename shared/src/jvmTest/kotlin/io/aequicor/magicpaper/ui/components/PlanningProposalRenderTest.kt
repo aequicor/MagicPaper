@@ -78,8 +78,8 @@ class PlanningProposalRenderTest {
                         repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
                         fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                         val labels = nodes().map(::text)
-                        assertEquals(phase == ExecutionPhase.COMPLETE, "Ждём вашего ответа" in labels)
-                        val expected = if (phase == ExecutionPhase.COMPLETE) "Ждём вашего ответа"
+                        assertEquals(requests.isNotEmpty(), "Ждём вашего ответа" in labels)
+                        val expected = if (requests.isNotEmpty()) "Ждём вашего ответа"
                             else "Выполнение этапов · есть предложение доработки"
                         assertTrue(expected in labels, labels.toString())
                         for (label in listOf("Предложение доработки", "Посмотреть")) {
@@ -95,7 +95,7 @@ class PlanningProposalRenderTest {
                         action("Посмотреть").config[SemanticsActions.OnClick].action!!.invoke()
                         repeat(6) { scene.render((it + 8) * 16_000_000L).close(); runCurrent() }
                         val confirm = action("Подтвердить доработку")
-                        assertEquals(phase != ExecutionPhase.COMPLETE, confirm.config.getOrNull(SemanticsProperties.Disabled) != null)
+                        assertEquals(!plan.proposalReadyForConfirmation, confirm.config.getOrNull(SemanticsProperties.Disabled) != null)
                         assertTrue(nodes().any { text(it).contains(followup.title) })
                         File(output, "${phase.name.lowercase()}-details-$width.png").writeBytes(scene.render(224_000_000L).use {
                             it.encodeToData()!!.use { data -> data.bytes }

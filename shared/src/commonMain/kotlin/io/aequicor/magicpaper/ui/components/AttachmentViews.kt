@@ -1,7 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -114,7 +114,7 @@ fun MessageAttachments(attachments: List<Attachment>) {
                         .widthIn(max = 220.dp)
                         .heightIn(max = 160.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { preview = attachment },
+                        .paperClickable { preview = attachment },
                 ) {
                     PaperImage(bitmap, attachment.name, Modifier.fillMaxWidth().heightIn(max = 160.dp))
                 }

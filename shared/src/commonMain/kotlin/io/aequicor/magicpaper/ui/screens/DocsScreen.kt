@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,9 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -21,13 +20,13 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 @Composable
 fun DocsScreen(vm: MagicPaperViewModel, articles: List<DocArticle>, query: String) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Документация", style = MaterialTheme.typography.titleLarge)
+        PaperText("Документация", style = LocalPaperTypography.current.headline)
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
+        PaperInput(
             value = query,
             onValueChange = { vm.setDocsQuery(it) },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Поиск по справочнику…") },
+            placeholder = { PaperText("Поиск по справочнику…") },
             singleLine = true,
         )
         Spacer(Modifier.height(12.dp))
@@ -46,11 +45,11 @@ private fun DocCard(article: DocArticle) {
             .fillMaxWidth()
             .padding(vertical = 6.dp),
     ) {
-        Text(article.title, style = MaterialTheme.typography.titleMedium)
-        Text(
+        PaperText(article.title, style = LocalPaperTypography.current.title)
+        PaperText(
             article.body,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = LocalPaperTypography.current.body,
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(6.dp))
     }

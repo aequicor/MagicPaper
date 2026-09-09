@@ -1,7 +1,8 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.Row
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import io.aequicor.magicpaper.data.skills.LocalSkillRepository
 import io.aequicor.magicpaper.domain.*
@@ -30,7 +31,7 @@ internal fun ProjectSkillRollback(projectId: String, repository: () -> LocalSkil
             } finally { busy = false }
         }
     }
-    TextButton(enabled = enabled && !busy, onClick = {
+    PaperAction(enabled = enabled && !busy, onClick = {
         changes = false; permissions = false
         action {
             preview = withContext(Dispatchers.IO) {
@@ -57,17 +58,17 @@ internal fun ProjectSkillRollback(projectId: String, repository: () -> LocalSkil
                 ProjectRollbackPreview(SkillActivationConsent(snapshot.generation, target.toMap(), false, added, trustedCodingText = false), details)
             }
         }
-    }) { Text("Откатить состав…") }
-    if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+    }) { PaperText("Откатить состав…") }
+    if (error.isNotBlank()) PaperText(error, color = LocalPaperColors.current.error)
     preview?.let { p ->
-        Text("Предпросмотр проектного отката\n${p.details}")
-        Text("Opt-in доверенного текста не восстанавливается. Для применения потребуется отдельное новое согласие после отката.")
-        Row { Checkbox(changes, { changes = it }, enabled = !busy); Text("Изменения отката и точные checksum просмотрены") }
+        PaperText("Предпросмотр проектного отката\n${p.details}")
+        PaperText("Opt-in доверенного текста не восстанавливается. Для применения потребуется отдельное новое согласие после отката.")
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { PaperCheck(changes, { changes = it }, enabled = !busy); PaperText("Изменения отката и точные checksum просмотрены") }
         if (p.consent.permissions.isNotEmpty()) Row {
-            Checkbox(permissions, { permissions = it }, enabled = !busy)
-            Text("Отдельно подтверждаю новые разрешения отката: ${p.consent.permissions}")
+            PaperCheck(permissions, { permissions = it }, enabled = !busy)
+            PaperText("Отдельно подтверждаю новые разрешения отката: ${p.consent.permissions}")
         }
-        TextButton(enabled = enabled && !busy && changes && (p.consent.permissions.isEmpty() || permissions), onClick = {
+        PaperAction(enabled = enabled && !busy && changes && (p.consent.permissions.isEmpty() || permissions), onClick = {
             action {
                 withContext(Dispatchers.IO) {
                     repository().rollbackProject(projectId, p.consent.copy(reviewedChanges = changes,
@@ -75,7 +76,7 @@ internal fun ProjectSkillRollback(projectId: String, repository: () -> LocalSkil
                 }
                 preview = null; changes = false; permissions = false; onChanged()
             }
-        }) { Text("Подтвердить откат без opt-in") }
-        TextButton(enabled = !busy, onClick = { preview = null; changes = false; permissions = false }) { Text("Отмена отката") }
+        }) { PaperText("Подтвердить откат без opt-in") }
+        PaperAction(enabled = !busy, onClick = { preview = null; changes = false; permissions = false }) { PaperText("Отмена отката") }
     }
 }

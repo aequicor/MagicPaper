@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,11 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -66,30 +63,30 @@ class SkillsRepositoryPlugin(
         }
 
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text(icon + " " + title, style = MaterialTheme.typography.titleMedium)
-            Text(
+            PaperText(icon + " " + title, style = LocalPaperTypography.current.title)
+            PaperText(
                 "Проверенные навыки устанавливаются в один клик и сразу подхватываются агентом.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            PaperInput(
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Найти навык…") },
+                placeholder = { PaperText("Найти навык…") },
                 singleLine = true,
             )
             notice?.let {
                 Spacer(Modifier.height(4.dp))
-                Text(
+                PaperText(
                     it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    style = LocalPaperTypography.current.body,
+                    color = LocalPaperColors.current.action,
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Text("Каталог", style = MaterialTheme.typography.titleSmall)
+            PaperText("Каталог", style = LocalPaperTypography.current.label)
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -112,12 +109,12 @@ class SkillsRepositoryPlugin(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            Text("Библиотека (${installed.size})", style = MaterialTheme.typography.titleSmall)
+            PaperText("Библиотека (${installed.size})", style = LocalPaperTypography.current.label)
             if (installed.isEmpty()) {
-                Text(
+                PaperText(
                     "Пока пусто. Установите навык из каталога выше.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = LocalPaperTypography.current.body,
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
             installed.forEach { skill ->
@@ -138,22 +135,22 @@ class SkillsRepositoryPlugin(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.surface)
+                .clip(PaperShapes.panel)
+                .background(LocalPaperColors.current.surface)
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(entry.name, style = MaterialTheme.typography.bodyLarge)
-                Text(
+                PaperText(entry.name, style = LocalPaperTypography.current.body)
+                PaperText(
                     entry.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = LocalPaperTypography.current.body,
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
             Spacer(Modifier.width(8.dp))
-            TextButton(onClick = onInstall) {
-                Text(if (existing != null) "Обновить" else "Установить")
+            PaperAction(onClick = onInstall) {
+                PaperText(if (existing != null) "Обновить" else "Установить")
             }
         }
     }
@@ -164,21 +161,21 @@ class SkillsRepositoryPlugin(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp)
-                .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.surface)
+                .clip(PaperShapes.panel)
+                .background(LocalPaperColors.current.surface)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(skill.name, style = MaterialTheme.typography.bodyLarge)
-                Text(
+                PaperText(skill.name, style = LocalPaperTypography.current.body)
+                PaperText(
                     if (skill.source == SkillSource.CATALOG) "из лавки" else "создан агентом",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = LocalPaperTypography.current.label,
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
-            Switch(checked = skill.enabled, onCheckedChange = onToggle)
-            TextButton(onClick = onDelete) { Text("✕") }
+            PaperToggle(checked = skill.enabled, onCheckedChange = onToggle)
+            PaperAction(onClick = onDelete) { PaperText("✕") }
         }
     }
 }

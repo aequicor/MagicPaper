@@ -1,4 +1,9 @@
 package io.aequicor.magicpaper.ui.screens
+import io.aequicor.magicpaper.designsystem.PaperWorkspaceHeading
+import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
+import io.aequicor.magicpaper.designsystem.PaperPromptField
+import io.aequicor.magicpaper.designsystem.PaperWorkSurface
+import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.domain.tools.ToolPhase
 
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -22,14 +27,12 @@ import io.aequicor.magicpaper.domain.InteractionKind
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -47,14 +50,11 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.border
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.indication
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -70,14 +70,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import io.aequicor.magicpaper.designsystem.paperChatTopShadow
+import io.aequicor.magicpaper.designsystem.paperTranscriptFade
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
 import androidx.compose.runtime.collectAsState
@@ -85,7 +89,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -94,7 +97,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.mutableStateMapOf
@@ -183,7 +185,7 @@ import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.CodingModelSwitcherDialog
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.stickToBottom
-import io.aequicor.magicpaper.ui.theme.MagicFonts
+import io.aequicor.magicpaper.designsystem.PaperFonts
 import io.aequicor.magicpaper.designsystem.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 
@@ -239,7 +241,9 @@ fun CodingScreen(
                 val activeId = project?.let { ui.activeSessionIdOf(it.id) }
                 val active = project?.let { ui.sessionsOf(it.id) }?.firstOrNull { it.session.id == activeId }
                 if (project == null || active == null) {
-                    ProjectsEmptyHint(hasProject = project != null)
+                    ProjectsEmptyHint(hasProject = project != null, onCreate = {
+                        if (project == null) vm.addCodingProject() else vm.requestCodingSession()
+                    })
                 } else {
                     SessionArea(
                         vm = vm,
@@ -278,7 +282,7 @@ internal fun ResizableProjectPanels(
                     }, Orientation.Horizontal),
                 contentAlignment = Alignment.Center,
             ) {
-                PaperVerticalDivider(color = LocalPaperColors.current.border)
+                PaperVerticalDivider(modifier = Modifier.align(Alignment.CenterEnd), color = LocalPaperColors.current.border)
                 Box(Modifier.width(3.dp).height(28.dp).background(LocalPaperColors.current.border, RoundedCornerShape(6.dp)))
             }
             Box(Modifier.weight(1f)) { content() }
@@ -315,15 +319,6 @@ private fun SessionArea(
         val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
             running = stageChat.running || draft.active)
         val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
-        if (ui.computerSupported && !sessionInfo.planningMode && !sessionInfo.researchMode && sessionInfo.stageId == null) {
-            io.aequicor.magicpaper.ui.components.ComputerUsePanel(
-                state = ui.computer, sessionId = sessionInfo.id, running = effective.running,
-                onEnable = { vm.enableComputerUse(sessionInfo.id, it) },
-                onDisable = { vm.disableComputerUse(sessionInfo.id) },
-                onPreview = { vm.previewComputerUse(sessionInfo.id) },
-                onSettings = vm::openComputerSystemSettings,
-            )
-        }
             CodingChat(
                 project = project,
                 session = effective,
@@ -397,7 +392,7 @@ private fun SessionTab(label: String, selected: Boolean, onClick: () -> Unit) {
                     LocalPaperColors.current.surface
                 }
             )
-            .clickable(onClick = onClick)
+            .paperClickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 5.dp),
     ) {
         PaperText(
@@ -413,15 +408,6 @@ private fun SessionTab(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 // ---- Кружок активности ----------------------------------------------------
-
-/**
- * Цвета активности кодинг-сессии: вне пастельной схемы — это сигнальные
- * цвета состояния, они должны читаться мгновенно.
- */
-private val StatusWorking = Color(0xFFCE5B5B)   // красный: агент работает
-private val StatusWaiting = Color(0xFFE0A63C)   // жёлтый: ждёт ответа или подтверждения
-private val StatusIdle = Color(0xFF79A97C)      // зелёный: ждёт запроса
-private val StatusQueued = Color(0xFF97959B)    // серый: ждёт передачи работы
 
 private val CodingSessionStatus.label: String
     get() = when (this) {
@@ -441,33 +427,16 @@ fun ActivityDot(
     modifier: Modifier = Modifier,
     size: Int = 10,
 ) {
-    val color = when (status) {
-        CodingSessionStatus.WORKING -> StatusWorking
-        CodingSessionStatus.WAITING -> StatusWaiting
-        CodingSessionStatus.CONFIRMATION -> StatusWaiting
-        CodingSessionStatus.BLOCKED -> Color(0xFFC77843)
-        CodingSessionStatus.QUEUED -> StatusQueued
-        CodingSessionStatus.SCHEDULED -> StatusQueued
-        CodingSessionStatus.IDLE -> StatusIdle
-    }
-    val pulse by animateFloatAsState(
-        targetValue = if (status == CodingSessionStatus.WORKING) 1f else 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = 700,
-                easing = FastOutSlowInEasing,
-            ),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "activityDotPulse",
-    )
-    val scale = if (status == CodingSessionStatus.WORKING) 0.75f + 0.25f * pulse else 1f
-    Box(
-        modifier = modifier
-            .size(size.dp)
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(androidx.compose.foundation.shape.CircleShape)
-            .background(color),
+    io.aequicor.magicpaper.designsystem.PaperActivityIndicator(
+        tone = when (status) {
+            CodingSessionStatus.IDLE -> io.aequicor.magicpaper.designsystem.PaperActivityTone.READY
+            CodingSessionStatus.WORKING -> io.aequicor.magicpaper.designsystem.PaperActivityTone.WORKING
+            CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING,
+            CodingSessionStatus.CONFIRMATION -> io.aequicor.magicpaper.designsystem.PaperActivityTone.ATTENTION
+            CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED -> io.aequicor.magicpaper.designsystem.PaperActivityTone.QUEUED
+        },
+        label = status.label, running = status == CodingSessionStatus.WORKING,
+        modifier = modifier, size = size.dp,
     )
 }
 
@@ -569,7 +538,7 @@ internal fun ProjectsPanel(
             ProjectPinnedSession(listState, "project-${ui.current?.id}", groups, sessionHeader)
         }
         PaperTextAction(onClick = onAddProject, modifier = Modifier.padding(8.dp)) {
-            PaperText("✦ Новый проект")
+            PaperText("+ Новый проект", style = LocalPaperTypography.current.chrome)
         }
     }
 }
@@ -654,8 +623,8 @@ private fun ProjectRow(
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(6.dp))
             .hoverable(hoverInteraction)
-            .clickable(onClick = onSelect)
-            .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
+            .paperClickable(onClick = onSelect)
+            .padding(start = 8.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(14.dp)) {
@@ -671,7 +640,7 @@ private fun ProjectRow(
             FadingSingleLineText(
                 project.name,
                 fontWeight = FontWeight.SemiBold,
-                style = LocalPaperTypography.current.body,
+                style = LocalPaperTypography.current.chrome,
                 color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.text,
             )
             FadingSingleLineText(
@@ -681,7 +650,7 @@ private fun ProjectRow(
                         if (runningSessions > 0) append(", $runningSessions работают")
                     }
                 },
-                style = LocalPaperTypography.current.body,
+                style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.secondaryText,
             )
         }
@@ -741,14 +710,14 @@ private fun SessionRow(
                     Color.Transparent
                 }
             )
-            .clickable(
+            .paperClickable(
                 onClickLabel = if (selected && childCount > 0) {
                     if (expanded) "Свернуть этапы" else "Раскрыть этапы"
                 } else null,
             ) {
                 if (selected && childCount > 0) onToggleChildren() else onSelect()
             }
-            .padding(horizontal = 6.dp, vertical = 5.dp),
+            .padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusTooltip(status) { ActivityDot(status, size = 8) }
@@ -756,7 +725,7 @@ private fun SessionRow(
         FadingSingleLineText(
             item.session.name,
             modifier = Modifier.weight(1f),
-            style = LocalPaperTypography.current.body,
+            style = LocalPaperTypography.current.chrome,
             fontWeight = FontWeight.Normal,
             color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
         )
@@ -765,7 +734,7 @@ private fun SessionRow(
                 Box(Modifier.size(24.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
-                    .clickable(
+                    .paperClickable(
                         onClick = onToggleChildren,
                     ),
                     contentAlignment = Alignment.Center) {
@@ -812,7 +781,7 @@ private fun RowMenu(open: Boolean, onOpenChange: (Boolean) -> Unit, entries: Lis
             color = LocalPaperColors.current.secondaryText,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable { onOpenChange(true) }
+                .paperClickable { onOpenChange(true) }
                 .semantics { contentDescription = "Действия" }
                 .padding(horizontal = 6.dp),
         )
@@ -846,7 +815,7 @@ private fun StatusTooltip(status: CodingSessionStatus, content: @Composable () -
 }
 
 @Composable
-private fun ProjectsEmptyHint(hasProject: Boolean) {
+private fun ProjectsEmptyHint(hasProject: Boolean, onCreate: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -856,13 +825,15 @@ private fun ProjectsEmptyHint(hasProject: Boolean) {
         Spacer(Modifier.height(8.dp))
         PaperText(
             if (hasProject) {
-                "В проекте пока нет кодинг-сессий. Добавьте сессию в левом меню — у каждой свой контекст и журнал."
+                "Создайте первую сессию"
             } else {
-                "Добавьте проект — папку, в которой агент будет читать файлы и выполнять запросы."
+                "Откройте папку проекта"
             },
             style = LocalPaperTypography.current.body,
             color = LocalPaperColors.current.secondaryText,
         )
+        Spacer(Modifier.height(16.dp))
+        io.aequicor.magicpaper.designsystem.PaperButton(if (hasProject) "Новая сессия" else "Открыть проект", onCreate)
     }
 }
 
@@ -937,11 +908,6 @@ internal fun CodingChat(
             if (fragment.item.first && fragment.index == 0) put(fragment.item.row.message.id, index + 1)
         } }
     }
-    // Remember arrivals at the list level: lazy reuse and reopening saved history
-    // must not replay the entrance animation or reset a command's disclosure.
-    val seenTimelineKeys = remember(session.session.id) { timeline.map { it.key }.toMutableSet() }
-    val arrivingKeys = remember(timeline, seenTimelineKeys) { timeline.map { it.key }.filterNot { it in seenTimelineKeys }.toSet() }
-    SideEffect { seenTimelineKeys.addAll(arrivingKeys) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
     val hasDraft = draftHistory.isNotEmpty()
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
@@ -960,40 +926,24 @@ internal fun CodingChat(
     var footerHeight by remember { mutableStateOf(0.dp) }
     val showOrchestrationStatus = session.session.effectiveRole == CodingSessionRole.ORCHESTRATOR && planningService != null
     val scrolled by remember(listState) { derivedStateOf { listState.canScrollBackward } }
-    Column(Modifier.fillMaxSize()) {
-        if (showOrchestrationStatus)
-            OrchestrationStatus(session, planningService, onOpenSession, Modifier.zIndex(1f), scrolled = scrolled)
-        session.session.stageId?.let { id -> session.plan?.eventWaitLabel(id)?.takeIf { it.isNotBlank() }?.let { label ->
-            PaperPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = LocalPaperColors.current.raisedSurface) {
-                PaperText(label, Modifier.padding(10.dp), style = LocalPaperTypography.current.body)
-            }
-        } }
-        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+    val eventWaitLabel = session.session.stageId?.let { session.plan?.eventWaitLabel(it) }?.takeIf { it.isNotBlank() }
+    var systemHeaderHeight by remember(session.session.id) { mutableStateOf(0.dp) }
+    val protectedBottom = maxOf(systemHeaderHeight, with(density) { scroll.requestPinsBounds?.bottom?.toDp() ?: 0.dp })
+    val effectHeight = if (protectedBottom > 0.dp) maxOf(32.dp, protectedBottom + 12.dp) else 32.dp
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val questionHeight = maxHeight * 0.75f
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().chatScrollInput(scroll)
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        // Fade only the messages; keep the paper background continuous.
-                        val edge = size.height - footerHeight.toPx()
-                        drawRect(Brush.verticalGradient(
-                            0f to Color.White, 0.35f to Color.White.copy(alpha = 0.8f),
-                            0.7f to Color.White.copy(alpha = 0.25f), 1f to Color.Transparent,
-                            startY = edge - 16.dp.toPx(), endY = edge + 16.dp.toPx(),
-                        ), blendMode = BlendMode.DstIn)
-                    },
-                contentPadding = PaddingValues(start = 16.dp, top = if (showOrchestrationStatus) 6.dp else 16.dp,
-                    end = 16.dp, bottom = footerHeight + 16.dp),
+                    .paperChatTopShadow(scrolled, effectHeight = effectHeight)
+                    .paperTranscriptFade(topShadowVisible = scrolled, effectHeight = effectHeight),
+                contentPadding = PaddingValues(start = 8.dp, top = systemHeaderHeight + 12.dp,
+                    end = 8.dp, bottom = footerHeight + 4.dp),
                 verticalArrangement = Arrangement.Top,
             ) {
                 item(key = "project-header", contentType = "header") {
-                    PaperText(
-                        "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${session.session.interactionMode.title} · ${project.path}",
-                        style = LocalPaperTypography.current.body,
-                        color = LocalPaperColors.current.secondaryText,
-                    )
+                    PaperWorkspaceHeading(session.session.name,
+                        "${project.name}  /  ${session.session.interactionMode.title}")
                 }
                 items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
                     val item = fragment.item
@@ -1002,27 +952,16 @@ internal fun CodingChat(
                     val isDraft = message.id == draftRow?.message?.id
                     val rowStatus = status.takeIf { busy && statusMessageId != null &&
                         (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
-                    var hasAppeared by rememberSaveable(item.key) { mutableStateOf(false) }
-                    val appearance = remember(item.key) {
-                        val animate = fragment.parts == null && !hasAppeared && isDraft && draft.active && item.key in arrivingKeys &&
-                            item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)
-                        MutableTransitionState(!animate).apply { targetState = true }
-                    }
-                    SideEffect { hasAppeared = true }
-                    androidx.compose.animation.AnimatedVisibility(appearance,
-                        enter = fadeIn(tween(180)) + expandVertically(tween(220), expandFrom = Alignment.Top),
-                        exit = ExitTransition.None,
-                    ) {
-                        SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
-                            pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
-                            live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
-                            continued = isDraft && busy, fragment = fragment,
-                            onExpand = { expandedMessages = expandedMessages + item.key },
-                            onCollapse = {
-                                listState.requestScrollToItem(fragments.indexOfFirst { it.item.key == item.key } + 1)
-                                expandedMessages = expandedMessages - item.key
-                            })
-                    }
+                    // Insert the complete bubble at once so its background stays joined to the status.
+                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
+                        pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
+                        live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
+                        continued = isDraft && busy, fragment = fragment,
+                        onExpand = { expandedMessages = expandedMessages + item.key },
+                        onCollapse = {
+                            scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
+                            expandedMessages = expandedMessages - item.key
+                        })
                 }
                 if (busy && (hasDraft || statusMessageId == null)) {
                     val statusKey = "draft-status:${draft.timelineId ?: session.session.id}"
@@ -1033,10 +972,20 @@ internal fun CodingChat(
                     }
                 }
             }
-            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd),
-                browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null }, itemKeys = pinKeys)
+            Column(Modifier.align(Alignment.TopStart).fillMaxWidth()
+                .onSizeChanged { systemHeaderHeight = with(density) { it.height.toDp() } }) {
+                if (showOrchestrationStatus)
+                    OrchestrationStatus(session, planningService, onOpenSession, Modifier, scrolled = false)
+                if (eventWaitLabel != null) {
+                    PaperPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = LocalPaperColors.current.raisedSurface) {
+                        PaperText(eventWaitLabel, Modifier.padding(10.dp), style = LocalPaperTypography.current.body)
+                    }
+                }
+            }
+            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = systemHeaderHeight),
+                browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null }, itemKeys = pinKeys, compact = true)
             ChatScrollToBottomButton(scroll,
-                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = footerHeight + 12.dp))
+                Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = (footerHeight - 8.dp).coerceAtLeast(0.dp)))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
                 val request = interactions.firstOrNull()
@@ -1069,7 +1018,6 @@ internal fun CodingChat(
                     onPasteAttachments = onPasteAttachments,
                 )
             }
-        }
     }
     }
 }
@@ -1125,7 +1073,7 @@ private fun SavedCodingHistoryItem(
                             step.kind == CodingStepKind.EXEC, expanded = true, onToggle = onCollapse,
                             showHeader = fragment.first, toolPhase = step.toolPhase, body = {
                                 parts.Content(fragment.index,
-                                    style = LocalPaperTypography.current.body.copy(fontFamily = MagicFonts.code),
+                                    style = LocalPaperTypography.current.body.copy(fontFamily = PaperFonts.code),
                                     color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
                             })
                     } else parts.Content(fragment.index,
@@ -1200,33 +1148,18 @@ private fun CodingMessageBubble(
     }
     val previewState = rememberSaveableStateHolder()
     val isUser = message.role == CodingRole.USER
-    val bubbleColor = if (message.systemNotice) {
-        LocalPaperColors.current.raisedSurface
-    } else if (isUser) {
-        LocalPaperColors.current.selected
-    } else {
-        LocalPaperColors.current.raisedSurface
-    }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = if (first) 10.dp else 0.dp),
+        modifier = Modifier.fillMaxWidth()
+            .padding(top = if (first) 8.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         MessagePinColumn(
             number = pinNumber.takeIf { isUser && last },
             onClick = onShowPins,
             modifier = Modifier
-                .widthIn(max = 680.dp)
+                .widthIn(max = 820.dp)
                 .then(if (step != null || forceWidth) Modifier.fillMaxWidth() else Modifier)
-                .clip(
-                    androidx.compose.foundation.shape.RoundedCornerShape(
-                        topStart = if (!first) 0.dp else if (isUser) 20.dp else 6.dp,
-                        topEnd = if (!first) 0.dp else if (isUser) 6.dp else 20.dp,
-                        bottomStart = if (last) 20.dp else 0.dp,
-                        bottomEnd = if (last) 20.dp else 0.dp,
-                    )
-                )
-                .background(bubbleColor)
-                .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
+                .paperConversationMessage(isUser, first, last),
         ) {
             if (first && message.systemNotice) PaperText("Системное сообщение", style = LocalPaperTypography.current.label,
                 color = LocalPaperColors.current.secondaryText)
@@ -1325,24 +1258,17 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
 private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
     var expanded by rememberSaveable(step.id) { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(LocalPaperColors.current.surface.copy(alpha = 0.5f))
-            .indication(interaction, LocalIndication.current),
-    ) {
+    PaperWorkSurface(Modifier.padding(vertical = 2.dp), expanded = expanded) {
         Row(Modifier.fillMaxWidth().chatDisclosure(interaction) { expanded = !expanded }
             .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             PaperText(
-                "💭",
+                "·",
                 style = LocalPaperTypography.current.body,
                 color = LocalPaperColors.current.border,
             )
             Spacer(Modifier.width(8.dp))
             PaperText(
-                if (expanded) "Размышление агента" else "Размышление агента… (клик — раскрыть)",
+                if (expanded) "Размышление агента" else "Размышление агента",
                 style = LocalPaperTypography.current.body,
                 color = LocalPaperColors.current.secondaryText,
                 modifier = Modifier.weight(1f),
@@ -1405,14 +1331,7 @@ private fun ToolStepContent(
         ToolStepStatus.FAILED -> LocalPaperColors.current.error
         ToolStepStatus.SUCCEEDED, ToolStepStatus.CANCELLED -> LocalPaperColors.current.secondaryText
     }, animationSpec = tween(180), label = "Tool status color")
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(LocalPaperColors.current.surface.copy(alpha = 0.5f))
-            .indication(interaction, LocalIndication.current),
-    ) {
+    PaperWorkSurface(Modifier.padding(vertical = 2.dp), expanded = expanded) {
         if (showHeader) Row(
             Modifier.fillMaxWidth().chatDisclosure(interaction, onToggle)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1457,14 +1376,14 @@ private fun ToolStepContent(
             }
             Spacer(Modifier.width(8.dp))
             if (expanded && body == null) ChatPlainText(if (title.length > 6000) title + "\n\n" + result else title,
-                Modifier.weight(1f), style = LocalPaperTypography.current.body,
+                Modifier.weight(1f), style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.secondaryText)
-            else PaperText(title.take(6000), style = LocalPaperTypography.current.body,
-                color = LocalPaperColors.current.secondaryText, maxLines = 2,
+            else PaperText(title.take(6000), style = LocalPaperTypography.current.chrome,
+                color = LocalPaperColors.current.secondaryText, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             PaperText(
                 if (expanded) "▴" else "▾",
-                style = LocalPaperTypography.current.body,
+                style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.secondaryText,
             )
         }
@@ -1475,14 +1394,14 @@ private fun ToolStepContent(
             PaperText(
                 if (isExec) "Выполняется команда…" else "Выполняется действие…",
                 modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
-                style = LocalPaperTypography.current.body,
+                style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.secondaryText,
             )
         }
         if (body != null) Box(Modifier.padding(horizontal = 10.dp)) { body() }
         if (body == null && expanded && result.isNotBlank() && title.length <= 6000) {
             ChatPlainText(result, Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
-                style = LocalPaperTypography.current.body.copy(fontFamily = MagicFonts.code),
+                style = LocalPaperTypography.current.code,
                 color = if (ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
         }
     }
@@ -1491,17 +1410,9 @@ private fun ToolStepContent(
 /** Текущий ответ агента со статусом и раскрываемыми размышлениями внизу. */
 @Composable
 private fun DraftFragment(first: Boolean, last: Boolean, content: @Composable () -> Unit) {
-    Column(
-        Modifier.padding(top = if (first) 10.dp else 0.dp).widthIn(max = 680.dp).fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp).copy(
-                topStart = if (first) RoundedCornerShape(10.dp).topStart else CornerSize(0.dp),
-                topEnd = if (first) RoundedCornerShape(10.dp).topEnd else CornerSize(0.dp),
-                bottomStart = if (last) RoundedCornerShape(10.dp).bottomStart else CornerSize(0.dp),
-                bottomEnd = if (last) RoundedCornerShape(10.dp).bottomEnd else CornerSize(0.dp)))
-            .background(LocalPaperColors.current.raisedSurface)
-            .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
-    ) {
-        content()
+    Row(Modifier.fillMaxWidth().padding(top = if (first) 8.dp else 0.dp)) {
+        Column(Modifier.widthIn(max = 820.dp).fillMaxWidth()
+            .paperConversationMessage(user = false, first = first, last = last)) { content() }
     }
 }
 
@@ -1552,51 +1463,46 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
             append(activity)
         }
     }
-    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ActivityDot(
-                if (isWorking) CodingSessionStatus.WORKING
-                else if (draft.active) CodingSessionStatus.WORKING else CodingSessionStatus.IDLE,
-                size = 6,
+                when {
+                    draft.failedMessage != null -> CodingSessionStatus.BLOCKED
+                    waitingForUser || draft.awaitingApproval -> CodingSessionStatus.WAITING
+                    draft.active -> CodingSessionStatus.WORKING
+                    else -> CodingSessionStatus.IDLE
+                },
+                size = 10,
             )
-            Spacer(Modifier.width(6.dp))
-            PaperText(label, style = LocalPaperTypography.current.body,
+            Spacer(Modifier.width(8.dp))
+            PaperText(label, style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.text,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false))
         }
         if (hasThinking) {
             val interaction = remember { MutableInteractionSource() }
-            Column(Modifier.fillMaxWidth().padding(top = 6.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(LocalPaperColors.current.surface.copy(alpha = 0.5f))
-                .indication(interaction, LocalIndication.current)
-                .border(1.dp, LocalPaperColors.current.border.copy(alpha = 0.5f), RoundedCornerShape(6.dp))) {
+            PaperWorkSurface(Modifier.padding(top = 6.dp), expanded = expanded) {
                 Row(
                     Modifier.fillMaxWidth().chatDisclosure(interaction, onToggle).semantics {
                         contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PaperText("Размышления агента", style = LocalPaperTypography.current.body,
+                    PaperText("Размышления агента", style = LocalPaperTypography.current.chrome,
                         color = LocalPaperColors.current.secondaryText,
                         modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(8.dp))
-                    PaperText(if (expanded) "▴" else "▾", style = LocalPaperTypography.current.body,
+                    PaperText(if (expanded) "▴" else "▾", style = LocalPaperTypography.current.chrome,
                         color = LocalPaperColors.current.secondaryText)
                 }
                 if (expanded) {
                     val thinking = remember(fragments) { fragments.joinToString("\n\n").trim() }
                     PaperDivider(color = LocalPaperColors.current.border.copy(alpha = 0.5f))
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        if (draft.active) {
-                            PaperText("Текст обновляется по мере ответа агента", style = LocalPaperTypography.current.label,
-                                color = LocalPaperColors.current.secondaryText)
-                            Spacer(Modifier.height(6.dp))
-                        }
                         ChatMarkdown(thinking, Modifier.fillMaxWidth().heightIn(max = 190.dp),
                             compact = true, streaming = draft.active, scrollable = true)
                     }
@@ -1622,7 +1528,7 @@ internal fun currentThinkingSummary(thinking: String): String {
 private fun CodingModeLabel(planning: Boolean, research: Boolean) {
     PaperText(if (research) "Исследование · код защищён" else if (planning) "Планирование" else "Обычный режим",
         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        style = LocalPaperTypography.current.label, color = LocalPaperColors.current.action)
+        style = LocalPaperTypography.current.chrome, color = LocalPaperColors.current.secondaryText)
 }
 
 @Composable
@@ -1656,19 +1562,29 @@ internal fun CodingComposer(
         attachments = emptyList()
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val trailingLimit = maxWidth * 0.45f
+        val trailingLimit = maxWidth * 0.40f
         val narrowContext = maxWidth < 600.dp
-        Column(Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp).copy(
-                bottomStart = CornerSize(0.dp),
-                bottomEnd = CornerSize(0.dp),
-            ))
-            .background(LocalPaperColors.current.surface)
-            .padding(horizontal = 4.dp, vertical = 2.dp)) {
-            if (onInteractionMode != null || planning || research) {
-                CodingModeLabel(planning, research)
-            }
+        PaperWorkspaceComposer {
             PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
+                PaperPromptField(
+                    value = text, onValueChange = { text = it },
+                    modifier = Modifier
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.V &&
+                                (event.isCtrlPressed || event.isMetaPressed)) {
+                                onPasteAttachments(attachments.size) {
+                                    attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
+                                }
+                            } else if (event.type == KeyEventType.KeyDown && (event.isMetaPressed || event.isCtrlPressed) && event.key == Key.Enter) {
+                                submit()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    maxLines = 6,
+                    placeholder = if (research) "Вопрос о проекте…" else "Что нужно сделать?",
+                )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box {
                     var menuOpen by remember { mutableStateOf(false) }
@@ -1680,13 +1596,7 @@ internal fun CodingComposer(
                     PaperTextAction(onClick = { searchMenuOpen = false; menuOpen = true },
                         modifier = Modifier.size(32.dp).semantics { contentDescription = "Инструменты и параметры сессии" },
                         contentPadding = PaddingValues(0.dp)) {
-                        val iconColor = LocalPaperColors.current.action
-                        Canvas(Modifier.size(18.dp)) {
-                            drawCircle(iconColor, style = Stroke(width = 1.5.dp.toPx()))
-                            drawCircle(iconColor, radius = 1.dp.toPx(), center = Offset(center.x, size.height * 0.3f))
-                            drawLine(iconColor, Offset(center.x, size.height * 0.48f),
-                                Offset(center.x, size.height * 0.73f), strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
-                        }
+                        PaperText("+", style = LocalPaperTypography.current.title, color = LocalPaperColors.current.action)
                     }
                     PaperMenuHost(menuOpen, ::closeMenu) {
                         if (searchMenuOpen && onSearchProvider != null) {
@@ -1704,7 +1614,7 @@ internal fun CodingComposer(
                                 )
                             }
                         } else {
-                            PaperRichMenuAction(text = { PaperText("SKILLS") }, enabled = onSkills != null,
+                            PaperRichMenuAction(text = { PaperText("Навыки") }, enabled = onSkills != null,
                                 onClick = { closeMenu(); onSkills?.invoke() })
                             PaperRichMenuAction(
                                 text = { PaperText("Прикрепить файлы") },
@@ -1755,7 +1665,7 @@ internal fun CodingComposer(
                             }
                             if (engine != null) {
                                 Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                                    PaperText("Backend coding agent", style = LocalPaperTypography.current.body)
+                                    PaperText("Движок", style = LocalPaperTypography.current.body)
                                     PaperText(engine.title, style = LocalPaperTypography.current.body,
                                         color = LocalPaperColors.current.secondaryText)
                                 }
@@ -1763,54 +1673,29 @@ internal fun CodingComposer(
                         }
                     }
                 }
-                BasicTextField(
-                    value = text, onValueChange = { text = it },
-                    textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(LocalPaperColors.current.action),
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 4.dp, vertical = 4.dp)
-                        .onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.V &&
-                                (event.isCtrlPressed || event.isMetaPressed)) {
-                                onPasteAttachments(attachments.size) {
-                                    attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
-                                }
-                            } else if (event.type == KeyEventType.KeyDown && event.isMetaPressed && event.key == Key.Enter) {
-                                submit()
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                    maxLines = 6,
-                    decorationBox = { inner ->
-                        Box {
-                            if (text.isEmpty()) PaperText(if (research) "Вопрос о проекте…" else "Поручение агенту в папке проекта…",
-                                style = LocalPaperTypography.current.body,
-                                color = LocalPaperColors.current.secondaryText,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            inner()
-                        }
-                    },
-                )
-                Row(Modifier.widthIn(max = trailingLimit).horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
-                    if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
-                    controls?.invoke()
+                if (!narrowContext && (onInteractionMode != null || planning || research)) CodingModeLabel(planning, research)
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    Row(Modifier.widthIn(max = trailingLimit),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
+                        if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
+                        controls?.invoke()
+                    }
                 }
                 PaperVerticalDivider(
                     modifier = Modifier.padding(horizontal = 6.dp).height(24.dp),
                     color = LocalPaperColors.current.border,
                 )
-                if (busy) PaperTextAction(onClick = onAbort, contentPadding = PaddingValues(horizontal = 4.dp)) { PaperText("Прервать") }
-                else PaperTextAction(enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
-                    contentPadding = PaddingValues(horizontal = 4.dp)) {
-                    PaperText(if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить", style = LocalPaperTypography.current.label)
-                }
+                if (busy) io.aequicor.magicpaper.designsystem.PaperButton("Прервать", onAbort,
+                    kind = io.aequicor.magicpaper.designsystem.PaperButtonKind.SECONDARY)
+                else io.aequicor.magicpaper.designsystem.PaperButton(
+                    if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить",
+                    onClick = ::submit,
+                    enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()))
             }
-            if (narrowContext) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            if (narrowContext) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (onInteractionMode != null || planning || research) CodingModeLabel(planning, research)
+                Spacer(Modifier.weight(1f))
                 io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
             }
         }

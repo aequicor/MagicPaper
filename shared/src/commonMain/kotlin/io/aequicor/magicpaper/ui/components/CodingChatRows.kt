@@ -11,7 +11,8 @@ internal data class CodingChatRow(
 
 /** Scoped tool calls retain their card when a temporary draft becomes a saved child response. */
 private val CodingStep.toolIdentity: String?
-    get() = if (toolCategory != null && callId.isNotBlank() && kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) "tool:$callId" else null
+    get() = if (toolCategory != null && callId.isNotBlank() && kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC))
+        "tool:${tool.length}:$tool:$callId" else null
 
 /** A run can contain thousands of steps; each one must be its own lazy-list item. */
 internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int? = null) {
@@ -23,9 +24,22 @@ internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int
 }
 
 internal fun codingHistoryItems(rows: List<CodingChatRow>): List<CodingHistoryItem> = buildList {
+    val toolPositions = mutableMapOf<String, Int>()
     rows.forEach { row ->
         if (row.message.role == CodingRole.AGENT && row.message.steps.isNotEmpty()) {
-            row.message.steps.indices.forEach { add(CodingHistoryItem(row, it)) }
+            row.message.steps.indices.forEach { index ->
+                val item = CodingHistoryItem(row, index)
+                val identity = item.step?.toolIdentity
+                val position = identity?.let { toolPositions[it] }
+                if (position == null) {
+                    if (identity != null) toolPositions[identity] = size
+                    add(item)
+                } else {
+                    // Parent/child snapshots can persist the same scoped call. Keep its
+                    // first position and latest result, never replacing completion with a live copy.
+                    if (this[position].step!!.running || !item.step!!.running) this[position] = item
+                }
+            }
         } else add(CodingHistoryItem(row))
     }
 }

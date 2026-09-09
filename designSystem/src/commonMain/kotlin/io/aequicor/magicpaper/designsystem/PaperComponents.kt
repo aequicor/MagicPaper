@@ -2,13 +2,19 @@
 
 package io.aequicor.magicpaper.designsystem
 
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,17 +32,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.PlainTooltip
@@ -62,6 +61,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.VisualTransformation
@@ -85,6 +85,7 @@ public fun PaperText(
     style: TextStyle? = null,
     fontWeight: FontWeight? = null,
     onTextLayout: (TextLayoutResult) -> Unit = {},
+    softWrap: Boolean = true,
 ) {
     Text(
         text = text,
@@ -96,6 +97,7 @@ public fun PaperText(
         overflow = overflow,
         textAlign = textAlign,
         onTextLayout = onTextLayout,
+        softWrap = softWrap,
     )
 }
 
@@ -129,16 +131,11 @@ public fun PaperAction(
     Surface(
         modifier = modifier.heightIn(min = policy.density.controlHeight)
             .semantics { role = Role.Button }
-            .onPreviewKeyEvent { event ->
-                val activates = event.key == Key.Enter && event.type == KeyEventType.KeyDown ||
-                    event.key == Key.Spacebar && event.type == KeyEventType.KeyUp
-                if (enabled && activates) { onClick(); true } else false
-            }
-            .clickable(enabled = enabled, onClick = onClick),
+            .paperClickable(enabled = enabled, onClick = onClick),
         color = Color.Transparent,
         shape = RoundedCornerShape(6.dp),
     ) {
-        Row(Modifier.padding(contentPadding), verticalAlignment = Alignment.CenterVertically, content = content)
+        Row(Modifier.padding(contentPadding), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, content = content)
     }
 }
 
@@ -159,7 +156,7 @@ public fun PaperPanel(
     content: @Composable () -> Unit,
 ) = PaperSurface(modifier, kind, color, shape, shadowElevation, content)
 
-/** Material-compatible field affordance kept private to the DS renderer. */
+/** Compact field; the label stays visible while typing and scaling. */
 @Composable
 public fun PaperInput(
     value: String,
@@ -171,36 +168,65 @@ public fun PaperInput(
     singleLine: Boolean = false,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     trailingIcon: @Composable (() -> Unit)? = null,
+    placeholder: @Composable (() -> Unit)? = null,
+    minLines: Int = 1,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    textStyle: TextStyle = LocalPaperTypography.current.body,
 ) {
-    val policy = LocalPaperPlatformPolicy.current
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier.heightIn(min = policy.density.fieldHeight),
-        enabled = enabled,
-        isError = isError,
-        label = label,
-        singleLine = singleLine,
-        visualTransformation = visualTransformation,
-        trailingIcon = trailingIcon,
-    )
+    val colors = LocalPaperColors.current
+    val source = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(6.dp)
+    BasicTextField(value, onValueChange, modifier = modifier.fillMaxWidth(),
+        enabled = enabled, singleLine = singleLine, minLines = minLines, maxLines = maxLines,
+        textStyle = textStyle.copy(color = colors.text),
+        visualTransformation = visualTransformation, interactionSource = source,
+        keyboardOptions = keyboardOptions, keyboardActions = keyboardActions, cursorBrush = SolidColor(colors.action),
+        decorationBox = { inner ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                label?.invoke()
+                Row(Modifier.fillMaxWidth().heightIn(min = LocalPaperPlatformPolicy.current.density.fieldHeight)
+                    .paperFeedback(source, shape, enabled, showPress = false)
+                    .background(if (enabled) colors.surface else colors.raisedSurface, shape)
+                    .border(1.dp, if (isError) colors.error else colors.border, shape)
+                    .hoverable(source, enabled)
+                    .padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { if (value.isEmpty()) placeholder?.invoke(); inner() }
+                    trailingIcon?.invoke()
+                }
+            }
+        })
 }
 
 @Composable
-public fun PaperToggle(
-    checked: Boolean,
-    onCheckedChange: ((Boolean) -> Unit)?,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-) = Switch(checked = checked, onCheckedChange = onCheckedChange, modifier = modifier, enabled = enabled)
+public fun PaperToggle(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    PaperToggleMark(checked, onCheckedChange, modifier, enabled, true)
+}
 
 @Composable
-public fun PaperCheck(
-    checked: Boolean,
-    onCheckedChange: ((Boolean) -> Unit)?,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-) = Checkbox(checked = checked, onCheckedChange = onCheckedChange, modifier = modifier, enabled = enabled)
+public fun PaperCheck(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    PaperToggleMark(checked, onCheckedChange, modifier, enabled, false)
+}
+
+@Composable
+private fun PaperToggleMark(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier, enabled: Boolean, switch: Boolean) {
+    val colors = LocalPaperColors.current
+    val source = remember { MutableInteractionSource() }
+    val shape = if (switch) RoundedCornerShape(50) else RoundedCornerShape(4.dp)
+    val height = LocalPaperPlatformPolicy.current.density.controlHeight
+    Box(modifier.sizeIn(minWidth = height, minHeight = height)
+        .paperFeedback(source, RoundedCornerShape(6.dp), enabled)
+        .then(if (onCheckedChange == null) Modifier else Modifier.toggleable(checked, source, null, enabled, if (switch) Role.Switch else Role.Checkbox, onCheckedChange)),
+        contentAlignment = Alignment.Center) {
+        Box(Modifier.sizeIn(minWidth = if (switch) 32.dp else 18.dp, minHeight = 18.dp)
+            .background(if (checked) colors.selected else colors.surface, shape)
+            .border(1.dp, if (enabled) colors.action else colors.disabled, shape), contentAlignment = if (switch) { if (checked) Alignment.CenterEnd else Alignment.CenterStart } else Alignment.Center) {
+            if (switch) Box(Modifier.padding(3.dp).sizeIn(minWidth = 12.dp, minHeight = 12.dp).background(if (enabled) colors.action else colors.disabled, RoundedCornerShape(50)))
+            else if (checked) PaperText("✓", role = PaperTextRole.CHROME, color = colors.text)
+        }
+    }
+}
 
 @Composable
 public fun PaperSurface(
@@ -241,7 +267,8 @@ public fun PaperButton(
 ) {
     val colors = LocalPaperColors.current
     val policy = LocalPaperPlatformPolicy.current
-    val active = enabled && !busy
+    val loading = busy || state == PaperControlState.BUSY
+    val active = enabled && !loading && state != PaperControlState.DISABLED
     val (container, foreground) = when (kind) {
         PaperButtonKind.PRIMARY -> colors.action to colors.actionOn
         PaperButtonKind.DESTRUCTIVE -> colors.error to colors.actionOn
@@ -250,26 +277,20 @@ public fun PaperButton(
     }
     val buttonModifier = modifier
             .heightIn(min = policy.density.controlHeight)
-            .semantics { contentDescription = accessibilityLabel; role = Role.Button }
-            .onPreviewKeyEvent { event ->
-                val activates = event.key == Key.Enter && event.type == KeyEventType.KeyDown ||
-                    event.key == Key.Spacebar && event.type == KeyEventType.KeyUp
-                if (active && activates) {
-                    onClick()
-                    true
-                } else {
-                    false
-                }
-            }
+            .semantics { contentDescription = accessibilityLabel; role = Role.Button; if (loading) stateDescription = "Загрузка" }
     Surface(
         modifier = (if (focusRequester == null) buttonModifier else buttonModifier.focusRequester(focusRequester))
-            .clickable(enabled = active, onClick = onClick),
-        shape = RoundedCornerShape(6.dp), color = if (active) container else colors.disabled,
+            .paperClickable(enabled = active, state = state, onClick = onClick),
+        shape = RoundedCornerShape(6.dp), color = if (!active) colors.disabled else when (state) {
+            PaperControlState.SELECTED -> colors.selected
+            PaperControlState.ERROR -> colors.errorSurface
+            else -> container
+        },
         border = if (kind == PaperButtonKind.QUIET) BorderStroke(1.dp, colors.border) else null,
     ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            if (busy) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), color = foreground, strokeWidth = 2.dp)
-            else PaperText(label, role = PaperTextRole.LABEL, color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
+            if (loading) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), color = foreground, strokeWidth = 2.dp)
+            else PaperText(label, role = PaperTextRole.CHROME, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = if (!active || state == PaperControlState.SELECTED || state == PaperControlState.ERROR) colors.text else foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -287,13 +308,8 @@ public fun PaperIconButton(
     val colors = LocalPaperColors.current
     Surface(
         modifier = modifier.sizeIn(minWidth = policy.density.controlHeight, minHeight = policy.density.controlHeight)
-            .semantics { contentDescription = label; role = Role.Button }
-            .onPreviewKeyEvent { event ->
-                val activates = event.key == Key.Enter && event.type == KeyEventType.KeyDown ||
-                    event.key == Key.Spacebar && event.type == KeyEventType.KeyUp
-                if (enabled && activates) { onClick(); true } else false
-            }
-            .clickable(enabled = enabled, onClick = onClick),
+            .semantics { contentDescription = label; role = Role.Button; this.selected = selected }
+            .paperClickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(6.dp), color = if (selected) colors.selected else Color.Transparent,
     ) { Box(contentAlignment = Alignment.Center) { content() } }
 }
@@ -330,18 +346,13 @@ public fun PaperField(
     singleLine: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
-    val policy = LocalPaperPlatformPolicy.current
-    OutlinedTextField(value, onValueChange, modifier.heightIn(min = policy.density.fieldHeight).semantics {
-        if (errorMessage != null) error(errorMessage)
-    }, enabled = enabled, isError = errorMessage != null, label = { PaperText(label, role = PaperTextRole.LABEL) },
-        supportingText = if (supportingText != null || errorMessage != null) {
-            {
-                Column {
-                    supportingText?.let { PaperText(it, role = PaperTextRole.LABEL) }
-                    errorMessage?.let { PaperText(it, role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
-                }
-            }
-        } else null, singleLine = singleLine, visualTransformation = visualTransformation)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        PaperInput(value, onValueChange, Modifier.semantics { if (errorMessage != null) error(errorMessage) },
+            label = { PaperText(label, role = PaperTextRole.LABEL) }, enabled = enabled,
+            isError = errorMessage != null, singleLine = singleLine, visualTransformation = visualTransformation)
+        supportingText?.let { PaperText(it, role = PaperTextRole.LABEL) }
+        errorMessage?.let { PaperText(it, role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
+    }
 }
 
 @Composable
@@ -352,8 +363,8 @@ public fun PaperSwitch(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    Row(modifier.semantics { contentDescription = label }, verticalAlignment = Alignment.CenterVertically) {
-        Switch(checked, onCheckedChange, enabled = enabled)
+    Row(modifier.semantics { contentDescription = label }.then(if (onCheckedChange == null) Modifier else Modifier.paperClickable(enabled = enabled, role = Role.Switch, onClick = { onCheckedChange(!checked) })).semantics { toggleableState = if (checked) androidx.compose.ui.state.ToggleableState.On else androidx.compose.ui.state.ToggleableState.Off }, verticalAlignment = Alignment.CenterVertically) {
+        PaperToggle(checked, null, enabled = enabled)
         PaperText(label, Modifier.padding(start = 8.dp))
     }
 }
@@ -367,41 +378,22 @@ public fun PaperChoice(
     enabled: Boolean = true,
     description: String? = null,
 ) {
-    val colors = LocalPaperColors.current
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val pressed by interaction.collectIsPressedAsState()
-    val focused by interaction.collectIsFocusedAsState()
-    val alpha = when {
-        !enabled -> 0f
-        pressed -> .14f
-        focused -> .10f
-        hovered -> .08f
-        else -> 0f
+    PaperChoice(selected, onSelect, modifier, enabled) {
+        Column {
+            PaperText(label, role = PaperTextRole.LABEL)
+            description?.let { PaperText(it, color = LocalPaperColors.current.secondaryText) }
+        }
     }
-    val overlay = colors.text.copy(alpha = alpha)
-    CompositionLocalProvider(LocalRippleConfiguration provides null) {
-        FilterChip(
-            selected = selected,
-            onClick = onSelect,
-            modifier = modifier.heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight).semantics {
-                role = Role.RadioButton
-                this.selected = selected
-                contentDescription = label
-            },
-            enabled = enabled,
-            interactionSource = interaction,
-            label = {
-                Column {
-                    PaperText(label, role = PaperTextRole.LABEL)
-                    description?.let { PaperText(it, role = PaperTextRole.BODY, color = colors.secondaryText) }
-                }
-            },
-            colors = FilterChipDefaults.filterChipColors(
-                containerColor = if (alpha == 0f) Color.Transparent else overlay,
-                selectedContainerColor = overlay.compositeOver(colors.selected),
-            ),
-        )
+}
+
+@Composable
+public fun PaperChoice(selected: Boolean, onSelect: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable () -> Unit) {
+    PaperSurface(modifier.heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
+        .semantics { this.selected = selected }
+        .paperClickable(enabled = enabled, role = Role.RadioButton, onClick = onSelect),
+        color = if (selected) LocalPaperColors.current.selected else LocalPaperColors.current.surface,
+        shape = RoundedCornerShape(6.dp)) {
+        Box(Modifier.padding(horizontal = 10.dp, vertical = 5.dp), contentAlignment = Alignment.Center) { content() }
     }
 }
 
@@ -410,7 +402,7 @@ public data class PaperMenuItem(val label: String, val enabled: Boolean = true, 
 @Composable
 public fun PaperMenu(expanded: Boolean, onDismissRequest: () -> Unit, items: List<PaperMenuItem>, modifier: Modifier = Modifier) {
     DropdownMenu(expanded, onDismissRequest, modifier) {
-        items.forEach { item -> DropdownMenuItem(text = { PaperText(item.label, role = PaperTextRole.LABEL, color = if (item.destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) }, onClick = item.onClick, enabled = item.enabled) }
+        items.forEach { item -> PaperAction(modifier = Modifier.fillMaxWidth(), onClick = { onDismissRequest(); item.onClick() }, enabled = item.enabled) { PaperText(item.label, role = PaperTextRole.LABEL, color = if (item.destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) } }
     }
 }
 
@@ -438,7 +430,7 @@ public fun PaperDialog(
 
 @Composable
 public fun PaperTooltip(text: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    TooltipBox(positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(), tooltip = { PlainTooltip { PaperText(text, role = PaperTextRole.LABEL) } }, state = rememberTooltipState(), modifier = modifier, content = content)
+    PaperTooltipHost(tooltip = { PaperText(text, role = PaperTextRole.CHROME) }, modifier = modifier, content = content)
 }
 
 @Composable

@@ -1,9 +1,10 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -47,31 +48,30 @@ internal fun SkillCatalogPanel(
     }
     LaunchedEffect(Unit) { action { } }
     Column(Modifier.widthIn(max = 680.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Добавить скилы из репозиториев", style = MaterialTheme.typography.titleLarge)
-        Text("Поиск локальный. Сеть — только по подтверждению. Импорт не подключает пакет, не активирует и не даёт opt-in coding. Ресурсы не исполняются.")
-        TextButton(onClick = { job?.cancel(); onClose() }) { Text("Назад к проекту") }
-        if (notice.isNotEmpty()) Text(notice)
+        PaperText("Добавить скилы из репозиториев", style = LocalPaperTypography.current.headline)
+        PaperAction(onClick = { job?.cancel(); onClose() }) { PaperText("Назад к проекту") }
+        if (notice.isNotEmpty()) PaperText(notice)
         if (busy) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-            TextButton(onClick = { job?.cancel(); notice = "Отменено. Незавершённая загрузка не устанавливается; завершённый атомарный импорт сохраняется." }) { Text("Отменить загрузку") }
+            PaperProgress(Modifier.fillMaxWidth())
+            PaperAction(onClick = { job?.cancel(); notice = "Загрузка отменена." }) { PaperText("Отменить загрузку") }
         }
-        OutlinedTextField(query, { query = it }, label = { Text("Поиск навыков без сети") }, modifier = Modifier.fillMaxWidth())
-        Text("Проверенные публичные источники")
+        PaperInput(query, { query = it }, label = { PaperText("Поиск навыков") }, modifier = Modifier.fillMaxWidth())
+        PaperText("Проверенные публичные источники")
         val sources = catalog.search(query)
-        if (sources.isEmpty()) Text("Источники не найдены. Введите ссылку ниже.")
+        if (sources.isEmpty()) PaperText("Источники не найдены. Введите ссылку ниже.")
         sources.forEach { source ->
-            Text(source.name + "\n" + source.description + "\n" + source.url)
-            TextButton(enabled = !busy, onClick = { link = source.url; network = false; discovery = null; preview = null }) { Text("Выбрать источник") }
+            PaperText(source.name + "\n" + source.description + "\n" + source.url)
+            PaperAction(enabled = !busy, onClick = { link = source.url; network = false; discovery = null; preview = null }) { PaperText("Выбрать источник") }
         }
-        OutlinedTextField(link, { link = it; network = false; discovery = null; preview = null }, enabled = !busy,
-            label = { Text("Ссылка GitHub: репозиторий или tree/blob/ref/путь") }, modifier = Modifier.fillMaxWidth())
-        Row { Checkbox(network, { network = it }, enabled = !busy); Text("Разрешаю анонимные GET к github.com, api.github.com, codeload.github.com. Передаётся только адрес источника, без рабочих данных и ключей.") }
-        TextButton(enabled = !busy && network && link.isNotBlank(), onClick = {
-            action { discovery = null; preview = null; discovery = catalog.discover(link, network); notice = "Выберите один пакет. Полный SHA зафиксирован." }
-        }) { Text("Найти пакеты по ссылке") }
+        PaperInput(link, { link = it; network = false; discovery = null; preview = null }, enabled = !busy,
+            label = { PaperText("Ссылка на GitHub") }, modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { PaperCheck(network, { network = it }, enabled = !busy); PaperText("Разрешаю анонимные GET к github.com, api.github.com, codeload.github.com. Передаётся только адрес источника, без рабочих данных и ключей.") }
+        PaperAction(enabled = !busy && network && link.isNotBlank(), onClick = {
+            action { discovery = null; preview = null; discovery = catalog.discover(link, network); notice = "Выберите пакет." }
+        }) { PaperText("Найти пакеты по ссылке") }
         discovery?.let { d ->
-            Text("Источник: ${d.repository}\nCommit: ${d.commit}")
-            d.packages.forEach { path -> TextButton(enabled = !busy, onClick = {
+            PaperText("Источник: ${d.repository}\nCommit: ${d.commit}")
+            d.packages.forEach { path -> PaperAction(enabled = !busy, onClick = {
                 action {
                     val p = withContext(Dispatchers.IO) { catalog.preview(d, path) }
                     preview = p
@@ -86,56 +86,56 @@ internal fun SkillCatalogPanel(
                         }
                     }
                 }
-            }) { Text(path) } }
+            }) { PaperText(path) } }
         }
         preview?.let { p ->
-            Text("Предпросмотр / сравнение")
-            Text(details)
-            Text("После (метаданные адаптера, не версия издателя): ${p.manifest}\nSHA-256: ${p.checksum}\nФактический источник: ${p.source}")
-            Text("Лицензия: ${p.manifest.license ?: "не установлена — подключение блокируется до обоснованного review"}")
-            Text("Исходный SKILL.md, включая метаданные автора:\n${p.original}")
-            Text("Лицензионный файл репозитория (применимость не подтверждена):\n${p.licenseEvidence ?: "не найден"}")
-            TextButton(enabled = !busy, onClick = {
-                action { withContext(Dispatchers.IO) { catalog.install(repository(), p) }; preview = null; notice = "Сохранено. Новый пакет в карантине; идентичный повтор не создаёт дубль. Далее — отдельный review точного checksum." }
-            }) { Text("Импортировать без подключения") }
-            TextButton(enabled = !busy, onClick = { preview = null }) { Text("Отменить предпросмотр") }
+            PaperText("Предпросмотр / сравнение")
+            PaperText(details)
+            PaperText("После (метаданные адаптера, не версия издателя): ${p.manifest}\nSHA-256: ${p.checksum}\nФактический источник: ${p.source}")
+            PaperText("Лицензия: ${p.manifest.license ?: "не установлена — подключение блокируется до обоснованного review"}")
+            PaperText("Исходный SKILL.md, включая метаданные автора:\n${p.original}")
+            PaperText("Лицензионный файл репозитория (применимость не подтверждена):\n${p.licenseEvidence ?: "не найден"}")
+            PaperAction(enabled = !busy, onClick = {
+                action { withContext(Dispatchers.IO) { catalog.install(repository(), p) }; preview = null; notice = "Пакет сохранён. Требуется проверка." }
+            }) { PaperText("Импортировать без подключения") }
+            PaperAction(enabled = !busy, onClick = { preview = null }) { PaperText("Отменить предпросмотр") }
         }
-        HorizontalDivider()
-        Text("Установленные — доступны офлайн")
+        PaperDivider()
+        PaperText("Установленные — доступны офлайн")
         val matches = local.filter { (it.release.pkg.manifest.toString() + it.source).contains(query.trim(), true) }
-        if (matches.isEmpty()) Text("Пакеты не найдены")
+        if (matches.isEmpty()) PaperText("Пакеты не найдены")
         matches.forEach { entry ->
             val p = entry.release.pkg
-            Text("${p.manifest.name} · ${p.key}\n${entry.source}\nChecksum: ${p.checksum}\nЛицензия: ${p.manifest.license ?: "не установлена"}; ${entry.release.status}")
+            PaperText("${p.manifest.name} · ${p.key}\n${entry.source}\nChecksum: ${p.checksum}\nЛицензия: ${p.manifest.license ?: "не установлена"}; ${entry.release.status}")
             if (onConnect != null) {
                 val eligible = entry.release.status == SkillCandidateStatus.VERIFIED && entry.release.improvement?.passed != false
-                Button(enabled = !busy && eligible, onClick = { onConnect(p.key) }) { Text("Подключить скилл") }
-                if (!eligible) Text("Для подключения завершите проверку скилла через «Просмотр и review».")
+                PaperButton("Подключить скилл", enabled = !busy && eligible, onClick = { onConnect(p.key) })
+                if (!eligible) PaperText("Для подключения завершите проверку скилла через «Просмотр и проверка».")
             }
-            TextButton(enabled = !busy, onClick = {
+            PaperAction(enabled = !busy, onClick = {
                 action {
                     val diff = withContext(Dispatchers.IO) { repository().diff(p.key) }
                     preview = null; review = entry; evidence = ""; origin = false; license = false; content = false
                     details = "${diff.after}\n${diff.newInstructions}\n" + diff.resources.joinToString("\n") { it.toString() }
                 }
-            }) { Text("Просмотр и review") }
-            if (entry.source.kind == SkillImportKind.GIT) TextButton(enabled = !busy, onClick = {
+            }) { PaperText("Просмотр и проверка") }
+            if (entry.source.kind == SkillImportKind.GIT) PaperAction(enabled = !busy, onClick = {
                 val url = entry.source.location.substringBefore("/tree/")
                 link = url; network = false; discovery = null; preview = null
-                notice = "Для проверки обновления подтвердите сеть. Будет разрешён новый полный SHA; проектная версия не меняется."
-            }) { Text("Проверить обновление…") }
+                notice = "Разрешите загрузку с GitHub для проверки обновления."
+            }) { PaperText("Проверить обновление…") }
         }
         review?.let { entry ->
-            Text("Review точного SHA-256: ${entry.release.pkg.checksum}\n$details")
-            OutlinedTextField(evidence, { evidence = it }, label = { Text("Обоснование происхождения, лицензии и проверки ресурсов") })
-            Row { Checkbox(origin, { origin = it }); Text("Происхождение установлено") }
-            Row { Checkbox(license, { license = it }); Text("Лицензия и её применимость установлены") }
-            Row { Checkbox(content, { content = it }); Text("Все инструкции и ресурсы проверены") }
-            TextButton(enabled = !busy && evidence.isNotBlank(), onClick = { action {
+            PaperText("Review точного SHA-256: ${entry.release.pkg.checksum}\n$details")
+            PaperInput(evidence, { evidence = it }, label = { PaperText("Обоснование происхождения, лицензии и проверки ресурсов") })
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { PaperCheck(origin, { origin = it }); PaperText("Происхождение установлено") }
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { PaperCheck(license, { license = it }); PaperText("Лицензия и её применимость установлены") }
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { PaperCheck(content, { content = it }); PaperText("Все инструкции и ресурсы проверены") }
+            PaperAction(enabled = !busy && evidence.isNotBlank(), onClick = { action {
                 withContext(Dispatchers.IO) { repository().review(entry.release.pkg.key, SkillPackageReview(entry.release.pkg.checksum, "local-user", evidence, origin, license, content)) }
-                review = null; notice = "Review сохранён. Подключение и согласие на coding — отдельно в проектной панели."
-            } }) { Text("Сохранить review без подключения") }
-            TextButton(onClick = { review = null }) { Text("Отмена review") }
+                review = null; notice = "Проверка сохранена."
+            } }) { PaperText("Сохранить проверку") }
+            PaperAction(onClick = { review = null }) { PaperText("Отмена") }
         }
     }
 }

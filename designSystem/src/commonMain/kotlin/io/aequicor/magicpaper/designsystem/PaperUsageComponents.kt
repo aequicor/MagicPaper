@@ -36,10 +36,7 @@ public fun PaperCoinIcon(modifier: Modifier = Modifier) {
 @Composable
 public fun PaperContextIndicator(fraction: Float?, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = LocalPaperColors.current
-    var focused by remember { mutableStateOf(false) }
-    val focus = modifier.onFocusChanged { focused = it.isFocused }.then(
-        if (focused) Modifier.border(2.dp, colors.action, RoundedCornerShape(6.dp)) else Modifier)
-    PaperIconButton("Заполненность контекста: $label", onClick, focus.semantics {
+    PaperIconButton("Заполненность контекста: $label", onClick, modifier.semantics {
         stateDescription = label
         if (fraction != null) progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
     }) {
@@ -59,11 +56,12 @@ public fun PaperContextIndicator(fraction: Float?, label: String, onClick: () ->
 @Composable
 public fun PaperSystemMessage(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val colors = LocalPaperColors.current
-    Row(modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Start) {
-        PaperPanel(Modifier.widthIn(max = 680.dp), color = colors.systemSurface,
-            shape = RoundedCornerShape(topStart = 6.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 20.dp)) {
+    Row(modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.Start) {
+        PaperPanel(Modifier.widthIn(max = 820.dp), color = colors.systemSurface,
+            shape = RoundedCornerShape(12.dp)) {
             CompositionLocalProvider(LocalPaperColors provides colors.copy(text = colors.systemText, secondaryText = colors.systemText)) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), content = content)
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp), content = content)
             }
         }
     }

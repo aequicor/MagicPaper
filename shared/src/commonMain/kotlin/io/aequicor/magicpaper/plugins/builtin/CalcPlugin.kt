@@ -1,14 +1,13 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,18 +31,18 @@ object CalcPlugin : MagicPlugin {
             if (expr.isBlank()) "" else " = " + evaluate(expr).getOrElse { "ошибка" }
         }
         Column(modifier = Modifier.padding(vertical = 8.dp)) {
-            Text(icon + " " + title, style = MaterialTheme.typography.titleMedium)
+            PaperText(icon + " " + title, style = LocalPaperTypography.current.title)
             Spacer(Modifier.height(6.dp))
             Row {
-                OutlinedTextField(
+                PaperInput(
                     value = expr,
                     onValueChange = { expr = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Например: 2 + 2 * 3") },
+                    placeholder = { PaperText("Например: 2 + 2 * 3") },
                     singleLine = true,
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(result, style = MaterialTheme.typography.titleMedium)
+                PaperText(result, style = LocalPaperTypography.current.title)
             }
         }
     }

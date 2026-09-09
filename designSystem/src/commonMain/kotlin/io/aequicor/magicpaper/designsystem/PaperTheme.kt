@@ -31,19 +31,36 @@ import org.jetbrains.compose.resources.Font
 /** Semantic colours. Decorative values are never used as text defaults. */
 @Immutable
 public data class PaperColors(
-    public val canvas: Color = Color(0xFFF5EFE3),
-    public val surface: Color = Color(0xFFFBF7EE),
-    public val raisedSurface: Color = Color(0xFFEFE7D6),
-    public val text: Color = Color(0xFF3E3950),
+    public val canvas: Color = Color(0xFFF3EBDD),
+    public val surface: Color = Color(0xFFFFFDFA),
+    public val raisedSurface: Color = Color(0xFFE5E2E3),
+    public val text: Color = Color(0xFF35242D),
     public val secondaryText: Color = Color(0xFF625C70), // 4.5:1 on paper
     public val action: Color = Color(0xFF62558D), // 4.5:1 with white label
     public val actionOn: Color = Color(0xFFFFFBF3),
-    public val selected: Color = Color(0xFFE9E2F4),
+    public val selected: Color = Color(0xFFDDD2EB),
     public val border: Color = Color(0xFFB7AD9D),
     public val focus: Color = Color(0xFF62558D),
     public val error: Color = Color(0xFF864747),
-    public val errorSurface: Color = Color(0xFFF3E3DF),
+    public val errorSurface: Color = Color(0xFFF5DDD7),
     public val disabled: Color = Color(0xFFAAA39B),
+    public val success: Color = Color(0xFF38553C),
+    public val successSurface: Color = Color(0xFFCCD8CB),
+    public val accentSurface: Color = Color(0xFFEABBB1),
+    public val hover: Color = Color(0x1235242D),
+    public val pressed: Color = Color(0x2435242D),
+    public val tooltipSurface: Color = Color(0xFF3B2D23),
+    public val tooltipText: Color = Color(0xFFF4EBDD),
+    public val composerHighlight: Color = Color(0xFFF0E8DE),
+    public val composerFocused: Color = Color(0xFFECE2D6),
+    public val composerSurface: Color = Color(0xFFE5DDD1),
+    public val depthShadow: Color = Color(0xFF3B2415),
+    public val userMessageSurface: Color = Color(0xFFD8C9E7),
+    public val agentMessageSurface: Color = Color(0xFFDDD8E0),
+    public val activityRed: Color = Color(0xFFE89B99),
+    public val activityYellow: Color = Color(0xFFE8C66C),
+    public val activityGreen: Color = Color(0xFF8FC7A2),
+    public val activityYellowEdge: Color = Color(0xFF80621E),
     public val systemText: Color = Color(0xFF713A86),
     public val systemSurface: Color = Color(0xFFF0E2F4),
 )
@@ -116,12 +133,14 @@ public fun PaperTheme(content: @Composable () -> Unit) {
     val policy = rememberPaperPlatformPolicy()
     val materialTypography = Typography(
         displayLarge = typography.display, headlineLarge = typography.headline,
-        titleMedium = typography.title, bodyMedium = typography.body,
+        titleMedium = typography.title, bodyLarge = typography.body, bodyMedium = typography.body,
         labelMedium = typography.label, bodySmall = typography.body,
     )
     val materialColors = lightColorScheme(
         primary = colors.action, onPrimary = colors.actionOn, primaryContainer = colors.selected,
-        onPrimaryContainer = colors.text, secondary = colors.action, onSecondary = colors.actionOn,
+        onPrimaryContainer = colors.text, secondary = colors.success, onSecondary = colors.actionOn,
+        secondaryContainer = colors.successSurface, onSecondaryContainer = colors.success,
+        tertiary = colors.error, tertiaryContainer = colors.accentSurface, onTertiaryContainer = colors.text,
         background = colors.canvas, onBackground = colors.text, surface = colors.surface,
         onSurface = colors.text, surfaceVariant = colors.raisedSurface,
         onSurfaceVariant = colors.secondaryText, outline = colors.border, error = colors.error,
@@ -151,4 +170,11 @@ public fun paperTextStyle(role: PaperTextRole): TextStyle = when (role) {
     PaperTextRole.LABEL -> LocalPaperTypography.current.label
     PaperTextRole.CODE -> LocalPaperTypography.current.code
     PaperTextRole.CHROME -> LocalPaperTypography.current.chrome
+}
+
+/** Shared outline vocabulary for panels and controls. */
+public object PaperShapes {
+    public val control = RoundedCornerShape(6.dp)
+    public val panel = RoundedCornerShape(10.dp)
+    public val dialog = RoundedCornerShape(14.dp)
 }

@@ -50,9 +50,9 @@ kotlin {
         }
         commonMain.dependencies {
             implementation(project(":designSystem"))
+            implementation("org.jetbrains:markdown:0.7.3")
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
-            implementation(libs.compose.material3)
             implementation(libs.compose.ui)
             implementation(libs.compose.components.resources)
             implementation(libs.compose.uiToolingPreview)
@@ -61,8 +61,6 @@ kotlin {
             implementation(libs.kotlinx.serializationJson)
             implementation(libs.kotlinx.datetime)
             implementation(libs.ktor.clientCore)
-            implementation(libs.markdownRenderer.m3)
-            implementation(libs.markdownRenderer.code)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -75,6 +73,8 @@ kotlin {
             implementation(libs.ktor.clientCio)
         }
         jvmTest.dependencies {
+            implementation(libs.compose.material3)
+            implementation(libs.markdownRenderer.m3)
             implementation(compose.desktop.currentOs)
         }
         webMain.dependencies {

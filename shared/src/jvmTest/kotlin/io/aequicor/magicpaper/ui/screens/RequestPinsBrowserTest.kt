@@ -108,8 +108,9 @@ class RequestPinsBrowserTest {
             assertTrue(walk(marker).none { text(it).isNotEmpty() }, "The marker is an icon without a number or label")
             assertTrue(walk(chat.history()).any { it.id == marker.id }, "The button must be inside LazyColumn")
             val source = chat.nodes().single { text(it) == body(8) }
+            chat.snapshot("message-indicator")
             assertTrue(marker.boundsInRoot.right > source.boundsInRoot.right && marker.boundsInRoot.bottom >= source.boundsInRoot.bottom,
-                "The marker overlays the existing lower-right padding")
+                "The marker overlays the existing lower-right padding: coding=$coding marker=${marker.boundsInRoot} source=${source.boundsInRoot}")
             chat.snapshot("message-indicator")
             val before = chat.position()
             chat.click(marker)

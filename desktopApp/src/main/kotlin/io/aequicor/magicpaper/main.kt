@@ -20,6 +20,10 @@ import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import io.aequicor.magicpaper.ui.window.LocalWindowsTitleBarController
 import io.aequicor.magicpaper.ui.window.WindowsTitleBarController
+import io.aequicor.magicpaper.designsystem.PaperCommandMenu
+import io.aequicor.magicpaper.designsystem.PaperColors
+import io.aequicor.magicpaper.di.createMagicPaperDependencies
+import io.aequicor.magicpaper.ui.Screen
 import java.awt.Frame
 import java.awt.Image
 import java.awt.event.ComponentAdapter
@@ -67,6 +71,8 @@ fun main() {
             // Linux keeps the existing fully custom, undecorated chrome.
             undecorated = mode == DesktopWindowMode.LINUX_CUSTOM,
         ) {
+            val dependencies = remember { createMagicPaperDependencies() }
+            PaperCommandMenu(onSettings = { dependencies.viewModel.open(Screen.SETTINGS) }, onClose = ::exitApplication)
             setAppIcons()
             val chrome = remember(window, mode) {
                 if (mode == DesktopWindowMode.LINUX_CUSTOM) DesktopWindowChrome(window) else null
@@ -90,7 +96,8 @@ fun main() {
                 else -> PaddingValues()
             }
             // Фон окна в цвет приложения — без белой вспышки в углах при ресайзе.
-            window.background = java.awt.Color(0xF5, 0xEF, 0xE3)
+            val canvas = PaperColors().canvas
+            window.background = java.awt.Color(canvas.red, canvas.green, canvas.blue)
             CompositionLocalProvider(
                 LocalWindowChrome provides chrome,
                 LocalWindowScope provides this,
@@ -99,7 +106,7 @@ fun main() {
                 LocalWindowToolbarHeight provides if (mode == DesktopWindowMode.MAC_SYSTEM) MacTitleBarHeight else 40.dp,
                 LocalWindowsTitleBarController provides windowsTitleBar,
             ) {
-                App()
+                App(dependencies)
             }
         }
     }

@@ -7,6 +7,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdownFlow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import com.mikepenz.markdown.model.markdownAnnotator
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -21,7 +25,7 @@ class MarkdownBlocksTest {
     private fun settings(doc: ChatMarkdownDocument) = DefaultAnnotatorSettings(
         linkTextSpanStyle = TextLinkStyles(SpanStyle()), codeSpanStyle = SpanStyle(fontFamily = FontFamily.Monospace),
         annotator = markdownAnnotator(),
-        referenceLinkHandler = doc.state.referenceLinkHandler,
+        referenceLinkHandler = runBlocking { parseMarkdownFlow(doc.source).filterIsInstance<State.Success>().first().referenceLinkHandler },
     )
 
     @Test fun longInlineFormattingRetainsEveryCharacterAndItsStyle() {
@@ -45,7 +49,7 @@ class MarkdownBlocksTest {
         val code = (1..1000).joinToString("\n") { "println(\"line $it 😀\")" }
         for (source in listOf("```kotlin\n$code\n```", "```kotlin\n$code", code.lineSequence().joinToString("\n") { "    $it" })) {
             val doc = document(source)
-            val original = doc.state.node.children.first { it.type == Element.CODE_FENCE || it.type == Element.CODE_BLOCK }
+            val original = doc.node.children.first { it.type == Element.CODE_FENCE || it.type == Element.CODE_BLOCK }
             val content = original.children.filter { it.type == Token.CODE_FENCE_CONTENT || it.type == Token.CODE_LINE }
             val expected = source.substring(content.first().startOffset, content.last().endOffset)
             val ranges = doc.blocks.filterIsInstance<MarkdownBlockNode>().mapNotNull { it.code }

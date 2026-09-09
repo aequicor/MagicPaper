@@ -128,8 +128,11 @@ class LargeCodingChatRenderTest {
             fun render() { scene.render(++frame * 32_000_000L).close(); Thread.sleep(10) }
             repeat(6) { render() }
             assertFalse(scene.texts().any { it.startsWith("Thought 1:") })
-            scene.sendPointerEvent(PointerEventType.Press, Offset(120f, 64f))
-            scene.sendPointerEvent(PointerEventType.Release, Offset(120f, 64f))
+            fun descendants(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::descendants)
+            val disclosure = scene.semanticsOwners.flatMap { descendants(it.unmergedRootSemanticsNode) }
+                .first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Развернуть размышления") == true }
+            scene.sendPointerEvent(PointerEventType.Press, disclosure.boundsInRoot.center)
+            scene.sendPointerEvent(PointerEventType.Release, disclosure.boundsInRoot.center)
             repeat(100) { render() }
             assertTrue(expanded.value, "Click the real thinking disclosure")
             val paragraphs = scene.texts().filter { it.startsWith("Thought ") && ": проверяю" in it }

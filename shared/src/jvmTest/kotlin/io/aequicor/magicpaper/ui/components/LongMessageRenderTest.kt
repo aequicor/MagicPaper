@@ -103,7 +103,8 @@ class LongMessageRenderTest {
                 var frame = 0L
                 fun render() { repeat(30) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
                 fun click(label: String) = onUi {
-                    val node = scene.nodes().single { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true }
+                    val node = scene.nodes().singleOrNull { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true }
+                        ?: error("Missing $label for $role; index=${list.firstVisibleItemIndex}; visible=${scene.texts().map { it.take(60) }}")
                     scene.sendPointerEvent(PointerEventType.Press, node.boundsInRoot.center)
                     scene.sendPointerEvent(PointerEventType.Release, node.boundsInRoot.center)
                 }
@@ -170,6 +171,49 @@ class LongMessageRenderTest {
             render()
             assertEquals(2, list.layoutInfo.totalItemsCount)
             assertTrue(onUi { "Читать далее" in scene.texts() }, "Restore the opened tool, including its preview")
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun collapsingFullToolLogKeepsVisibleHeaderAtItsReadingPosition() {
+        val title = "read huge-output.txt"
+        val step = CodingStep(CodingStepKind.EXEC, title, id = "tool", callId = "tool",
+            result = "Log line\n".repeat(20000))
+        val before = List(4) { CodingMessage("before-$it", CodingRole.USER, "Earlier message $it", createdAt = it.toLong()) }
+        val after = List(12) { CodingMessage("after-$it", CodingRole.USER, "Later message $it\n".repeat(8), createdAt = 10L + it) }
+        val session = CodingSessionUi(CodingSession("position", "p", "Position", 0), messages =
+            before + CodingMessage("command", CodingRole.AGENT, "", createdAt = 5, steps = listOf(step)) + after)
+        val list = LazyListState()
+        val scene = onUi { ImageComposeScene(760, 700) {
+            MagicPaperTheme { CodingChat(CodingProject("p", "Project", "/project", 0), session,
+                false, true, { _, _ -> }, {}, { _, _ -> }, listState = list) }
+        } }
+        try {
+            var frame = 0L
+            fun render() { repeat(30) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+            fun textNode(label: String) = scene.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true
+            }
+            fun click(label: String) = onUi {
+                val node = textNode(label)
+                scene.sendPointerEvent(PointerEventType.Press, node.boundsInRoot.center)
+                scene.sendPointerEvent(PointerEventType.Release, node.boundsInRoot.center)
+            }
+            render()
+            onUi { list.requestScrollToItem(5, -80) }
+            render()
+            click(title)
+            render()
+            click("Читать далее")
+            render()
+            assertTrue(list.layoutInfo.totalItemsCount > 500)
+            val top = onUi { textNode(title).boundsInRoot.top }
+            assertTrue(top > 40f, "Regression needs a visible header below the viewport top")
+            click(title)
+            render()
+            assertEquals(18, list.layoutInfo.totalItemsCount)
+            val collapsedTop = onUi { textNode(title).boundsInRoot.top }
+            assertTrue(kotlin.math.abs(collapsedTop - top) <= 1f,
+                "Collapsing full log moved its header: $top -> $collapsedTop")
         } finally { onUi { scene.close() } }
     }
 

@@ -1,6 +1,6 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,37 +33,37 @@ fun ComputerUsePanel(
     val owns = state.sessionId == sessionId
     val enabled = owns && state.access != ComputerAccess.OFF
     val other = state.sessionId != null && !owns
-    PaperPanel(kind = if (enabled) PaperSurfaceKind.SELECTED else PaperSurfaceKind.RAISED) {
+    PaperPanel(color = if (enabled) LocalPaperColors.current.successSurface else androidx.compose.ui.graphics.Color.Transparent) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PaperText(if (enabled) {
                     if (state.access == ComputerAccess.CONTROL) "Экран, мышь и клавиатура включены" else "Просмотр экрана включён"
                 } else if (other) "Экран занят другой сессией" else "Доступ к экрану выключен",
-                    modifier = Modifier.weight(1f), role = PaperTextRole.LABEL)
+                    modifier = Modifier.weight(1f), style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome)
                 if (enabled) {
-                    PaperAction(onPreview, enabled = !state.busy) { PaperText("Снимок", role = PaperTextRole.LABEL) }
-                    PaperAction(onDisable) { PaperText("Отключить", role = PaperTextRole.LABEL) }
+                    PaperAction(onPreview, enabled = !state.busy) { PaperText("Снимок", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
+                    PaperAction(onDisable) { PaperText("Отключить", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
                 } else if (owns && state.busy) {
-                    PaperAction(onDisable) { PaperText("Отмена", role = PaperTextRole.LABEL) }
+                    PaperAction(onDisable) { PaperText("Отмена", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
                 } else {
-                    PaperAction({ chooser = true }, enabled = !running && !other) { PaperText("Включить…", role = PaperTextRole.LABEL) }
+                    PaperAction({ chooser = true }, enabled = !running && !other) { PaperText("Включить…", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
                 }
             }
             if (!other && state.detail.isNotBlank()) {
-                PaperText(state.detail, role = PaperTextRole.LABEL,
+                PaperText(state.detail, style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome,
                     color = if (state.access == ComputerAccess.OFF && !state.busy) LocalPaperColors.current.error else LocalPaperColors.current.secondaryText)
-                if (state.access == ComputerAccess.OFF && !state.busy) PaperAction(onSettings) { PaperText("Системные настройки", role = PaperTextRole.LABEL) }
+                if (state.access == ComputerAccess.OFF && !state.busy) PaperAction(onSettings) { PaperText("Системные настройки", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
             }
             if (owns) state.preview?.let { attachment ->
                 val bitmap = rememberAttachmentBitmap(attachment)
                 if (bitmap != null) {
                     PaperImage(bitmap, "Последний снимок, доступный агенту",
                         modifier = Modifier.height(72.dp).fillMaxWidth()
-                            .clickable { expanded = true })
+                            .paperClickable { expanded = true })
                     if (expanded) PaperModal(onDismissRequest = { expanded = false },
                         title = { PaperText("Последний снимок экрана", role = PaperTextRole.TITLE) },
                         text = { PaperImage(bitmap, "Последний снимок экрана", Modifier.fillMaxWidth()) },
-                        confirmButton = { PaperAction({ expanded = false }) { PaperText("Закрыть", role = PaperTextRole.LABEL) } })
+                        confirmButton = { PaperAction({ expanded = false }) { PaperText("Закрыть", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) } })
                 }
             }
         }
@@ -74,11 +74,11 @@ fun ComputerUsePanel(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 PaperText("Агент получит снимки экрана, включая видимые окна других приложений. Снимки передаются выбранной модели. Доступ действует только для этой сессии до завершения запроса или отключения.")
-                PaperText("Выберите модель с поддержкой изображений и инструментов.", role = PaperTextRole.LABEL)
-                PaperAction({ chooser = false; onEnable(ComputerAccess.SCREEN) }) { PaperText("Только просмотр экрана", role = PaperTextRole.LABEL) }
-                PaperAction({ chooser = false; onEnable(ComputerAccess.CONTROL) }) { PaperText("Экран, мышь и клавиатура", role = PaperTextRole.LABEL) }
+                PaperText("Выберите модель с поддержкой изображений и инструментов.", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome)
+                PaperAction({ chooser = false; onEnable(ComputerAccess.SCREEN) }) { PaperText("Только просмотр экрана", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
+                PaperAction({ chooser = false; onEnable(ComputerAccess.CONTROL) }) { PaperText("Экран, мышь и клавиатура", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
             }
         },
-        confirmButton = { PaperAction({ chooser = false }) { PaperText("Отмена", role = PaperTextRole.LABEL) } },
+        confirmButton = { PaperAction({ chooser = false }) { PaperText("Отмена", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) } },
     )
 }

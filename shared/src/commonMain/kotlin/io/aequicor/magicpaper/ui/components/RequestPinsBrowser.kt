@@ -1,7 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -64,7 +64,7 @@ internal fun MessagePinButton(number: Int, onClick: () -> Unit, modifier: Modifi
     val ink = LocalPaperColors.current.text.copy(alpha = .6f)
     Box(
         modifier = modifier.size(20.dp).clip(CircleShape)
-            .clickable(role = Role.Button, onClickLabel = "Открыть список закреплений", onClick = onClick)
+            .paperClickable(shape = CircleShape, role = Role.Button, onClickLabel = "Открыть список закреплений", onClick = onClick)
             .semantics { contentDescription = "Закреплённое сообщение №$number. Открыть список" },
         // The glyph fits in the bubble's existing right padding, beside the last line.
         contentAlignment = Alignment.CenterEnd,
@@ -106,7 +106,7 @@ internal fun RequestPinsDialog(entries: List<RequestPinEntry>, selectedId: Strin
                         val current = entry.pin.messageId == selectedId
                         PaperPanel(kind = if (current) PaperSurfaceKind.SELECTED else PaperSurfaceKind.PANEL) {
                             Column(Modifier.fillMaxWidth().semantics { selected = current }
-                                .clickable(role = Role.Button, onClickLabel = "Перейти к сообщению") { onNavigate(entry.pin) }
+                                .paperClickable(role = Role.Button, onClickLabel = "Перейти к сообщению") { onNavigate(entry.pin) }
                                 .padding(12.dp)) {
                                 PaperText("${if (entry.isRequest) "Запрос" else "Уточнение"} №${index + 1} · ${entry.pin.author}",
                                     role = PaperTextRole.LABEL,

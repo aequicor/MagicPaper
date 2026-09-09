@@ -1,7 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +63,7 @@ internal fun RequestPinsOverlay(
     browserMessageId: String? = null,
     onCloseBrowser: () -> Unit = {},
     itemKeys: Map<String, Any> = emptyMap(),
+    compact: Boolean = false,
 ) {
     val visible by remember(groups, itemIndices, listState) {
         derivedStateOf {
@@ -98,7 +99,7 @@ internal fun RequestPinsOverlay(
     }
     val selection = visible
     if (selection != null) {
-        RequestPinsPanel(selection, onNavigate = navigate, modifier = modifier.onGloballyPositioned {
+        RequestPinsPanel(selection, onNavigate = navigate, compact = compact, modifier = modifier.onGloballyPositioned {
                 val position = it.positionInParent()
                 scroll.requestPinsBounds = Rect(position.x, position.y,
                     position.x + it.size.width, position.y + it.size.height)
@@ -118,24 +119,25 @@ internal fun RequestPinsPanel(
     selection: VisibleRequestPins,
     onNavigate: (RequestPin) -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(if (compact) 10.dp else 16.dp)
     PaperPanel(
-        modifier = modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+        modifier = modifier.widthIn(max = if (compact) 400.dp else 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             // Blur the panel's shadow without changing the message's opacity.
-            .dropShadow(shape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = .18f), offset = DpOffset(0.dp, 3.dp))),
+            .dropShadow(shape, Shadow(radius = if (compact) 4.dp else 12.dp, color = Color.Black.copy(alpha = if (compact) .08f else .18f), offset = DpOffset(0.dp, 3.dp))),
         shape = shape,
-        kind = PaperSurfaceKind.SELECTED,
+        kind = if (compact) PaperSurfaceKind.PANEL else PaperSurfaceKind.SELECTED,
         shadowElevation = 0.dp,
     ) {
         Column {
-            PinText(selection.group.request, title = true,
-                modifier = Modifier.clickable(role = Role.Button, onClickLabel = "Перейти к запросу") {
+            PinText(selection.group.request, title = true, compact = compact,
+                modifier = Modifier.paperClickable(role = Role.Button, onClickLabel = "Перейти к запросу") {
                     onNavigate(selection.group.request)
                 })
             selection.clarification?.let { clarification ->
                 PaperDivider(Modifier.padding(horizontal = 12.dp), color = LocalPaperColors.current.secondaryText.copy(alpha = .12f))
-                Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Перейти к уточнению") {
+                Row(Modifier.fillMaxWidth().paperClickable(role = Role.Button, onClickLabel = "Перейти к уточнению") {
                     onNavigate(clarification)
                 }, verticalAlignment = Alignment.CenterVertically) {
                     val count = selection.group.clarifications.size
@@ -155,7 +157,7 @@ internal fun RequestPinsPanel(
                                 color = LocalPaperColors.current.text)
                         }
                     }
-                    PinText(clarification, modifier = Modifier.weight(1f))
+                    PinText(clarification, compact = compact, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -164,12 +166,12 @@ internal fun RequestPinsPanel(
 
 @Composable
 private fun PinText(pin: RequestPin,
-    modifier: Modifier = Modifier, title: Boolean = false) {
+    modifier: Modifier = Modifier, title: Boolean = false, compact: Boolean = false) {
     val label = if (pin.author == "Пользователь") pin.summary else "${pin.author} · ${pin.summary}"
     Box(modifier.fillMaxWidth()
-        .heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
-        PaperText(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            role = PaperTextRole.BODY,
+        .heightIn(min = if (compact) 32.dp else 44.dp).padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
+        io.aequicor.magicpaper.designsystem.PaperFadingText(label, maxLines = if (compact) 1 else 2,
+            style = if (compact) io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome else io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.body,
             fontWeight = if (title) FontWeight.SemiBold else FontWeight.Normal,
             color = LocalPaperColors.current.text)
     }

@@ -14,11 +14,11 @@ fun CodingModelChip(profile: LlmProfile?, overridden: Boolean, onClick: () -> Un
     PaperAction(onClick, modifier.heightIn(min = 32.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
             PaperText(profile?.let { it.modelName(it.selectionKey).ifBlank { it.name } } ?: "Выбрать модель",
-                role = PaperTextRole.LABEL, maxLines = 1,
+                role = PaperTextRole.CHROME, maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             if (profile != null) {
                 PaperText(profile.effortLabel(ModelDefaults.capability(profile)),
-                    role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText,
+                    role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText,
                     maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }

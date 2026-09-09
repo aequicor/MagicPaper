@@ -10,7 +10,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -229,7 +229,7 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
-                    .clickable(enabled = enabled, onClick = {
+                    .paperClickable(enabled = enabled, onClick = {
                         onDraft(
                             draft.copy(
                                 provider = candidate.type,

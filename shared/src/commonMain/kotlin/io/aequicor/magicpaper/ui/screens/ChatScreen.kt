@@ -238,10 +238,11 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                         bottomEnd = if (fragment.last) 20.dp else 0.dp,
                     )
                 )
-                .padding(start = 14.dp, end = 14.dp, top = if (fragment.first) 10.dp else 0.dp,
-                    bottom = if (fragment.last) 10.dp else 0.dp),
+                ,
         ) {
-            MessagePinColumn(number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins) {
+            MessagePinColumn(number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = if (fragment.first) 10.dp else 0.dp,
+                    bottom = if (fragment.last) 10.dp else 0.dp)) {
             if (fragment.parts != null) {
                 fragment.parts.Content(fragment.index)
                 if (fragment.last) CollapseMessage(onCollapse)

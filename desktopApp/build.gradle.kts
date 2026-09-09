@@ -11,6 +11,8 @@ plugins {
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":designSystem"))
+    implementation(libs.androidx.lifecycle.viewmodelCompose)
 
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutinesSwing)

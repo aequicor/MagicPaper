@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.plugins.builtin
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,11 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -89,22 +86,22 @@ class SelfEducationPlugin(
         }
 
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text(icon + " " + title, style = MaterialTheme.typography.titleMedium)
-            Text(
+            PaperText(icon + " " + title, style = LocalPaperTypography.current.title)
+            PaperText(
                 "После удачного диалога агент предложит превратить подход в навык. " +
                     "Подтвердите — и он будет применять его сам.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
             Spacer(Modifier.height(8.dp))
-            TextButton(onClick = ::propose, enabled = !busy) {
-                Text(if (busy) "Обдумываю…" else "Предложить навык из последнего диалога")
+            PaperAction(onClick = ::propose, enabled = !busy) {
+                PaperText(if (busy) "Обдумываю…" else "Предложить навык из последнего диалога")
             }
             notice?.let {
-                Text(
+                PaperText(
                     it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    style = LocalPaperTypography.current.body,
+                    color = LocalPaperColors.current.action,
                 )
             }
             draft?.let { current ->
@@ -124,13 +121,13 @@ class SelfEducationPlugin(
                 }, onDismiss = { draft = null })
             }
             Spacer(Modifier.height(12.dp))
-            Text("Созданные навыки", style = MaterialTheme.typography.titleSmall)
+            PaperText("Созданные навыки", style = LocalPaperTypography.current.label)
             val selfMade = skills.filter { it.source == SkillSource.SELF_MADE }
             if (selfMade.isEmpty()) {
-                Text(
+                PaperText(
                     "Пока нет навыков, созданных агентом.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = LocalPaperTypography.current.body,
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
             selfMade.forEach { skill ->
@@ -138,28 +135,28 @@ class SelfEducationPlugin(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 2.dp)
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surface)
+                        .clip(PaperShapes.panel)
+                        .background(LocalPaperColors.current.surface)
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(skill.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
+                        PaperText(skill.name, style = LocalPaperTypography.current.body)
+                        PaperText(
                             skill.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = LocalPaperTypography.current.label,
+                            color = LocalPaperColors.current.secondaryText,
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    Switch(
+                    PaperToggle(
                         checked = skill.enabled,
                         onCheckedChange = { enabled ->
                             scope.launch { store.save(skill.copy(enabled = enabled)) }
                         },
                     )
-                    TextButton(onClick = { scope.launch { store.delete(skill.id) } }) {
-                        Text("✕")
+                    PaperAction(onClick = { scope.launch { store.delete(skill.id) } }) {
+                        PaperText("✕")
                     }
                 }
             }
@@ -177,50 +174,50 @@ class SelfEducationPlugin(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.surface)
+                .clip(PaperShapes.panel)
+                .background(LocalPaperColors.current.surface)
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("Черновик навыка", style = MaterialTheme.typography.titleSmall)
+            PaperText("Черновик навыка", style = LocalPaperTypography.current.label)
             draft.note?.let {
-                Text(
+                PaperText(
                     it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = LocalPaperTypography.current.label,
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
-            OutlinedTextField(
+            PaperInput(
                 value = draft.name,
                 onValueChange = { onChange(draft.copy(name = it)) },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Название") },
+                label = { PaperText("Название") },
                 singleLine = true,
             )
-            OutlinedTextField(
+            PaperInput(
                 value = draft.description,
                 onValueChange = { onChange(draft.copy(description = it)) },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Когда применять") },
+                label = { PaperText("Когда применять") },
                 minLines = 1,
                 maxLines = 3,
             )
-            OutlinedTextField(
+            PaperInput(
                 value = draft.instructions,
                 onValueChange = { onChange(draft.copy(instructions = it)) },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Инструкция для агента") },
+                label = { PaperText("Инструкция для агента") },
                 minLines = 3,
                 maxLines = 10,
             )
             Row {
-                TextButton(
+                PaperAction(
                     onClick = onSave,
                     enabled = draft.name.isNotBlank() && draft.instructions.isNotBlank(),
                 ) {
-                    Text("Сохранить и включить")
+                    PaperText("Сохранить и включить")
                 }
-                TextButton(onClick = onDismiss) { Text("Отменить") }
+                PaperAction(onClick = onDismiss) { PaperText("Отменить") }
             }
         }
     }

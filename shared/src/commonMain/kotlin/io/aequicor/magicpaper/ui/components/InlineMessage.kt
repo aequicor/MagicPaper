@@ -1,7 +1,8 @@
 package io.aequicor.magicpaper.ui.components
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -23,11 +24,11 @@ internal class InlineMessageParts(
     val size: Int get() = document?.blocks?.size ?: ranges.size
 
     @Composable
-    fun Content(index: Int, style: TextStyle = MaterialTheme.typography.bodyLarge,
-        color: Color = MaterialTheme.colorScheme.onSurface) {
+    fun Content(index: Int, style: TextStyle = LocalPaperTypography.current.body,
+        color: Color = LocalPaperColors.current.text) {
         if (document != null) MarkdownDocumentBody(document, listOf(document.blocks[index]))
         else androidx.compose.foundation.text.selection.SelectionContainer {
-            Text(source.substring(ranges[index]), style = style, color = color)
+            PaperText(source.substring(ranges[index]), style = style, color = color)
         }
     }
 }
@@ -48,9 +49,9 @@ internal fun rememberInlineMessageParts(source: String, markdown: Boolean): Inli
 @Composable
 internal fun CollapseMessage(onCollapse: () -> Unit) {
     Box(Modifier.fillMaxWidth()) {
-        Text("Свернуть", Modifier.align(Alignment.CenterEnd).chatDisclosure(onToggle = onCollapse)
+        PaperText("Свернуть", Modifier.align(Alignment.CenterEnd).chatDisclosure(onToggle = onCollapse)
             .padding(horizontal = 12.dp, vertical = 12.dp),
-            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            style = LocalPaperTypography.current.label, color = LocalPaperColors.current.action)
     }
 }
 

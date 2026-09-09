@@ -6,6 +6,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.use
@@ -14,6 +17,7 @@ import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import java.io.File
 import kotlin.test.*
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 class DecisionGraphRenderTest {
     @Test fun choosesAnAlternativeDirectlyOnTheGraph() {
         val current = mutableStateOf(Plan("routes", "project", "Реализация поиска", milestones = listOf(
@@ -40,8 +44,12 @@ class DecisionGraphRenderTest {
             scene.render(64_000_000L).use { image ->
                 File(output, "graph-alternatives-before.png").writeBytes(image.encodeToData()!!.use { it.bytes })
             }
-            scene.sendPointerEvent(PointerEventType.Press, Offset(510f, 87f))
-            scene.sendPointerEvent(PointerEventType.Release, Offset(510f, 87f))
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            val option = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Собственная реализация" } == true
+            }.boundsInRoot.center
+            scene.sendPointerEvent(PointerEventType.Press, option)
+            scene.sendPointerEvent(PointerEventType.Release, option)
             repeat(3) { scene.render(80_000_000L + it * 16_000_000L).close() }
             assertEquals("custom", current.value.tree.first { it.id == "choice" }.selectedOptionId)
             assertEquals(setOf("b", "c", "end"), DecisionCompiler.compile(current.value).stageIds.toSet())

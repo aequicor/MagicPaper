@@ -9,6 +9,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.domain.*
@@ -18,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.assertEquals
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 class SearchSettingsRenderTest {
     @Test fun rendersProvidersAtDesktopAndPhoneWidths() {
         val output = File("build/reports/search-settings").apply { mkdirs() }
@@ -38,8 +42,12 @@ class SearchSettingsRenderTest {
                     assertTrue(bytes.size > 1000)
                     File(output, "${provider.name.lowercase()}-$width.png").writeBytes(bytes)
                     if (provider == SearchProvider.QUERIT && width == 390) {
-                        scene.sendPointerEvent(PointerEventType.Press, Offset(130f, 420f))
-                        scene.sendPointerEvent(PointerEventType.Release, Offset(130f, 420f))
+                        fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                        val control = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.first {
+                            it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Проверить подключение" } == true
+                        }.boundsInRoot.center
+                        scene.sendPointerEvent(PointerEventType.Press, control)
+                        scene.sendPointerEvent(PointerEventType.Release, control)
                         repeat(4) { scene.render(100_000_000L + it * 16_000_000L).close() }
                         assertEquals(1, checks, "Connection button must invoke the checker")
                         scene.render(180_000_000L).use {

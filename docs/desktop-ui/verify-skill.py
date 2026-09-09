@@ -27,7 +27,7 @@ def main() -> None:
     header = frontmatter.group(1)
     required_header = {
         "name: magicpaper-desktop-ui",
-        '  version: "1.0.0"',
+        '  version: "1.1.0"',
         '  package-id: "magicpaper.desktop-ui"',
         "license: MIT",
     }
@@ -41,7 +41,7 @@ def main() -> None:
 
     manifest_bytes = MANIFEST.read_bytes()
     manifest = json.loads(manifest_bytes)
-    if manifest["schemaVersion"] != 1 or manifest["id"] != "magicpaper.desktop-ui" or manifest["version"] != "1.0.0":
+    if manifest["schemaVersion"] != 1 or manifest["id"] != "magicpaper.desktop-ui" or manifest["version"] != "1.1.0":
         fail("unexpected package identity")
     if manifest["license"] != "MIT" or manifest["compatibility"] != {
         "minHost": "1.0.0", "maxHostExclusive": "2.0.0", "platforms": ["desktop"]
@@ -84,7 +84,7 @@ def main() -> None:
     if "allow_implicit_invocation: true" not in agent or "$magicpaper-desktop-ui" not in agent:
         fail("implicit invocation metadata is missing")
 
-    print(f"PASS: magicpaper.desktop-ui@1.0.0; files={len(actual)}; manifestSha256={hashlib.sha256(manifest_bytes).hexdigest()}")
+    print(f"PASS: magicpaper.desktop-ui@1.1.0; files={len(actual)}; manifestSha256={hashlib.sha256(manifest_bytes).hexdigest()}")
 
 
 if __name__ == "__main__":

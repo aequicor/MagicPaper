@@ -1,7 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.clickable
+import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -53,6 +53,7 @@ internal class ChatScrollState(private val listState: LazyListState) {
     var navigating by mutableStateOf(false)
         private set
     private var navigationId = 0
+    private var disclosureItemKey: Any? = null
 
     val canScrollToEnd: Boolean get() = listState.canScrollForward
 
@@ -124,7 +125,24 @@ internal class ChatScrollState(private val listState: LazyListState) {
         }
     }
 
+    /** Full-log collapse removes lazy fragments. Retain the visible opening row, not offset zero. */
+    fun preserveCollapsedItem(itemKey: Any, index: Int) {
+        interruptNavigation()
+        disclosureRevision++
+        val preservedHeader = disclosureItemKey == itemKey
+        disclosureItemKey = null
+        // chatDisclosure already captured the exact header coordinates, including
+        // a partly scrolled first fragment. Do not overwrite that pending request.
+        if (preservedHeader) return
+        val opening = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == itemKey }
+        // When collapsing from the footer, the opening row has already scrolled away.
+        // Show it at the top; a visible opening row keeps its current screen position.
+        val offset = opening?.offset?.coerceAtLeast(0) ?: 0
+        listState.requestScrollToItem(index, -offset)
+    }
+
     fun preserveDisclosure(itemKey: Any, item: LayoutCoordinates?, header: LayoutCoordinates?) {
+        disclosureItemKey = null
         interruptNavigation()
         disclosureRevision++
         if (item?.isAttached != true || header?.isAttached != true) return
@@ -135,6 +153,7 @@ internal class ChatScrollState(private val listState: LazyListState) {
         val headerInViewport = info.offset + headerInItem
         val target = headerInViewport.coerceAtLeast(0f)
         // Apply with the height change, before LazyColumn can skip the shrunken message.
+        disclosureItemKey = itemKey
         listState.requestScrollToItem(info.index, (headerInItem - target).roundToInt())
     }
 }
@@ -178,9 +197,8 @@ internal fun Modifier.chatDisclosure(
 ): Modifier = composed {
     val preserve = LocalChatDisclosure.current
     val coordinates = remember { ChatCoordinates() }
-    onGloballyPositioned { coordinates.value = it }.clickable(
+    onGloballyPositioned { coordinates.value = it }.paperClickable(
         interactionSource = interactionSource,
-        indication = if (interactionSource == null) LocalIndication.current else null,
         role = Role.Button,
     ) {
         preserve(coordinates.value)

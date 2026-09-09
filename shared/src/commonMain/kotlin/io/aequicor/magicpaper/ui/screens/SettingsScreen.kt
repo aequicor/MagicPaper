@@ -2,8 +2,8 @@ package io.aequicor.magicpaper.ui.screens
 
 import io.aequicor.magicpaper.designsystem.*
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.toggleable
+import io.aequicor.magicpaper.designsystem.paperClickable
+import io.aequicor.magicpaper.designsystem.paperToggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -97,7 +97,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .toggleable(
+                .paperToggleable(
                     value = draft.paperAnimationEnabled,
                     role = Role.Switch,
                     onValueChange = { draft = draft.copy(paperAnimationEnabled = it) },
@@ -106,21 +106,14 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         ) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 PaperText("Анимация магической бумаги", style = paperTextStyle(PaperTextRole.BODY))
-                PaperText(
-                    "Живой фон всего окна, включая тулбар, на мощных ПК и телефонах. " +
-                        "При заряде 20% и ниже анимация приостанавливается автоматически. " +
-                        "На Android также учитывается энергосбережение. " +
-                        "На неподдерживаемых устройствах и в браузере — статичная бумага.",
-                    style = paperTextStyle(PaperTextRole.BODY),
-                    color = LocalPaperColors.current.secondaryText,
-                )
+
             }
             PaperToggle(checked = draft.paperAnimationEnabled, onCheckedChange = null)
         }
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .toggleable(
+                .paperToggleable(
                     value = draft.hideSystemSteps,
                     role = Role.Switch,
                     onValueChange = { draft = draft.copy(hideSystemSteps = it) },
@@ -129,11 +122,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         ) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 PaperText("Скрывать системные шаги", style = paperTextStyle(PaperTextRole.BODY))
-                PaperText(
-                    "Скрывает служебные статусы агента. Ответы, рассуждения, действия с инструментами и ошибки остаются видимыми.",
-                    style = paperTextStyle(PaperTextRole.BODY),
-                    color = LocalPaperColors.current.secondaryText,
-                )
+
             }
             PaperToggle(checked = draft.hideSystemSteps, onCheckedChange = null)
         }
@@ -141,6 +130,27 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
 
         NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }
         NavEntry("⚙", "Движки", "pi, Codex и движок новых сессий") { vm.openEnginesSettings() }
+
+        if (state.coding.computerSupported) {
+            Spacer(Modifier.height(12.dp))
+            Section("Доступ к экрану")
+            val active = state.coding.currentSession
+            val session = active?.session
+            if (session != null && !session.planningMode && !session.researchMode && session.stageId == null) {
+                PaperText("Сессия: ${session.name}", style = paperTextStyle(PaperTextRole.LABEL))
+                io.aequicor.magicpaper.ui.components.ComputerUsePanel(
+                    state = state.coding.computer, sessionId = session.id, running = active.running,
+                    onEnable = { vm.enableComputerUse(session.id, it) },
+                    onDisable = { vm.disableComputerUse(session.id) },
+                    onPreview = { vm.previewComputerUse(session.id) },
+                    onSettings = vm::openComputerSystemSettings,
+                )
+            } else {
+                PaperText("Выберите сессию кодинга без планирования или исследования.",
+                    color = LocalPaperColors.current.secondaryText)
+                PaperAction({ vm.open(Screen.CODING) }) { PaperText("Проекты и код") }
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
         Section("Поисковый движок")
@@ -284,7 +294,7 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
                 items(filtered, key = { it.id }) { model ->
                     val checked = model.id in draft.favoriteModels
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).toggleable(value = checked, role = Role.Checkbox,
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).paperToggleable(value = checked, role = Role.Checkbox,
                         onValueChange = { draft = draft.withFavoriteModel(model.id) }).heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         PaperCheck(checked = checked, onCheckedChange = null)
@@ -345,7 +355,7 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .paperClickable(enabled = enabled, onClick = onClick)
             .heightIn(min = 40.dp)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -444,7 +454,7 @@ private fun NavEntry(icon: String, title: String, subtitle: String, onClick: () 
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
+            .paperClickable(onClick = onClick)
             .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
