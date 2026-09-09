@@ -647,9 +647,8 @@ private fun ProjectRow(
             .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Keep the title aligned when the disclosure appears on hover.
         Box(Modifier.width(14.dp)) {
-            if (showActions) Text(
+            Text(
                 if (expanded) "▾" else "▸",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.outline,
