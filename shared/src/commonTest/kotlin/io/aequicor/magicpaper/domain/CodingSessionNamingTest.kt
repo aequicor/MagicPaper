@@ -15,6 +15,13 @@ class CodingSessionNamingTest {
         assertEquals(worker, worker.namedFromPrompt("Запрос"))
     }
 
+    @Test fun newSessionTitleIsReplacedByFirstPrompt() {
+        val session = CodingSession("s", "p", "Новая сессия", 1)
+        assertEquals("Исправить меню", session.namedFromPrompt("Исправить меню").name)
+        val manual = session.copy(nameManuallySet = true)
+        assertEquals(manual, manual.namedFromPrompt("Исправить меню"))
+    }
+
     @Test fun sidebarPlacesNewSessionsFirstRegardlessOfInsertionOrder() {
         val older = CodingSession("older", "p", "Older", 1)
         val newer = older.copy(id = "newer", createdAt = 2)

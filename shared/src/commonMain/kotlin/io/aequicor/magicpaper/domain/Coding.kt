@@ -657,7 +657,7 @@ val CodingStep.isVisibleActivity: Boolean
 
 /** Assign a useful title once, preserving explicit and worker names. */
 fun CodingSession.namedFromPrompt(prompt: String): CodingSession {
-    val defaultName = name == "Основная" || name.startsWith("Сессия ") || name.startsWith("План:")
+    val defaultName = name == "Новая сессия" || name == "Основная" || name.startsWith("Сессия ") || name.startsWith("План:")
     val title = prompt.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(60)
     return if (!nameManuallySet && parentSessionId == null && defaultName && title.isNotBlank()) copy(name = title) else this
 }

@@ -1254,7 +1254,7 @@ class OrchestrationService(
         val existing = projects.sessions(plan.projectId)
         val parent = existing.firstOrNull { it.id == plan.parentSessionId }
         if (parent != null) {
-            val defaultName = parent.name == "Основная" || parent.name.startsWith("Сессия ") || parent.name.startsWith("План:")
+            val defaultName = parent.name == "Новая сессия" || parent.name == "Основная" || parent.name.startsWith("Сессия ") || parent.name.startsWith("План:")
             val title = plan.tree.firstOrNull { it.kind == DecisionKind.GOAL }?.title ?: plan.goal
             val updated = parent.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true,
                 orchestratorNumber = parent.orchestratorNumber ?: ((existing.mapNotNull { it.orchestratorNumber }.maxOrNull() ?: 0) + 1),

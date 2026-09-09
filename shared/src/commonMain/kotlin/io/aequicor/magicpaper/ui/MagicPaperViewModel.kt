@@ -1280,11 +1280,10 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return
         val project = _state.value.coding.current ?: return
         scope.launch {
-            val ordinal = repo.sessions(project.id).size + 1
             val session = CodingSession(
                 id = Id.new(),
                 projectId = project.id,
-                name = "Сессия $ordinal",
+                name = "Новая сессия",
                 engine = engine,
                 createdAt = Id.now(),
                 modelSelection = project.modelSelection ?: ProfileResolver.favoriteDefault(_state.value.settings, _state.value.availableLlmProfiles, coding = true),

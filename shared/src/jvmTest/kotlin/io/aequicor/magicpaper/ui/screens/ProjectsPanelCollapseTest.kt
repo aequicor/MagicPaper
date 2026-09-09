@@ -61,14 +61,14 @@ class ProjectsPanelCollapseTest {
             scene.sendPointerEvent(PointerEventType.Move, Offset(100f, item.offset + item.size / 2f),
                 type = PointerType.Mouse)
             render()
-            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + if (node.config.isClearingSemantics) emptyList() else node.children.flatMap(::walk)
             val arrow = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.single {
                 it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(label) == true
             }
             click(arrow.boundsInRoot.center)
         }
         private fun nodes(): List<SemanticsNode> {
-            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + if (node.config.isClearingSemantics) emptyList() else node.children.flatMap(::walk)
             return scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
         }
         fun hover(key: String) {
@@ -159,6 +159,16 @@ class ProjectsPanelCollapseTest {
         p.click("project-a")
         assertTrue("session-parent" in p.keys(), "Selecting another project opens its list")
         assertTrue("session-child" in p.keys())
+    }
+
+    @Test fun hoveringKeepsRowAndTitleBoundsStable() = Panel().use { p ->
+        val rows = p.list.layoutInfo.visibleItemsInfo.associate { it.key to (it.offset to it.size) }
+        val titles = listOf("Project A", "Plan", "Stage", "Ordinary").associateWith { p.text(it).boundsInRoot }
+        for (key in listOf("project-a", "session-parent", "session-child", "session-ordinary", "project-b")) {
+            p.hover(key)
+            assertEquals(rows, p.list.layoutInfo.visibleItemsInfo.associate { it.key to (it.offset to it.size) })
+            titles.forEach { (title, bounds) -> assertEquals(bounds, p.text(title).boundsInRoot, title) }
+        }
     }
 
     @Test fun newSessionButtonUsesOnlyItsCallback() = Panel().use { p ->

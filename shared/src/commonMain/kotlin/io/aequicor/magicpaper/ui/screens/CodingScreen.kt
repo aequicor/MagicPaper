@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.border
@@ -679,7 +680,7 @@ private fun ProjectRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (showActions) {
+        HoverActions(visible = showActions) {
             // The action is deliberately available only on the current project: the
             // creation dialog saves into the ViewModel's current project.
             if (selected) {
@@ -750,47 +751,64 @@ private fun SessionRow(
         FadingSingleLineText(
             item.session.name,
             modifier = Modifier.weight(1f),
-            style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Normal,
             color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
         )
-        if (showActions && childCount > 0) {
-            Box(Modifier.size(24.dp)
-                .clip(MaterialTheme.shapes.small)
-                .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
-                .clickable(
-                    onClick = onToggleChildren,
-                ),
-                contentAlignment = Alignment.Center) {
-                Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
-            }
-        }
-        if (showActions) TooltipBox(
-            positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
-                androidx.compose.material3.TooltipAnchorPosition.Above,
-            ),
-            tooltip = {
-                androidx.compose.material3.Surface(
-                    color = MaterialTheme.colorScheme.inverseSurface,
-                    shape = MaterialTheme.shapes.small,
-                ) {
-                    Text("В архив", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.inverseOnSurface)
+        HoverActions(visible = showActions) {
+            if (childCount > 0) {
+                Box(Modifier.size(24.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
+                    .clickable(
+                        onClick = onToggleChildren,
+                    ),
+                    contentAlignment = Alignment.Center) {
+                    Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
                 }
-            },
-            state = rememberTooltipState(),
-        ) {
-            ToolbarButton(ToolbarIcon.Archive, label = "Архивировать сессию", size = 24.dp, onClick = onArchive)
+            }
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                    androidx.compose.material3.TooltipAnchorPosition.Above,
+                ),
+                tooltip = {
+                    androidx.compose.material3.Surface(
+                        color = MaterialTheme.colorScheme.inverseSurface,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text("В архив", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.inverseOnSurface)
+                    }
+                },
+                state = rememberTooltipState(),
+            ) {
+                ToolbarButton(ToolbarIcon.Archive, label = "Архивировать сессию", size = 24.dp, onClick = onArchive)
+            }
+            RowMenu(
+                open = menuOpen,
+                onOpenChange = { menuOpen = it },
+                entries = buildList<Pair<String, () -> Unit>> {
+                    if (item.running) add("Прервать прогон" to onAbort)
+                    add((if (item.session.stageId != null) "В архив" else "Удалить сессию") to onDelete)
+                },
+            )
         }
-        if (showActions) RowMenu(
-            open = menuOpen,
-            onOpenChange = { menuOpen = it },
-            entries = buildList<Pair<String, () -> Unit>> {
-                if (item.running) add("Прервать прогон" to onAbort)
-                add((if (item.session.stageId != null) "В архив" else "Удалить сессию") to onDelete)
-            },
-        )
+    }
+}
+
+/** Reserve action space even when hidden so hovering cannot resize a row or its title. */
+@Composable
+private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
+    Layout(
+        modifier = if (visible) Modifier else Modifier.clearAndSetSemantics {},
+        content = { Row(verticalAlignment = Alignment.CenterVertically) { content() } },
+    ) { measurables, constraints ->
+        val actions = measurables.single().measure(constraints.copy(minWidth = 0, minHeight = 0))
+        layout(actions.width, actions.height) {
+            // Unplaced actions are neither drawn nor available for pointer input.
+            if (visible) actions.placeRelative(0, 0)
+        }
     }
 }
 
