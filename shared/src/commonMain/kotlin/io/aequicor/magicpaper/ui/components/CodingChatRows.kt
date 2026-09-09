@@ -18,7 +18,7 @@ internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int
     val first: Boolean get() = stepIndex == null || stepIndex == 0 || step?.kind == CodingStepKind.SYSTEM || row.message.steps.getOrNull(stepIndex - 1)?.kind == CodingStepKind.SYSTEM
     val last: Boolean get() = stepIndex == null || stepIndex == row.message.steps.lastIndex || step?.kind == CodingStepKind.SYSTEM || row.message.steps.getOrNull(stepIndex + 1)?.kind == CodingStepKind.SYSTEM
     val key: String = if (stepIndex == null) row.message.id else step?.toolIdentity ?:
-        "${row.message.timelineId ?: row.message.id}:step:${row.stepKeys[stepIndex]}"
+        "${step?.sourceTimelineId ?: row.message.timelineId ?: row.message.id}:step:${row.stepKeys[stepIndex]}"
     val step: CodingStep? get() = stepIndex?.let { row.message.steps[it] }
 }
 
@@ -82,11 +82,15 @@ internal fun CodingDraft.visibleChatContent(hideSystemSteps: Boolean): CodingDra
 internal fun codingDraftRow(draft: CodingDraft, messages: List<CodingMessage>, fallbackId: String,
     hideSystemSteps: Boolean, busy: Boolean): CodingChatRow? {
     val identity = draft.timelineId ?: fallbackId
-    val saved = draft.timelineId != null && messages.any { (it.timelineId ?: it.id) == identity }
+    val savedTimelines = messages.map { it.timelineId ?: it.id }.toSet()
+    val saved = draft.timelineId != null && identity in savedTimelines
     val draftCalls = draft.steps.mapNotNull { it.toolIdentity }.toSet()
     val savedCalls = if (draftCalls.isEmpty()) emptySet() else messages.asSequence().flatMap { it.steps.asSequence() }
         .mapNotNull { it.toolIdentity }.filter { it in draftCalls }.toSet()
-    val pending = draft.steps.filter { step -> step.toolIdentity?.let { it !in savedCalls } ?: !saved }
+    val pending = draft.steps.filter { step ->
+        if (step.sourceTimelineId != null && step.sourceTimelineId in savedTimelines) false
+        else step.toolIdentity?.let { it !in savedCalls } ?: (step.sourceTimelineId != null || !saved)
+    }
     if (saved && pending.isEmpty()) return null
     val steps = pending.toMutableList().apply {
         if (!saved && !draft.failedMessage.isNullOrBlank() && none { it.kind == CodingStepKind.ERROR })

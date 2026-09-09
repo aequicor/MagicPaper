@@ -597,6 +597,8 @@ data class CodingStep(
     val systemEvent: CompactionStatus? = null,
     val toolCategory: ToolCategory? = null,
     val toolPhase: ToolPhase? = null,
+    /** A merged live draft can contain steps from several independently saved replies. */
+    val sourceTimelineId: String? = null,
 )
 
 /** Роли в журнале проекта. */

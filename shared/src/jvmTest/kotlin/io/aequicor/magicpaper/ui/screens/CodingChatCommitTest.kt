@@ -72,6 +72,9 @@ class CodingChatCommitTest {
         fun textNode(text: String) = onUi { nodes().firstOrNull {
             it.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains(text) } == true
         } }
+        fun textCount(text: String) = onUi { nodes().count {
+            it.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains(text) } == true
+        } }
         fun expandVisibleCommand(): String {
             val node = onUi { nodes().first {
                 it.boundsInRoot.top in 80f..350f &&
@@ -108,6 +111,23 @@ class CodingChatCommitTest {
         assertEquals(before, chat.anchor())
         chat.publishSaved(clearDraft = true)
         assertEquals(before, chat.anchor())
+    }
+
+    @Test fun coordinatorAnswerAppearsOnceWhileItsSavedAndLiveSnapshotsOverlap() = Chat().use { chat ->
+        val answer = CodingStep(CodingStepKind.ANSWER, "Результат передан на проверку. Сохранённые замечания учтены.",
+            id = "answer", sourceTimelineId = "turn-coordinator")
+        val tool = CodingStep(CodingStepKind.TOOL, "Состояние плана", id = "context", sourceTimelineId = "turn-coordinator")
+        chat.value.value = chat.value.value.copy(draft = CodingDraft(active = true, steps = listOf(tool, answer)))
+        chat.render()
+        assertEquals(1, chat.textCount("Результат передан на проверку"))
+        val before = chat.anchor()
+        chat.value.value = chat.value.value.copy(messages = listOf(CodingMessage("turn-coordinator", CodingRole.AGENT,
+            "Оркестратор: ${answer.title}", createdAt = 1, steps = listOf(tool, answer.copy(title = "Оркестратор: ${answer.title}")))))
+        chat.render { assertEquals(1, chat.textCount("Результат передан на проверку"), "A persistence frame duplicated the reply") }
+        assertEquals(before, chat.anchor())
+        chat.snapshot("orchestrator-return-saved")
+        chat.value.value = chat.value.value.copy(draft = CodingDraft(), running = false)
+        chat.render { assertEquals(1, chat.textCount("Результат передан на проверку")) }
     }
 
     @Test fun savingAtTheBottomKeepsFollowingOutput() = Chat().use { chat ->

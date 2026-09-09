@@ -83,7 +83,7 @@ internal fun List<CodingStep>.withPlanningActivity(raw: CodingStep): List<Coding
 
 /** Keep the visible answer's lazy-item identity when the orchestration reply is persisted. */
 internal fun CodingMessage.withPlanningDraft(draft: CodingDraft?): CodingMessage {
-    if (role != CodingRole.AGENT || draft?.timelineId != id) return this
+    if (role != CodingRole.AGENT || draft?.timelineId != (timelineId ?: id)) return this
     val answer = draft.steps.lastOrNull { it.kind == CodingStepKind.ANSWER && it.title.isNotBlank() }
     val persisted = steps.ifEmpty {
         if (answer != null && text.isNotBlank()) listOf(CodingStep(CodingStepKind.ANSWER, text)) else emptyList()
@@ -93,6 +93,7 @@ internal fun CodingMessage.withPlanningDraft(draft: CodingDraft?): CodingMessage
     val savedSteps = retained + persisted
     val lastAnswer = savedSteps.indexOfLast { it.kind == CodingStepKind.ANSWER }
     return copy(timelineId = draft.timelineId, steps = savedSteps.mapIndexed { index, step ->
-        if (index == lastAnswer && step.id.isBlank() && answer != null) step.copy(id = answer.id) else step
+        step.copy(sourceTimelineId = step.sourceTimelineId ?: draft.timelineId,
+            id = if (index == lastAnswer && step.id.isBlank() && answer != null) answer.id else step.id)
     })
 }
