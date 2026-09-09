@@ -1,7 +1,6 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,9 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,7 +28,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.decodeToImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import io.aequicor.magicpaper.designsystem.PaperAttachmentChip
+import io.aequicor.magicpaper.designsystem.PaperAttachmentRow
+import io.aequicor.magicpaper.designsystem.PaperImage
+import io.aequicor.magicpaper.designsystem.PaperModal
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.AttachmentKind
 import io.aequicor.magicpaper.domain.AttachmentMeta
@@ -82,49 +83,11 @@ fun PendingAttachmentsRow(
 @Composable
 fun AttachmentChip(attachment: Attachment, onRemove: (() -> Unit)? = null) {
     val bitmap = rememberAttachmentBitmap(attachment)
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
-            .padding(start = if (bitmap != null) 4.dp else 10.dp, top = 4.dp, end = 8.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    PaperAttachmentChip("${attachment.name} · ${formatSize(attachment.sizeBytes)}", onRemove?.let { { it() } }) {
         if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = attachment.name,
-                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(7.dp)),
-                contentScale = ContentScale.Crop,
-            )
-            Spacer(Modifier.width(8.dp))
+            PaperImage(bitmap, attachment.name, Modifier.size(34.dp).clip(RoundedCornerShape(7.dp)))
         } else {
-            Text(attachmentGlyph(attachment.kind), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(6.dp))
-        }
-        Column {
-            Text(
-                attachment.name,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-            )
-            Text(
-                formatSize(attachment.sizeBytes),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (onRemove != null) {
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "✕",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onRemove)
-                    .padding(horizontal = 5.dp, vertical = 2.dp),
-            )
+            PaperText(attachmentGlyph(attachment.kind), role = PaperTextRole.BODY)
         }
     }
 }
@@ -153,12 +116,7 @@ fun MessageAttachments(attachments: List<Attachment>) {
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { preview = attachment },
                 ) {
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = attachment.name,
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp),
-                        contentScale = ContentScale.Fit,
-                    )
+                    PaperImage(bitmap, attachment.name, Modifier.fillMaxWidth().heightIn(max = 160.dp))
                 }
             } else {
                 AttachmentChip(attachment)
@@ -174,39 +132,18 @@ fun MessageAttachments(attachments: List<Attachment>) {
 @Composable
 fun ImagePreviewDialog(attachment: Attachment, onDismiss: () -> Unit) {
     val bitmap = rememberAttachmentBitmap(attachment)
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.widthIn(max = 720.dp),
-        ) {
+    PaperModal(onDismissRequest = onDismiss,
+        title = { PaperText("${attachment.name} · ${formatSize(attachment.sizeBytes)}", role = PaperTextRole.TITLE) },
+        text = {
             Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    "${attachment.name} · ${formatSize(attachment.sizeBytes)}",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
                 if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = attachment.name,
-                        modifier = Modifier.fillMaxWidth(),
-                        contentScale = ContentScale.Fit,
-                    )
+                    PaperImage(bitmap, attachment.name, Modifier.fillMaxWidth())
                 } else {
-                    Text("Не удалось показать изображение.", style = MaterialTheme.typography.bodyMedium)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Закрыть") }
+                    PaperText("Не удалось показать изображение.")
                 }
             }
-        }
-    }
+        },
+        confirmButton = { io.aequicor.magicpaper.designsystem.PaperAction(onDismiss) { PaperText("Закрыть", role = PaperTextRole.LABEL) } })
 }
 
 /** Чипы вложений записи журнала кодинг-сессии (файлы лежат на диске рантайма). */
@@ -220,21 +157,8 @@ fun CodingAttachments(metas: List<AttachmentMeta>) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         metas.forEach { meta ->
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(attachmentGlyph(meta.kind), style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "${meta.name} · ${formatSize(meta.sizeBytes)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
+            PaperAttachmentChip("${meta.name} · ${formatSize(meta.sizeBytes)}", null) {
+                PaperText(attachmentGlyph(meta.kind), role = PaperTextRole.BODY)
             }
         }
     }

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "magicpaper.desktop-ui",
+  "version": "1.0.0",
+  "name": "MagicPaper Desktop UI",
+  "description": "Implement and review native-feeling MagicPaper desktop interfaces through the public Paper design-system API.",
+  "instructions": "SKILL.md",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "5f6f6ed3051ac7f0d21a94a132359536769e9dadf6a854df7522d29fadebf640",
+      "size": 1080
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "53704c05e94f3e5e3a173473753a5f6cec44dd9b683d661b4c34c5164c6801fb",
+      "size": 4788
+    },
+    {
+      "path": "agents/openai.yaml",
+      "sha256": "425e840185719c9a726d2a734771d550d40c6a6493e9fec9911396754bd0a845",
+      "size": 281
+    },
+    {
+      "path": "references/design-system.md",
+      "sha256": "3a113c35aaa572c62bec53ebf9f9e95e5336443603d94ed278df4e3170a052c1",
+      "size": 2854
+    },
+    {
+      "path": "references/platform-behavior.md",
+      "sha256": "719fb8e377983e8273e002f692a16737ac8c74c90b08e684e9ea474401fb4832",
+      "size": 3235
+    },
+    {
+      "path": "references/verification.md",
+      "sha256": "8bdf590133841345873b9fc48e6fc60ff11464145d8fa4f5d46deadd39dabf9a",
+      "size": 1765
+    }
+  ],
+  "dependencies": [],
+  "permissions": ["READ_PROJECT", "WRITE_PROJECT", "RUN_PROCESS"],
+  "origin": {
+    "kind": "LOCAL_DIRECTORY",
+    "location": "skills/magicpaper-desktop-ui",
+    "publisher": "MagicPaper contributors",
+    "revision": null
+  },
+  "license": "MIT",
+  "compatibility": {
+    "minHost": "1.0.0",
+    "maxHostExclusive": "2.0.0",
+    "platforms": ["desktop"]
+  }
+}

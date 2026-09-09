@@ -78,22 +78,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -196,6 +182,8 @@ import io.aequicor.magicpaper.ui.components.CodingModelSwitcherDialog
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.stickToBottom
 import io.aequicor.magicpaper.ui.theme.MagicFonts
+import io.aequicor.magicpaper.designsystem.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 /**
  * Экран «Проекты и код»: в проекте несколько кодинг-сессий, у каждой — кружок
@@ -219,12 +207,12 @@ fun CodingScreen(
     LaunchedEffect(ui.current?.id) { skillsProject = null }
     skillsProject?.let { projectId ->
         androidx.compose.ui.window.Dialog(onDismissRequest = { skillsProject = null }) {
-            androidx.compose.material3.Surface(shape = MaterialTheme.shapes.large) {
+            PaperPanel(shape = RoundedCornerShape(14.dp)) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("SKILLS", style = MaterialTheme.typography.titleLarge)
+                    PaperText("SKILLS", style = LocalPaperTypography.current.title)
                     vm.projectSkills?.Content(projectId)
-                        ?: Text("Проектные навыки недоступны на этой платформе")
-                    TextButton(onClick = { skillsProject = null }) { Text("Закрыть") }
+                        ?: PaperText("Проектные навыки недоступны на этой платформе")
+                    PaperTextAction(onClick = { skillsProject = null }) { PaperText("Закрыть") }
                 }
             }
         }
@@ -288,8 +276,8 @@ internal fun ResizableProjectPanels(
                     }, Orientation.Horizontal),
                 contentAlignment = Alignment.Center,
             ) {
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Box(Modifier.width(3.dp).height(28.dp).background(MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small))
+                PaperVerticalDivider(color = LocalPaperColors.current.border)
+                Box(Modifier.width(3.dp).height(28.dp).background(LocalPaperColors.current.border, RoundedCornerShape(6.dp)))
             }
             Box(Modifier.weight(1f)) { content() }
         }
@@ -397,24 +385,24 @@ private fun SessionArea(
 private fun SessionTab(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .clip(MaterialTheme.shapes.small)
+            .clip(RoundedCornerShape(6.dp))
             .background(
                 if (selected) {
-                    MaterialTheme.colorScheme.primaryContainer
+                    LocalPaperColors.current.selected
                 } else {
-                    MaterialTheme.colorScheme.surface
+                    LocalPaperColors.current.surface
                 }
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 5.dp),
     ) {
-        Text(
+        PaperText(
             label,
-            style = MaterialTheme.typography.labelLarge,
+            style = LocalPaperTypography.current.label,
             color = if (selected) {
-                MaterialTheme.colorScheme.primary
+                LocalPaperColors.current.action
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+                LocalPaperColors.current.secondaryText
             },
         )
     }
@@ -549,7 +537,7 @@ internal fun ProjectsPanel(
                     stickyHeader(key = "project-${project.id}") { index ->
                         val pinned = listState.firstVisibleItemIndex > index ||
                             (listState.firstVisibleItemIndex == index && listState.firstVisibleItemScrollOffset > 0)
-                        ProjectHeaderSurface(pinned) {
+                        ProjectHeaderPaperPanel(pinned) {
                             ProjectRow(project, selected, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
                                 {
                                     if (selected) projectCollapsed = !projectCollapsed
@@ -576,8 +564,8 @@ internal fun ProjectsPanel(
             }
             ProjectPinnedSession(listState, "project-${ui.current?.id}", groups, sessionHeader)
         }
-        TextButton(onClick = onAddProject, modifier = Modifier.padding(8.dp)) {
-            Text("✦ Новый проект")
+        PaperTextAction(onClick = onAddProject, modifier = Modifier.padding(8.dp)) {
+            PaperText("✦ Новый проект")
         }
     }
 }
@@ -592,13 +580,13 @@ private data class ProjectSessionGroup(
 
 /** Animate the surface, never the lazy item's height: scroll anchors remain stable. */
 @Composable
-private fun ProjectHeaderSurface(pinned: Boolean, content: @Composable () -> Unit) {
+private fun ProjectHeaderPaperPanel(pinned: Boolean, content: @Composable () -> Unit) {
     val progress by animateFloatAsState(
         if (pinned) 1f else 0f,
         tween(200, easing = FastOutSlowInEasing),
         label = "projectHeaderPin",
     )
-    val surface = MaterialTheme.colorScheme.surface
+    val surface = LocalPaperColors.current.surface
     Column(Modifier.fillMaxWidth()
         .graphicsLayer { shadowElevation = 3.dp.toPx() * progress }
         .background(surface.copy(alpha = progress))) { content() }
@@ -629,7 +617,7 @@ private fun ProjectPinnedSession(
     Box(Modifier.fillMaxSize().padding(top = topPadding).clipToBounds()) {
         Layout(modifier = Modifier.scrollable(listState, Orientation.Vertical, reverseDirection = true), content = {
             key(group.parent.session.id) {
-                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) { content(group) }
+                Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) { content(group) }
             }
         }) { measurables, constraints ->
             val header = measurables.single().measure(constraints.copy(minHeight = 0))
@@ -660,17 +648,17 @@ private fun ProjectRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 6.dp)
-            .clip(MaterialTheme.shapes.small)
+            .clip(RoundedCornerShape(6.dp))
             .hoverable(hoverInteraction)
             .clickable(onClick = onSelect)
             .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(14.dp)) {
-            Text(
+            PaperText(
                 if (expanded) "▾" else "▸",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.outline,
+                style = LocalPaperTypography.current.label,
+                color = LocalPaperColors.current.border,
             )
         }
         StatusTooltip(status) { ActivityDot(status, size = 9) }
@@ -679,8 +667,8 @@ private fun ProjectRow(
             FadingSingleLineText(
                 project.name,
                 fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                style = LocalPaperTypography.current.body,
+                color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.text,
             )
             FadingSingleLineText(
                 buildString {
@@ -689,20 +677,20 @@ private fun ProjectRow(
                         if (runningSessions > 0) append(", $runningSessions работают")
                     }
                 },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
         }
         HoverActions(visible = showActions) {
             // The action is deliberately available only on the current project: the
             // creation dialog saves into the ViewModel's current project.
             if (selected) {
-                TextButton(
+                PaperTextAction(
                     onClick = onAddSession,
                     modifier = Modifier.semantics { contentDescription = "Новая сессия" },
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                 ) {
-                    Text("Новая сессия", style = MaterialTheme.typography.labelMedium)
+                    PaperText("Новая сессия", style = LocalPaperTypography.current.label)
                 }
             }
             RowMenu(
@@ -740,11 +728,11 @@ private fun SessionRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = if (nested) 42.dp else 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
-            .clip(MaterialTheme.shapes.small)
+            .clip(RoundedCornerShape(6.dp))
             .hoverable(hoverInteraction)
             .background(
                 if (selected) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    LocalPaperColors.current.selected.copy(alpha = 0.55f)
                 } else {
                     Color.Transparent
                 }
@@ -764,38 +752,23 @@ private fun SessionRow(
         FadingSingleLineText(
             item.session.name,
             modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
+            style = LocalPaperTypography.current.body,
             fontWeight = FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+            color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
         )
         HoverActions(visible = showActions) {
             if (childCount > 0) {
                 Box(Modifier.size(24.dp)
-                    .clip(MaterialTheme.shapes.small)
+                    .clip(RoundedCornerShape(6.dp))
                     .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
                     .clickable(
                         onClick = onToggleChildren,
                     ),
                     contentAlignment = Alignment.Center) {
-                    Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
+                    PaperText(if (expanded) "▾" else "▸", color = LocalPaperColors.current.action)
                 }
             }
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
-                    androidx.compose.material3.TooltipAnchorPosition.Above,
-                ),
-                tooltip = {
-                    androidx.compose.material3.Surface(
-                        color = MaterialTheme.colorScheme.inverseSurface,
-                        shape = MaterialTheme.shapes.small,
-                    ) {
-                        Text("В архив", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.inverseOnSurface)
-                    }
-                },
-                state = rememberTooltipState(),
-            ) {
+            PaperTooltip("В архив") {
                 ToolbarButton(ToolbarIcon.Archive, label = "Архивировать сессию", size = 24.dp, onClick = onArchive)
             }
             RowMenu(
@@ -829,21 +802,21 @@ private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
 @Composable
 private fun RowMenu(open: Boolean, onOpenChange: (Boolean) -> Unit, entries: List<Pair<String, () -> Unit>>) {
     Box {
-        Text(
+        PaperText(
             "⋯",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = LocalPaperTypography.current.label,
+            color = LocalPaperColors.current.secondaryText,
             modifier = Modifier
-                .clip(MaterialTheme.shapes.small)
+                .clip(RoundedCornerShape(6.dp))
                 .clickable { onOpenChange(true) }
                 .semantics { contentDescription = "Действия" }
                 .padding(horizontal = 6.dp),
         )
         if (open) {
-            DropdownMenu(expanded = true, onDismissRequest = { onOpenChange(false) }) {
+            PaperMenuHost(expanded = true, onDismissRequest = { onOpenChange(false) }) {
                 entries.forEach { (label, action) ->
-                    DropdownMenuItem(
-                        text = { Text(label) },
+                    PaperRichMenuAction(
+                        text = { PaperText(label) },
                         onClick = {
                             onOpenChange(false)
                             action()
@@ -865,25 +838,7 @@ private fun sessionCountWord(count: Int): String = when {
 
 @Composable
 private fun StatusTooltip(status: CodingSessionStatus, content: @Composable () -> Unit) {
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
-            androidx.compose.material3.TooltipAnchorPosition.Above,
-        ),
-        tooltip = {
-            androidx.compose.material3.Surface(
-                color = MaterialTheme.colorScheme.inverseSurface,
-                shape = MaterialTheme.shapes.small,
-            ) {
-                Text(
-                    status.label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.inverseOnSurface,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-            }
-        },
-        state = rememberTooltipState(),
-    ) { content() }
+    PaperTooltip(status.label) { content() }
 }
 
 @Composable
@@ -893,16 +848,16 @@ private fun ProjectsEmptyHint(hasProject: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("✦", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        PaperText("✦", style = LocalPaperTypography.current.title, color = LocalPaperColors.current.action)
         Spacer(Modifier.height(8.dp))
-        Text(
+        PaperText(
             if (hasProject) {
                 "В проекте пока нет кодинг-сессий. Добавьте сессию в левом меню — у каждой свой контекст и журнал."
             } else {
                 "Добавьте проект — папку, в которой агент будет читать файлы и выполнять запросы."
             },
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = LocalPaperTypography.current.body,
+            color = LocalPaperColors.current.secondaryText,
         )
     }
 }
@@ -1004,8 +959,8 @@ internal fun CodingChat(
         if (showOrchestrationStatus)
             OrchestrationStatus(session, planningService, onOpenSession, Modifier.zIndex(1f), scrolled = scrolled)
         session.session.stageId?.let { id -> session.plan?.eventWaitLabel(id)?.takeIf { it.isNotBlank() }?.let { label ->
-            Surface(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                Text(label, Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+            PaperPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = LocalPaperColors.current.raisedSurface) {
+                PaperText(label, Modifier.padding(10.dp), style = LocalPaperTypography.current.body)
             }
         } }
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -1029,10 +984,10 @@ internal fun CodingChat(
                 verticalArrangement = Arrangement.Top,
             ) {
                 item(key = "project-header", contentType = "header") {
-                    Text(
+                    PaperText(
                         "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${session.session.interactionMode.title} · ${project.path}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = LocalPaperTypography.current.body,
+                        color = LocalPaperColors.current.secondaryText,
                     )
                 }
                 items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
@@ -1164,19 +1119,19 @@ private fun SavedCodingHistoryItem(
                             step.kind == CodingStepKind.EXEC, expanded = true, onToggle = onCollapse,
                             showHeader = fragment.first, body = {
                                 parts.Content(fragment.index,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
-                                    color = if (step.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+                                    style = LocalPaperTypography.current.body.copy(fontFamily = MagicFonts.code),
+                                    color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
                             })
                     } else parts.Content(fragment.index,
                         style = when (step?.kind) {
-                            CodingStepKind.INFO -> MaterialTheme.typography.bodySmall
-                            CodingStepKind.ERROR -> MaterialTheme.typography.bodyMedium
-                            else -> MaterialTheme.typography.bodyLarge
+                            CodingStepKind.INFO -> LocalPaperTypography.current.body
+                            CodingStepKind.ERROR -> LocalPaperTypography.current.body
+                            else -> LocalPaperTypography.current.body
                         },
                         color = when {
-                            step?.kind == CodingStepKind.ERROR || message.failed -> MaterialTheme.colorScheme.error
-                            step?.kind == CodingStepKind.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
-                            else -> MaterialTheme.colorScheme.onSurface
+                            step?.kind == CodingStepKind.ERROR || message.failed -> LocalPaperColors.current.error
+                            step?.kind == CodingStepKind.INFO -> LocalPaperColors.current.secondaryText
+                            else -> LocalPaperColors.current.text
                         })
                     if (fragment.last) CollapseMessage(onCollapse)
                 } },
@@ -1191,7 +1146,7 @@ private fun SavedCodingHistoryItem(
                 }
                 row.planCard?.let { card ->
                     Spacer(Modifier.height(12.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    PaperDivider(color = LocalPaperColors.current.border)
                     Spacer(Modifier.height(12.dp))
                     ChatMarkdown(card.text)
                     if (planningService != null) {
@@ -1200,7 +1155,7 @@ private fun SavedCodingHistoryItem(
                     }
                 }
                 OrchestrationMessageInputStatus(message, session.id, planningService)
-                if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
+                if (message.pendingDelivery) PaperText("Ожидает передачи после текущего хода", style = LocalPaperTypography.current.label)
             }
         }
     }
@@ -1229,11 +1184,11 @@ private fun CodingMessageBubble(
     val previewState = rememberSaveableStateHolder()
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (message.systemNotice) {
-        MaterialTheme.colorScheme.surfaceContainerLow
+        LocalPaperColors.current.raisedSurface
     } else if (isUser) {
-        MaterialTheme.colorScheme.primaryContainer
+        LocalPaperColors.current.selected
     } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
+        LocalPaperColors.current.raisedSurface
     }
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = if (first) 10.dp else 0.dp),
@@ -1256,8 +1211,8 @@ private fun CodingMessageBubble(
                 .background(bubbleColor)
                 .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
         ) {
-            if (first && message.systemNotice) Text("Системное сообщение", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (first && message.systemNotice) PaperText("Системное сообщение", style = LocalPaperTypography.current.label,
+                color = LocalPaperColors.current.secondaryText)
             if (first) header?.invoke()
             if (body != null) {
                 body()
@@ -1272,23 +1227,23 @@ private fun CodingMessageBubble(
                         Column {
                             ChatPlainText(
                                 message.text,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (message.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                style = LocalPaperTypography.current.body,
+                                color = if (message.failed) LocalPaperColors.current.error else LocalPaperColors.current.text,
                             )
                             if (message.activity.isNotEmpty()) {
                                 Spacer(Modifier.height(6.dp))
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                PaperDivider(color = LocalPaperColors.current.border)
                                 Spacer(Modifier.height(6.dp))
-                                Text(
+                                PaperText(
                                     "Действия агента:",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = LocalPaperTypography.current.label,
+                                    color = LocalPaperColors.current.secondaryText,
                                 )
                                 message.activity.forEach { line ->
-                                    Text(
+                                    PaperText(
                                         text = line,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = LocalPaperTypography.current.body,
+                                        color = LocalPaperColors.current.secondaryText,
                                     )
                                 }
                             }
@@ -1298,11 +1253,11 @@ private fun CodingMessageBubble(
             }
             if (body != null && showFooter && step == null && !isUser && message.activity.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Text("Действия агента:", style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                PaperDivider(color = LocalPaperColors.current.border)
+                PaperText("Действия агента:", style = LocalPaperTypography.current.label,
+                    color = LocalPaperColors.current.secondaryText)
                 message.activity.forEach { line ->
-                    Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PaperText(line, style = LocalPaperTypography.current.body, color = LocalPaperColors.current.secondaryText)
                 }
             }
             if (showFooter) {
@@ -1330,16 +1285,16 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
         CodingStepKind.ERROR -> {
             ChatPlainText(
                 "✕ ${step.title}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.error,
                 modifier = Modifier.padding(vertical = 3.dp),
             )
         }
         CodingStepKind.INFO -> {
             ChatPlainText(
                 "◷ ${step.title}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
                 modifier = Modifier.padding(vertical = 2.dp),
             )
         }
@@ -1357,28 +1312,28 @@ private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+            .clip(RoundedCornerShape(6.dp))
+            .background(LocalPaperColors.current.surface.copy(alpha = 0.5f))
             .indication(interaction, LocalIndication.current),
     ) {
         Row(Modifier.fillMaxWidth().chatDisclosure(interaction) { expanded = !expanded }
             .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
+            PaperText(
                 "💭",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.border,
             )
             Spacer(Modifier.width(8.dp))
-            Text(
+            PaperText(
                 if (expanded) "Размышление агента" else "Размышление агента… (клик — раскрыть)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
                 modifier = Modifier.weight(1f),
             )
-            Text(
+            PaperText(
                 if (expanded) "▴" else "▾",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
         }
         if (expanded) {
@@ -1425,16 +1380,16 @@ private fun ToolStepContent(
     val interaction = remember { MutableInteractionSource() }
     val status = when { running -> ToolStepStatus.RUNNING; ok -> ToolStepStatus.SUCCEEDED; else -> ToolStepStatus.FAILED }
     val statusColor by animateColorAsState(when (status) {
-        ToolStepStatus.RUNNING -> MaterialTheme.colorScheme.primary
-        ToolStepStatus.FAILED -> MaterialTheme.colorScheme.error
-        ToolStepStatus.SUCCEEDED -> MaterialTheme.colorScheme.onSurfaceVariant
+        ToolStepStatus.RUNNING -> LocalPaperColors.current.action
+        ToolStepStatus.FAILED -> LocalPaperColors.current.error
+        ToolStepStatus.SUCCEEDED -> LocalPaperColors.current.secondaryText
     }, animationSpec = tween(180), label = "Tool status color")
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+            .clip(RoundedCornerShape(6.dp))
+            .background(LocalPaperColors.current.surface.copy(alpha = 0.5f))
             .indication(interaction, LocalIndication.current),
     ) {
         if (showHeader) Row(
@@ -1479,33 +1434,33 @@ private fun ToolStepContent(
             }
             Spacer(Modifier.width(8.dp))
             if (expanded && body == null) ChatPlainText(if (title.length > 6000) title + "\n\n" + result else title,
-                Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else Text(title.take(6000), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+                Modifier.weight(1f), style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText)
+            else PaperText(title.take(6000), style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText, maxLines = 2,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text(
+            PaperText(
                 if (expanded) "▴" else "▾",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
         }
         AnimatedVisibility(showHeader && running && live,
             enter = fadeIn(tween(160)) + expandVertically(tween(200), expandFrom = Alignment.Top),
             exit = fadeOut(tween(120)) + shrinkVertically(tween(200), shrinkTowards = Alignment.Top),
         ) {
-            Text(
+            PaperText(
                 if (isExec) "Выполняется команда…" else "Выполняется действие…",
                 modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.secondaryText,
             )
         }
         if (body != null) Box(Modifier.padding(horizontal = 10.dp)) { body() }
         if (body == null && expanded && result.isNotBlank() && title.length <= 6000) {
             ChatPlainText(result, Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
-                color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+                style = LocalPaperTypography.current.body.copy(fontFamily = MagicFonts.code),
+                color = if (ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
         }
     }
 }
@@ -1515,12 +1470,12 @@ private fun ToolStepContent(
 private fun DraftFragment(first: Boolean, last: Boolean, content: @Composable () -> Unit) {
     Column(
         Modifier.padding(top = if (first) 10.dp else 0.dp).widthIn(max = 680.dp).fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium.copy(
-                topStart = if (first) MaterialTheme.shapes.medium.topStart else CornerSize(0.dp),
-                topEnd = if (first) MaterialTheme.shapes.medium.topEnd else CornerSize(0.dp),
-                bottomStart = if (last) MaterialTheme.shapes.medium.bottomStart else CornerSize(0.dp),
-                bottomEnd = if (last) MaterialTheme.shapes.medium.bottomEnd else CornerSize(0.dp)))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clip(RoundedCornerShape(10.dp).copy(
+                topStart = if (first) RoundedCornerShape(10.dp).topStart else CornerSize(0.dp),
+                topEnd = if (first) RoundedCornerShape(10.dp).topEnd else CornerSize(0.dp),
+                bottomStart = if (last) RoundedCornerShape(10.dp).bottomStart else CornerSize(0.dp),
+                bottomEnd = if (last) RoundedCornerShape(10.dp).bottomEnd else CornerSize(0.dp)))
+            .background(LocalPaperColors.current.raisedSurface)
             .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
     ) {
         content()
@@ -1585,38 +1540,38 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
                 size = 6,
             )
             Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
+            PaperText(label, style = LocalPaperTypography.current.body,
+                color = LocalPaperColors.current.text,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false))
         }
         if (hasThinking) {
             val interaction = remember { MutableInteractionSource() }
             Column(Modifier.fillMaxWidth().padding(top = 6.dp)
-                .clip(MaterialTheme.shapes.small)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                .clip(RoundedCornerShape(6.dp))
+                .background(LocalPaperColors.current.surface.copy(alpha = 0.5f))
                 .indication(interaction, LocalIndication.current)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)) {
+                .border(1.dp, LocalPaperColors.current.border.copy(alpha = 0.5f), RoundedCornerShape(6.dp))) {
                 Row(
                     Modifier.fillMaxWidth().chatDisclosure(interaction, onToggle).semantics {
                         contentDescription = if (expanded) "Свернуть размышления" else "Развернуть размышления"
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Размышления агента", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    PaperText("Размышления агента", style = LocalPaperTypography.current.body,
+                        color = LocalPaperColors.current.secondaryText,
                         modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (expanded) "▴" else "▾", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PaperText(if (expanded) "▴" else "▾", style = LocalPaperTypography.current.body,
+                        color = LocalPaperColors.current.secondaryText)
                 }
                 if (expanded) {
                     val thinking = remember(fragments) { fragments.joinToString("\n\n").trim() }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    PaperDivider(color = LocalPaperColors.current.border.copy(alpha = 0.5f))
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         if (draft.active) {
-                            Text("Текст обновляется по мере ответа агента", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            PaperText("Текст обновляется по мере ответа агента", style = LocalPaperTypography.current.label,
+                                color = LocalPaperColors.current.secondaryText)
                             Spacer(Modifier.height(6.dp))
                         }
                         ChatMarkdown(thinking, Modifier.fillMaxWidth().heightIn(max = 190.dp),
@@ -1642,9 +1597,9 @@ internal fun currentThinkingSummary(thinking: String): String {
 
 @Composable
 private fun CodingModeLabel(planning: Boolean, research: Boolean) {
-    Text(if (research) "Исследование · код защищён" else if (planning) "Планирование" else "Обычный режим",
+    PaperText(if (research) "Исследование · код защищён" else if (planning) "Планирование" else "Обычный режим",
         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        style = LocalPaperTypography.current.label, color = LocalPaperColors.current.action)
 }
 
 @Composable
@@ -1679,11 +1634,11 @@ internal fun CodingComposer(
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val trailingLimit = maxWidth * 0.45f
         Column(Modifier.fillMaxWidth()
-            .clip(MaterialTheme.shapes.large.copy(
+            .clip(RoundedCornerShape(14.dp).copy(
                 bottomStart = CornerSize(0.dp),
                 bottomEnd = CornerSize(0.dp),
             ))
-            .background(MaterialTheme.colorScheme.surface)
+            .background(LocalPaperColors.current.surface)
             .padding(horizontal = 4.dp, vertical = 2.dp)) {
             if (onInteractionMode != null || planning || research) {
                 CodingModeLabel(planning, research)
@@ -1697,10 +1652,10 @@ internal fun CodingComposer(
                         menuOpen = false
                         searchMenuOpen = false
                     }
-                    TextButton(onClick = { searchMenuOpen = false; menuOpen = true },
+                    PaperTextAction(onClick = { searchMenuOpen = false; menuOpen = true },
                         modifier = Modifier.size(32.dp).semantics { contentDescription = "Инструменты и параметры сессии" },
                         contentPadding = PaddingValues(0.dp)) {
-                        val iconColor = MaterialTheme.colorScheme.primary
+                        val iconColor = LocalPaperColors.current.action
                         Canvas(Modifier.size(18.dp)) {
                             drawCircle(iconColor, style = Stroke(width = 1.5.dp.toPx()))
                             drawCircle(iconColor, radius = 1.dp.toPx(), center = Offset(center.x, size.height * 0.3f))
@@ -1708,27 +1663,27 @@ internal fun CodingComposer(
                                 Offset(center.x, size.height * 0.73f), strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
                         }
                     }
-                    DropdownMenu(menuOpen, ::closeMenu) {
+                    PaperMenuHost(menuOpen, ::closeMenu) {
                         if (searchMenuOpen && onSearchProvider != null) {
-                            DropdownMenuItem(
-                                text = { Text("Поисковый движок") },
-                                leadingIcon = { Text("‹") },
+                            PaperRichMenuAction(
+                                text = { PaperText("Поисковый движок") },
+                                leadingIcon = { PaperText("‹") },
                                 onClick = { searchMenuOpen = false },
                             )
-                            HorizontalDivider()
+                            PaperDivider()
                             SearchProvider.entries.forEach { provider ->
-                                DropdownMenuItem(
-                                    text = { Text(provider.menuLabel) },
-                                    trailingIcon = if (searchProvider == provider) { { Text("✓") } } else null,
+                                PaperRichMenuAction(
+                                    text = { PaperText(provider.menuLabel) },
+                                    trailingIcon = if (searchProvider == provider) { { PaperText("✓") } } else null,
                                     onClick = { closeMenu(); onSearchProvider(provider) },
                                 )
                             }
                         } else {
-                            DropdownMenuItem(text = { Text("SKILLS") }, enabled = onSkills != null,
+                            PaperRichMenuAction(text = { PaperText("SKILLS") }, enabled = onSkills != null,
                                 onClick = { closeMenu(); onSkills?.invoke() })
-                            DropdownMenuItem(
-                                text = { Text("Прикрепить файлы") },
-                                leadingIcon = { Text("📎") },
+                            PaperRichMenuAction(
+                                text = { PaperText("Прикрепить файлы") },
+                                leadingIcon = { PaperText("📎") },
                                 onClick = {
                                     closeMenu()
                                     onPickAttachments(attachments.size) { attachments = attachments + it }
@@ -1737,47 +1692,47 @@ internal fun CodingComposer(
                             if (onInteractionMode != null) {
                                 val currentMode = if (planning) CodingInteractionMode.PLANNING else if (research) CodingInteractionMode.RESEARCH else CodingInteractionMode.CODE
                                 CodingInteractionMode.entries.forEach { mode ->
-                                    DropdownMenuItem(
-                                        text = { Text(when (mode) {
+                                    PaperRichMenuAction(
+                                        text = { PaperText(when (mode) {
                                             CodingInteractionMode.CODE -> "Обычный режим"
                                             CodingInteractionMode.RESEARCH -> "Режим исследования"
                                             CodingInteractionMode.PLANNING -> "Режим планирования"
                                         }) },
-                                        trailingIcon = if (currentMode == mode) { { Text("✓") } } else null,
+                                        trailingIcon = if (currentMode == mode) { { PaperText("✓") } } else null,
                                         enabled = modeSwitchEnabled && !busy && (!planning || mode == CodingInteractionMode.PLANNING),
                                         onClick = { closeMenu(); if (currentMode != mode) onInteractionMode(mode) },
                                     )
                                 }
                             } else if (onPlanning != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Режим планирования") },
-                                    leadingIcon = { Text("🔀") },
-                                    trailingIcon = if (planning) { { Text("✓") } } else null,
+                                PaperRichMenuAction(
+                                    text = { PaperText("Режим планирования") },
+                                    leadingIcon = { PaperText("🔀") },
+                                    trailingIcon = if (planning) { { PaperText("✓") } } else null,
                                     onClick = {
                                         closeMenu()
                                         if (!planning) onPlanning()
                                     },
                                 )
                             }
-                            if (onSearchProvider != null || engine != null) HorizontalDivider()
+                            if (onSearchProvider != null || engine != null) PaperDivider()
                             if (onSearchProvider != null) {
-                                DropdownMenuItem(
+                                PaperRichMenuAction(
                                     text = {
                                         Column {
-                                            Text("Поисковый движок")
-                                            Text(searchProvider.menuLabel, style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            PaperText("Поисковый движок")
+                                            PaperText(searchProvider.menuLabel, style = LocalPaperTypography.current.body,
+                                                color = LocalPaperColors.current.secondaryText)
                                         }
                                     },
-                                    trailingIcon = { Text("›") },
+                                    trailingIcon = { PaperText("›") },
                                     onClick = { searchMenuOpen = true },
                                 )
                             }
                             if (engine != null) {
                                 Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                                    Text("Backend coding agent", style = MaterialTheme.typography.bodyLarge)
-                                    Text(engine.title, style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    PaperText("Backend coding agent", style = LocalPaperTypography.current.body)
+                                    PaperText(engine.title, style = LocalPaperTypography.current.body,
+                                        color = LocalPaperColors.current.secondaryText)
                                 }
                             }
                         }
@@ -1785,8 +1740,8 @@ internal fun CodingComposer(
                 }
                 BasicTextField(
                     value = text, onValueChange = { text = it },
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                    textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(LocalPaperColors.current.action),
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 4.dp, vertical = 4.dp)
@@ -1806,9 +1761,9 @@ internal fun CodingComposer(
                     maxLines = 6,
                     decorationBox = { inner ->
                         Box {
-                            if (text.isEmpty()) Text(if (research) "Вопрос о проекте…" else "Поручение агенту в папке проекта…",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            if (text.isEmpty()) PaperText(if (research) "Вопрос о проекте…" else "Поручение агенту в папке проекта…",
+                                style = LocalPaperTypography.current.body,
+                                color = LocalPaperColors.current.secondaryText,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                             inner()
                         }
@@ -1819,14 +1774,14 @@ internal fun CodingComposer(
                     horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
                     controls?.invoke()
                 }
-                VerticalDivider(
+                PaperVerticalDivider(
                     modifier = Modifier.padding(horizontal = 6.dp).height(24.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant,
+                    color = LocalPaperColors.current.border,
                 )
-                if (busy) TextButton(onClick = onAbort, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("Прервать") }
-                else TextButton(enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
+                if (busy) PaperTextAction(onClick = onAbort, contentPadding = PaddingValues(horizontal = 4.dp)) { PaperText("Прервать") }
+                else PaperTextAction(enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()), onClick = ::submit,
                     contentPadding = PaddingValues(horizontal = 4.dp)) {
-                    Text(if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить", style = MaterialTheme.typography.labelMedium)
+                    PaperText(if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить", style = LocalPaperTypography.current.label)
                 }
             }
         }

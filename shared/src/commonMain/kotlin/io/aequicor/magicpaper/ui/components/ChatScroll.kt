@@ -8,7 +8,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
@@ -32,6 +31,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
@@ -161,7 +161,7 @@ private class ChatCoordinates { var value: LayoutCoordinates? = null }
 internal fun ChatScrollItem(scroll: ChatScrollState, key: Any, content: @Composable () -> Unit) {
     val coordinates = remember { ChatCoordinates() }
     val highlighted by remember(scroll, key) { derivedStateOf { scroll.highlightedKey == key } }
-    val highlight = if (highlighted) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier
+    val highlight = if (highlighted) Modifier.border(2.dp, LocalPaperColors.current.focus, RoundedCornerShape(12.dp)) else Modifier
     val preserve = remember(scroll, key) { { header: LayoutCoordinates? -> scroll.preserveDisclosure(key, coordinates.value, header) } }
     Box(Modifier.then(highlight).onGloballyPositioned {
         coordinates.value = it

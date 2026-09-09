@@ -1,14 +1,13 @@
 package io.aequicor.magicpaper
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -16,11 +15,6 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -29,15 +23,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.di.MagicPaperDependencies
 import io.aequicor.magicpaper.di.createMagicPaperDependencies
+import io.aequicor.magicpaper.designsystem.PaperTheme
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperButton
+import io.aequicor.magicpaper.designsystem.PaperButtonKind
+import io.aequicor.magicpaper.designsystem.PaperDivider
+import io.aequicor.magicpaper.designsystem.PaperIconButton
+import io.aequicor.magicpaper.designsystem.PaperPanel
+import io.aequicor.magicpaper.designsystem.PaperSurface
+import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
@@ -46,8 +48,6 @@ import io.aequicor.magicpaper.ui.UiState
 import io.aequicor.magicpaper.ui.components.ModelSwitcherDialog
 import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
 import io.aequicor.magicpaper.ui.components.MagicPaperBackground
-import io.aequicor.magicpaper.ui.components.ToolbarButton
-import io.aequicor.magicpaper.ui.components.ToolbarIcon
 import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
@@ -55,7 +55,6 @@ import io.aequicor.magicpaper.ui.screens.PluginsScreen
 import io.aequicor.magicpaper.ui.screens.SessionsPanel
 import io.aequicor.magicpaper.ui.screens.SettingsScreen
 import io.aequicor.magicpaper.ui.screens.WelcomeScreen
-import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
@@ -66,10 +65,10 @@ import kotlinx.coroutines.delay
 /** Корневой композиционный узел: тема + каркас. */
 @Composable
 fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies() }) {
-    MagicPaperTheme {
-        Surface(
+    PaperTheme {
+        PaperSurface(
             modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
+            kind = PaperSurfaceKind.CANVAS,
         ) {
             val state by deps.viewModel.state.collectAsState()
             Box(Modifier.fillMaxSize()) {
@@ -83,7 +82,7 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
                         }
                     } else {
                         TopBar(deps.viewModel, state.screen)
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        PaperDivider()
                         Box(modifier = Modifier.weight(1f)) {
                             MainArea(deps.viewModel, state)
                             Notice(
@@ -117,7 +116,7 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
             AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen == Screen.CHAT) {
                 Row {
                     SessionsPanel(vm, state.sessions, state.current?.id)
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    PaperDivider(Modifier.fillMaxHeight().width(1.dp))
                 }
             }
             Box(modifier = Modifier.weight(1f)) {
@@ -147,16 +146,6 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
     val desktopHeight = LocalWindowToolbarHeight.current
     val toolbarHeight = desktopHeight ?: 56.dp
     val buttonSize = if (desktopHeight != null) 28.dp else 48.dp
-    val titleStyle = if (desktopHeight != null) {
-        MaterialTheme.typography.labelMedium.copy(
-            fontFamily = FontFamily.SansSerif,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 13.sp,
-            lineHeight = 16.sp,
-        )
-    } else {
-        MaterialTheme.typography.titleSmall
-    }
     // Резервируем только боковые зоны системных кнопок. Сам тулбар занимает
     // их строку, а не добавляет ещё один ряд под прозрачным тайтлбаром macOS.
     val layoutDirection = LocalLayoutDirection.current
@@ -171,36 +160,32 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ToolbarButton(
-                icon = ToolbarIcon.Sidebar,
+            PaperIconButton(
                 label = "Показать или скрыть боковую панель",
-                size = buttonSize,
                 onClick = { vm.toggleSessionsPanel() },
-            )
+            ) { PaperText("☰", role = PaperTextRole.CHROME) }
             WindowDragArea(modifier = Modifier.weight(1f).height(toolbarHeight)) {
                 Row(
                     Modifier.fillMaxSize().padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("MagicPaper", style = titleStyle, maxLines = 1)
+                    PaperText("MagicPaper", role = PaperTextRole.CHROME, maxLines = 1)
                     Spacer(Modifier.width(10.dp))
-                    Text(
+                    PaperText(
                         screen.subtitle,
                         modifier = Modifier.weight(1f),
-                        style = titleStyle.copy(fontWeight = FontWeight.Normal),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        role = PaperTextRole.CHROME,
+                        color = LocalPaperColors.current.secondaryText,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            ToolbarButton(
-                icon = ToolbarIcon.Settings,
+            PaperIconButton(
                 label = if (screen == Screen.SETTINGS) "Вернуться в чат" else "Настройки",
-                size = buttonSize,
                 selected = screen == Screen.SETTINGS,
                 onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
-            )
+            ) { PaperText("⚙", role = PaperTextRole.CHROME) }
             if (chrome != null) WindowButtons(chrome)
         }
     }
@@ -216,18 +201,8 @@ private fun WindowButtons(chrome: io.aequicor.magicpaper.ui.window.WindowChrome)
 
 @Composable
 private fun WindowButton(glyph: String, danger: Boolean = false, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(MaterialTheme.shapes.medium)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            glyph,
-            style = MaterialTheme.typography.titleMedium,
-            color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    PaperIconButton("Управление окном", onClick, Modifier.size(40.dp)) {
+        PaperText(glyph, role = PaperTextRole.TITLE, color = if (danger) LocalPaperColors.current.error else LocalPaperColors.current.secondaryText)
     }
 }
 
@@ -246,26 +221,18 @@ private val Screen.subtitle: String
 private fun ActivePlugins(plugins: List<MagicPlugin>, states: Map<String, PluginState>, openPlanning: () -> Unit) {
     val enabledIds = states.filterValues { it.enabled }.keys
     Column {
-        Text("Активные панели", style = MaterialTheme.typography.titleMedium)
+        PaperText("Активные панели", role = PaperTextRole.TITLE)
         Spacer(Modifier.height(4.dp))
         val active = plugins.filter { it.id in enabledIds }
         if (active.isEmpty()) {
-            Text(
+            PaperText(
                 "Все плагины выключены. Включите нужный выше.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = LocalPaperColors.current.secondaryText,
             )
         }
         active.forEach { plugin ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp)
-                    .clip(MaterialTheme.shapes.medium)
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(12.dp),
-            ) {
-                if (plugin.id == "coding-planning") androidx.compose.material3.TextButton(onClick = openPlanning) { Text("Открыть планирование в чате проекта") }
+            PaperPanel(Modifier.fillMaxWidth().padding(vertical = 6.dp).padding(12.dp)) {
+                if (plugin.id == "coding-planning") PaperButton("Открыть планирование в чате проекта", openPlanning, kind = PaperButtonKind.QUIET)
                 else plugin.Content()
             }
         }
@@ -282,14 +249,8 @@ private fun Notice(notice: String?, modifier: Modifier = Modifier, onDismiss: ()
             delay(4000)
             onDismiss()
         }
-        Box(
-            modifier = Modifier
-                .padding(16.dp)
-                .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-        ) {
-            Text(notice.orEmpty(), style = MaterialTheme.typography.bodyMedium)
+        PaperPanel(Modifier.padding(16.dp).padding(horizontal = 16.dp, vertical = 10.dp), kind = PaperSurfaceKind.RAISED) {
+            PaperText(notice.orEmpty())
         }
     }
 }

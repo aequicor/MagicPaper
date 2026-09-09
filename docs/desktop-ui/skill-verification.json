@@ -1,0 +1,65 @@
+{
+  "taskId": "92610538-166a-4b52-b613-551b223d6586",
+  "package": {
+    "id": "magicpaper.desktop-ui",
+    "version": "1.0.0",
+    "manifestSha256": "b923d8b4a9b49a87d91feca28a00d1f728eced1361d1b8d71c1e34ecb6a4c31c",
+    "payloadFiles": 6,
+    "payloadBytes": 14003,
+    "host": "1.0.0/desktop"
+  },
+  "criteria": {
+    "92610538-166a-4b52-b613-551b223d6586/ac-skill-valid": {
+      "status": "PASS",
+      "frontmatter": true,
+      "internalLinks": true,
+      "httpsLinks": true,
+      "packageContract": true,
+      "brandRule": true,
+      "platformBehaviorRule": true,
+      "publicDesignSystemApiOnly": true
+    },
+    "92610538-166a-4b52-b613-551b223d6586/ac-skill-active": {
+      "status": "PASS",
+      "installedVersion": "magicpaper.desktop-ui@1.0.0",
+      "projectId": "MagicPaper",
+      "importedQuarantined": true,
+      "reviewedVerified": true,
+      "boundThroughApi": true,
+      "representativeUiRequestReceivedInstructions": true,
+      "unrelatedActivePreserved": true,
+      "unrelatedBindingsPreserved": true,
+      "unrelatedTrustPreserved": true,
+      "snapshotEditedDirectly": false
+    }
+  },
+  "actualBinding": {
+    "status": "PASS",
+    "repository": ".magicpaper/skill-packages",
+    "report": "docs/desktop-ui/active-binding.json",
+    "generation": 3,
+    "installedVersion": "magicpaper.desktop-ui@1.0.0",
+    "projectId": "MagicPaper",
+    "reopenedAndRead": true,
+    "representativeUiRequestReceivedInstructions": true,
+    "snapshotEditedDirectly": false,
+    "userHomeRepositoryChanged": false
+  },
+  "tests": {
+    "jvm": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "desktopMapBindings": 183
+  },
+  "notRun": [
+    "Windows native UI",
+    "VoiceOver",
+    "NVDA and Java Access Bridge",
+    "IME",
+    "Windows Snap",
+    "multi-monitor DPI"
+  ]
+}

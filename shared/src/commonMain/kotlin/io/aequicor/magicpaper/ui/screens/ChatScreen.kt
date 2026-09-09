@@ -31,12 +31,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -79,6 +73,19 @@ import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
 import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.chatScrollInput
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperAction
+import io.aequicor.magicpaper.designsystem.PaperButton
+import io.aequicor.magicpaper.designsystem.PaperButtonKind
+import io.aequicor.magicpaper.designsystem.PaperComposer
+import io.aequicor.magicpaper.designsystem.PaperComposerField
+import io.aequicor.magicpaper.designsystem.PaperDivider
+import io.aequicor.magicpaper.designsystem.PaperPanel
+import io.aequicor.magicpaper.designsystem.PaperProgress
+import io.aequicor.magicpaper.designsystem.PaperProgressKind
+import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
@@ -172,16 +179,12 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 modifier = Modifier.padding(start = 20.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                PaperProgress(modifier = Modifier.size(14.dp), kind = PaperProgressKind.CIRCULAR, label = "Чары плетутся")
                 Spacer(Modifier.width(8.dp))
-                Text(
+                PaperText(
                     text = "Чары плетутся…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    role = PaperTextRole.BODY,
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
         }
@@ -195,12 +198,12 @@ private fun EmptyHint() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("✦", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        PaperText("✦", role = PaperTextRole.HEADLINE, color = LocalPaperColors.current.action)
         Spacer(Modifier.height(8.dp))
-        Text(
+        PaperText(
             "Свиток пуст. Задайте вопрос — и бумага ответит.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            role = PaperTextRole.BODY,
+            color = LocalPaperColors.current.secondaryText,
         )
     }
 }
@@ -215,18 +218,12 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Inli
 private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
     fragment: ChatMessageFragment = ChatMessageFragment(message), onCollapse: () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
-    val bubbleColor = if (isUser) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 10.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        MessagePinColumn(
-            number = pinNumber.takeIf { isUser && fragment.last },
-            onClick = onShowPins,
+        PaperPanel(
+            kind = if (isUser) PaperSurfaceKind.SELECTED else PaperSurfaceKind.PANEL,
             modifier = Modifier
                 // На узких экранах бабл не должна занимать всю ширину —
                 // 100% не даёт читаемой строки.
@@ -241,10 +238,10 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                         bottomEnd = if (fragment.last) 20.dp else 0.dp,
                     )
                 )
-                .background(bubbleColor)
                 .padding(start = 14.dp, end = 14.dp, top = if (fragment.first) 10.dp else 0.dp,
                     bottom = if (fragment.last) 10.dp else 0.dp),
         ) {
+            MessagePinColumn(number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins) {
             if (fragment.parts != null) {
                 fragment.parts.Content(fragment.index)
                 if (fragment.last) CollapseMessage(onCollapse)
@@ -261,24 +258,25 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
             if (isUser && fragment.last) MessageAttachments(message.attachments)
             if (fragment.last && message.sources.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                PaperDivider()
                 Spacer(Modifier.height(6.dp))
                 SelectionContainer {
                     Column {
-                        Text(
+                        PaperText(
                             "Источники:",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            role = PaperTextRole.LABEL,
+                            color = LocalPaperColors.current.secondaryText,
                         )
                         message.sources.forEach { hit ->
-                            Text(
+                            PaperText(
                                 text = "• ${hit.title} — ${hit.url}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                role = PaperTextRole.BODY,
+                                color = LocalPaperColors.current.action,
                             )
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -294,15 +292,15 @@ private fun ModelChip(
 ) {
     val resolved = ProfileResolver.resolve(session, io.aequicor.magicpaper.domain.AppSettings(activeLlmProfileId = activeProfileId), profiles)
     val overridden = session?.llmProfileId != null
-    TextButton(
+    PaperAction(
         onClick = onClick,
         modifier = Modifier.heightIn(min = 48.dp),
     ) {
         if (resolved == null) {
-            Text(
+            PaperText(
                 "✦ Источник не подключён",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
+                role = PaperTextRole.BODY,
+                color = LocalPaperColors.current.error,
             )
         } else {
             // Подпись с учётом словаря модели: при подмене уровня видно «х-выс→выс».
@@ -310,10 +308,10 @@ private fun ModelChip(
                 ModelDefaults.capability(resolved),
                 resolved.modelId,
             )
-            Text(
+            PaperText(
                 "${if (overridden) "◌ " else ""}✦ ${resolved.shortLabel} · $effortGlyph ▾",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
+                role = PaperTextRole.BODY,
+                color = LocalPaperColors.current.action,
                 maxLines = 1,
             )
         }
@@ -342,11 +340,10 @@ private fun Composer(
         attachments = emptyList()
     }
     Column(modifier = Modifier.fillMaxWidth()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        PaperDivider()
         // Ряд с чипом модели: отдельная кнопка чата для переключения источника.
-        Row(
+        PaperComposer(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             ModelChip(session, profiles, activeProfileId, onOpenSwitcher)
         }
@@ -359,15 +356,15 @@ private fun Composer(
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
+            PaperAction(
                 enabled = enabled,
                 onClick = { onPickAttachments(attachments.size) { attachments = attachments + it } },
                 modifier = Modifier.heightIn(min = 48.dp),
             ) {
-                Text("📎", style = MaterialTheme.typography.titleMedium)
+                PaperText("📎", role = PaperTextRole.TITLE)
             }
             Spacer(Modifier.width(4.dp))
-            OutlinedTextField(
+            PaperComposerField(
                 value = text,
                 onValueChange = { text = it },
                 modifier = Modifier
@@ -385,22 +382,21 @@ private fun Composer(
                             false
                         }
                     },
-                placeholder = { Text("Начертать заклинание…") },
+                label = { PaperText("Начертать заклинание…", role = PaperTextRole.LABEL) },
                 minLines = 1,
                 maxLines = 5,
-                shape = MaterialTheme.shapes.large,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { submit() }),
             )
             Spacer(Modifier.width(8.dp))
-            TextButton(
+            PaperButton(
                 enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()),
                 onClick = ::submit,
                 // M3: зона касания не меньше 48dp.
                 modifier = Modifier.heightIn(min = 48.dp),
-            ) {
-                Text("Отправить")
-            }
+                label = "Отправить",
+                kind = PaperButtonKind.PRIMARY,
+            )
         }
     }
 }

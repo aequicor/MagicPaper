@@ -1,0 +1,34 @@
+{
+  "inventoryMatches": true,
+  "unmappedUI": [],
+  "uiFiles": 85,
+  "declarations": 415,
+  "materialFiles": 47,
+  "materialSites": 1743,
+  "markdownReferences": 125,
+  "protectedRecoveryFilesUnchanged": true,
+  "trackedDriftSinceBaseline": [],
+  "surfaceMap": {
+    "criterion": "4aa76be6-198a-4448-8af5-69bd0c97e7f2/ac-research-map",
+    "status": "PASS",
+    "explicitBindings": 183,
+    "composableDeclarations": 180,
+    "entries": 3,
+    "missingBindings": [],
+    "staleBindings": [],
+    "unknownTargets": [],
+    "unknownStages": [],
+    "byStage": {
+      "3": 18,
+      "5": 46,
+      "6": 91,
+      "7": 28
+    },
+    "negativeControlsRejected": [
+      "missing-binding",
+      "unknown-component",
+      "unknown-stage"
+    ],
+    "scope": "Source declarations → explicit DS API → valid migration task. Not a runtime UI test or compiler-resolved call graph."
+  }
+}

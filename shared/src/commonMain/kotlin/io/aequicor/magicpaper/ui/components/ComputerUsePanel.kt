@@ -1,17 +1,22 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.ComputerAccess
 import io.aequicor.magicpaper.domain.ComputerUseState
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperAction
+import io.aequicor.magicpaper.designsystem.PaperImage
+import io.aequicor.magicpaper.designsystem.PaperModal
+import io.aequicor.magicpaper.designsystem.PaperPanel
+import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 
 @Composable
 fun ComputerUsePanel(
@@ -28,55 +33,52 @@ fun ComputerUsePanel(
     val owns = state.sessionId == sessionId
     val enabled = owns && state.access != ComputerAccess.OFF
     val other = state.sessionId != null && !owns
-    Surface(color = if (enabled) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow) {
+    PaperPanel(kind = if (enabled) PaperSurfaceKind.SELECTED else PaperSurfaceKind.RAISED) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (enabled) {
+                PaperText(if (enabled) {
                     if (state.access == ComputerAccess.CONTROL) "Экран, мышь и клавиатура включены" else "Просмотр экрана включён"
                 } else if (other) "Экран занят другой сессией" else "Доступ к экрану выключен",
-                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                    modifier = Modifier.weight(1f), role = PaperTextRole.LABEL)
                 if (enabled) {
-                    TextButton(onClick = onPreview, enabled = !state.busy) { Text("Снимок") }
-                    TextButton(onClick = onDisable) { Text("Отключить") }
+                    PaperAction(onPreview, enabled = !state.busy) { PaperText("Снимок", role = PaperTextRole.LABEL) }
+                    PaperAction(onDisable) { PaperText("Отключить", role = PaperTextRole.LABEL) }
                 } else if (owns && state.busy) {
-                    TextButton(onClick = onDisable) { Text("Отмена") }
+                    PaperAction(onDisable) { PaperText("Отмена", role = PaperTextRole.LABEL) }
                 } else {
-                    TextButton(onClick = { chooser = true }, enabled = !running && !other) { Text("Включить…") }
+                    PaperAction({ chooser = true }, enabled = !running && !other) { PaperText("Включить…", role = PaperTextRole.LABEL) }
                 }
             }
             if (!other && state.detail.isNotBlank()) {
-                Text(state.detail, style = MaterialTheme.typography.bodySmall,
-                    color = if (state.access == ComputerAccess.OFF && !state.busy) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                if (state.access == ComputerAccess.OFF && !state.busy) TextButton(onClick = onSettings) { Text("Системные настройки") }
+                PaperText(state.detail, role = PaperTextRole.LABEL,
+                    color = if (state.access == ComputerAccess.OFF && !state.busy) LocalPaperColors.current.error else LocalPaperColors.current.secondaryText)
+                if (state.access == ComputerAccess.OFF && !state.busy) PaperAction(onSettings) { PaperText("Системные настройки", role = PaperTextRole.LABEL) }
             }
             if (owns) state.preview?.let { attachment ->
                 val bitmap = rememberAttachmentBitmap(attachment)
                 if (bitmap != null) {
-                    Image(bitmap, "Последний снимок, доступный агенту", contentScale = ContentScale.Fit,
-                        modifier = Modifier.height(72.dp).fillMaxWidth().clip(MaterialTheme.shapes.small)
+                    PaperImage(bitmap, "Последний снимок, доступный агенту",
+                        modifier = Modifier.height(72.dp).fillMaxWidth()
                             .clickable { expanded = true })
-                    if (expanded) AlertDialog(
-                        onDismissRequest = { expanded = false },
-                        title = { Text("Последний снимок экрана") },
-                        text = { Image(bitmap, "Последний снимок экрана", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.Fit) },
-                        confirmButton = { TextButton(onClick = { expanded = false }) { Text("Закрыть") } },
-                    )
+                    if (expanded) PaperModal(onDismissRequest = { expanded = false },
+                        title = { PaperText("Последний снимок экрана", role = PaperTextRole.TITLE) },
+                        text = { PaperImage(bitmap, "Последний снимок экрана", Modifier.fillMaxWidth()) },
+                        confirmButton = { PaperAction({ expanded = false }) { PaperText("Закрыть", role = PaperTextRole.LABEL) } })
                 }
             }
         }
     }
-    if (chooser) AlertDialog(
+    if (chooser) PaperModal(
         onDismissRequest = { chooser = false },
-        title = { Text("Доступ к компьютеру") },
+        title = { PaperText("Доступ к компьютеру", role = PaperTextRole.TITLE) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Агент получит снимки экрана, включая видимые окна других приложений. Снимки передаются выбранной модели. Доступ действует только для этой сессии до завершения запроса или отключения.")
-                Text("Выберите модель с поддержкой изображений и инструментов.", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { chooser = false; onEnable(ComputerAccess.SCREEN) }) { Text("Только просмотр экрана") }
-                TextButton(onClick = { chooser = false; onEnable(ComputerAccess.CONTROL) }) { Text("Экран, мышь и клавиатура") }
+                PaperText("Агент получит снимки экрана, включая видимые окна других приложений. Снимки передаются выбранной модели. Доступ действует только для этой сессии до завершения запроса или отключения.")
+                PaperText("Выберите модель с поддержкой изображений и инструментов.", role = PaperTextRole.LABEL)
+                PaperAction({ chooser = false; onEnable(ComputerAccess.SCREEN) }) { PaperText("Только просмотр экрана", role = PaperTextRole.LABEL) }
+                PaperAction({ chooser = false; onEnable(ComputerAccess.CONTROL) }) { PaperText("Экран, мышь и клавиатура", role = PaperTextRole.LABEL) }
             }
         },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = { chooser = false }) { Text("Отмена") } },
+        confirmButton = { PaperAction({ chooser = false }) { PaperText("Отмена", role = PaperTextRole.LABEL) } },
     )
 }

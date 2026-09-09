@@ -5,10 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +24,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
 import io.aequicor.magicpaper.domain.RequestPin
 import io.aequicor.magicpaper.domain.RequestPinGroup
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperDivider
+import io.aequicor.magicpaper.designsystem.PaperPanel
+import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -118,12 +120,12 @@ internal fun RequestPinsPanel(
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(16.dp)
-    Surface(
+    PaperPanel(
         modifier = modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             // Blur the panel's shadow without changing the message's opacity.
             .dropShadow(shape, Shadow(radius = 12.dp, color = Color.Black.copy(alpha = .18f), offset = DpOffset(0.dp, 3.dp))),
         shape = shape,
-        color = MaterialTheme.colorScheme.primaryContainer,
+        kind = PaperSurfaceKind.SELECTED,
         shadowElevation = 0.dp,
     ) {
         Column {
@@ -132,7 +134,7 @@ internal fun RequestPinsPanel(
                     onNavigate(selection.group.request)
                 })
             selection.clarification?.let { clarification ->
-                HorizontalDivider(Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .12f))
+                PaperDivider(Modifier.padding(horizontal = 12.dp), color = LocalPaperColors.current.secondaryText.copy(alpha = .12f))
                 Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Перейти к уточнению") {
                     onNavigate(clarification)
                 }, verticalAlignment = Alignment.CenterVertically) {
@@ -145,12 +147,12 @@ internal fun RequestPinsPanel(
                             Column(Modifier.height(30.dp).width(3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 pinIndicatorWindow(selection.clarificationIndex, count).forEach { index ->
                                     Box(Modifier.weight(1f).fillMaxWidth().background(
-                                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = if (index == selection.clarificationIndex) 1f else .22f),
+                                        LocalPaperColors.current.text.copy(alpha = if (index == selection.clarificationIndex) 1f else .22f),
                                         RoundedCornerShape(2.dp)))
                                 }
                             }
-                            if (count > 5) Text("${selection.clarificationIndex + 1}/$count", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            if (count > 5) PaperText("${selection.clarificationIndex + 1}/$count", role = PaperTextRole.LABEL,
+                                color = LocalPaperColors.current.text)
                         }
                     }
                     PinText(clarification, modifier = Modifier.weight(1f))
@@ -166,9 +168,9 @@ private fun PinText(pin: RequestPin,
     val label = if (pin.author == "Пользователь") pin.summary else "${pin.author} · ${pin.summary}"
     Box(modifier.fillMaxWidth()
         .heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
-        Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium,
+        PaperText(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            role = PaperTextRole.BODY,
             fontWeight = if (title) FontWeight.SemiBold else FontWeight.Normal,
-            color = MaterialTheme.colorScheme.onPrimaryContainer)
+            color = LocalPaperColors.current.text)
     }
 }

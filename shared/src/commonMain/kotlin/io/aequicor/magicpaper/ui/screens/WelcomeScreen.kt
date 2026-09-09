@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -25,10 +27,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -38,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextAlign
@@ -92,7 +91,7 @@ fun WelcomeScreen(
             ) {
                 PageDots(page = page, pageCount = lastPage + 1, modifier = Modifier.weight(1f))
                 if (page == 0) {
-                    TextButton(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Пропустить") }
+                    PaperAction(onClick = { vm.finishOnboarding(draft, profileDraft) }) { PaperText("Пропустить") }
                 }
             }
         }
@@ -142,17 +141,17 @@ fun WelcomeScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (page > 0) {
-                    TextButton(
+                    PaperAction(
                         onClick = { page-- },
                         modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text("← Назад") }
+                    ) { PaperText("← Назад") }
                 } else {
                     Spacer(Modifier.width(1.dp))
                 }
                 if (page < lastPage) {
-                    Button(onClick = { page++ }) { Text("Далее →") }
+                    PaperAction(onClick = { page++ }) { PaperText("Далее →") }
                 } else {
-                    Button(onClick = { vm.finishOnboarding(draft, profileDraft) }) { Text("Начать работу") }
+                    PaperAction(onClick = { vm.finishOnboarding(draft, profileDraft) }) { PaperText("Начать работу") }
                 }
             }
         }
@@ -172,8 +171,8 @@ private fun PageDots(page: Int, pageCount: Int, modifier: Modifier = Modifier) {
                     .size(if (i == page) 10.dp else 8.dp)
                     .clip(CircleShape)
                     .background(
-                        if (i == page) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outlineVariant
+                        if (i == page) LocalPaperColors.current.action
+                        else LocalPaperColors.current.border
                     ),
             )
         }
@@ -186,17 +185,17 @@ private fun WelcomeIntro() {
         modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("✦", style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.primary)
+        PaperText("✦", style = paperTextStyle(PaperTextRole.DISPLAY), color = LocalPaperColors.current.action)
         Spacer(Modifier.height(12.dp))
-        Text("Добро пожаловать в MagicPaper", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        PaperText("Добро пожаловать в MagicPaper", style = paperTextStyle(PaperTextRole.TITLE), textAlign = TextAlign.Center)
         Spacer(Modifier.height(12.dp))
-        Text(
+        PaperText(
             "Это «магическая бумага»: задайте вопрос — агент поднимет ваши документы, " +
                 "поиск в сети и ответит прямо в свитке.\n\n" +
                 "За три шага настроим источник магии (модель), поисковый движок и плагины. " +
                 "Всё можно поменять позже в настройках.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = LocalPaperColors.current.secondaryText,
         )
     }
 }
@@ -215,13 +214,13 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
         }
     }
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Шаг 1 — источник магии", style = MaterialTheme.typography.titleLarge)
+        PaperText("Шаг 1 — источник магии", style = paperTextStyle(PaperTextRole.TITLE))
         Spacer(Modifier.height(4.dp))
-        Text(
+        PaperText(
             "Выберите провайдера: локальный сервер (Ollama, LM Studio) или облачный API. " +
                 "Позже можно подключить сколько угодно источников и переключать их в чате.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
         ProviderCatalog.all.forEach { candidate ->
@@ -229,7 +228,7 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.small)
+                    .clip(RoundedCornerShape(6.dp))
                     .clickable(enabled = enabled, onClick = {
                         onDraft(
                             draft.copy(
@@ -245,40 +244,40 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
                     .padding(horizontal = 10.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                PaperText(
                     if (candidate.displayName == draft.name) "◉" else "○",
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = paperTextStyle(PaperTextRole.BODY),
                     color = if (candidate.displayName == draft.name) {
-                        MaterialTheme.colorScheme.primary
+                        LocalPaperColors.current.action
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        LocalPaperColors.current.secondaryText
                     },
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(
+                PaperText(
                     candidate.displayName + if (!enabled) " · только desktop" else "",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    style = paperTextStyle(PaperTextRole.BODY),
+                    color = if (enabled) LocalPaperColors.current.text else LocalPaperColors.current.border,
                 )
             }
         }
         Spacer(Modifier.height(10.dp))
         if (subscription) {
             val auth = state.openAiSubscription
-            Text(
+            PaperText(
                 if (auth.account?.signedIn == true) "✓ Вход выполнен: ${auth.account.email.orEmpty()}"
                 else "API-ключ не нужен — войдите с аккаунтом ChatGPT.",
-                color = if (auth.account?.signedIn == true) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (auth.account?.signedIn == true) LocalPaperColors.current.action else LocalPaperColors.current.secondaryText,
             )
-            auth.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            auth.error?.let { PaperText(it, color = LocalPaperColors.current.error, style = paperTextStyle(PaperTextRole.BODY)) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (auth.signingIn) {
-                    TextButton(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { Text("Открыть вход") }
-                    TextButton(onClick = vm::cancelOpenAiSubscriptionLogin) { Text("Отмена") }
+                    PaperAction(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { PaperText("Открыть вход") }
+                    PaperAction(onClick = vm::cancelOpenAiSubscriptionLogin) { PaperText("Отмена") }
                 } else if (auth.account?.signedIn == true) {
-                    TextButton(onClick = { vm.refreshOpenAiSubscription(true) }) { Text("Обновить аккаунт") }
+                    PaperAction(onClick = { vm.refreshOpenAiSubscription(true) }) { PaperText("Обновить аккаунт") }
                 } else {
-                    TextButton(onClick = vm::startOpenAiSubscriptionLogin) { Text("Войти через ChatGPT") }
+                    PaperAction(onClick = vm::startOpenAiSubscriptionLogin) { PaperText("Войти через ChatGPT") }
                 }
             }
         } else {
@@ -290,7 +289,7 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
         Field("Имя модели", draft.modelId) { onDraft(draft.copy(modelId = it)) }
         Spacer(Modifier.height(8.dp))
         if (draft.configured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
-            Text("✓ Источник готов", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+            PaperText("✓ Источник готов", style = paperTextStyle(PaperTextRole.BODY), color = LocalPaperColors.current.action)
         }
     }
 }
@@ -298,12 +297,12 @@ private fun WelcomeModel(vm: MagicPaperViewModel, state: UiState, draft: LlmProf
 @Composable
 private fun WelcomeSearch(vm: MagicPaperViewModel, draft: AppSettings, onDraft: (AppSettings) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Шаг 2 — поиск", style = MaterialTheme.typography.titleLarge)
+        PaperText("Шаг 2 — поиск", style = paperTextStyle(PaperTextRole.TITLE))
         Spacer(Modifier.height(4.dp))
-        Text(
+        PaperText(
             "«Авто» пробует настроенные Google и Querit, затем Wikipedia; ключи можно добавить позже.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
         SearchApiSettings(draft, vm::checkSearchConnection, onDraft)
@@ -317,12 +316,12 @@ private fun WelcomePlugins(
     onToggle: (String, Boolean) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text("Шаг 3 — плагины", style = MaterialTheme.typography.titleLarge)
+        PaperText("Шаг 3 — плагины", style = paperTextStyle(PaperTextRole.TITLE))
         Spacer(Modifier.height(4.dp))
-        Text(
+        PaperText(
             "Включите нужные панели — их можно переключать в любой момент в разделе «Плагины».",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
         plugins.forEach { plugin ->

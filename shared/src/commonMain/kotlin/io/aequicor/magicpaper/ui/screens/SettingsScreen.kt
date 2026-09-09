@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.designsystem.*
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,18 +19,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -83,7 +76,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        Text("Настройки", style = MaterialTheme.typography.titleLarge)
+        PaperText("Настройки", style = paperTextStyle(PaperTextRole.TITLE))
         Spacer(Modifier.height(12.dp))
 
         // ---- Разделы: сюда переехали кнопки навигации из шапки ----
@@ -97,13 +90,13 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         }
 
         Spacer(Modifier.height(16.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        PaperDivider()
         Spacer(Modifier.height(16.dp))
 
         Section("Оформление")
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                .clip(MaterialTheme.shapes.small)
+                .clip(RoundedCornerShape(6.dp))
                 .toggleable(
                     value = draft.paperAnimationEnabled,
                     role = Role.Switch,
@@ -112,21 +105,21 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                Text("Анимация магической бумаги", style = MaterialTheme.typography.bodyLarge)
-                Text(
+                PaperText("Анимация магической бумаги", style = paperTextStyle(PaperTextRole.BODY))
+                PaperText(
                     "Живой фон всего окна, включая тулбар, на мощных ПК и телефонах. " +
                         "При заряде 20% и ниже анимация приостанавливается автоматически. " +
                         "На Android также учитывается энергосбережение. " +
                         "На неподдерживаемых устройствах и в браузере — статичная бумага.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = paperTextStyle(PaperTextRole.BODY),
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
-            Switch(checked = draft.paperAnimationEnabled, onCheckedChange = null)
+            PaperToggle(checked = draft.paperAnimationEnabled, onCheckedChange = null)
         }
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                .clip(MaterialTheme.shapes.small)
+                .clip(RoundedCornerShape(6.dp))
                 .toggleable(
                     value = draft.hideSystemSteps,
                     role = Role.Switch,
@@ -135,14 +128,14 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                Text("Скрывать системные шаги", style = MaterialTheme.typography.bodyLarge)
-                Text(
+                PaperText("Скрывать системные шаги", style = paperTextStyle(PaperTextRole.BODY))
+                PaperText(
                     "Скрывает служебные статусы агента. Ответы, рассуждения, действия с инструментами и ошибки остаются видимыми.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = paperTextStyle(PaperTextRole.BODY),
+                    color = LocalPaperColors.current.secondaryText,
                 )
             }
-            Switch(checked = draft.hideSystemSteps, onCheckedChange = null)
+            PaperToggle(checked = draft.hideSystemSteps, onCheckedChange = null)
         }
         Spacer(Modifier.height(12.dp))
 
@@ -154,26 +147,26 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         SearchApiSettings(draft, vm::checkSearchConnection) { draft = it }
 
         Spacer(Modifier.height(16.dp))
-        TextButton(
+        PaperAction(
             onClick = { vm.saveSettings(draft) },
             modifier = Modifier.heightIn(min = 48.dp),
-        ) { Text("Сохранить настройки") }
+        ) { PaperText("Сохранить настройки") }
         Spacer(Modifier.height(20.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        PaperDivider()
         Spacer(Modifier.height(12.dp))
 
         Section("Профиль и данные")
-        Text(
+        PaperText(
             "Хранилище: ${state.storageInfo}. Приложение не требует прав администратора; " +
                 "все данные лежат в папке пользователя и удаляются вместе с программой.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { vm.exportProfile() }) { Text("Экспорт профиля") }
-            TextButton(onClick = { vm.importProfile() }) { Text("Импорт профиля") }
-            TextButton(onClick = { vm.wipeAll() }) { Text("Стереть всё") }
+            PaperAction(onClick = { vm.exportProfile() }) { PaperText("Экспорт профиля") }
+            PaperAction(onClick = { vm.importProfile() }) { PaperText("Импорт профиля") }
+            PaperAction(onClick = { vm.wipeAll() }) { PaperText("Стереть всё") }
         }
     }
 }
@@ -229,16 +222,16 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
     ) {
-        Text(if (profile.configured) "Настройки подключения" else "Подключить модели", style = MaterialTheme.typography.titleLarge)
-        Text(
+        PaperText(if (profile.configured) "Настройки подключения" else "Подключить модели", style = paperTextStyle(PaperTextRole.TITLE))
+        PaperText(
             "Подключение → избранное → готово",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.LABEL),
+            color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(12.dp))
 
         Section("Провайдер")
-        TextButton(onClick = { chooseProvider = !chooseProvider }) { Text("${specName.ifBlank { "Выбрать поставщика" }} ▾") }
+        PaperAction(onClick = { chooseProvider = !chooseProvider }) { PaperText("${specName.ifBlank { "Выбрать поставщика" }} ▾") }
         if (chooseProvider) ProviderCatalog.all.forEach { candidate ->
             val enabled = (!candidate.desktopOnly || subscriptionAvailable) && !state.editorModelsLoading
             ProviderRow(
@@ -272,48 +265,48 @@ fun ProfileEditor(vm: MagicPaperViewModel, profile: LlmProfile, state: UiState) 
             }
         }
 
-        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+        PaperDivider(Modifier.padding(vertical = 12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Избранные модели", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-            TextButton(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
-                Text(if (state.editorModelsLoading) "Загрузка…" else if (draft.modelCatalog.isEmpty()) "Загрузить" else "Обновить", style = MaterialTheme.typography.labelSmall)
+            PaperText("Избранные модели", Modifier.weight(1f), style = paperTextStyle(PaperTextRole.TITLE))
+            PaperAction(onClick = { vm.fetchModels(draft) }, enabled = !state.editorModelsLoading && draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) {
+                PaperText(if (state.editorModelsLoading) "Загрузка…" else if (draft.modelCatalog.isEmpty()) "Загрузить" else "Обновить", style = paperTextStyle(PaperTextRole.LABEL))
             }
         }
-        state.editorModelsError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Text("Выбрано ${draft.favoriteModels.size} · для быстрого выбора в чате и проектах", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        state.editorModelsError?.let { PaperText(it, color = LocalPaperColors.current.error) }
+        PaperText("Выбрано ${draft.favoriteModels.size} · для быстрого выбора в чате и проектах", style = paperTextStyle(PaperTextRole.LABEL), color = LocalPaperColors.current.secondaryText)
         if (draft.modelCatalog.isEmpty()) {
-            Text("Загрузите доступные модели, чтобы добавить их в избранное.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            PaperText("Загрузите доступные модели, чтобы добавить их в избранное.", style = paperTextStyle(PaperTextRole.BODY), color = LocalPaperColors.current.secondaryText)
         } else {
-            OutlinedTextField(modelQuery, { modelQuery = it }, label = { Text("Найти модель") },
+            PaperInput(modelQuery, { modelQuery = it }, label = { PaperText("Найти модель") },
                 singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
             val filtered = draft.modelCatalog.filter { it.id.contains(modelQuery, true) || it.name.contains(modelQuery, true) }
-            if (filtered.isEmpty()) Text("Модели не найдены", style = MaterialTheme.typography.bodySmall)
+            if (filtered.isEmpty()) PaperText("Модели не найдены", style = paperTextStyle(PaperTextRole.BODY))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
                 items(filtered, key = { it.id }) { model ->
                     val checked = model.id in draft.favoriteModels
-                    Row(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).toggleable(value = checked, role = Role.Checkbox,
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).toggleable(value = checked, role = Role.Checkbox,
                         onValueChange = { draft = draft.withFavoriteModel(model.id) }).heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = checked, onCheckedChange = null)
-                        Text(model.name, Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                        PaperCheck(checked = checked, onCheckedChange = null)
+                        PaperText(model.name, Modifier.weight(1f).padding(start = 8.dp), style = paperTextStyle(PaperTextRole.BODY))
                     }
                 }
             }
         }
         if (spec?.allowsManualModelId == true) {
             Field("Модель вручную", draft.modelId) { draft = draft.copy(modelId = it) }
-            TextButton(onClick = { draft = draft.withFavoriteModel(draft.modelId) }, enabled = draft.modelId.isNotBlank()) {
-                Text(if (draft.modelId in draft.favoriteModels) "Убрать из избранного" else "Добавить в избранное")
+            PaperAction(onClick = { draft = draft.withFavoriteModel(draft.modelId) }, enabled = draft.modelId.isNotBlank()) {
+                PaperText(if (draft.modelId in draft.favoriteModels) "Убрать из избранного" else "Добавить в избранное")
             }
         }
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = {
+        PaperAction(onClick = {
             val first = draft.modelId.takeIf { it in draft.favoriteModels } ?: draft.favoriteModels.firstOrNull()
                 ?: draft.modelId.ifBlank { draft.modelCatalog.firstOrNull()?.id.orEmpty() }
             vm.saveLlmProfile(draft.copy(modelId = first, modelLibraryVersion = 1))
-        }, enabled = draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) { Text("Сохранить") }
-        TextButton(onClick = vm::closeLlmProfileEditor) { Text("Отмена") }
+        }, enabled = draft.connectionConfigured && (!subscription || state.openAiSubscription.account?.signedIn == true)) { PaperText("Сохранить") }
+        PaperAction(onClick = vm::closeLlmProfileEditor) { PaperText("Отмена") }
         }
     }
     }
@@ -329,21 +322,20 @@ private fun CatalogModelPicker(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = models.firstOrNull { it.id == selectedId }
-    Text("Модель", style = MaterialTheme.typography.labelMedium)
-    TextButton(onClick = { expanded = true }, enabled = models.isNotEmpty()) {
-        Text(selected?.name ?: selectedId.ifBlank { "Каталог моделей пока пуст" })
+    PaperText("Модель", style = paperTextStyle(PaperTextRole.LABEL))
+    PaperAction(onClick = { expanded = true }, enabled = models.isNotEmpty()) {
+        PaperText(selected?.name ?: selectedId.ifBlank { "Каталог моделей пока пуст" })
     }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        models.forEach { model ->
-            DropdownMenuItem(
-                text = { Text(if (model.name == model.id) model.id else "${model.name} · ${model.id}") },
-                onClick = {
-                    onSelected(model.id)
-                    expanded = false
-                },
-            )
-        }
-    }
+    PaperMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false },
+        items = models.map { model ->
+            PaperMenuItem(if (model.name == model.id) model.id else "${model.name} · ${model.id}") {
+                onSelected(model.id)
+                expanded = false
+            }
+        },
+    )
 }
 
 /** Строка выбора провайдера из каталога. */
@@ -352,29 +344,29 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
+            .clip(RoundedCornerShape(6.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .heightIn(min = 40.dp)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
+        PaperText(
             if (selected) "◉" else "○",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.width(10.dp))
-        Text(
+        PaperText(
             spec.displayName + if (!enabled) " · только desktop" else "",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+            style = paperTextStyle(PaperTextRole.BODY),
+            color = if (enabled) LocalPaperColors.current.text else LocalPaperColors.current.border,
             modifier = Modifier.weight(1f),
         )
         if (spec.defaultBaseUrl.isNotBlank()) {
-            Text(
+            PaperText(
                 spec.defaultBaseUrl,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = paperTextStyle(PaperTextRole.BODY),
+                color = LocalPaperColors.current.secondaryText,
                 maxLines = 1,
             )
         }
@@ -388,15 +380,15 @@ internal fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
     var showDetails by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     if (!auth.available) {
-        Text(
+        PaperText(
             "OpenAI по подписке поддерживается только в desktop-приложении.",
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodyMedium,
+            color = LocalPaperColors.current.error,
+            style = paperTextStyle(PaperTextRole.BODY),
         )
         return
     }
     val account = auth.account
-    Text(
+    PaperText(
         when {
             auth.loading -> "Проверяю аккаунт…"
             account?.signedIn == true -> buildString {
@@ -406,11 +398,11 @@ internal fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
             }
             else -> "Войдите в ChatGPT: запросы будут расходовать лимит вашей подписки, API-ключ не нужен."
         },
-        style = MaterialTheme.typography.bodySmall,
-        color = if (account?.signedIn == true) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+        style = paperTextStyle(PaperTextRole.BODY),
+        color = if (account?.signedIn == true) LocalPaperColors.current.action else LocalPaperColors.current.secondaryText,
     )
-    if (account?.signedIn == true) TextButton(onClick = { showDetails = !showDetails }) {
-        Text(if (showDetails) "Скрыть лимиты ▴" else "Лимиты подписки ▾", style = MaterialTheme.typography.labelSmall)
+    if (account?.signedIn == true) PaperAction(onClick = { showDetails = !showDetails }) {
+        PaperText(if (showDetails) "Скрыть лимиты ▴" else "Лимиты подписки ▾", style = paperTextStyle(PaperTextRole.LABEL))
     }
     if (showDetails) account?.rateLimits?.forEach { limit ->
         val reset = limit.resetsAtEpochSeconds?.let {
@@ -422,25 +414,25 @@ internal fun SubscriptionAccount(vm: MagicPaperViewModel, state: UiState) {
                 else -> "обновление через ${minutes / 1440} д ${minutes % 1440 / 60} ч"
             }
         }
-        Text(
+        PaperText(
             "${limit.name} · ${if (limit.window == "primary") "основной лимит" else if (limit.window == "secondary") "дополнительный лимит" else limit.window}: осталось ${(100 - limit.usedPercent).coerceIn(0, 100)}%" +
                 (reset?.let { " · $it" } ?: ""),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = paperTextStyle(PaperTextRole.LABEL),
+            color = LocalPaperColors.current.secondaryText,
         )
     }
-    auth.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    auth.error?.let { PaperText(it, style = paperTextStyle(PaperTextRole.BODY), color = LocalPaperColors.current.error) }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
             auth.signingIn -> {
-                TextButton(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { Text("Открыть страницу входа") }
-                TextButton(onClick = vm::cancelOpenAiSubscriptionLogin) { Text("Отмена") }
+                PaperAction(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { PaperText("Открыть страницу входа") }
+                PaperAction(onClick = vm::cancelOpenAiSubscriptionLogin) { PaperText("Отмена") }
             }
             account?.signedIn == true -> {
-                TextButton(onClick = { vm.refreshOpenAiSubscription(true) }) { Text("Обновить") }
-                TextButton(onClick = vm::logoutOpenAiSubscription) { Text("Выйти") }
+                PaperAction(onClick = { vm.refreshOpenAiSubscription(true) }) { PaperText("Обновить") }
+                PaperAction(onClick = vm::logoutOpenAiSubscription) { PaperText("Выйти") }
             }
-            else -> TextButton(onClick = vm::startOpenAiSubscriptionLogin) { Text("Войти через ChatGPT") }
+            else -> PaperAction(onClick = vm::startOpenAiSubscriptionLogin) { PaperText("Войти через ChatGPT") }
         }
     }
 }
@@ -451,32 +443,32 @@ private fun NavEntry(icon: String, title: String, subtitle: String, onClick: () 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .heightIn(min = 48.dp)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(icon, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        PaperText(icon, style = paperTextStyle(PaperTextRole.TITLE), color = LocalPaperColors.current.action)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
+            PaperText(title, style = paperTextStyle(PaperTextRole.BODY))
+            PaperText(
                 subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = paperTextStyle(PaperTextRole.BODY),
+                color = LocalPaperColors.current.secondaryText,
             )
         }
-        Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        PaperText("›", style = paperTextStyle(PaperTextRole.TITLE), color = LocalPaperColors.current.secondaryText)
     }
 }
 
 @Composable
 private fun Section(title: String) {
-    Text(
+    PaperText(
         title,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
+        style = paperTextStyle(PaperTextRole.TITLE),
+        color = LocalPaperColors.current.action,
     )
     Spacer(Modifier.height(6.dp))
 }
@@ -484,14 +476,14 @@ private fun Section(title: String) {
 @Composable
 internal fun Field(label: String, value: String, secret: Boolean = false, onChange: (String) -> Unit) {
     var text by remember(value) { mutableStateOf(value) }
-    OutlinedTextField(
+    PaperInput(
         value = text,
         onValueChange = {
             text = it
             onChange(it)
         },
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        label = { Text(label) },
+        label = { PaperText(label) },
         visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         singleLine = true,
     )

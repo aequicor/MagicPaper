@@ -1,0 +1,6 @@
+interface:
+  display_name: "MagicPaper Desktop UI"
+  short_description: "Native-feeling macOS and Windows UI"
+  default_prompt: "Use $magicpaper-desktop-ui to implement a MagicPaper desktop UI change through the public design-system API."
+policy:
+  allow_implicit_invocation: true

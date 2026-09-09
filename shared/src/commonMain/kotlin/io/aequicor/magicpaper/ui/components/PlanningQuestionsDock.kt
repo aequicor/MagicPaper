@@ -1,23 +1,28 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperAction
+import io.aequicor.magicpaper.designsystem.PaperButton
+import io.aequicor.magicpaper.designsystem.PaperButtonKind
+import io.aequicor.magicpaper.designsystem.PaperChoice
+import io.aequicor.magicpaper.designsystem.PaperComposerField
+import io.aequicor.magicpaper.designsystem.PaperQuestionnaire
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.*
 import kotlinx.serialization.json.Json
 
@@ -66,72 +71,61 @@ private fun Questionnaire(
             index = if (advance && index < questions.lastIndex) index + 1 else index,
             reviewing = advance && index == questions.lastIndex))
     }
-    Surface(modifier.testTag("questionnaire"), shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+    PaperQuestionnaire(modifier.testTag("questionnaire")) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Text(if (draft.reviewing) "Проверьте ответы" else "${index + 1}/${questions.size} · ${question.title}",
-                    Modifier.weight(1f).testTag("questionnaire.title"), style = MaterialTheme.typography.titleMedium,
+                PaperText(if (draft.reviewing) "Проверьте ответы" else "${index + 1}/${questions.size} · ${question.title}",
+                    Modifier.weight(1f).testTag("questionnaire.title"), role = PaperTextRole.TITLE,
                     maxLines = 4, overflow = TextOverflow.Ellipsis, onTextLayout = { titleOverflow = it.hasVisualOverflow })
                 if (!draft.reviewing) {
-                    TextButton({ onDraft(draft.copy(index = index - 1)) }, enabled = index > 0 && !busy,
-                        modifier = Modifier.testTag("questionnaire.back"), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Назад") }
+                    PaperAction({ onDraft(draft.copy(index = index - 1)) }, enabled = index > 0 && !busy,
+                        modifier = Modifier.testTag("questionnaire.back")) { PaperText("Назад", role = PaperTextRole.LABEL) }
                     if (!answer.skipped && answer.isComplete(question)) {
-                        TextButton({ change(answer, advance = true) }, enabled = !busy,
-                            modifier = Modifier.testTag("questionnaire.next"), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Далее") }
-                    } else TextButton({ change(PlanningAnswer(question.id, skipped = true), advance = true) }, enabled = question.canSkip && !busy,
-                        modifier = Modifier.testTag("questionnaire.skip"), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Пропустить") }
+                        PaperAction({ change(answer, advance = true) }, enabled = !busy,
+                            modifier = Modifier.testTag("questionnaire.next")) { PaperText("Далее", role = PaperTextRole.LABEL) }
+                    } else PaperAction({ change(PlanningAnswer(question.id, skipped = true), advance = true) }, enabled = question.canSkip && !busy,
+                        modifier = Modifier.testTag("questionnaire.skip")) { PaperText("Пропустить", role = PaperTextRole.LABEL) }
                 }
             }
-            if (context.isNotBlank() || queuedCount > 0) Text(
+            if (context.isNotBlank() || queuedCount > 0) PaperText(
                 listOfNotNull(context.takeIf { it.isNotBlank() }, "В очереди: $queuedCount".takeIf { queuedCount > 0 }).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
             key(if (draft.reviewing) "review" else question.id) {
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (details.isNotBlank()) SelectionContainer { Text(details, style = MaterialTheme.typography.bodyMedium) }
+                    if (details.isNotBlank()) SelectionContainer { PaperText(details) }
                     if (draft.reviewing) {
                         questions.forEach { q ->
-                            Text(interactionAnswerText(listOf(q), answers, redactSecrets = true), style = MaterialTheme.typography.bodyMedium)
+                            PaperText(interactionAnswerText(listOf(q), answers, redactSecrets = true))
                         }
                     } else {
-                        if (titleOverflow) Text(question.title, style = MaterialTheme.typography.bodyMedium)
-                        if (question.kind == QuestionKind.MULTIPLE) Text("Можно выбрать несколько вариантов", style = MaterialTheme.typography.labelSmall)
+                        if (titleOverflow) PaperText(question.title)
+                        if (question.kind == QuestionKind.MULTIPLE) PaperText("Можно выбрать несколько вариантов", role = PaperTextRole.LABEL)
                         question.options.forEach { option ->
                             val selected = option.id in answer.selected
-                            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
-                                MaterialTheme.shapes.small).selectable(selected, enabled = !busy && option.enabled,
-                                role = if (question.kind == QuestionKind.MULTIPLE) Role.Checkbox else Role.RadioButton,
-                                onClick = {
+                            PaperChoice(selected = selected, enabled = !busy && option.enabled,
+                                modifier = Modifier.fillMaxWidth().testTag("questionnaire.option.${option.id}"),
+                                label = option.label, description = option.description.takeIf { it.isNotBlank() }, onSelect = {
                                     val chosen = if (question.kind == QuestionKind.MULTIPLE) {
                                         if (selected) answer.selected - option.id else answer.selected + option.id
                                     } else listOf(option.id)
                                     change(answer.copy(selected = chosen, skipped = false),
                                         advance = question.kind != QuestionKind.MULTIPLE && answer.text.isBlank())
-                                }).testTag("questionnaire.option.${option.id}").padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                if (question.kind == QuestionKind.MULTIPLE) Checkbox(selected, null, enabled = !busy && option.enabled)
-                                else RadioButton(selected, null, enabled = !busy && option.enabled)
-                                Spacer(Modifier.width(8.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(option.label, style = MaterialTheme.typography.bodyLarge)
-                                    if (option.description.isNotBlank()) Text(option.description, style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
+                                })
                         }
-                        if (question.allowCustomInput) OutlinedTextField(answer.text, { change(answer.copy(text = it, skipped = false)) },
-                            placeholder = { Text("Свой вариант") }, enabled = !busy,
+                        if (question.allowCustomInput) PaperComposerField(answer.text, { change(answer.copy(text = it, skipped = false)) },
+                            label = { PaperText("Свой вариант", role = PaperTextRole.LABEL) }, enabled = !busy,
                             modifier = Modifier.fillMaxWidth().testTag("questionnaire.custom"), minLines = 1, maxLines = 4,
                             visualTransformation = if (question.secret) PasswordVisualTransformation() else VisualTransformation.None)
                     }
-                    if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (error != null) PaperText(error, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL)
                 }
             }
             if (draft.reviewing) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton({ onDraft(draft.copy(index = 0, reviewing = false)) }, enabled = !busy,
-                        modifier = Modifier.testTag("questionnaire.return")) { Text("Вернуться") }
-                    Button({ onSubmit(answers) }, enabled = !busy && questions.all { q -> answers.first { it.questionId == q.id }.isComplete(q) },
-                        modifier = Modifier.testTag("questionnaire.confirm")) { Text(if (busy) "Отправляем…" else "Подтвердить") }
+                    PaperAction({ onDraft(draft.copy(index = 0, reviewing = false)) }, enabled = !busy,
+                        modifier = Modifier.testTag("questionnaire.return")) { PaperText("Вернуться", role = PaperTextRole.LABEL) }
+                    PaperButton(if (busy) "Отправляем…" else "Подтвердить", { onSubmit(answers) }, enabled = !busy && questions.all { q -> answers.first { it.questionId == q.id }.isComplete(q) },
+                        modifier = Modifier.testTag("questionnaire.confirm"), kind = PaperButtonKind.PRIMARY)
             }
         }
     }

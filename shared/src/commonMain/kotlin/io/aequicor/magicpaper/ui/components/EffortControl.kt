@@ -6,11 +6,6 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.ui.graphics.Color
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -18,6 +13,7 @@ import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.ReasoningCapability
 import io.aequicor.magicpaper.domain.resolveEffort
 import io.aequicor.magicpaper.domain.selectableLevels
+import io.aequicor.magicpaper.designsystem.*
 
 /**
  * Управление усилием по возможностям конкретной модели: чип `default` и только
@@ -45,21 +41,19 @@ fun EffortControl(
     val resolved = capability.resolveEffort(selection)
     val levels = capability.selectableLevels
     Column(modifier = modifier.fillMaxWidth()) {
-        Text(
+        PaperText(
             if (resolved.clamped) {
                 "Усилие: ${selection.label} → ${resolved.level?.label ?: "по умолчанию провайдера"}"
             } else {
                 "Усилие: ${selection.label}"
             },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText,
         )
         if (resolved.clamped) {
-            Text(
+            PaperText(
                 "Модель не принимает уровень «${selection.label}» — в запрос уйдёт «" +
                     (resolved.level?.label ?: "ничего") + "».",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                role = PaperTextRole.BODY, color = LocalPaperColors.current.secondaryText,
             )
         }
         FlowRow(
@@ -88,18 +82,8 @@ private fun EffortChip(
     onSelect: (EffortSelection) -> Unit,
     effective: Boolean,
 ) {
-    TextButton(onClick = { onSelect(value) }, modifier = Modifier.padding(0.dp),
-        colors = ButtonDefaults.textButtonColors(containerColor = if (current == value) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)) {
-        Text(
+    PaperChoice(selected = current == value, onSelect = { onSelect(value) }, label =
             if (effective) "$title →" else title,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (current == value) {
-                MaterialTheme.colorScheme.primary
-            } else if (effective) {
-                MaterialTheme.colorScheme.secondary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-        )
-    }
+        modifier = Modifier.padding(0.dp),
+    )
 }

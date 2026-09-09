@@ -1,0 +1,92 @@
+commit b0b84ae50bac08f5fb20fb1a6a062c58f5d98314
+Author:     aequicor <kyamshanov@vk.com>
+AuthorDate: Wed Sep 9 09:49:53 2026 +0400
+Commit:     aequicor <kyamshanov@vk.com>
+CommitDate: Wed Sep 9 09:49:53 2026 +0400
+
+    Fix stale checkpoint recovery after successful responses
+
+diff --git a/shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt b/shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt
+index 86703fc..aee92cb 100644
+--- a/shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt
++++ b/shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt
+@@ -79,6 +79,10 @@ data class CodingRunCheckpoint(
+     val runId: String = messageId,
+ )
+ 
++/** A persisted successful reply is authoritative even while checkpoint cleanup is pending. */
++fun CodingRunCheckpoint.hasSuccessfulResponse(messages: List<CodingMessage>): Boolean =
++    responseId.isNotBlank() && messages.any { it.id == responseId && it.role == CodingRole.AGENT && !it.failed }
++
+ /** Older logs have no checkpoint; only an unanswered or failed turn can be resumed. */
+ fun List<CodingMessage>.interruptedCodingRequest(): CodingMessage? =
+     if (lastOrNull()?.let { it.role == CodingRole.USER || it.failed } == true)
+diff --git a/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UiState.kt b/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UiState.kt
+index b5ce275..e1c5c7c 100644
+--- a/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UiState.kt
++++ b/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UiState.kt
+@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.domain.UserInteractionRequest
+ import io.aequicor.magicpaper.domain.ExecutionIntent
+ import io.aequicor.magicpaper.domain.ExecutionPhase
+ import io.aequicor.magicpaper.domain.interruptedCodingRequest
++import io.aequicor.magicpaper.domain.hasSuccessfulResponse
+ import io.aequicor.magicpaper.domain.AppSettings
+ import io.aequicor.magicpaper.domain.ChatSession
+ import io.aequicor.magicpaper.domain.CodingDraft
+@@ -57,7 +58,8 @@ data class CodingSessionUi(
+                     current.phase == ExecutionPhase.WAITING
+             }
+             if (session.planningMode || session.stageId != null) return false
+-            return session.pendingRun != null || messages.interruptedCodingRequest() != null
++            return session.pendingRun?.let { !it.hasSuccessfulResponse(messages) }
++                ?: (messages.interruptedCodingRequest() != null)
+         }
+ 
+     /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */
+diff --git a/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UserInteractions.kt b/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UserInteractions.kt
+index 5584de8..61bcee2 100644
+--- a/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UserInteractions.kt
++++ b/shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UserInteractions.kt
+@@ -103,6 +103,8 @@ internal fun interactionCandidates(
+     }
+     ui.sessions.filter { !it.session.archived && !it.running && it.plan == null && !it.session.planningMode && it.session.stageId == null }.forEach { item ->
+         val checkpoint = item.session.pendingRun
++        // History can arrive before checkpoint cleanup, including after a restart.
++        if (checkpoint?.hasSuccessfulResponse(item.messages) == true) return@forEach
+         val interrupted = item.messages.interruptedCodingRequest()
+         if (checkpoint?.stoppedByUser == true || checkpoint?.intent == ExecutionIntent.PAUSE || checkpoint == null && interrupted == null) return@forEach
+         val source = checkpoint?.responseId?.ifBlank { checkpoint.messageId } ?: interrupted!!.id
+diff --git a/shared/src/commonTest/kotlin/io/aequicor/magicpaper/ui/UserInteractionStatusTest.kt b/shared/src/commonTest/kotlin/io/aequicor/magicpaper/ui/UserInteractionStatusTest.kt
+index 054fecd..51dba69 100644
+--- a/shared/src/commonTest/kotlin/io/aequicor/magicpaper/ui/UserInteractionStatusTest.kt
++++ b/shared/src/commonTest/kotlin/io/aequicor/magicpaper/ui/UserInteractionStatusTest.kt
+@@ -51,6 +51,29 @@ class UserInteractionStatusTest {
+         assertTrue(interactionCandidates(CodingUi(sessions = listOf(item.copy(session = plain.copy(pendingRun = checkpoint.copy(stoppedByUser = true))))), emptyList(), emptyMap(), emptyMap()).isEmpty())
+     }
+ 
++    @Test fun successfulResponseClosesRecoveryEvenWithAStaleCheckpoint() {
++        val response = CodingMessage("a", CodingRole.AGENT, "Готово", createdAt = 2)
++        for (intent in listOf(ExecutionIntent.RUN, ExecutionIntent.STOP)) {
++            val item = CodingSessionUi(plain.copy(pendingRun = CodingRunCheckpoint("u", "Task", responseId = "a", intent = intent)),
++                listOf(CodingMessage("u", CodingRole.USER, "Task", createdAt = 1), response))
++            val pending = interactionCandidates(CodingUi(sessions = listOf(item)), emptyList(), emptyMap(), emptyMap())
++            assertTrue(pending.isEmpty())
++            assertFalse(item.canResume)
++            assertEquals(CodingSessionStatus.IDLE, item.status)
++        }
++    }
++
++    @Test fun previousResponseDoesNotHideAnInterruptedNewRun() {
++        val previous = CodingMessage("previous", CodingRole.AGENT, "Готово", createdAt = 2)
++        for (responseId in listOf("next", "")) {
++            val item = CodingSessionUi(plain.copy(pendingRun = CodingRunCheckpoint("u", "New task", responseId = responseId)),
++                listOf(previous, CodingMessage("u", CodingRole.USER, "New task", createdAt = 3)))
++            val pending = interactionCandidates(CodingUi(sessions = listOf(item)), emptyList(), emptyMap(), emptyMap())
++            assertEquals(InteractionKind.RECOVER_RUN, pending.single().kind)
++            assertTrue(item.canResume)
++        }
++    }
++
+     @Test fun missingHostVerificationExplainsThePlanProblemInsteadOfAskingForCodeRepair() {
+         val criterion = AcceptanceCriterion("opaque-id/layout", "Кнопка находится слева от меню", environment = EvidenceEnvironment.MANUAL)
+         val record = AcceptanceRecord("run", "attempt", "snapshot", listOf(criterion), listOf(

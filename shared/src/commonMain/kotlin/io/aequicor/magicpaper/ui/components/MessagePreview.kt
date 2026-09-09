@@ -2,7 +2,6 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -19,6 +18,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
+import io.aequicor.magicpaper.designsystem.paperTextStyle
 
 /** Preview work stays bounded; chat hosts expand the document into their own lazy items. */
 @Composable
@@ -56,19 +59,19 @@ internal fun MessagePreview(
                 Column(Modifier.wrapContentHeight(Alignment.Top, unbounded = true)
                     .onSizeChanged { contentHeight = it.height }) { preview() }
             }
-            if (clipped) Text("Читать далее",
+            if (clipped) PaperText("Читать далее",
                 Modifier.align(Alignment.BottomEnd).chatDisclosure {
                     if (expansion != null) expansion.expand() else expanded = true
                 }.padding(horizontal = 12.dp, vertical = 12.dp),
-                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                role = PaperTextRole.LABEL, color = LocalPaperColors.current.action)
         }
     }
 }
 
 /** Plain messages and tool output need the same bound as Markdown, including unbroken lines. */
 @Composable
-internal fun ChatPlainText(text: String, modifier: Modifier = Modifier, style: TextStyle = MaterialTheme.typography.bodyLarge,
-    color: Color = MaterialTheme.colorScheme.onSurface) {
+internal fun ChatPlainText(text: String, modifier: Modifier = Modifier, style: TextStyle = paperTextStyle(PaperTextRole.BODY),
+    color: Color = LocalPaperColors.current.text) {
     val previewText = remember(text) {
         var end = minOf(text.length, MESSAGE_PREVIEW_CHARS)
         if (end < text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end--
@@ -77,12 +80,12 @@ internal fun ChatPlainText(text: String, modifier: Modifier = Modifier, style: T
         prefix.substring(0, ranges.take(4).lastOrNull()?.let { it.last + 1 } ?: 0)
     }
     MessagePreview(text, previewText.length < text.length, modifier, preview = {
-        SelectionContainer { Text(previewText, style = style, color = color) }
+        SelectionContainer { PaperText(previewText, style = style, color = color) }
     }, reader = { readerModifier ->
         val ranges = remember(text) { textBlockRanges(text) }
         SelectionContainer {
             Column(readerModifier) {
-                ranges.forEach { range -> Text(text.substring(range), style = style, color = color) }
+                ranges.forEach { range -> PaperText(text.substring(range), style = style, color = color) }
             }
         }
     })

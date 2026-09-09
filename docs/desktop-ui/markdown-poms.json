@@ -1,0 +1,484 @@
+[
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer/0.41.0/1130135c2b163695bd37b01537a1743d5c7f3a14/multiplatform-markdown-renderer-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown:0.7.3",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer/0.45.0/75483af1bd57de8cb016a7e3adc6f27bb4f35b1e/multiplatform-markdown-renderer-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown:0.7.9",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.5.1",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-android:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-android/0.41.0/7f57da668b48732a0791ec8f19af96140e4163f/multiplatform-markdown-renderer-android-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown-jvm:0.7.3",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.4.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-android:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-android/0.45.0/211dfc19096849596fde863ac7af4ef0470379c6/multiplatform-markdown-renderer-android-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown-jvm:0.7.9",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.5.1",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code/0.41.0/6684e507d6be60888cb6981bd7b3f51a90104cf0/multiplatform-markdown-renderer-code-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer:0.41.0",
+      "dev.snipme:highlights:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code/0.45.0/93047ec464712f35c142ace8a7675b922b44478/multiplatform-markdown-renderer-code-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer:0.45.0",
+      "dev.snipme:highlights:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-android:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-android/0.41.0/e830ef9158b43900ea8a7f1bf50f1ff0a2bdda18/multiplatform-markdown-renderer-code-android-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-android:0.41.0",
+      "dev.snipme:highlights-jvm:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-android:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-android/0.45.0/85c09712a7c091cfa2afb4f6e150336efc1bf1c6/multiplatform-markdown-renderer-code-android-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-android:0.45.0",
+      "dev.snipme:highlights-jvm:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-js:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-js/0.41.0/47c290acd49046b7beed46f2c07821c379bb9a14/multiplatform-markdown-renderer-code-js-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.3.21",
+      "com.mikepenz:multiplatform-markdown-renderer-js:0.41.0",
+      "dev.snipme:highlights-js:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-js:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-js/0.45.0/53b363b6cef7a1e2e0b059ef33e5b2df4729ed83/multiplatform-markdown-renderer-code-js-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.4.10",
+      "com.mikepenz:multiplatform-markdown-renderer-js:0.45.0",
+      "dev.snipme:highlights-js:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-jvm:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-jvm/0.41.0/5cc8499c13ee82b5455ac0f06e7c764d808de8bf/multiplatform-markdown-renderer-code-jvm-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-jvm:0.41.0",
+      "dev.snipme:highlights-jvm:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-jvm:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-jvm/0.45.0/3dab5f45b8486a6c9b22f1a2e73d102dc821cf4d/multiplatform-markdown-renderer-code-jvm-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-jvm:0.45.0",
+      "dev.snipme:highlights-jvm:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-wasm-js:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-wasm-js/0.41.0/47314d5f0b7e5e7816c4e10e3ba29c87dcf6304e/multiplatform-markdown-renderer-code-wasm-js-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-wasm-js:0.41.0",
+      "dev.snipme:highlights-wasm-js:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-code-wasm-js:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-code-wasm-js/0.45.0/b67ef4003bd6350852abe3f1b9a4d8578360b8ad/multiplatform-markdown-renderer-code-wasm-js-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-wasm-js:0.45.0",
+      "dev.snipme:highlights-wasm-js:1.1.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-js:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-js/0.41.0/4fe37a6d143229ae1737dc7abb6e675d5be78e16/multiplatform-markdown-renderer-js-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.3.21",
+      "org.jetbrains:markdown-js:0.7.3",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-js:0.4.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-js:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-js/0.45.0/1f1f45ea4127b964e6d31c548a35a90feacc02c2/multiplatform-markdown-renderer-js-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.4.10",
+      "org.jetbrains:markdown-js:0.7.9",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.11.0",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-js:0.5.1",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-jvm:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-jvm/0.41.0/a0aa17c9a40d908e348d16aedd52cb992c316be1/multiplatform-markdown-renderer-jvm-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown-jvm:0.7.3",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.4.0",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-jvm:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-jvm/0.45.0/96980befc8b156e8ae80074c95e4db9853e3674f/multiplatform-markdown-renderer-jvm-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown-jvm:0.7.9",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.5.1",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3/0.41.0/8b7531a1c3fc975ffb7dd12718b9f1adc5d54934/multiplatform-markdown-renderer-m3-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer:0.41.0",
+      "org.jetbrains:markdown:0.7.3",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3/0.45.0/1b8c30d42f7aa11835d5e440863528a13f76bae9/multiplatform-markdown-renderer-m3-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer:0.45.0",
+      "org.jetbrains:markdown:0.7.9",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-android:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-android/0.41.0/88e2c3ad38c7c654df631c6bc957561f45b5327e/multiplatform-markdown-renderer-m3-android-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-android:0.41.0",
+      "org.jetbrains:markdown-jvm:0.7.3",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-android:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-android/0.45.0/f8c2e42ffed5659439ae582275393ec438133363/multiplatform-markdown-renderer-m3-android-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-android:0.45.0",
+      "org.jetbrains:markdown-jvm:0.7.9",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-js:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-js/0.41.0/ffb9bd9fb364e45d8d4f9717036043fcab8b725f/multiplatform-markdown-renderer-m3-js-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.3.21",
+      "com.mikepenz:multiplatform-markdown-renderer-js:0.41.0",
+      "org.jetbrains:markdown-js:0.7.3",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-js:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-js/0.45.0/9a9094d01f9a81cf4c6902e5ec7b2a20f9ce73cb/multiplatform-markdown-renderer-m3-js-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.4.10",
+      "com.mikepenz:multiplatform-markdown-renderer-js:0.45.0",
+      "org.jetbrains:markdown-js:0.7.9",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-jvm:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-jvm/0.41.0/e7d2715a81a0b5dbb1dc76bc859304c7a1e376ff/multiplatform-markdown-renderer-m3-jvm-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-jvm:0.41.0",
+      "org.jetbrains:markdown-jvm:0.7.3",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-jvm:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-jvm/0.45.0/6743e71d5c884e83e7328d74dc5d0c2dd65d6238/multiplatform-markdown-renderer-m3-jvm-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-jvm:0.45.0",
+      "org.jetbrains:markdown-jvm:0.7.9",
+      "org.jetbrains.kotlin:kotlin-stdlib:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-wasm-js:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-wasm-js/0.41.0/11197c2a9e93bf68bcefde9389351d6d322785f7/multiplatform-markdown-renderer-m3-wasm-js-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-wasm-js:0.41.0",
+      "org.jetbrains:markdown-wasm-js:0.7.3",
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-m3-wasm-js:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-m3-wasm-js/0.45.0/7f437629ea25d91948043a26684df1c1c9f8845c/multiplatform-markdown-renderer-m3-wasm-js-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "com.mikepenz:multiplatform-markdown-renderer-wasm-js:0.45.0",
+      "org.jetbrains:markdown-wasm-js:0.7.9",
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.4.10"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-wasm-js:0.41.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-wasm-js/0.41.0/e31cef54014241bc1c24873e903b1f5d9ea7ee2f/multiplatform-markdown-renderer-wasm-js-0.41.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown-wasm-js:0.7.3",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-wasm-js:0.4.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.3.21"
+    ]
+  },
+  {
+    "artifact": "com.mikepenz:multiplatform-markdown-renderer-wasm-js:0.45.0",
+    "cachePath": "com.mikepenz/multiplatform-markdown-renderer-wasm-js/0.45.0/7f81b2874011cc68eee23ea47bf919ccba499776/multiplatform-markdown-renderer-wasm-js-0.45.0.pom",
+    "licenses": [
+      "Apache-2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains:markdown-wasm-js:0.7.9",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-wasm-js:1.11.0",
+      "org.jetbrains.kotlinx:kotlinx-collections-immutable-wasm-js:0.5.1",
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.4.10"
+    ]
+  },
+  {
+    "artifact": "org.jetbrains:markdown:0.7.9",
+    "cachePath": "org.jetbrains/markdown/0.7.9/a28e350f192e11cc7cc53046e9995f10ff452a72/markdown-0.7.9.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib:2.0.0"
+    ]
+  },
+  {
+    "artifact": "org.jetbrains:markdown-js:0.7.3",
+    "cachePath": "org.jetbrains/markdown-js/0.7.3/b107b67bde2ca07dd326ae487a8651b17f301b97/markdown-js-0.7.3.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.0.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.0.0"
+    ]
+  },
+  {
+    "artifact": "org.jetbrains:markdown-js:0.7.9",
+    "cachePath": "org.jetbrains/markdown-js/0.7.9/44f173c1de853aae29024a581f352126c2a32016/markdown-js-0.7.9.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.0.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.0.0"
+    ]
+  },
+  {
+    "artifact": "org.jetbrains:markdown-jvm:0.7.9",
+    "cachePath": "org.jetbrains/markdown-jvm/0.7.9/d25ebbe753c08d1a34a9c2a9a6327133f0e13f71/markdown-jvm-0.7.9.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib:2.0.0"
+    ]
+  },
+  {
+    "artifact": "org.jetbrains:markdown-wasm-js:0.7.3",
+    "cachePath": "org.jetbrains/markdown-wasm-js/0.7.3/ca4b99ff9f06d400de9f45fcfde3079bb1fffed2/markdown-wasm-js-0.7.3.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.0.0"
+    ]
+  },
+  {
+    "artifact": "org.jetbrains:markdown-wasm-js:0.7.9",
+    "cachePath": "org.jetbrains/markdown-wasm-js/0.7.9/44e3b3d4416c2ea77c7d886669d418d045688b45/markdown-wasm-js-0.7.9.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.0.0"
+    ]
+  },
+  {
+    "artifact": "dev.snipme:highlights:1.1.0",
+    "cachePath": "dev.snipme/highlights/1.1.0/a417fb7fff9949ce9a2387664b40f34fc2818581/highlights-1.1.0.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib:2.2.0",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0",
+      "org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1"
+    ]
+  },
+  {
+    "artifact": "dev.snipme:highlights-js:1.1.0",
+    "cachePath": "dev.snipme/highlights-js/1.1.0/ce7034cdf9cafada1090c2bcba1096c71dde7049/highlights-js-1.1.0.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-dom-api-compat:2.2.0",
+      "org.jetbrains.kotlin:kotlin-stdlib-js:2.2.0",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.9.0",
+      "org.jetbrains.kotlinx:kotlinx-serialization-json-js:1.7.1"
+    ]
+  },
+  {
+    "artifact": "dev.snipme:highlights-jvm:1.1.0",
+    "cachePath": "dev.snipme/highlights-jvm/1.1.0/fcf5c8ae5d95c9778c23873739c8315a2ea01d63/highlights-jvm-1.1.0.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib:2.2.0",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0",
+      "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.7.1"
+    ]
+  },
+  {
+    "artifact": "dev.snipme:highlights-wasm-js:1.1.0",
+    "cachePath": "dev.snipme/highlights-wasm-js/1.1.0/204691b6fc5edeebe695fe0717d789f19289107d/highlights-wasm-js-1.1.0.pom",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ],
+    "dependencies": [
+      "org.jetbrains.kotlin:kotlin-stdlib-wasm-js:2.2.0",
+      "org.jetbrains.kotlinx:kotlinx-coroutines-core-wasm-js:1.9.0",
+      "org.jetbrains.kotlinx:kotlinx-serialization-json-wasm-js:1.7.1"
+    ]
+  }
+]

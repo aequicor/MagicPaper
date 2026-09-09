@@ -4,11 +4,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.designsystem.*
 
 @Composable
 internal fun PlanningBlockerDock(
@@ -30,17 +30,15 @@ internal fun PlanningBlockerCard(
     blockers: List<PlanningBlocker>, busy: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier,
 ) {
     if (blockers.isEmpty()) return
-    Surface(modifier, shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.errorContainer) {
+    PaperApprovalDock(modifier) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Выполнение остановлено", style = MaterialTheme.typography.titleSmall)
+            PaperText("Выполнение остановлено", role = PaperTextRole.TITLE)
             SelectionContainer(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    blockers.forEach { Text(it.text, style = MaterialTheme.typography.bodyMedium) }
+                    blockers.forEach { PaperText(it.text) }
                 }
             }
-            Button(onClick = onRetry, enabled = !busy) {
-                Text(blockers.recoveryActionLabel())
-            }
+            PaperButton(blockers.recoveryActionLabel(), onRetry, enabled = !busy)
         }
     }
 }

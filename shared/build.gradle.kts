@@ -49,6 +49,7 @@ kotlin {
             implementation(libs.ktor.clientCio)
         }
         commonMain.dependencies {
+            implementation(project(":designSystem"))
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
@@ -105,4 +106,30 @@ tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
+}
+
+// DesktopUiSkillIntegrationTest validates the tracked package outside this subproject.
+tasks.named<Test>("jvmTest") {
+    inputs.dir(rootProject.layout.projectDirectory.dir("skills/magicpaper-desktop-ui"))
+}
+
+tasks.register<JavaExec>("installDesktopUiSkillBinding") {
+    group = "verification"
+    description = "Import, review, bind, and verify the project-local desktop UI skill repository."
+    dependsOn("jvmTestClasses")
+    classpath(
+        configurations.named("jvmTestRuntimeClasspath"),
+        layout.buildDirectory.dir("classes/kotlin/jvm/test"),
+        layout.buildDirectory.dir("classes/kotlin/jvm/main"),
+        layout.buildDirectory.dir("processedResources/jvm/main"),
+    )
+    mainClass.set("io.aequicor.magicpaper.data.skills.DesktopUiSkillBindingTool")
+    args(
+        rootProject.layout.projectDirectory.dir("skills/magicpaper-desktop-ui").asFile.absolutePath,
+        rootProject.layout.projectDirectory.dir(".magicpaper/skill-packages").asFile.absolutePath,
+        rootProject.layout.projectDirectory.file("docs/desktop-ui/active-binding.json").asFile.absolutePath,
+    )
+    inputs.dir(rootProject.layout.projectDirectory.dir("skills/magicpaper-desktop-ui"))
+    outputs.dir(rootProject.layout.projectDirectory.dir(".magicpaper/skill-packages"))
+    outputs.file(rootProject.layout.projectDirectory.file("docs/desktop-ui/active-binding.json"))
 }
