@@ -161,14 +161,32 @@ class ProjectsPanelCollapseTest {
         assertTrue("session-child" in p.keys())
     }
 
-    @Test fun hoveringKeepsRowAndTitleBoundsStable() = Panel().use { p ->
+    @Test fun hoveringKeepsRowSizeAndTitlePositionStable() = Panel().use { p ->
         val rows = p.list.layoutInfo.visibleItemsInfo.associate { it.key to (it.offset to it.size) }
         val titles = listOf("Project A", "Plan", "Stage", "Ordinary").associateWith { p.text(it).boundsInRoot }
         for (key in listOf("project-a", "session-parent", "session-child", "session-ordinary", "project-b")) {
             p.hover(key)
             assertEquals(rows, p.list.layoutInfo.visibleItemsInfo.associate { it.key to (it.offset to it.size) })
-            titles.forEach { (title, bounds) -> assertEquals(bounds, p.text(title).boundsInRoot, title) }
+            titles.forEach { (title, bounds) ->
+                val current = p.text(title).boundsInRoot
+                assertEquals(bounds.topLeft, current.topLeft, title)
+                assertEquals(bounds.height, current.height, title)
+            }
         }
+    }
+
+    @Test fun hiddenSessionActionsLeaveTitleSpaceUpToRowEdge() = Panel(width = 200).use { p ->
+        val title = "A long session title that reaches the sidebar edge"
+        p.ui.value = p.ui.value.copy(sessions = p.ui.value.sessions.map {
+            if (it.session.id == "ordinary") it.copy(session = it.session.copy(name = title)) else it
+        })
+        p.render()
+        val fullBounds = p.text(title).boundsInRoot
+        assertTrue(fullBounds.right >= 185f, "Hidden actions must not leave an empty strip before the row edge")
+        p.hover("session-ordinary")
+        assertTrue(p.text(title).boundsInRoot.right < fullBounds.right, "Visible actions need their own space")
+        p.hover("project-b")
+        assertEquals(fullBounds, p.text(title).boundsInRoot, "Leaving the row restores all title space")
     }
 
     @Test fun newSessionButtonUsesOnlyItsCallback() = Panel().use { p ->

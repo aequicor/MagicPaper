@@ -797,7 +797,7 @@ private fun SessionRow(
     }
 }
 
-/** Reserve action space even when hidden so hovering cannot resize a row or its title. */
+/** Keep row height stable, but let titles use the width of hidden actions. */
 @Composable
 private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
     Layout(
@@ -805,7 +805,7 @@ private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
         content = { Row(verticalAlignment = Alignment.CenterVertically) { content() } },
     ) { measurables, constraints ->
         val actions = measurables.single().measure(constraints.copy(minWidth = 0, minHeight = 0))
-        layout(actions.width, actions.height) {
+        layout(if (visible) actions.width else 0, actions.height) {
             // Unplaced actions are neither drawn nor available for pointer input.
             if (visible) actions.placeRelative(0, 0)
         }
