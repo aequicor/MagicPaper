@@ -72,6 +72,23 @@ internal fun Plan.coordinatorResultProblem(eventId: String, decision: Coordinato
 
 internal fun CoordinationRecord.actionOrigin(): String = if (actionRevision == 0) id else "$id-revision-$actionRevision"
 
+/** A consumed user answer starts a new recovery window; queued answers do not. */
+internal fun Plan.blockedTurnCount(stageId: String, attempt: StageAttempt): Int {
+    var count = 0
+    for (record in stageRecords(stageId, attempt)) {
+        val turn = record.id.substringAfterLast("-turn-").toIntOrNull() ?: record.turnIndex
+        if (deliveries.any { it.targetStageId == stageId && it.attemptId == attempt.id &&
+                it.turnIndex == turn && it.replyTo != null &&
+                it.state in setOf(DeliveryState.DELIVERED, DeliveryState.ANSWERED) }) count = 0
+        when (record.reply.kind) {
+            StageReplyKind.RESULT -> count = 0
+            StageReplyKind.BLOCKED, StageReplyKind.QUESTION -> count++
+            StageReplyKind.WAIT -> Unit
+        }
+    }
+    return count
+}
+
 /** Scope evidence by attempt and run, including checkpoints written before those fields existed. */
 internal fun Plan.stageRecords(stageId: String, attempt: StageAttempt): List<CoordinationRecord> = coordination.filter {
     it.stageId == stageId && (it.runId.isBlank() || it.runId == runId) &&

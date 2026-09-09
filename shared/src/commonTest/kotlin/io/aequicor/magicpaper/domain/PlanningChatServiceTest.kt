@@ -1281,6 +1281,37 @@ class PlanningChatServiceTest {
         assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
     }
 
+    @Test fun answeredRecoveryLimitReturnsToCoordinatorInsteadOfRepeatingHelp() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        val attempt = StageAttempt("a", "plan-p-stage-stage", StageAssignment(profile.id, "m"),
+            phase = AttemptPhase.EXECUTING, turnIndex = 2,
+            report = """{"kind":"BLOCKED","text":"Migration unfinished"}""")
+        val stage = base.milestones.single().copy(attempts = listOf(attempt))
+        val plan = base.copy(confirmedRevision = 1, milestones = listOf(stage), coordination = (0..1).map {
+            CoordinationRecord("a-turn-$it", stage.id, StageReply(StageReplyKind.BLOCKED, "Migration unfinished"), attemptId = "a", turnIndex = it)
+        })
+        f.store.save(plan)
+        f.service.prepareSessions(plan)
+        val stopped = f.service.finished(plan, stage, attempt)
+        assertEquals(StageTurnAction.WAIT, stopped.action)
+        assertTrue(f.gateway.coordinatorCallbacks.isEmpty())
+        val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
+        f.service.send(parent, "Continue migration", replyTo = question.id); runCurrent()
+        val nextAttempt = attempt.copy(turnIndex = 3)
+        f.store.update(plan.id) { it.copy(milestones = listOf(stage.copy(attempts = listOf(nextAttempt)))) }
+        val resumed = f.store.planFor(plan.id)!!
+        f.service.instructions(resumed, resumed.milestones.single(), nextAttempt)
+        f.service.started(resumed, resumed.milestones.single(), nextAttempt)
+        f.gateway.coordinator = """{"reply":"Finish remaining migration","actions":[{"stageId":"stage","message":"Migrate remaining files and run tests"}]}"""
+        val next = f.service.finished(f.store.planFor(plan.id)!!, resumed.milestones.single(), nextAttempt)
+        assertEquals(StageTurnAction.CONTINUE, next.action)
+        assertEquals(1, f.gateway.coordinatorCallbacks.size)
+        assertNull(f.projects.messages(project.id, parent.id).pendingPlanningQuestion())
+        assertTrue(f.store.planFor(plan.id)!!.deliveries.any { it.text == "Migrate remaining files and run tests" })
+    }
+
     @Test fun answerArrivingBeforeWorkerSavesWaitingStateResumesTheStage() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
