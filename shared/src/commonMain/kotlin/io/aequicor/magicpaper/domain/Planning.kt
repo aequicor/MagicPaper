@@ -103,6 +103,7 @@ data class Plan(
     val versions: List<PlanVersion> = emptyList(),
     val deliveries: List<PlanDelivery> = emptyList(),
     val pendingRequest: String = "",
+    val pendingRecalculationNodeId: String? = null,
     val requestId: String = "",
     val coordination: List<CoordinationRecord> = emptyList(),
     val scheduledMessages: List<ScheduledMessage> = emptyList(),

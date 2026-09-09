@@ -1,4 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
+import io.aequicor.magicpaper.domain.tools.ToolPhase
+
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import io.aequicor.magicpaper.ui.components.InlineMessageParts
 import io.aequicor.magicpaper.ui.components.MessageExpansion
@@ -1121,7 +1123,7 @@ private fun SavedCodingHistoryItem(
                     if (step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) {
                         ToolStepContent(step!!.title, "", step.running, step.ok, live,
                             step.kind == CodingStepKind.EXEC, expanded = true, onToggle = onCollapse,
-                            showHeader = fragment.first, body = {
+                            showHeader = fragment.first, toolPhase = step.toolPhase, body = {
                                 parts.Content(fragment.index,
                                     style = LocalPaperTypography.current.body.copy(fontFamily = MagicFonts.code),
                                     color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
@@ -1372,12 +1374,13 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
         ok = step.ok,
         live = live,
         isExec = step.kind == CodingStepKind.EXEC,
+        toolPhase = step.toolPhase,
         expanded = expanded,
         onToggle = { expanded = !expanded },
     )
 }
 
-private enum class ToolStepStatus { RUNNING, SUCCEEDED, FAILED }
+private enum class ToolStepStatus { RUNNING, WAITING, SUCCEEDED, FAILED, CANCELLED }
 
 @Composable
 private fun ToolStepContent(
@@ -1390,14 +1393,17 @@ private fun ToolStepContent(
     expanded: Boolean,
     onToggle: () -> Unit,
     showHeader: Boolean = true,
+    toolPhase: ToolPhase? = null,
     body: (@Composable () -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val status = when { running -> ToolStepStatus.RUNNING; ok -> ToolStepStatus.SUCCEEDED; else -> ToolStepStatus.FAILED }
+    val status = when { toolPhase == ToolPhase.WAITING && running -> ToolStepStatus.WAITING
+        toolPhase == ToolPhase.CANCELLED -> ToolStepStatus.CANCELLED
+        running -> ToolStepStatus.RUNNING; ok -> ToolStepStatus.SUCCEEDED; else -> ToolStepStatus.FAILED }
     val statusColor by animateColorAsState(when (status) {
-        ToolStepStatus.RUNNING -> LocalPaperColors.current.action
+        ToolStepStatus.RUNNING, ToolStepStatus.WAITING -> LocalPaperColors.current.action
         ToolStepStatus.FAILED -> LocalPaperColors.current.error
-        ToolStepStatus.SUCCEEDED -> LocalPaperColors.current.secondaryText
+        ToolStepStatus.SUCCEEDED, ToolStepStatus.CANCELLED -> LocalPaperColors.current.secondaryText
     }, animationSpec = tween(180), label = "Tool status color")
     Column(
         modifier = Modifier
@@ -1419,6 +1425,8 @@ private fun ToolStepContent(
                 modifier = Modifier.size(14.dp).semantics {
                     contentDescription = when (status) {
                         ToolStepStatus.RUNNING -> "Выполняется"
+                        ToolStepStatus.WAITING -> "Ожидается ответ пользователя"
+                        ToolStepStatus.CANCELLED -> "Вызов отменён"
                         ToolStepStatus.FAILED -> "Ошибка выполнения"
                         ToolStepStatus.SUCCEEDED -> "Выполнено"
                     }
@@ -1428,7 +1436,7 @@ private fun ToolStepContent(
                     val stroke = 1.4.dp.toPx()
                     // Draw every status inside the icon bounds, independent of text line height.
                     when (iconStatus) {
-                        ToolStepStatus.RUNNING -> {
+                        ToolStepStatus.RUNNING, ToolStepStatus.WAITING -> {
                             drawCircle(statusColor, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
                             drawLine(statusColor, center, Offset(center.x, size.height * 0.25f), stroke, StrokeCap.Round)
                             drawLine(statusColor, center, Offset(size.width * 0.72f, center.y), stroke, StrokeCap.Round)
@@ -1438,7 +1446,7 @@ private fun ToolStepContent(
                             drawLine(statusColor, Offset(size.width * 0.16f, size.height * 0.52f), bend, stroke, StrokeCap.Round)
                             drawLine(statusColor, bend, Offset(size.width * 0.84f, size.height * 0.24f), stroke, StrokeCap.Round)
                         }
-                        ToolStepStatus.FAILED -> {
+                        ToolStepStatus.FAILED, ToolStepStatus.CANCELLED -> {
                             drawLine(statusColor, Offset(size.width * 0.22f, size.height * 0.22f),
                                 Offset(size.width * 0.78f, size.height * 0.78f), stroke, StrokeCap.Round)
                             drawLine(statusColor, Offset(size.width * 0.78f, size.height * 0.22f),

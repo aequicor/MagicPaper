@@ -53,3 +53,20 @@ test('non-Git folders report the cause and forbidden tools are blocked', async (
   for (const name of ['write', 'edit', 'bash', 'powershell', 'computer']) assert.equal(gate({ toolName: name }).block, true);
   for (const name of planningTools) assert.equal(gate({ toolName: name }), undefined);
 });
+
+
+test('planning accepts only the exact application tools declared by the host', () => {
+  const original = process.env.MAGICPAPER_AGENT_TOOLS_NAMES;
+  try {
+    process.env.MAGICPAPER_AGENT_TOOLS_NAMES = JSON.stringify(['magicpaper_context_get', 'magicpaper_plan_propose']);
+    let gate;
+    register({ registerTool: () => {}, on: (name, callback) => { if (name === 'tool_call') gate = callback; } });
+    for (const name of ['magicpaper_context_get', 'magicpaper_plan_propose']) assert.equal(gate({ toolName: name }), undefined);
+    for (const name of ['write', 'bash', 'magicpaper_stage_send', 'magicpaper_arbitrary']) assert.equal(gate({ toolName: name }).block, true);
+    process.env.MAGICPAPER_AGENT_TOOLS_NAMES = JSON.stringify(['bash']);
+    assert.throws(() => register({}), /каталог/);
+  } finally {
+    if (original === undefined) delete process.env.MAGICPAPER_AGENT_TOOLS_NAMES;
+    else process.env.MAGICPAPER_AGENT_TOOLS_NAMES = original;
+  }
+});

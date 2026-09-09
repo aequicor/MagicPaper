@@ -1,12 +1,13 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.data.planning.PlanningStore
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import kotlinx.serialization.encodeToString
 
 /** Application-owned conversation, durable requests and worker inboxes. UI never owns a run. */
@@ -17,6 +18,7 @@ class OrchestrationService(
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     private val clock: () -> Long = Id::now,
     private val workerDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val toolHost: ToolHost? = null,
 ) : PlanningExecutionHooks {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     val messageScheduler = MessageScheduler(store, this.scope, ::dispatchScheduledMessage, clock, ::synchronizeQuestionEvents, ::hasScheduledReceipt)
@@ -51,7 +53,7 @@ class OrchestrationService(
         coordinators.entries.groupBy { it.value.sessionId }.forEach { (sessionId, turns) ->
             val request = requests[sessionId] ?: CodingDraft()
             combined[sessionId] = request.copy(active = true, steps = request.steps + turns.flatMap { (id, activity) ->
-                activity.steps.map { it.copy(callId = "$id:${it.callId}", id = "$id:${it.id}") }
+                activity.steps.map { if (it.toolCategory != null) it else it.copy(callId = "$id:${it.callId}", id = "$id:${it.id}") }
             })
         }
         combined
@@ -60,6 +62,228 @@ class OrchestrationService(
     val changes: StateFlow<Long> = _changes
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+    init {
+        toolHost?.checkScope = { context -> withContext(this.scope.coroutineContext.minusKey(Job)) { checkToolScope(context) } }
+        toolHost?.checkReplayScope = { context -> withContext(this.scope.coroutineContext.minusKey(Job)) { checkToolScope(context, historical = true) } }
+        toolHost?.reconcile = { context, receipt -> withContext(this.scope.coroutineContext.minusKey(Job)) { reconcileTool(context, receipt) } }
+        toolHost?.receiver = { context, operation, tool, arguments ->
+            withContext(this.scope.coroutineContext.minusKey(Job)) { executeTool(context, operation, tool, arguments) }
+        }
+        toolHost?.prepareWorker = { session ->
+            val plan = session.planId?.let { store.planFor(it) }
+            val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
+            val attempt = stage?.attempts?.lastOrNull { it.sessionId == session.id }
+            when {
+                plan != null && stage != null && attempt != null -> ToolExecutionContext(session.projectId, session.id, session.id, "${attempt.id}-turn-${attempt.turnIndex}",
+                    ToolRole.WORKER, session.interactionMode, plan.id, plan.runId, stage.id, attempt.id, attempt.turnIndex, parentSessionId = plan.parentSessionId.takeIf { it.isNotBlank() })
+                plan != null && plan.isAuxiliarySession(session.id) -> ToolExecutionContext.worker(session).copy(
+                    role = ToolRole.CHAT, ownerSessionId = plan.auxiliaryOwner(session.id)!!, runId = plan.runId)
+                else -> ToolExecutionContext.worker(session).copy(role = ToolRole.CHAT, planId = null)
+            }
+        }
+    }
+
+    private fun Plan.auxiliaryOwner(id: String): String? {
+        if (finalAttempt?.let { id == it.sessionId || id == "${it.sessionId}-delivery" } == true)
+            return parentSessionId.ifBlank { sessionId.ifBlank { id } }
+        return milestones.flatMap { it.attempts }.firstOrNull { id == "${it.sessionId}-merge" }?.sessionId
+    }
+    private fun Plan.isAuxiliarySession(id: String) = auxiliaryOwner(id) != null
+
+    private suspend fun checkToolScope(context: ToolExecutionContext, historical: Boolean = false) {
+        require(projects.all().any { it.id == context.projectId }) { "Проект удалён" }
+        val plan = context.planId?.let { store.planFor(it) ?: error("План удалён") }
+        if (plan != null) {
+            require(plan.projectId == context.projectId && (historical || context.runId == null || plan.runId == context.runId)) { "Проект или запуск изменился" }
+            if (context.role == ToolRole.WORKER && !historical) {
+                val stage = plan.milestones.firstOrNull { it.id == context.stageId } ?: error("Этап не найден")
+                val attempt = stage.attempts.lastOrNull() ?: error("Попытка не найдена")
+                require(attempt.id == context.attemptId && attempt.sessionId == context.sessionId && attempt.turnIndex == context.turnIndex) { "Попытка этапа изменилась" }
+            } else require(context.role == ToolRole.WORKER || plan.parentSessionId.isBlank() || plan.parentSessionId == context.ownerSessionId ||
+                (context.role == ToolRole.CHAT && plan.auxiliaryOwner(context.sessionId) == context.ownerSessionId)) { "План принадлежит другому оркестратору" }
+        }
+        val session = projects.sessions(context.projectId).firstOrNull { it.id == context.ownerSessionId }
+        require(session != null || (plan != null && plan.parentSessionId.isBlank() &&
+            (context.role == ToolRole.PLANNER || plan.isAuxiliarySession(context.sessionId)))) { "Сессия удалена" }
+        require(session?.archived != true) { "Сессия в архиве" }
+    }
+
+    private suspend fun reconcileTool(context: ToolExecutionContext, receipt: ToolReceipt): JsonElement? {
+        val plan = context.planId?.let { store.planFor(it) } ?: return null
+        val operation = receipt.operationId.takeIf { it.isNotBlank() } ?: return null
+        fun success(text: String) = buildJsonObject { put("status", "applied"); put("message", text) }
+        return when (receipt.toolId) {
+            "stage.send" -> plan.deliveries.firstOrNull { it.id == operation }?.let { buildJsonObject { put("status", "queued"); put("deliveryId", it.id) } }
+            "stage.resolve" -> {
+                val args = json.decodeFromJsonElement<ToolStageResolve>(receipt.arguments)
+                if (args.action == CoordinatorResultAction.CONTINUE && plan.deliveries.any { it.id == operation }) receipt.arguments else null
+            }
+            "stage.handoff" -> plan.coordination.firstOrNull { it.toolCallId == operation }?.let { success("Передача управления сохранена. Завершите ответ; результат проверит приложение") }
+            "session.manage" -> state(plan.parentSessionId, plan.projectId).sessionCommands.firstOrNull { it.id == operation && it.applied }?.let { success("Сессия обновлена") }
+            "schedule.manage" -> {
+                val args = json.decodeFromJsonElement<ToolScheduleManage>(receipt.arguments)
+                val ids = args.commands.indices.mapNotNull { plan.scheduleReceipts["$operation-schedule-$it"] }
+                if (ids.size != args.commands.size) null else buildJsonObject { put("status", "applied"); put("rules", json.encodeToJsonElement(ids)) }
+            }
+            "plan.refine", "plan.recalculate" -> if (plan.pendingRequest.isBlank() && plan.dialogue.any { it.id == "$operation-reply" })
+                success(if (receipt.toolId == "plan.refine") "Предложение плана сохранено" else "Предложение пересчёта сохранено") else null
+            else -> null
+        }
+    }
+
+    private suspend fun executeTool(context: ToolExecutionContext, operation: String, tool: String, arguments: JsonObject): JsonElement {
+        checkToolScope(context)
+        val plan = context.planId?.let { store.planFor(it) }
+        fun requirePlan() = plan ?: error("Не задан план")
+        fun success(text: String) = buildJsonObject { put("status", "applied"); put("message", text) }
+        return when (tool) {
+            "context.get" -> buildJsonObject {
+                put("projectId", context.projectId); put("sessionId", context.ownerSessionId)
+                val previous = toolHost?.receipts?.forRequest("${context.projectId}/${context.ownerSessionId}/${context.requestId}").orEmpty()
+                put("previousTools", buildJsonArray { previous.forEach { call -> add(buildJsonObject {
+                    put("tool", call.toolId); put("status", call.phase.name); put("operationId", call.operationId)
+                    put("arguments", call.arguments.toString().take(3000)); put("result", call.result.toString().take(6000))
+                }) } })
+                put("sessions", buildJsonArray { projects.sessions(context.projectId).filter {
+                    it.id == context.ownerSessionId || it.parentSessionId == context.ownerSessionId
+                }.forEach { session -> add(buildJsonObject { put("id", session.id); put("name", session.name); put("archived", session.archived) }) } })
+                if (plan != null) {
+                    put("planId", plan.id); put("revision", plan.revision); put("runId", plan.runId)
+                    put("goal", plan.goal); put("intent", plan.intent.name); put("phase", plan.phase.name)
+                    put("tree", json.encodeToJsonElement(plan.tree))
+                    put("stages", buildJsonArray { plan.selectedMilestones.forEach { stage -> add(buildJsonObject {
+                        put("id", stage.id); put("title", stage.title); put("status", stage.status.name)
+                        put("description", stage.description); put("acceptance", stage.acceptance); put("report", stage.report.take(6000))
+                    }) } })
+                    put("deliveries", json.encodeToJsonElement(plan.deliveries.filter { context.stageId == null || it.targetStageId == context.stageId }.takeLast(20)))
+                }
+            }
+            "plan.refine" -> {
+                val args = json.decodeFromJsonElement<ToolMessage>(arguments)
+                require(args.message.isNotBlank()) { "Добавьте поручение" }
+                require(args.revision == null || args.revision == requirePlan().revision) { "План изменился" }
+                refine(requirePlan().id, operation, args.message, args.requiresConfirmation)
+                success("Предложение плана сохранено")
+            }
+            "plan.recalculate" -> {
+                val current = requirePlan()
+                val args = json.decodeFromJsonElement<ToolRecalculate>(arguments)
+                require(args.revision == current.revision && current.tree.any { it.id == args.nodeId }) { "План или узел изменился" }
+                // Use the same proposal/confirmation path as ordinary refinement.
+                refine(current.id, operation, "Пересчитай участок ${args.nodeId}", true, args.nodeId)
+                success("Предложение пересчёта сохранено")
+            }
+            "plan.control" -> {
+                val current = requirePlan()
+                val args = json.decodeFromJsonElement<ToolPlanControl>(arguments)
+                require(current.revision == args.revision) { "План изменился; запросите актуальный контекст" }
+                when (args.action) {
+                    "pause" -> execution.pause(current.id)
+                    "stop" -> execution.stop(current.id)
+                    "retry" -> {
+                        require(context.sourceInput != null && context.sourceInput.scheduledRuleId == null && current.confirmedRevision != null) { "Повтор требует действия пользователя и подтверждённого плана" }
+                        execution.retry(current.id)
+                    }
+                    "resume" -> {
+                        require(context.sourceInput != null && context.sourceInput.scheduledRuleId == null) { "Возобновление требует действия пользователя" }
+                        require(current.confirmedRevision != null) { "Сначала подтвердите план" }
+                        resumePlan(current.id)
+                    }
+                    "confirm" -> {
+                        require(context.sourceInput != null && context.sourceInput.scheduledRuleId == null) { "Подтверждение требует действия пользователя" }
+                        confirmNow(current.id, args.proposalId, args.revision)
+                    }
+                    else -> error("Неизвестная команда управления")
+                }
+                success("Команда управления выполнена")
+            }
+            "stage.pause" -> {
+                val current = requirePlan()
+                val args = json.decodeFromJsonElement<ToolStagePause>(arguments)
+                require(args.stageIds.isNotEmpty() && args.stageIds.all { id -> current.selectedMilestones.any { it.id == id } }) { "Неизвестный этап" }
+                val key = context.sourceInput?.id ?: context.requestId
+                val saved = updateState(context.ownerSessionId, context.projectId) { old -> old.copy(workPauses = old.workPauses +
+                    (key to OrchestrationPause(current.id, (old.workPauses[key]?.stageIds.orEmpty() + args.stageIds).distinct()))) }
+                execution.interruptStages(current.id, saved.pausedStages(current) - setOfNotNull(context.stageId))
+                success("Затронутые этапы приостановлены: ${args.reason}")
+            }
+            "stage.send" -> {
+                val current = requirePlan()
+                val args = json.decodeFromJsonElement<ToolStageSend>(arguments)
+                require(current.confirmedRevision != null && args.message.isNotBlank() && current.selectedMilestones.any { it.id == args.stageId }) { "Недопустимый этап или пустое задание" }
+                require(context.attemptId == null || args.stageId != context.stageId || current.coordination.firstOrNull { it.id == "${context.attemptId}-turn-${context.turnIndex}" }?.reply?.kind != StageReplyKind.RESULT) { "Для доработки текущего результата используйте stage.resolve CONTINUE" }
+                val id = enqueue(current.id, context.ownerSessionId, args.stageId, args.message, operation)
+                buildJsonObject { put("status", "queued"); put("deliveryId", id) }
+            }
+            "stage.resolve" -> {
+                val current = requirePlan()
+                require(context.attemptId != null) { "Нет текущего результата исполнителя" }
+                val args = json.decodeFromJsonElement<ToolStageResolve>(arguments)
+                val reply = CoordinatorReply(args.reason.ifBlank { "Результат передан на проверку" }, resultAction = args.action, continuationReason = args.reason,
+                    actions = if (args.action == CoordinatorResultAction.CONTINUE) listOf(CoordinatorAction(context.stageId!!, args.reason)) else emptyList())
+                require(current.coordinatorResultProblem("${context.attemptId}-turn-${context.turnIndex}", reply) == null) { "Некорректное решение по результату; для продолжения укажите конкретную незавершённую работу" }
+                if (args.action == CoordinatorResultAction.CONTINUE) enqueue(current.id, context.ownerSessionId, context.stageId!!, args.reason, operation)
+                json.encodeToJsonElement(args)
+            }
+            "session.manage" -> {
+                val current = requirePlan()
+                val args = json.decodeFromJsonElement<ToolSessionManage>(arguments)
+                val stage = current.milestones.firstOrNull { it.id == args.stageId } ?: error("Этап не найден")
+                val session = stage.attempts.firstOrNull()?.sessionId ?: "plan-${current.id}-stage-${stage.id}"
+                performSessionCommand(current, SessionCommand(operation, args.kind, session, current.id, stage.id, args.name), publishNotice = false)
+                success("Сессия обновлена")
+            }
+            "schedule.manage" -> {
+                val current = requirePlan()
+                val args = json.decodeFromJsonElement<ToolScheduleManage>(arguments)
+                require(args.commands.isNotEmpty()) { "Нет операций" }
+                val saved = messageScheduler.apply(current.id, args.commands, operation, context.ownerSessionId,
+                    state(current.parentSessionId, current.projectId).questions.filter { it.planId == current.id }.map { it.id }.toSet(), context.stageId, expectedRunId = current.runId)
+                buildJsonObject { put("status", "applied"); put("rules", json.encodeToJsonElement(args.commands.indices.mapNotNull { saved.scheduleReceipts["$operation-schedule-$it"] })) }
+            }
+            "stage.handoff" -> {
+                val current = requirePlan()
+                val requested = json.decodeFromJsonElement<StageReply>(arguments)
+                val reply = requested.copy(waitFor = requested.waitFor?.normalized(clock()))
+                require(reply.text.isNotBlank() && (reply.targetStageId.isBlank() || current.selectedMilestones.any { it.id == reply.targetStageId })) { "Некорректный результат или адресат" }
+                require(reply.kind != StageReplyKind.WAIT || (reply.waitFor != null && reply.resumeMessage.isNotBlank())) { "Для ожидания нужны условие и сообщение продолжения" }
+                reply.waitFor?.validate(current, state(current.parentSessionId, current.projectId).questions.map { it.id }.toSet())
+                val id = "${context.attemptId}-turn-${context.turnIndex}"
+                store.update(current.id) { latest ->
+                    val existing = latest.coordination.firstOrNull { it.id == id }
+                    require(existing == null || existing.reply == reply) { "Результат этого хода уже передан" }
+                    if (existing != null) latest else latest.copy(coordination = latest.coordination + CoordinationRecord(id,
+                        context.stageId!!, reply, runId = current.runId, attemptId = context.attemptId!!,
+                        sourceSessionId = context.sessionId, turnIndex = context.turnIndex, createdAt = clock(), toolCallId = operation))
+                }
+                success("Передача управления сохранена. Завершите ответ; результат проверит приложение")
+            }
+            else -> error("Инструмент не подключён: $tool")
+        }
+    }
+
+    /** Persisted JSON decisions execute through Command/Observer too; their original operation IDs stay inside the receiver. */
+    private suspend inline fun <reified T> legacyTool(plan: Plan, request: String, call: String, name: String,
+        args: JsonObject, noinline action: suspend () -> T): T {
+        val host = toolHost ?: return action()
+        val definition = ToolCatalog.get(name)
+        val context = ToolExecutionContext(plan.projectId, plan.parentSessionId, plan.parentSessionId, request,
+            ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId)
+        val registry = ToolRegistry(listOf(JsonToolCommand(definition) { _, _, _ -> json.encodeToJsonElement(action()) }))
+        val tools = ToolSession(context, registry, ToolExecutor(registry, host.receipts, host.checkScope, host.checkReplayScope))
+        val recorder = CodingRunRecorder()
+        val messageId = "legacy-tool-$request-$call"
+        val close = tools.events.observe { event ->
+            recorder.apply(event.codingEvent())
+            _drafts.update { it + (plan.parentSessionId to recorder.draft(true).copy(timelineId = messageId)) }
+        }
+        try {
+            val result = tools.call(call, name, args)
+            append(plan.projectId, plan.parentSessionId, recorder.message(messageId, clock()).copy(timelineId = messageId))
+            return json.decodeFromJsonElement<T>(result)
+        } finally { close() }
+    }
+
     private fun changed() { _changes.update { it + 1 } }
     private fun launch(block: suspend () -> Unit) = scope.launch {
         try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { _error.value = e.message; changed() }
@@ -112,7 +336,7 @@ class OrchestrationService(
             coordinatingPlans.forEach { execution.stop(it) }
             val plan = store.plans().firstOrNull { it.parentSessionId == sessionId && it.pendingRequest.isNotBlank() } ?: return@launch
             append(plan.projectId, sessionId, CodingMessage("${plan.requestId}-cancelled", CodingRole.AGENT, "Запрос планирования остановлен. Сохранённый план не изменён.", createdAt = Id.now()))
-            store.update(plan.id) { it.copy(pendingRequest = "", requestId = "") }
+            store.update(plan.id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null) }
             _drafts.update { it - sessionId }
         }
     }
@@ -635,7 +859,7 @@ class OrchestrationService(
             if (it.id == input.id) it.copy(decision = saved) else it
         }) } }
         val pauseIds = (decision.pauseStageIds + state(session.id, session.projectId).workPauses[input.id]?.stageIds.orEmpty() + if (decision.intent == UserTurnIntent.INSTRUCT) listOf(decision.stageId) else emptyList()).distinct()
-        if (pauseIds.isNotEmpty()) {
+        if (pauseIds.isNotEmpty() && !decision.toolsApplied) {
             val saved = updateState(session.id, session.projectId) { old -> old.copy(workPauses = old.workPauses +
                 (input.id to OrchestrationPause(current.id, pauseIds))) }
             execution.interruptStages(current.id, saved.pausedStages(current))
@@ -647,8 +871,10 @@ class OrchestrationService(
         when (decision.intent) {
             UserTurnIntent.SCHEDULE -> {
                 require(decision.schedules.isNotEmpty()) { "Нет операций с правилами" }
-                val saved = messageScheduler.apply(current.id, decision.schedules, input.id, session.id,
-                    state(session.id, session.projectId).questions.filter { it.planId == current.id }.map { it.id }.toSet(), expectedRunId = current.runId)
+                val saved = legacyTool(current, input.id, "schedule", "schedule.manage", json.encodeToJsonElement(ToolScheduleManage(decision.schedules)).jsonObject) {
+                    messageScheduler.apply(current.id, decision.schedules, input.id, session.id,
+                        state(session.id, session.projectId).questions.filter { it.planId == current.id }.map { it.id }.toSet(), expectedRunId = current.runId)
+                }
                 val ids = decision.schedules.indices.mapNotNull { saved.scheduleReceipts["${input.id}-schedule-$it"] }
                 append(session.projectId, session.id, CodingMessage("${input.id}-reply", CodingRole.AGENT,
                     decision.reply.ifBlank { "Правила сохранены." } + "\nПравила: ${ids.joinToString()}", createdAt = clock()))
@@ -656,10 +882,14 @@ class OrchestrationService(
             UserTurnIntent.ANSWER -> answerQuestion(session, current, input, decision)
             UserTurnIntent.INSTRUCT -> {
                 require(current.confirmedRevision != null && current.selectedMilestones.any { it.id == decision.stageId }) { "Этап не найден" }
-                enqueue(current.id, session.id, decision.stageId, input.text, "${input.id}-instruction")
+                legacyTool(current, input.id, "instruct", "stage.send", json.encodeToJsonElement(ToolStageSend(decision.stageId, input.text)).jsonObject) {
+                    enqueue(current.id, session.id, decision.stageId, input.text, "${input.id}-instruction")
+                }
                 if (current.intent == ExecutionIntent.RUN) execution.start(current.id)
             }
-            UserTurnIntent.REFINE -> refine(current.id, input.id, input.text, decision.requiresConfirmation)
+            UserTurnIntent.REFINE -> legacyTool(current, input.id, "refine", "plan.refine", json.encodeToJsonElement(ToolMessage(input.text, requiresConfirmation = decision.requiresConfirmation)).jsonObject) {
+                refine(current.id, input.id, input.text, decision.requiresConfirmation)
+            }
             UserTurnIntent.CLARIFY -> askToRefine(session, current, input, decision.copy(pauseStageIds = pauseIds))
             UserTurnIntent.DISCUSS -> {
                 val message = decision.reply.ifBlank { "Уточните, что вы хотите узнать." }
@@ -674,6 +904,7 @@ class OrchestrationService(
                 require(input.scheduledRuleId == null || decision.command !in listOf("resume", "confirm")) {
                     "Автоматическое сообщение не может подтвердить план или отменить пользовательскую остановку"
                 }
+                legacyTool(current, input.id, "control", "plan.control", json.encodeToJsonElement(ToolPlanControl(decision.command, current.revision, decision.proposalId)).jsonObject) {
                 when (decision.command) {
                     "pause" -> execution.pause(current.id)
                     "stop" -> execution.stop(current.id)
@@ -683,6 +914,7 @@ class OrchestrationService(
                     }
                     "confirm" -> confirmNow(current.id, decision.proposalId)
                     else -> error("Неизвестная команда управления")
+                }
                 }
                 append(current.projectId, session.id, CodingMessage("${input.id}-reply", CodingRole.AGENT,
                     decision.reply.ifBlank { "Команда выполнена." }, createdAt = Id.now()))
@@ -697,8 +929,30 @@ class OrchestrationService(
             old.copy(workPauses = if (pause != null && proposal != null)
                 retained + (input.id to pause.copy(proposalId = proposal.id)) else retained - input.id)
         }
-        if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER)
+        if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER || decision.toolsApplied)
             store.planFor(current.id)?.takeIf { it.intent == ExecutionIntent.RUN }?.let { execution.start(it.id) }
+    }
+
+    private suspend fun interpretToolInput(session: CodingSession, plan: Plan, input: OrchestrationInput, profile: LlmProfile): UserTurnDecision {
+        val tools = toolHost!!.session(ToolExecutionContext(plan.projectId, session.id, session.id, input.id,
+            ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId, sourceInput = input))
+        val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
+        val messages = listOf(LlmMessage(LlmChatRole.SYSTEM,
+            "Ты оркестратор. Сначала получи context.get. Учитывай previousTools: не повторяй применённые действия; при неизвестном исходе требуется восстановление. Вопрос о статусе или результате требует объяснения, не изменения плана. " +
+                "Для явного поручения создать или изменить план используй plan.refine; для уточнения без поручения спроси, нужна ли доработка. " +
+                "При поправках сначала приостанови только затронутые этапы через stage.pause; независимые этапы продолжаются. " +
+                "Для задания в рамках существующего этапа используй stage.send. Структуру и критерии меняй через предложение плана. " +
+                "Если не хватает требований, используй questionnaire; молчание не означает согласие. " +
+                "Подтверждение плана выполняет пользователь. Автоматическое сообщение не может отменить остановку пользователя. " +
+                schedulingInstructions()),
+            LlmMessage(LlmChatRole.USER, "Источник: ${if (input.scheduledRuleId == null) "пользователь" else "автоматическое сообщение"}\nИстория:\n$history\nТекущий запрос: ${input.text}"))
+        _drafts.update { it + (session.id to CodingDraft(active = true, timelineId = "${input.id}-reply")) }
+        val activity = MutableStateFlow<List<CodingStep>>(emptyList())
+        val raw = withContext(workerDispatcher) { composer.completeToolTurn(plan.copy(engine = session.engine ?: plan.engine), profile, messages, tools) { step ->
+            activity.update { it.withPlanningActivity(step) }
+            _drafts.update { it + (session.id to CodingDraft(active = true, timelineId = "${input.id}-reply", steps = activity.value)) }
+        } }
+        return UserTurnDecision(UserTurnIntent.DISCUSS, raw.ifBlank { "Действия выполнены." }, toolsApplied = true)
     }
 
     private suspend fun inputScheduleProblem(plan: Plan, input: OrchestrationInput, decision: UserTurnDecision): String? {
@@ -711,6 +965,7 @@ class OrchestrationService(
         val roster = profiles.load()
         val profile = (session.modelSelection ?: plan.plannerSelection)?.let { ProfileResolver.selection(it, roster) }
             ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster) ?: error("Подключите модель оркестратора")
+        if (toolHost != null) return interpretToolInput(session, plan, input, profile)
         var requests = state(session.id, session.projectId).openQuestions(plan.id)
         val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
         fun context(current: Plan): String =
@@ -906,19 +1161,24 @@ class OrchestrationService(
         }
     }
 
-    private suspend fun refine(id: String, requestId: String, text: String, requireApproval: Boolean = false) {
+    private suspend fun refine(id: String, requestId: String, text: String, requireApproval: Boolean = false, nodeId: String? = null) {
         val lock = refinementGuard.withLock { refinementLocks.getOrPut(id) { Mutex() } }
-        lock.withLock { refineLocked(id, requestId, text, requireApproval) }
+        lock.withLock { refineLocked(id, requestId, text, requireApproval, nodeId) }
     }
-    private suspend fun refineLocked(id: String, requestId: String, text: String, requireApproval: Boolean) {
+    private suspend fun refineLocked(id: String, requestId: String, text: String, requireApproval: Boolean, nodeId: String? = null) {
         val pending = store.update(id) { it.copy(pendingRequest = text, requestId = requestId,
+            pendingRecalculationNodeId = nodeId ?: if (it.requestId == requestId) it.pendingRecalculationNodeId else null,
             dialogue = if (it.dialogue.any { m -> m.id == requestId }) it.dialogue else it.dialogue + PlanningMessage(requestId, "user", text)) }
         val sessionId = pending.parentSessionId
+        val nestedActivityId = currentCoroutineContext()[ToolSession]?.takeIf {
+            it.context.role == ToolRole.ORCHESTRATOR && it.context.ownerSessionId == sessionId
+        }?.let { "planner:$requestId" }
         val activity = MutableStateFlow(_drafts.value[sessionId]?.takeIf { it.timelineId == "$requestId-reply" }
             ?.steps.orEmpty().map { it.copy(running = false) })
         fun event(rawStep: CodingStep) {
             activity.update { it.withPlanningActivity(rawStep.inPlanningCall("$requestId:refine")) }
-            _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
+            if (nestedActivityId == null) _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
+            else coordinatorActivity.update { it + (nestedActivityId to CoordinatorActivity(id, sessionId, activity.value)) }
         }
         try {
             val roster = profiles.load()
@@ -933,7 +1193,9 @@ class OrchestrationService(
                 finalAttemptHistory = pending.finalAttemptHistory + if (continuation) listOfNotNull(pending.finalAttempt) else emptyList())
             val request = if (continuation) "$text\nПодготовь предложение доработки. Сохрани завершённые этапы и их идентификаторы, добавь новые этапы с критериями. Запуск потребует подтверждения пользователя." else text
             val result = withContext(workerDispatcher) {
-                composer.refine(effective, request, profile, roster, store.dossiers.value, settings.load(), ::event) { event(CodingStep(CodingStepKind.INFO, it)) }
+                val subtree = nodeId ?: pending.pendingRecalculationNodeId
+                if (subtree == null) composer.refine(effective, request, profile, roster, store.dossiers.value, settings.load(), ::event) { event(CodingStep(CodingStepKind.INFO, it)) }
+                else composer.recalculate(effective, subtree, profile, roster, store.dossiers.value, settings.load(), ::event) { event(CodingStep(CodingStepKind.INFO, it)) }
             }
             val assistant = result.dialogue.last().copy(id = "$requestId-reply", activity = activity.value.filter { it.kind != CodingStepKind.ANSWER }.map { it.copy(running = false) })
             val snapshot = PlanVersion(pending.revision, pending.tree, pending.milestones.map { it.copy(attempts = emptyList()) }, Id.now())
@@ -948,7 +1210,7 @@ class OrchestrationService(
                                 result.tree, result.milestones, assistant.text))
                 }
             } else execution.applyProposal(pending, result.copy(dialogue = pending.dialogue + assistant))
-            store.update(id) { it.copy(pendingRequest = "", requestId = "", plannerSelection = choice, searchProvider = session.searchProvider,
+            store.update(id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null, plannerSelection = choice, searchProvider = session.searchProvider,
                 versions = if (result.tree != pending.tree || result.milestones != pending.milestones) it.versions + snapshot else it.versions) }
             val saved = store.planFor(id)!!
             publish(saved)
@@ -966,9 +1228,13 @@ class OrchestrationService(
                 "Модель не успела завершить планирование за отведённое время. Отправьте сообщение ещё раз или увеличьте время ожидания в настройках модели."
             else planningFailureMessage(e.message?.takeIf { it.isNotBlank() } ?: "Ошибка планирования")
             append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, message, failed = true, createdAt = Id.now(), steps = activity.value.map { it.copy(running = false) } + CodingStep(CodingStepKind.ERROR, message)))
-            store.update(id) { it.copy(pendingRequest = "", requestId = "") }
+            store.update(id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null) }
             throw IllegalStateException(message, e)
-        } finally { _drafts.update { it - sessionId }; changed() }
+        } finally {
+            if (nestedActivityId == null) _drafts.update { it - sessionId }
+            else coordinatorActivity.update { it - nestedActivityId }
+            changed()
+        }
     }
     fun chooseOption(id: String, revision: Long, choiceId: String, optionId: String) = launch {
         if (id in deletedPlans) return@launch
@@ -1216,7 +1482,7 @@ class OrchestrationService(
         performSessionCommand(plan, SessionCommand(Id.new(), kind, sessionId, plan.id, session.stageId.orEmpty(), name.trim()))
     }
 
-    private suspend fun performSessionCommand(plan: Plan, command: SessionCommand) = sessionLock.withLock {
+    private suspend fun performSessionCommand(plan: Plan, command: SessionCommand, publishNotice: Boolean = true) = sessionLock.withLock {
         if (plan.id in deletedPlans || plan.parentSessionId in deletedSessions) return@withLock
         require(plan.parentSessionId.isNotBlank()) { "Не задан оркестратор" }
         val saved = updateState(plan.parentSessionId, plan.projectId) { old ->
@@ -1272,7 +1538,7 @@ class OrchestrationService(
             if (it.id == command.id) it.copy(applied = true) else it
         }) }
         val target = address(plan.projectId, command.sessionId)
-        append(plan.projectId, plan.parentSessionId, CodingMessage(command.id, CodingRole.AGENT,
+        if (publishNotice) append(plan.projectId, plan.parentSessionId, CodingMessage(command.id, CodingRole.AGENT,
             when (command.kind) {
                 SessionCommandKind.CREATE -> "Создана сессия «${target.name}»."
                 SessionCommandKind.ARCHIVE -> "Сессия «${target.name}» перемещена в архив. История и результат сохранены."
@@ -1406,7 +1672,7 @@ class OrchestrationService(
             waitFor использует тот же формат MessageTrigger: ${schedulingTriggerInstructions()}
             Не вызывай сессии для проверки статуса; предложи ожидание оркестратору. Постоянные ID выдаёт приложение.
             Для передачи информации другим этапам обратись к оркестратору через QUESTION и targetStageId. Не запускай других исполнителей самостоятельно.
-            Последнее сообщение верни строго JSON: {"kind":"RESULT|QUESTION|BLOCKED|WAIT","text":"результат, вопрос или причина блокировки","targetStageId":"id этапа или пустая строка","changedFiles":["относительный путь"]}.
+            ${if (toolHost != null) "Передай структурированный результат через magicpaper_stage_handoff; последний текст — краткое пояснение. Параметры инструмента:" else "Последнее сообщение верни строго JSON:"} {"kind":"RESULT|QUESTION|BLOCKED|WAIT","text":"результат, вопрос или причина блокировки","targetStageId":"id этапа или пустая строка","changedFiles":["относительный путь"]}.
             RESULT только после выполнения и проверки; QUESTION если нужен ответ; BLOCKED если продолжать нельзя. Не заменяй вопрос успешным результатом.
             Возврат RESULT уже передаёт работу на проверку приложения. Ты не можешь выставить статус этапа сообщением «завершён»; сохраняй в text факты, команды и результаты проверок, включая прежние актуальные доказательства и ограничения.
             Входящие сообщения: ${inbox.joinToString("\n") { "[${it.id}, от ${it.sourceSessionId}] ${it.text}" }}
@@ -1551,8 +1817,10 @@ class OrchestrationService(
             }
             record = updated.coordination.first { it.id == eventId }
         }
-        if (decision.schedules.isNotEmpty()) messageScheduler.apply(plan.id, decision.schedules, eventId, plan.parentSessionId,
-            state(plan.parentSessionId, plan.projectId).questions.filter { it.planId == plan.id }.map { it.id }.toSet(), stage.id)
+        if (decision.schedules.isNotEmpty()) legacyTool(plan, eventId, "schedule", "schedule.manage", json.encodeToJsonElement(ToolScheduleManage(decision.schedules)).jsonObject) {
+            messageScheduler.apply(plan.id, decision.schedules, eventId, plan.parentSessionId,
+                state(plan.parentSessionId, plan.projectId).questions.filter { it.planId == plan.id }.map { it.id }.toSet(), stage.id)
+        }
         if (decision.askUser || decision.questions.isNotEmpty()) {
             askUser(plan, stage, "$eventId-coordinator", decision.reply.ifBlank { reply.text }, decision.questions, activity, decision.questionStageIds,
                 if (reply.kind == StageReplyKind.QUESTION) attempt.sessionId else plan.parentSessionId)
@@ -1564,10 +1832,12 @@ class OrchestrationService(
             val latest = store.planFor(plan.id)!!
             val targetStage = latest.milestones.first { it.id == action.stageId }
             val targetSession = targetStage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${targetStage.id}"
-            performSessionCommand(latest, SessionCommand("$eventId-session-$index", action.kind, targetSession, plan.id, targetStage.id, action.name))
+            legacyTool(latest, eventId, "session-$index", "session.manage", json.encodeToJsonElement(ToolSessionManage(action.kind, targetStage.id, action.name)).jsonObject) {
+                performSessionCommand(latest, SessionCommand("$eventId-session-$index", action.kind, targetSession, plan.id, targetStage.id, action.name))
+            }
         }
         val actionOrigin = record.actionOrigin()
-        decision.actions.forEachIndexed { index, action ->
+        if (!decision.toolsApplied) decision.actions.forEachIndexed { index, action ->
             val latest = store.planFor(plan.id)!!
             val applied = latest.deliveries.firstOrNull {
                 (it.id.startsWith("$eventId-action-") || it.id.startsWith("$eventId-revision-")) &&
@@ -1575,11 +1845,17 @@ class OrchestrationService(
                     it.text == action.message &&
                     it.state in setOf(DeliveryState.DELIVERED, DeliveryState.ANSWERED)
             }
-            enqueue(plan.id, if (action.stageId == stage.id) plan.parentSessionId else attempt.sessionId,
-                action.stageId, action.message, applied?.id ?: "$actionOrigin-action-$index")
+            legacyTool(latest, eventId, "delivery-$actionOrigin-$index", "stage.send", json.encodeToJsonElement(ToolStageSend(action.stageId, action.message)).jsonObject) {
+                enqueue(plan.id, if (action.stageId == stage.id) plan.parentSessionId else attempt.sessionId,
+                    action.stageId, action.message, applied?.id ?: "$actionOrigin-action-$index")
+            }
         }
-        if (decision.replan && store.planFor(plan.id)!!.dialogue.none { it.id == "$eventId-replan-reply" })
-            refine(plan.id, "$eventId-replan", "Обнови план в рамках цели. Сохрани начатые этапы и их идентификаторы, добавь необходимые продолжения. ${decision.reply}")
+        if (decision.replan && store.planFor(plan.id)!!.dialogue.none { it.id == "$eventId-replan-reply" }) {
+            val instruction = "Обнови план в рамках цели. Сохрани начатые этапы и их идентификаторы, добавь необходимые продолжения. ${decision.reply}"
+            legacyTool(plan, eventId, "replan", "plan.refine", json.encodeToJsonElement(ToolMessage(instruction, requiresConfirmation = false)).jsonObject) {
+                refine(plan.id, "$eventId-replan", instruction)
+            }
+        }
         if (reply.kind == StageReplyKind.RESULT) {
             val peers = store.plans.value.filter { it.projectId == plan.projectId && it.id != plan.id && it.phase != ExecutionPhase.COMPLETE }
             val overlaps = peers.flatMap { peer -> peer.coordination.filter { other -> other.reply.kind == StageReplyKind.RESULT && other.reply.changedFiles.any { it in reply.changedFiles } }.map { peer to it } }
@@ -1614,7 +1890,7 @@ class OrchestrationService(
             askUser(plan, stage, "$eventId-invalid-wait", "Не удалось назначить ожидание: ${decision.reply}")
             return StageTurnDecision(StageTurnAction.WAIT, reply.text, "$eventId-invalid-wait")
         }
-        if (reply.kind != StageReplyKind.RESULT && decision.actions.none { it.stageId == stage.id })
+        if (reply.kind != StageReplyKind.RESULT && !decision.toolsApplied && decision.actions.none { it.stageId == stage.id })
             enqueue(plan.id, plan.parentSessionId, stage.id, decision.reply, "$eventId-followup")
         val queued = store.planFor(plan.id)!!.deliveries.any { it.targetStageId == stage.id && it.state == DeliveryState.QUEUED }
         return StageTurnDecision(if (queued) StageTurnAction.CONTINUE else StageTurnAction.VERIFY, reply.text)
@@ -1627,6 +1903,34 @@ class OrchestrationService(
     private suspend fun coordinatorDecision(
         judge: LlmProfile, context: List<LlmMessage>, targets: Set<String>, plan: Plan, eventId: String, activityId: String,
     ): CoordinatorReply {
+        if (toolHost != null) {
+            val record = store.planFor(plan.id)?.coordination?.firstOrNull { it.id == eventId } ?: error("Результат не найден")
+            val tools = toolHost.session(ToolExecutionContext(plan.projectId, plan.parentSessionId, plan.parentSessionId, "$eventId-coordinator",
+                ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId,
+                record.stageId, record.attemptId.ifBlank { eventId.substringBeforeLast("-turn-") }, record.turnIndex))
+            val instructions = listOf(LlmMessage(LlmChatRole.SYSTEM,
+                "Ты оркестратор результата этапа. Используй context.get для текущего состояния. " +
+                    "Передавай задания через stage.send, управляй сессиями через session.manage, задавай вопросы через questionnaire. " +
+                    "При RESULT вызови stage.resolve: VERIFY для проверки приложения; CONTINUE только с конкретной незавершённой работой. " +
+                    "Не объявляй этап принятым: приёмку проводит приложение. Для WAIT назначь ожидание через schedule.manage. " +
+                    schedulingInstructions()), LlmMessage(LlmChatRole.USER, context.drop(1).joinToString("\n") { it.content }))
+            val text = withContext(workerDispatcher) { composer.completeToolTurn(plan, judge, instructions, tools) { coordinatorEvent(activityId, it) } }
+            updateState(plan.parentSessionId, plan.projectId) { saved ->
+                val key = tools.context.requestId
+                val pause = saved.workPauses[key]
+                val proposal = store.plans.value.firstOrNull { it.id == plan.id }?.proposal
+                saved.copy(workPauses = if (pause != null && proposal != null) saved.workPauses + (key to pause.copy(proposalId = proposal.id)) else saved.workPauses - key)
+            }
+            val resolved = tools.results.value["stage.resolve"]?.let { json.decodeFromJsonElement<ToolStageResolve>(it) }
+            require(record.reply.kind != StageReplyKind.RESULT || resolved != null) { "Вызовите stage.resolve для текущего результата" }
+            val delivered = tools.calls.value.filter { it.tool == "stage.send" }.map { call ->
+                json.decodeFromJsonElement<ToolStageSend>(call.arguments).let { CoordinatorAction(it.stageId, it.message) }
+            } + if (resolved?.action == CoordinatorResultAction.CONTINUE) listOf(CoordinatorAction(record.stageId, resolved.reason)) else emptyList()
+            val decision = CoordinatorReply(text.ifBlank { "Результат рассмотрен" }, actions = delivered, resultAction = resolved?.action,
+                continuationReason = resolved?.reason.orEmpty(), toolsApplied = true)
+            require(store.planFor(plan.id)?.coordinatorResultProblem(eventId, decision) == null) { "Оркестратор не передал корректное решение через stage.resolve" }
+            return decision
+        }
         val routing = "Для управления дочерними сессиями есть sessionActions=[{kind: CREATE|ARCHIVE|RESTORE|RENAME, stageId: id, name: название}]. " +
             "На RESULT выбирай resultAction=VERIFY, если результат готов к проверке приложения; actions текущему этапу оставь пустыми. " +
             "RESULT сам передаёт управление приложению. Не проси исполнителя принять результат, отметить успех или завершиться: это снова запустит его. " +

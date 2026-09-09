@@ -12,6 +12,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import io.aequicor.magicpaper.domain.tools.ToolPhase
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
@@ -23,7 +24,7 @@ class CodingToolPreviewRenderTest {
         val step = mutableStateOf(initial)
         var height = 0
         private var frame = 0L
-        private val scene = ImageComposeScene(680, 600) {
+        val scene = ImageComposeScene(680, 600) {
             MagicPaperTheme {
                 Column(Modifier.fillMaxWidth().onSizeChanged { height = it.height }) {
                     CodingStepRow(step.value, live = true)
@@ -44,6 +45,25 @@ class CodingToolPreviewRenderTest {
             render()
         }
         override fun close() = scene.close()
+    }
+
+    @Test fun waitingAndCancellationRemainVisibleInTheExistingToolCard() {
+        Card(CodingStep(CodingStepKind.TOOL, "Вопросы пользователю · Формат результата", tool = "questionnaire",
+            callId = "stable", running = true, toolPhase = ToolPhase.WAITING)).use { card ->
+            card.render()
+            fun labels() = card.scene.semanticsOwners.flatMap { owner ->
+                fun all(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::all)
+                all(owner.rootSemanticsNode)
+            }.flatMap { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+            assertTrue("Ожидается ответ пользователя" in labels(), labels().toString())
+            val before = card.height
+            card.step.value = card.step.value.copy(running = false, ok = false, toolPhase = ToolPhase.CANCELLED)
+            card.render()
+            assertTrue("Вызов отменён" in labels(), labels().toString())
+            assertTrue(card.height <= before, "Completion must not expand the card")
+            val output = java.io.File("build/reports/agent-tools").apply { mkdirs() }
+            card.scene.render().encodeToData()?.bytes?.let { java.io.File(output, "cancelled-tool.png").writeBytes(it) }
+        }
     }
 
     @Test fun megabyteToolPayloadsStayOutOfCollapsedTextLayoutDuringUpdates() {

@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.tools.*
+import io.aequicor.magicpaper.data.tools.*
+import kotlinx.coroutines.currentCoroutineContext
 import io.aequicor.magicpaper.domain.RuntimeQuestionnaires
 import io.aequicor.magicpaper.domain.forPendingRun
 import io.aequicor.magicpaper.data.research.*
@@ -247,15 +250,18 @@ class PiCodingRuntime(
         val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
         val computerBridge = if (restricted) null else computerUse?.bridge(session.id)
         val researchBridge = if (research) ResearchCheckBridge(session, project) else null
-        val questionnaireBridge = if (planning) null else io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
+        val agentTools = currentCoroutineContext()[ToolSession]
+        val agentBridge = agentTools?.let { AgentToolBridge(it) }
+        val questionnaireBridge = if (planning || agentTools != null) null else io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
         try {
+            if (agentTools != null) writeAtomically(File(sessionHome(session.id), "agent-tools.mjs"), PiAgentToolExtension.source(agentTools))
             if (research) writeAtomically(File(sessionHome(session.id), "research.mjs"), PiResearchExtension.source)
             writeAtomically(File(sessionHome(session.id), "questionnaire.mjs"), io.aequicor.magicpaper.data.questionnaire.PiQuestionnaireExtension.source)
             if (computerBridge != null) {
                 writeAtomically(File(sessionHome(session.id), "computer-use.mjs"), io.aequicor.magicpaper.data.computer.PiComputerExtension.source)
             }
             while (true) {
-                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge, agentBridge, agentTools)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
@@ -271,6 +277,7 @@ class PiCodingRuntime(
             }
         } finally {
             researchBridge?.close()
+            agentBridge?.close()
             questionnaireBridge?.close()
             computerBridge?.close()
             abortedSessions.remove(session.id)
@@ -298,6 +305,8 @@ class PiCodingRuntime(
         questionnaireBridge: io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge? = null,
         planning: Boolean = false,
         researchBridge: ResearchCheckBridge? = null,
+        agentBridge: AgentToolBridge? = null,
+        agentTools: ToolSession? = null,
     ): AttemptOutcome {
         val research = researchBridge != null
         val restricted = planning || research
@@ -317,11 +326,12 @@ class PiCodingRuntime(
         // распадается на части, и обрывки уходят в «сообщения» — агент видит
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
         args += listOf(if (restricted) "--system-prompt" else "--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
-        if (restricted) args += listOf("--tools", if (research) "read,grep,find,ls,planning_git,questionnaire,research_check" else "read,grep,find,ls,planning_git",
+        if (restricted) args += listOf("--tools", (if (research) "read,grep,find,ls,planning_git,research_check" + if (agentTools == null) ",questionnaire" else "" else "read,grep,find,ls,planning_git") + agentTools?.definitions.orEmpty().joinToString("", prefix = "") { ",${it.wireName}" },
             "--extension", resourceScript("planning-tools.mjs").absolutePath)
         if (research) args += listOf("--extension", File(sessionHome(session.id), "research.mjs").absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
         args += listOf("--extension", resourceScript("usage-context.mjs").absolutePath)
+        if (agentBridge != null) args += listOf("--extension", File(sessionHome(session.id), "agent-tools.mjs").absolutePath)
         if (questionnaireBridge != null) args += listOf("--extension", File(sessionHome(session.id), "questionnaire.mjs").absolutePath)
         if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)
         // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит
@@ -358,6 +368,11 @@ class PiCodingRuntime(
                     }
                     environment().remove("MAGICPAPER_COMPUTER_URL")
                     environment().remove("MAGICPAPER_COMPUTER_TOKEN")
+                    if (agentBridge != null) {
+                        environment()["MAGICPAPER_AGENT_TOOLS_URL"] = agentBridge.url
+                        environment()["MAGICPAPER_AGENT_TOOLS_TOKEN"] = agentBridge.token
+                        environment()["MAGICPAPER_AGENT_TOOLS_NAMES"] = kotlinx.serialization.json.JsonArray(agentTools!!.definitions.map { kotlinx.serialization.json.JsonPrimitive(it.wireName) }).toString()
+                    }
                     if (questionnaireBridge != null) {
                         environment()["MAGICPAPER_QUESTIONNAIRE_URL"] = questionnaireBridge.url
                         environment()["MAGICPAPER_QUESTIONNAIRE_TOKEN"] = questionnaireBridge.token

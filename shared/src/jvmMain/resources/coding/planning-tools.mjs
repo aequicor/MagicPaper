@@ -52,7 +52,11 @@ export async function planningGit(cwd, input, signal) {
 
 export default function (pi) {
   const research = process.env.MAGICPAPER_RESEARCH_MODE === '1';
-  const allowed = research ? [...planningTools, 'questionnaire', 'research_check'] : planningTools;
+  // This list is supplied by the host from the role-filtered catalog, never by model arguments.
+  const applicationTools = JSON.parse(process.env.MAGICPAPER_AGENT_TOOLS_NAMES || '[]');
+  if (!Array.isArray(applicationTools) || applicationTools.some(name => typeof name !== 'string' || !/^magicpaper_[a-z_]+$/.test(name)))
+    throw new Error('Некорректный каталог инструментов приложения.');
+  const allowed = [...(research ? [...planningTools, 'questionnaire', 'research_check'] : planningTools), ...applicationTools];
   pi.registerTool({
     name: 'planning_git', label: 'Просмотр изменений Git',
     description: 'Read-only Git status or diff in the project. For diff, staged=false shows working-tree changes and staged=true shows index changes. Read untracked files with read. Paginate using nextOffset; no commands or arbitrary Git options are accepted.',

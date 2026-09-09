@@ -362,7 +362,8 @@ class PlanningExecutionService(
                     try {
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                         val activityRecorder = CodingRunRecorder()
-                        monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load()))),
+                        monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                            planId = plan.id, parentSessionId = plan.parentSessionId, pendingRun = CodingRunCheckpoint("${attempt.id}-delivery", "")),
                             "Разреши Git merge-конфликт, сохрани пользовательские изменения и результат плана. Цель: ${plan.goal}. Если изменения уже объединены, продолжи проверки. Добавь разрешённые файлы в индекс, выполни подходящие тесты и сообщи фактические результаты. Не изменяй исходную папку вне этой рабочей копии. Предыдущий отчёт: ${attempt.mergeReport}",
                             (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
                             activityRecorder.apply(event)
@@ -441,7 +442,8 @@ class PlanningExecutionService(
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                 val activityRecorder = CodingRunRecorder()
                 monitoredRun(project.copy(path = workspace.integrationPath),
-                    CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine),
+                    CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
+                        planId = plan.id, parentSessionId = plan.parentSessionId, pendingRun = CodingRunCheckpoint("${attempt.id}-verification", "")),
                     "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
                     attempt.assignment.executionProfile(profiles.load())).collect { event ->
                     activityRecorder.apply(event)
@@ -617,6 +619,8 @@ class PlanningExecutionService(
                 var outputPendingSave = false
                 var outputPendingDisplay = false
                 val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
+                    planId = plan.id, stageId = stage.id, parentSessionId = plan.parentSessionId.takeIf { it.isNotBlank() },
+                    role = CodingSessionRole.WORKER,
                     pendingRun = CodingRunCheckpoint("${attempt.id}-turn-${attempt.turnIndex}", ""))
                 if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
@@ -681,6 +685,8 @@ class PlanningExecutionService(
                         outputPendingSave = false
                     }
                 }
+                val submitted = store.planFor(id)?.coordination?.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" && it.toolCallId != null }
+                if (submitted != null && attempt.report.isBlank()) attempt = attempt.copy(report = submitted.reply.text)
                 attempt = attempt.copy(chatTurns = attempt.chatTurns.dropLast(1) + attempt.chatTurns.last().copy(completedAt = Id.now()))
                 currentAttempt = attempt
                 if (failure != null || !ended || attempt.report.isBlank()) {
@@ -779,6 +785,7 @@ class PlanningExecutionService(
                         saveAttempt(id, stageId, attempt)
                         journal(id, "conflict-agent-intent", stageId, attempt.id)
                         val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                            planId = id, stageId = stageId,
                             pendingRun = CodingRunCheckpoint("${attempt.id}-merge", ""))
                         var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
