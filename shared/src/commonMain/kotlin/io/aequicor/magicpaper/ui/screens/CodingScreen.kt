@@ -6,7 +6,16 @@ import io.aequicor.magicpaper.domain.QuestionnaireDraft
 import io.aequicor.magicpaper.domain.PlanningAnswer
 import io.aequicor.magicpaper.domain.InteractionKind
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -75,6 +84,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -910,6 +920,11 @@ internal fun CodingChat(
     }
     val draftHistory = remember(draftRow) { codingHistoryItems(listOfNotNull(draftRow)) }
     val timeline = remember(history, draftHistory) { history + draftHistory }
+    // Remember arrivals at the list level: lazy reuse and reopening saved history
+    // must not replay the entrance animation or reset a command's disclosure.
+    val seenTimelineKeys = remember(session.session.id) { timeline.map { it.key }.toMutableSet() }
+    val arrivingKeys = remember(timeline, seenTimelineKeys) { timeline.map { it.key }.filterNot { it in seenTimelineKeys }.toSet() }
+    SideEffect { seenTimelineKeys.addAll(arrivingKeys) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
     val hasDraft = draftHistory.isNotEmpty()
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
@@ -968,10 +983,22 @@ internal fun CodingChat(
                     val isDraft = message.id == draftRow?.message?.id
                     val rowStatus = status.takeIf { busy && statusMessageId != null &&
                         (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
-                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
-                        pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
-                        live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
-                        continued = isDraft && busy)
+                    var hasAppeared by rememberSaveable(item.key) { mutableStateOf(false) }
+                    val appearance = remember(item.key) {
+                        val animate = !hasAppeared && isDraft && draft.active && item.key in arrivingKeys &&
+                            item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)
+                        MutableTransitionState(!animate).apply { targetState = true }
+                    }
+                    SideEffect { hasAppeared = true }
+                    androidx.compose.animation.AnimatedVisibility(appearance,
+                        enter = fadeIn(tween(180)) + expandVertically(tween(220), expandFrom = Alignment.Top),
+                        exit = ExitTransition.None,
+                    ) {
+                        SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
+                            pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
+                            live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
+                            continued = isDraft && busy)
+                    }
                 }
                 if (busy && (hasDraft || statusMessageId == null)) {
                     val statusKey = "draft-status:${draft.timelineId ?: session.session.id}"
@@ -1235,6 +1262,8 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
     )
 }
 
+private enum class ToolStepStatus { RUNNING, SUCCEEDED, FAILED }
+
 @Composable
 private fun ToolStepContent(
     title: String,
@@ -1247,11 +1276,12 @@ private fun ToolStepContent(
     onToggle: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val statusColor = when {
-        running -> MaterialTheme.colorScheme.primary
-        !ok -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val status = when { running -> ToolStepStatus.RUNNING; ok -> ToolStepStatus.SUCCEEDED; else -> ToolStepStatus.FAILED }
+    val statusColor by animateColorAsState(when (status) {
+        ToolStepStatus.RUNNING -> MaterialTheme.colorScheme.primary
+        ToolStepStatus.FAILED -> MaterialTheme.colorScheme.error
+        ToolStepStatus.SUCCEEDED -> MaterialTheme.colorScheme.onSurfaceVariant
+    }, animationSpec = tween(180), label = "Tool status color")
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1265,33 +1295,38 @@ private fun ToolStepContent(
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Canvas(
+            Crossfade(
+                targetState = status,
+                animationSpec = tween(180),
+                label = "Tool status icon",
                 modifier = Modifier.size(14.dp).semantics {
-                    contentDescription = when {
-                        running -> "Выполняется"
-                        !ok -> "Ошибка выполнения"
-                        else -> "Выполнено"
+                    contentDescription = when (status) {
+                        ToolStepStatus.RUNNING -> "Выполняется"
+                        ToolStepStatus.FAILED -> "Ошибка выполнения"
+                        ToolStepStatus.SUCCEEDED -> "Выполнено"
                     }
                 },
-            ) {
-                val stroke = 1.4.dp.toPx()
-                // Draw every status inside the icon bounds, independent of text line height.
-                when {
-                    running -> {
-                        drawCircle(statusColor, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
-                        drawLine(statusColor, center, Offset(center.x, size.height * 0.25f), stroke, StrokeCap.Round)
-                        drawLine(statusColor, center, Offset(size.width * 0.72f, center.y), stroke, StrokeCap.Round)
-                    }
-                    ok -> {
-                        val bend = Offset(size.width * 0.4f, size.height * 0.76f)
-                        drawLine(statusColor, Offset(size.width * 0.16f, size.height * 0.52f), bend, stroke, StrokeCap.Round)
-                        drawLine(statusColor, bend, Offset(size.width * 0.84f, size.height * 0.24f), stroke, StrokeCap.Round)
-                    }
-                    else -> {
-                        drawLine(statusColor, Offset(size.width * 0.22f, size.height * 0.22f),
-                            Offset(size.width * 0.78f, size.height * 0.78f), stroke, StrokeCap.Round)
-                        drawLine(statusColor, Offset(size.width * 0.78f, size.height * 0.22f),
-                            Offset(size.width * 0.22f, size.height * 0.78f), stroke, StrokeCap.Round)
+            ) { iconStatus ->
+                Canvas(Modifier.fillMaxSize()) {
+                    val stroke = 1.4.dp.toPx()
+                    // Draw every status inside the icon bounds, independent of text line height.
+                    when (iconStatus) {
+                        ToolStepStatus.RUNNING -> {
+                            drawCircle(statusColor, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
+                            drawLine(statusColor, center, Offset(center.x, size.height * 0.25f), stroke, StrokeCap.Round)
+                            drawLine(statusColor, center, Offset(size.width * 0.72f, center.y), stroke, StrokeCap.Round)
+                        }
+                        ToolStepStatus.SUCCEEDED -> {
+                            val bend = Offset(size.width * 0.4f, size.height * 0.76f)
+                            drawLine(statusColor, Offset(size.width * 0.16f, size.height * 0.52f), bend, stroke, StrokeCap.Round)
+                            drawLine(statusColor, bend, Offset(size.width * 0.84f, size.height * 0.24f), stroke, StrokeCap.Round)
+                        }
+                        ToolStepStatus.FAILED -> {
+                            drawLine(statusColor, Offset(size.width * 0.22f, size.height * 0.22f),
+                                Offset(size.width * 0.78f, size.height * 0.78f), stroke, StrokeCap.Round)
+                            drawLine(statusColor, Offset(size.width * 0.78f, size.height * 0.22f),
+                                Offset(size.width * 0.22f, size.height * 0.78f), stroke, StrokeCap.Round)
+                        }
                     }
                 }
             }
@@ -1307,7 +1342,10 @@ private fun ToolStepContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (running && live) {
+        AnimatedVisibility(running && live,
+            enter = fadeIn(tween(160)) + expandVertically(tween(200), expandFrom = Alignment.Top),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(200), shrinkTowards = Alignment.Top),
+        ) {
             Text(
                 if (isExec) "Выполняется команда…" else "Выполняется действие…",
                 modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),

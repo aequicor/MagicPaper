@@ -195,4 +195,35 @@ class CodingChatCommitTest {
             assertNotNull(chat.textNode("Выполняется действие…"), "Cached equal rows must still be recognized as live")
         }
     }
+
+    @Test fun newCommandAppearsGraduallyAndStaysVisibleThroughCompletion() = Chat().use { chat ->
+        chat.recorder.apply(CodingEvent.ToolStarted("command", "./gradlew check", callId = "animated-command", isExec = true))
+        chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
+        val step = chat.value.value.draft.steps.last()
+        val key = "${chat.value.value.draft.timelineId}:step:${step.id}"
+        val heights = mutableListOf<Int>()
+        chat.render {
+            chat.list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { heights += it.size }
+        }
+        val fullHeight = heights.last()
+        assertTrue(heights.any { it in 1 until fullHeight }, "New commands must expand over several frames: $heights")
+        assertTrue(heights.zipWithNext().all { (before, after) -> after >= before },
+            "A new command must not briefly disappear: $heights")
+        assertFalse(chat.list.canScrollForward, "Follow the bottom after the appearance animation")
+
+        chat.readMiddle()
+        onUi { chat.list.dispatchRawDelta(100_000f) }
+        chat.render {
+            val command = chat.list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+            assertEquals(fullHeight, assertNotNull(command).size,
+                "Returning to an existing command must not replay its entrance")
+        }
+
+        chat.recorder.apply(CodingEvent.ToolFinished("command", false, callId = "animated-command", resultPreview = "Done"))
+        chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
+        chat.render {
+            assertNotNull(chat.textNode("./gradlew check"), "The command must stay composed throughout completion")
+        }
+        assertFalse(chat.list.canScrollForward, "Follow the bottom after the status animation")
+    }
 }

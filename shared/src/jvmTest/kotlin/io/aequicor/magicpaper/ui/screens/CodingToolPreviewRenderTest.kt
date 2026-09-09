@@ -31,7 +31,8 @@ class CodingToolPreviewRenderTest {
             }
         }
 
-        fun render() { repeat(6) { scene.render(++frame * 32_000_000L).close(); Thread.sleep(10) } }
+        fun renderFrame() { scene.render(++frame * 32_000_000L).close(); Thread.sleep(10) }
+        fun render() { repeat(10) { renderFrame() } }
         fun texts(): List<String> {
             fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
             return scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
@@ -91,6 +92,25 @@ class CodingToolPreviewRenderTest {
             assertFalse(completed in card.texts())
             card.toggle()
             assertTrue(completed in card.texts(), "Reopening must show the latest full output")
+        }
+    }
+
+    @Test fun completionShrinksTheRunningLabelOverSeveralFrames() {
+        for (ok in listOf(true, false)) {
+            Card(CodingStep(CodingStepKind.EXEC, "⚒ command · ./gradlew check",
+                callId = "command", running = true)).use { card ->
+                card.render()
+                val runningHeight = card.height
+                card.step.value = card.step.value.copy(running = false, ok = ok)
+                val heights = List(12) { card.renderFrame(); card.height }
+                val completedHeight = heights.last()
+                assertTrue(completedHeight < runningHeight)
+                assertTrue(heights.any { it in (completedHeight + 1) until runningHeight },
+                    "Completion must shrink smoothly, not jump from $runningHeight to $completedHeight: $heights")
+                assertTrue(heights.zipWithNext().all { (before, after) -> after <= before },
+                    "Completion must not bounce or briefly expand: $heights")
+                assertFalse(card.texts().any { it.startsWith("Выполняется") })
+            }
         }
     }
 }
