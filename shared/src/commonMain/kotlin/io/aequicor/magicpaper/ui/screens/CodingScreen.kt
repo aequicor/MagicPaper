@@ -499,7 +499,9 @@ internal fun ProjectsPanel(
         val groups = buildList {
             var index = projectIndex + 1
             if (!projectCollapsed) ownSessions.filter { it.session.parentSessionId !in sessionIds }.forEach { parent ->
+                // Read the orchestrator's work in creation order, from top to bottom.
                 val children = ownSessions.filter { it.session.parentSessionId == parent.session.id }
+                    .sortedBy { it.session.createdAt }
                 val expanded = collapsed[parent.session.id] != true
                 val start = index++
                 if (expanded) index += children.size
