@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.domain.tools.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.util.TextSimilarity
@@ -43,16 +45,54 @@ class PlanComposer(
             val owner = plan.parentSessionId.ifBlank { plan.sessionId.ifBlank { "plan-${plan.id}" } }
             val context = ToolExecutionContext(plan.projectId, owner, owner, plan.requestId.ifBlank { Id.new() },
                 ToolRole.PLANNER, CodingInteractionMode.PLANNING, plan.id, plan.runId)
-            val tools = toolHost.session(context, mapOf("plan.propose" to { _, _, arguments ->
-                decisions.validateToolProposal(plan, arguments)
-                arguments
-            }))
-            val toolMessages = messages + LlmMessage(LlmChatRole.SYSTEM,
-                "Структуру ответа передай вызовом magicpaper_plan_propose, а не JSON в последнем сообщении. " +
-                    "Если нужны уточнения, используй magicpaper_questionnaire. После ответов продолжи планирование. " +
-                    "Параметры plan.propose соответствуют описанной структуре проекта плана. Окончательный текст — краткое пояснение пользователю.")
-            withContext(tools) { planningGateway.completeWithActivity(project, engine, context.requestId, profile, toolMessages, onActivity) }
-            tools.results.value["plan.propose"]?.toString() ?: error("Планировщик не передал предложение через plan.propose. План не изменён.")
+            supervisorScope {
+                // A model can finish its turn while exec still reports a running cell. Keep
+                // the human interaction owned by this planning request, not that MCP call.
+                val requestScope = this
+                val toolMessages = (messages + LlmMessage(LlmChatRole.SYSTEM,
+                    "Структуру ответа передай вызовом magicpaper_plan_propose, а не JSON в последнем сообщении. " +
+                        "Если нужны уточнения, используй magicpaper_questionnaire. После ответов продолжи планирование. " +
+                        "Параметры plan.propose соответствуют описанной структуре проекта плана. Окончательный текст — краткое пояснение пользователю.")).toMutableList()
+                var attempt = 0
+                var proposal: JsonElement? = null
+                while (proposal == null) {
+                    val pending = MutableStateFlow<List<Pair<JsonObject, Deferred<JsonElement>>>>(emptyList())
+                    val turnContext = if (attempt == 0) context else context.copy(requestId = "${context.requestId}-answers-$attempt")
+                    val tools = toolHost.session(turnContext, mapOf(
+                        "questionnaire" to { ctx, id, arguments ->
+                            val answer = requestScope.async { toolHost.askQuestionnaire(ctx, id, arguments) }
+                            pending.update { it + (arguments to answer) }
+                            try { answer.await() } catch (error: Exception) {
+                                // Invalid questions are ordinary tool failures. A cancelled MCP
+                                // waiter leaves its still-live human interaction available.
+                                if (answer.isCancelled) pending.update { calls -> calls.filterNot { it.second === answer } }
+                                throw error
+                            }
+                        },
+                        "plan.propose" to { _, _, arguments ->
+                            check(pending.value.all { it.second.isCompleted && !it.second.isCancelled }) { "Сначала дождитесь ответов пользователя" }
+                            decisions.validateToolProposal(plan, arguments)
+                            arguments
+                        },
+                    ))
+                    val reply = withContext(tools) {
+                        planningGateway.completeWithActivity(project, engine, turnContext.requestId, profile, toolMessages, onActivity)
+                    }
+                    // Await even after a premature final message. User cancellation still
+                    // cancels this scope and removes the questionnaire and its draft normally.
+                    val answers = pending.value.map { (questions, answer) -> questions to answer.await() }
+                    proposal = tools.results.value["plan.propose"]
+                    if (proposal != null) break
+                    check(answers.isNotEmpty()) { "Планировщик не передал предложение через plan.propose. План не изменён." }
+                    toolMessages += LlmMessage(LlmChatRole.ASSISTANT, reply)
+                    toolMessages += LlmMessage(LlmChatRole.USER,
+                        "Подтверждённые ответы пользователя:\n" + answers.joinToString("\n") { (questions, answer) ->
+                            "Вопросы: $questions\nОтветы: $answer"
+                        } + "\nПродолжи планирование с учётом этих ответов и передай результат через magicpaper_plan_propose.")
+                    attempt++
+                }
+                proposal.toString()
+            }
         }
     }
 

@@ -17,7 +17,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
 
 internal object QuestionnaireTool {
-    const val instructions = "When you need a clarification or a decision from the user, call questionnaire instead of asking only in prose. Supply concise questions with answer options when useful. The user may add text or skip a clarification. Wait for the confirmed answers; never interpret silence as consent. This tool cannot authorize commands or grant permissions."
+    const val instructions = "When you need a clarification or a decision from the user, call questionnaire instead of asking only in prose. Supply concise questions with answer options when useful. The user may add text or skip a clarification. Wait for the confirmed answers; never interpret silence as consent. This tool cannot authorize commands or grant permissions. If exec returns Script running with cell ID, the questionnaire is still pending: keep calling wait for that cell until confirmed answers arrive. Do not send a final response while any questionnaire or application tool call is pending; ending the turn cancels pending tool calls."
     val schema = Json.parseToJsonElement("""{
       "type":"object","additionalProperties":false,"required":["questions"],"properties":{"questions":{
         "type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,

@@ -23,6 +23,7 @@ class OrchestrationToolsTest {
         val host = ToolHost(MemoryToolReceiptStore())
         val profile = LlmProfile("model", "Planner", baseUrl = "http://test/v1", modelId = "m", favoriteModels = listOf("m"), modelLibraryVersion = 1)
         val project = CodingProject("p", "Project", "/project", 0)
+        val planningPrompts = mutableListOf<String>()
         val parent = CodingSession("parent", "p", "Parent", 0, engine = CodingEngine.PI, planningMode = true,
             role = CodingSessionRole.ORCHESTRATOR, modelSelection = ModelSelection("model", "m"))
         val worker = CodingSession("worker", "p", "Worker", 0, engine = CodingEngine.PI, role = CodingSessionRole.WORKER,
@@ -45,6 +46,7 @@ class OrchestrationToolsTest {
                 emit(CodingEvent.Finished)
             }
             override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile) = flow {
+                planningPrompts += prompt
                 emit(CodingEvent.SessionStarted("native-${session.id}"))
                 emit(CodingEvent.MessageStarted)
                 val tools = currentCoroutineContext()[ToolSession] ?: error("Missing tools")
@@ -238,6 +240,84 @@ class OrchestrationToolsTest {
         assertTrue(observed.any { it.tool == "plan.propose" && !it.running && it.ok })
         f.planningRun = { """{"reply":"Pretend plan","tree":[],"milestones":[]}""" }
         assertFailsWith<IllegalStateException> { f.composer.completePlanning(plan, f.profile, listOf(LlmMessage(LlmChatRole.USER, "Review"))) {} }
+    }
+
+    @Test fun prematurePlannerFinalKeepsQuestionAliveAndContinuesAfterConfirmedAnswer() = runTest {
+        val f = Fixture(this); f.init()
+        val contexts = mutableListOf<ToolExecutionContext>()
+        f.planningRun = { tools ->
+            contexts += tools.context
+            if (contexts.size == 1) {
+                coroutineScope {
+                    val call = launch { tools.call("2", "questionnaire", f.args("""{"questions":[{"id":"source","title":"Источник?","kind":"TEXT"}]}""")) }
+                    f.host.questions.requests.first { it.isNotEmpty() }
+                    // The native turn closes a still-running exec cell and its MCP request.
+                    call.cancelAndJoin()
+                }
+                "После ответа передам план"
+            } else {
+                tools.call("2", "plan.propose", f.args("""{"reply":"Ответ учтён","tree":[],"milestones":[]}"""))
+                "Готово"
+            }
+        }
+        val result = async { f.composer.completePlanning(f.store.planFor("plan")!!, f.profile,
+            listOf(LlmMessage(LlmChatRole.USER, "Review"))) {} }
+        runCurrent()
+        val question = f.host.questions.requests.value.single()
+        advanceTimeBy(3_600_000); runCurrent()
+        assertTrue(result.isActive)
+        assertEquals(question, f.host.questions.requests.value.single())
+        assertEquals(1, contexts.size)
+        f.host.questions.respond(question.id, listOf(PlanningAnswer("source", text = "Существующее подключение")))
+        assertContains(result.await(), "Ответ учтён")
+        assertEquals(2, contexts.size)
+        assertContains(f.planningPrompts.last(), "Существующее подключение")
+        assertContains(f.planningPrompts.last(), "Источник?")
+        assertNotEquals(contexts[0].requestId, contexts[1].requestId)
+        assertTrue(f.host.questions.requests.value.isEmpty())
+    }
+
+    @Test fun plannerCannotProposeBeforeAnswerAndNormalQuestionNeedsNoRestart() = runTest {
+        val f = Fixture(this); f.init()
+        var turns = 0
+        f.planningRun = { tools ->
+            turns++
+            coroutineScope {
+                val answer = async { tools.call("ask", "questionnaire", f.args("""{"questions":[{"id":"q","title":"Источник?","kind":"TEXT"}]}""")) }
+                f.host.questions.requests.first { it.isNotEmpty() }
+                assertFailsWith<IllegalStateException> {
+                    tools.call("early", "plan.propose", f.args("""{"reply":"Слишком рано"}"""))
+                }
+                assertContains(answer.await().toString(), "Мой ответ")
+                tools.call("ready", "plan.propose", f.args("""{"reply":"Ответ учтён"}"""))
+            }
+            "Готово"
+        }
+        val result = async { f.composer.completePlanning(f.store.planFor("plan")!!, f.profile,
+            listOf(LlmMessage(LlmChatRole.USER, "Review"))) {} }
+        runCurrent()
+        f.host.questions.respond(f.host.questions.requests.value.single().id, listOf(PlanningAnswer("q", text = "Мой ответ")))
+        assertContains(result.await(), "Ответ учтён")
+        assertEquals(1, turns)
+        assertTrue(f.host.questions.requests.value.isEmpty())
+    }
+
+    @Test fun stoppingPlanningStillCancelsQuestionAfterPrematureNativeFinal() = runTest {
+        val f = Fixture(this); f.init()
+        f.planningRun = { tools ->
+            coroutineScope {
+                val call = launch { tools.call("ask", "questionnaire", f.args("""{"questions":[{"id":"q","title":"Источник?","kind":"TEXT"}]}""")) }
+                f.host.questions.requests.first { it.isNotEmpty() }
+                call.cancelAndJoin()
+            }
+            "Жду ответ"
+        }
+        val result = launch { f.composer.completePlanning(f.store.planFor("plan")!!, f.profile,
+            listOf(LlmMessage(LlmChatRole.USER, "Review"))) {} }
+        runCurrent()
+        assertEquals(1, f.host.questions.requests.value.size)
+        result.cancelAndJoin()
+        assertTrue(f.host.questions.requests.value.isEmpty())
     }
 
     @Test fun coordinatorContinueQueuesConcreteWorkAndVerifyCannotAcceptItEarly() = runTest {

@@ -12,7 +12,7 @@ internal val PI_CODING_INSTRUCTIONS = """
             """.trimIndent()
 
 internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, override: String, research: Boolean = false): String =
-    (if (planning) listOf(PLANNING_INSTRUCTIONS, override) else if (research) listOf(override, RESEARCH_INSTRUCTIONS, QuestionnaireTool.instructions) else when (engine) {
+    (if (planning) listOf(PLANNING_INSTRUCTIONS, override, QuestionnaireTool.instructions) else if (research) listOf(override, RESEARCH_INSTRUCTIONS, QuestionnaireTool.instructions) else when (engine) {
         CodingEngine.CODEX -> listOf(QuestionnaireTool.instructions, CodexAppServerOpenAiSubscription.CODING_INSTRUCTIONS, override)
         CodingEngine.PI -> listOf(PI_CODING_INSTRUCTIONS, QuestionnaireTool.instructions, override)
         null -> listOf("Движок не выбран", override)

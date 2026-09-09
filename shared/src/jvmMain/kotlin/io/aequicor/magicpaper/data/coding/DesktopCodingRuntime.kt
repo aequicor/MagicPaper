@@ -127,13 +127,18 @@ class DesktopCodingRuntime(
             }
         } catch (e: CancellationException) { abort(session.id); throw e }
         finally { active.remove(session.id) }
-    }.flowOn(Dispatchers.IO)
+    }.withWakeGuard(onStalled = { withContext(Dispatchers.IO) { abort(session.id) } }).flowOn(Dispatchers.IO)
 
     override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> {
         val runId = session.pendingRun?.let { skillRunIdentity(session.id, it.runId) } ?: java.util.UUID.randomUUID().toString()
         session.forPendingRun()
         require(!session.planningMode) { "Планирование требует отдельного защищённого маршрута" }
-        val events = runIdentified(runId, project, session, prompt, profile, attachments)
+        val events = runIdentified(runId, project, session, prompt, profile, attachments).withWakeGuard(
+            awaitingUser = {
+                approvals.value.any { it.sessionId == session.id } || questionnaires.value.any { it.sessionId == session.id }
+            },
+            onStalled = { withContext(Dispatchers.IO) { abort(session.id) } },
+        )
         val effective = if (session.researchMode) events else events.withSkillExperience(runId, experience, resultVerifier, cancelled = { runId in cancelledRuns })
         return (if (session.researchMode) channelFlow {
             val activeTool = java.util.concurrent.atomic.AtomicReference<CodingEvent.ToolStarted?>()

@@ -15,21 +15,23 @@ class ToolHost(val receipts: ToolReceiptStore) {
     var prepareWorker: suspend (CodingSession) -> ToolExecutionContext = { ToolExecutionContext.worker(it) }
     var search: (suspend (ToolExecutionContext, String) -> JsonElement)? = null
     private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
+    internal suspend fun askQuestionnaire(ctx: ToolExecutionContext, id: String, args: JsonObject): JsonElement {
+        val request = json.decodeFromJsonElement<ToolQuestions>(args)
+        require(request.questions.validQuestions() && request.questions.isNotEmpty()) { "Некорректные вопросы" }
+        val safe = request.questions.map { it.copy(secret = false, allowCustomInput = true, canSkip = true,
+            options = it.options.map { o -> o.copy(enabled = true) }) }
+        val answers = questions.ask(UserInteractionRequest("tool:$id", ctx.projectId, ctx.ownerSessionId,
+            InteractionKind.RUNTIME, safe, ownerSessionId = ctx.ownerSessionId, createdAt = Id.now()))
+        return json.encodeToJsonElement(answers)
+    }
+
     fun session(context: ToolExecutionContext, overrides: Map<String, suspend (ToolExecutionContext, String, JsonObject) -> JsonElement> = emptyMap()): ToolSession {
         val commands = ToolCatalog.definitions.filter { !it.native && (it.id != "web.search" || search != null) }.map { definition ->
             JsonToolCommand(definition) { ctx, id, args ->
                 val override = overrides[definition.id]
                 if (override != null) override(ctx, id, args)
                 else when (definition.id) {
-                    "questionnaire" -> {
-                        val request = json.decodeFromJsonElement<ToolQuestions>(args)
-                        require(request.questions.validQuestions() && request.questions.isNotEmpty()) { "Некорректные вопросы" }
-                        val safe = request.questions.map { it.copy(secret = false, allowCustomInput = true, canSkip = true,
-                            options = it.options.map { o -> o.copy(enabled = true) }) }
-                        val answers = questions.ask(UserInteractionRequest("tool:$id", ctx.projectId, ctx.ownerSessionId,
-                            InteractionKind.RUNTIME, safe, ownerSessionId = ctx.ownerSessionId, createdAt = Id.now()))
-                        json.encodeToJsonElement(answers)
-                    }
+                    "questionnaire" -> askQuestionnaire(ctx, id, args)
                     "web.search" -> search!!(ctx, json.decodeFromJsonElement<ToolSearch>(args).query.also { require(it.isNotBlank()) })
                     else -> receiver(ctx, id, definition.id, args)
                 }
