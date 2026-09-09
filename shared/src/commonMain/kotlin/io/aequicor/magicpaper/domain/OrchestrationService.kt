@@ -833,14 +833,7 @@ class OrchestrationService(
             }
             return
         }
-        val answerText = buildString {
-            appendLine("Ответ на запрос: ${question.text}")
-            question.questions.forEach { q -> combined.firstOrNull { it.questionId == q.id }?.let { a ->
-                val selected = a.selected.mapNotNull { option -> q.options.firstOrNull { it.id == option }?.label }
-                appendLine("${q.title}: " + if (a.skipped) "Пропущено пользователем" else (selected + listOfNotNull(a.text.takeIf { it.isNotBlank() })).joinToString("; "))
-            } }
-            (question.partialMessages + (input.id to input.text)).values.filter { it.isNotBlank() }.forEach { appendLine(it) }
-        }.trim()
+        val answerText = question.workerAnswerText(combined, input)
         if (question.forDiscussion) {
             askToRefine(session, plan, input.copy(text = answerText), decision.copy(reply = "Уточнение сохранено."))
             return
@@ -1452,8 +1445,7 @@ class OrchestrationService(
         }
         val reply = record.reply
         publishHandoff(plan, record)
-        val records = store.planFor(plan.id)!!.coordination.filter { it.stageId == stage.id }
-        val blocked = records.takeLastWhile { it.reply.kind != StageReplyKind.RESULT }.count { it.reply.kind in setOf(StageReplyKind.BLOCKED, StageReplyKind.QUESTION) }
+        val blocked = store.planFor(plan.id)!!.blockedTurnCount(stage.id, attempt)
         if (blocked >= 3) {
             askUser(plan, stage, "$eventId-help", "Этап «${stage.title}» остановлен после трёх попыток разрешить блокировку. Нужно ваше уточнение: ${reply.text}")
             return StageTurnDecision(StageTurnAction.WAIT, reply.text, "$eventId-help")

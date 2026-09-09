@@ -56,6 +56,25 @@ import kotlinx.serialization.Serializable
     val planId: String, val stageId: String = "", val name: String = "", val applied: Boolean = false,
 )
 
+/** Keep answers separate from the diagnostic wrapper to avoid recursively echoing it. */
+internal fun OrchestrationQuestion.workerAnswerText(answers: List<PlanningAnswer>, input: OrchestrationInput): String = buildString {
+    appendLine("Ответ пользователя на запрос [$id]")
+    if (answers.isEmpty()) {
+        (partialMessages + (input.id to input.text)).values.filter { it.isNotBlank() }.distinct().forEach { appendLine(it) }
+    } else {
+        questions.forEach { q -> answers.firstOrNull { it.questionId == q.id }?.let { a ->
+            val selected = a.selected.mapNotNull { option -> q.options.firstOrNull { it.id == option }?.label }
+            val label = if (q.id == "$id-question") "Ответ" else q.title
+            appendLine("$label: " + if (a.skipped) "Пропущено пользователем" else
+                (selected + listOfNotNull(a.text.takeIf { it.isNotBlank() })).joinToString("; "))
+        } }
+        // Structured submissions already render the same answers in input.text.
+        partialMessages.filterKeys { it != input.id }.values.filter { it.isNotBlank() }.distinct().forEach { appendLine(it) }
+        if (input.text.isNotBlank() && (input.answers.isEmpty() ||
+                input.text.trim() != interactionAnswerText(questions, input.answers).trim())) appendLine(input.text)
+    }
+}.trim()
+
 @Serializable data class OrchestrationState(
     val sessionId: String, val projectId: String,
     val version: Int = 1, val activePlanId: String? = null,
