@@ -563,6 +563,7 @@ data class CodingMessage(
     val handoff: HandoffInfo? = null,
     val scheduledRuleId: String? = null,
     val timelineId: String? = null,
+    val systemContext: Boolean = false,
 
 )
 
@@ -589,6 +590,9 @@ interface CodingProjectRepository {
  * Все зависимости изолированы в папке данных приложения и удаляются вместе с ним.
  */
 interface CodingRuntime {
+    suspend fun sessionContext(project: CodingProject, session: CodingSession, profile: LlmProfile?): String =
+        sessionContextReport(profile, "Проект: ${project.path}\nДвижок: ${session.engine}", "Промпт недоступен для этого движка.", "Сведения о навыках недоступны.")
+
     val questionnaires: kotlinx.coroutines.flow.StateFlow<List<UserInteractionRequest>> get() = noRuntimeQuestionnaires
     suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) { error("Опросник недоступен") }
     val computerUse: ComputerUse? get() = null

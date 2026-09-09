@@ -191,8 +191,16 @@ internal fun buildDependencies(
  * key-value хранилища, что и чаты. Платформы без кодинг-бэкенда могут не
  * передавать его в [buildDependencies].
  */
-fun codingProjectRepository(store: KeyValueStore, json: Json): CodingProjectRepository =
-    BackgroundCodingProjectRepository(JsonCodingProjectRepository(store, json) { session, project ->
+fun codingProjectRepository(store: KeyValueStore, json: Json, runtime: CodingRuntime? = null): CodingProjectRepository =
+    BackgroundCodingProjectRepository(JsonCodingProjectRepository(store, json, initialContext = { session, project ->
+        val profiles = JsonLlmProfileRepository(store, json).load()
+        val settings = JsonSettingsRepository(store, json).load()
+        val profile = if (session.planningMode) session.modelSelection?.let {
+            io.aequicor.magicpaper.domain.ProfileResolver.selection(it, profiles)
+        } ?: io.aequicor.magicpaper.domain.ProfileResolver.resolve(null as io.aequicor.magicpaper.domain.ChatSession?, settings, profiles)
+        else io.aequicor.magicpaper.domain.ProfileResolver.coding(session, project, settings, profiles)
+        runtime?.sessionContext(project, session, profile)
+    }) { session, project ->
         val profiles = JsonLlmProfileRepository(store, json).load()
         val settings = JsonSettingsRepository(store, json).load()
         io.aequicor.magicpaper.domain.legacyCodingEngine(io.aequicor.magicpaper.domain.ProfileResolver.coding(session, project, settings, profiles))

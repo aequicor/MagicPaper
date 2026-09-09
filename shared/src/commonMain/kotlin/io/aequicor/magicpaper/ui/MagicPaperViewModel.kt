@@ -1289,10 +1289,11 @@ class MagicPaperViewModel(
                 modelSelection = project.modelSelection ?: ProfileResolver.favoriteDefault(_state.value.settings, _state.value.availableLlmProfiles, coding = true),
             )
             repo.saveSession(session)
+            val initialMessages = repo.messages(project.id, session.id)
             _state.update {
                 it.copy(
                     coding = it.coding.copy(
-                        sessions = listOf(CodingSessionUi(session = session)) + it.coding.sessions,
+                        sessions = listOf(CodingSessionUi(session = session, messages = initialMessages)) + it.coding.sessions,
                         currentSessionId = session.id,
                         creatingSession = false,
                     ),

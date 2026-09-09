@@ -1124,6 +1124,10 @@ private fun CodingMessageBubble(
     header: (@Composable () -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
 ) {
+    if (message.systemContext) {
+        io.aequicor.magicpaper.ui.components.SessionContextMessage(message.id, message.text)
+        return
+    }
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer

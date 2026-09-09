@@ -310,8 +310,8 @@ class CodexAppServerOpenAiSubscription(
                 if (planning) JsonObject(providerConfig + CodexPlanningPermissions.threadConfig()) else JsonObject(permissions!!.threadConfig() + providerConfig), computerBridge)
             questionnaireBridge = if (planning) null else QuestionnaireBridge(questionnaireRegistry, session)
             val threadConfig = questionnaireBridge?.codexConfig(baseConfig) ?: baseConfig
-            val instructions = listOf(if (planning) "" else QuestionnaireTool.instructions, if (planning) io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS else CODING_INSTRUCTIONS, codingProfile.advanced.systemPromptOverride)
-                .filter { it.isNotBlank() }.joinToString("\n\n")
+            val instructions = io.aequicor.magicpaper.data.coding.codingSystemPrompt(
+                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride)
             val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
                 if (computerUse != null && oldId in codingThreads) {
                     request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })

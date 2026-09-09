@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 class JsonCodingProjectRepository(
     private val store: KeyValueStore,
     private val json: Json,
+    private val initialContext: suspend (CodingSession, CodingProject) -> String? = { _, _ -> null },
     private val migrateEngine: suspend (CodingSession, CodingProject?) -> io.aequicor.magicpaper.domain.CodingEngine = { _, _ -> io.aequicor.magicpaper.domain.CodingEngine.PI },
 ) : CodingProjectRepository {
 
@@ -91,6 +92,7 @@ class JsonCodingProjectRepository(
         val migrated = main.copy(engine = migrateEngine(main, project))
         saveSessions(allSessions() + migrated)
         migrateLegacyLog(project.id, main.id)
+        if (messages(project.id, main.id).isEmpty()) initializeContext(migrated, project)
         return listOf(migrated)
     }
 
@@ -99,7 +101,17 @@ class JsonCodingProjectRepository(
         val previous = current.firstOrNull { it.id == session.id }
         require(previous?.engine == null || session.engine == null || session.engine == previous.engine) { "Движок существующей сессии изменить нельзя" }
         val saved = if (session.engine != null) session else session.copy(engine = previous?.engine ?: migrateEngine(session, all().firstOrNull { it.id == session.projectId }))
+        if (previous == null) all().firstOrNull { it.id == saved.projectId }?.let { initializeContext(saved, it) }
         saveSessions(current.filterNot { it.id == session.id } + saved)
+    }
+
+    private suspend fun initializeContext(session: CodingSession, project: CodingProject) {
+        if (messages(project.id, session.id).isNotEmpty()) return
+        val text = initialContext(session, project) ?: return
+        saveMessages(project.id, session.id, listOf(CodingMessage(
+            id = "${session.id}-system-context", role = io.aequicor.magicpaper.domain.CodingRole.AGENT,
+            text = text, createdAt = session.createdAt, systemContext = true,
+        )))
     }
 
     override suspend fun deleteSession(projectId: String, sessionId: String) {

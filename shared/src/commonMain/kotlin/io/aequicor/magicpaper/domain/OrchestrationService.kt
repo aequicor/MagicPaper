@@ -586,7 +586,7 @@ class OrchestrationService(
     private suspend fun inputHistory(session: CodingSession): List<CodingMessage> {
         val inputs = state(session.id, session.projectId).inputs.associateBy { it.id }
         return projects.messages(session.projectId, session.id).filter {
-            (inputs[it.id]?.status ?: it.inputStatus) !in setOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.WITHDRAWN)
+            !it.systemContext && (inputs[it.id]?.status ?: it.inputStatus) !in setOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.WITHDRAWN)
         }
     }
 

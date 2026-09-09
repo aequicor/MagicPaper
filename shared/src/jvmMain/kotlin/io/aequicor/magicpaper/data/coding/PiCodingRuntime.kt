@@ -215,8 +215,7 @@ class PiCodingRuntime(
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = if (planning) profile.forModel() else profile.forCoding()
         writePiConfig(codingProfile, sessionHome(session.id), imageInput = !planning && computerUse?.grant(session.id) != null)
-        if (planning) writeAtomically(File(sessionHome(session.id), HINTS_FILE), io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS +
-            "\n" + codingProfile.advanced.systemPromptOverride)
+        if (planning) writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, true, codingProfile.advanced.systemPromptOverride))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
@@ -878,12 +877,7 @@ class PiCodingRuntime(
         // Подсказка модели про точное совпадение текста правок: путь к этому
         // файлу уходит в --append-system-prompt (файл читает сам пи, см. run).
         File(home, HINTS_FILE).writeText(
-            """
-            Files may contain Russian typography: em dashes (—), guillemets («»…«»), the letter ё.
-            In edit tools, copy oldText/newText EXACTLY as read() returned them: do not replace
-            an em dash with a hyphen or guillemets with straight quotes, do not drop characters.
-            If an edit fails to match, re-read that region and retry with the exact text.
-            """.trimIndent(),
+            PI_CODING_INSTRUCTIONS,
             StandardCharsets.UTF_8
         )
     }
@@ -899,8 +893,7 @@ class PiCodingRuntime(
         // не должны прочитать наполовину записанный models.json.
         writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile, imageInput = imageInput))
         writeAtomically(File(home, "model-options.mjs"), PiModelOptions.extension(profile))
-        File(home, HINTS_FILE).appendText("\n\n" + io.aequicor.magicpaper.data.questionnaire.QuestionnaireTool.instructions)
-        if (profile.advanced.systemPromptOverride.isNotBlank()) File(home, HINTS_FILE).appendText("\n\n" + profile.advanced.systemPromptOverride)
+        File(home, HINTS_FILE).writeText(codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, false, profile.advanced.systemPromptOverride))
 
     }
 

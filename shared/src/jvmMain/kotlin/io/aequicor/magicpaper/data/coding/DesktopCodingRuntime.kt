@@ -18,6 +18,38 @@ class DesktopCodingRuntime(
     private val experience: () -> LocalSkillExperience? = { null },
     private val resultVerifier: SkillRunVerifier = SkillRunVerifier { SkillRunVerification() },
 ) : CodingRuntime {
+    override suspend fun sessionContext(project: CodingProject, session: CodingSession, profile: LlmProfile?): String = withContext(Dispatchers.IO) {
+        val effective = profile?.let { if (session.planningMode) it.forModel() else it.forCoding() }
+        val skills = if (session.planningMode) "Пакеты проекта не передаются в режим изучения проекта." else try {
+            val selection = skillSelection(project.id)
+            buildString {
+                if (selection.instructions.isEmpty()) appendLine("Пакеты проекта не подключены.")
+                selection.instructions.forEach { skill ->
+                    appendLine("${skill.name} · ${skill.id}@${skill.version}")
+                    appendLine("SHA-256: ${skill.checksum}")
+                    appendLine("Заявленные разрешения: ${skill.permissions.joinToString().ifBlank { "нет" }}")
+                    appendLine("Инструкция SKILL.md:")
+                    appendLine(skill.text)
+                    appendLine()
+                }
+                appendLine("Передача как доверенного пользовательского текста: ${if (selection.trustedText) "включена" else "выключена"}.")
+                if (selection.freshSession) appendLine("Каждый запуск использует новую сессию движка без прежней истории.")
+            }
+        } catch (e: CancellationException) { throw e } catch (_: Exception) {
+            "Не удалось проверить привязки навыков. Состав не подтверждён; при запуске будет повторная проверка."
+        }
+        val environment = buildString {
+            appendLine("Проект: ${project.name}\nРабочая папка: ${project.path}")
+            appendLine("Движок: ${session.engine?.title ?: "не выбран"}; режим: ${if (session.planningMode) "планирование" else "код"}; роль: ${session.role}")
+            appendLine("Дополнительные источники: встроенные инструкции движка, настройки инструментов и доступа, инструкции проекта (например, AGENTS.md). Они могут загружаться при запуске и чтении файлов; полный контекст движка здесь недоступен.")
+            if (session.engine == CodingEngine.PI) appendLine("Нативная автозагрузка навыков Pi отключена (--no-skills).")
+            else appendLine("Нативные навыки и плагины Codex определяются его конфигурацией при запуске; список ниже относится к пакетам MagicPaper.")
+            appendLine("Инструменты и доступ: ${if (session.planningMode) "режим чтения проекта" else "политика выбранного движка; доступ к компьютеру выдаётся отдельно для сессии"}.")
+        }
+        sessionContextReport(effective, environment,
+            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty()), skills)
+    }
+
     override val computerUse get() = subscription.computerUse
     private val active = ConcurrentHashMap.newKeySet<String>()
     private val runIds = ConcurrentHashMap<String, String>()

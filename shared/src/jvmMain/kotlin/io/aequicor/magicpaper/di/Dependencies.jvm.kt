@@ -29,7 +29,7 @@ actual fun createMagicPaperDependencies(): MagicPaperDependencies {
         store = store,
         bridge = DesktopProfileBridge(),
         codingRuntime = runtime,
-        codingProjects = codingProjectRepository(store, appJson),
+        codingProjects = codingProjectRepository(store, appJson, runtime),
         dirPicker = DesktopProjectDirPicker(),
         filePicker = DesktopFilePicker(),
         openAiSubscription = subscription,

@@ -27,6 +27,34 @@ class JsonCodingProjectRepositoryTest {
     private fun agent(id: String, text: String) =
         CodingMessage(id = id, role = CodingRole.AGENT, text = text, createdAt = 2L)
 
+    @Test fun creationContextIsFirstAndSurvivesReloadWithoutRegeneration() = runTest {
+        var snapshots = 0
+        val reporting = JsonCodingProjectRepository(store, json, initialContext = { _, _ ->
+            snapshots++; "prompt and skills version $snapshots"
+        })
+        reporting.save(CodingProject("p", "Project", "/p", 1))
+        val main = reporting.sessions("p").single()
+        assertTrue(reporting.messages("p", main.id).single().systemContext)
+        val session = CodingSession("new", "p", "New", 2)
+        reporting.saveSession(session)
+        val first = reporting.messages("p", "new").single()
+        assertTrue(first.systemContext)
+        reporting.saveMessages("p", "new", listOf(first, user("u", "task")))
+        reporting.saveSession(session.copy(name = "Renamed"))
+        val reloaded = JsonCodingProjectRepository(store, json).messages("p", "new")
+        assertEquals(listOf(first.id, "u"), reloaded.map { it.id })
+        assertEquals(2, snapshots)
+        assertEquals(listOf("u"), reloaded.pinMessages().map { it.id })
+    }
+
+    @Test fun legacyMessagesAreNotGivenAnInventedCreationSnapshot() = runTest {
+        val reporting = JsonCodingProjectRepository(store, json, initialContext = { _, _ -> "snapshot" })
+        reporting.save(CodingProject("p", "Project", "/p", 1))
+        reporting.saveMessages("p", "main-p", listOf(user("old", "previous task")))
+        reporting.sessions("p")
+        assertEquals(listOf("old"), reporting.messages("p", "main-p").map { it.id })
+    }
+
     @Test fun sessionsStayNewestFirstAfterReloadAndRename() = runTest {
         repo.save(CodingProject("p", "Project", "/p", 1))
         val older = CodingSession("older", "p", "Older", 2)
