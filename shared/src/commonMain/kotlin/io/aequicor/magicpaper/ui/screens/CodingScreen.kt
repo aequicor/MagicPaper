@@ -1438,13 +1438,13 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
     val hasThinking = remember(fragments) { fragments.any { it.isNotBlank() } }
     val isWorking = draft.active && !waitingForUser && draft.failedMessage == null &&
         (progress != null || tool != null || !draft.awaitingModel)
-    var dots by remember { mutableStateOf(3) }
+    var dots by remember { mutableStateOf(1) }
     LaunchedEffect(isWorking) {
-        dots = 3
+        dots = 1
         if (isWorking) {
             while (true) {
                 delay(500)
-                dots = if (dots == 1) 3 else dots - 1
+                dots = dots % 3 + 1
             }
         }
     }
@@ -1471,9 +1471,6 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
                 size = 6,
             )
             Spacer(Modifier.width(6.dp))
-            Text("Сейчас:", style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.width(4.dp))
             Text(label, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
