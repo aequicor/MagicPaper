@@ -262,7 +262,7 @@ class OrchestrationService(
             createdAt = at, route = route, handoff = info))
         append(plan.projectId, source, CodingMessage("${record.id}-handoff", CodingRole.AGENT,
             "$reason задачи «${task.title}»: управление передано оркестратору «${route.target.name}».",
-            createdAt = at, route = route, handoff = info))
+            createdAt = at, route = route, handoff = info, systemNotice = true))
     }
 
     private fun schedulingTriggerInstructions() =
@@ -586,7 +586,7 @@ class OrchestrationService(
     private suspend fun inputHistory(session: CodingSession): List<CodingMessage> {
         val inputs = state(session.id, session.projectId).inputs.associateBy { it.id }
         return projects.messages(session.projectId, session.id).filter {
-            !it.systemContext && (inputs[it.id]?.status ?: it.inputStatus) !in setOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.WITHDRAWN)
+            !it.systemContext && !it.systemNotice && (inputs[it.id]?.status ?: it.inputStatus) !in setOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.WITHDRAWN)
         }
     }
 
@@ -1362,10 +1362,17 @@ class OrchestrationService(
                 it.copy(state = DeliveryState.DELIVERED) else it
         }) }
         val count = saved.deliveries.count { it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex }
-        append(plan.projectId, plan.parentSessionId, CodingMessage("${attempt.id}-turn-${attempt.turnIndex}-started", CodingRole.AGENT,
-            "Работа передана исполнителю." + if (count == 0) "" else " Передано сообщений: $count.", createdAt = Id.now(),
-            route = MessageRoute(address(plan.projectId, plan.parentSessionId), address(plan.projectId, attempt.sessionId),
-                kind = "Задание", stageLabel = stage.stageLabel())))
+        val returning = attempt.turnIndex > 0
+        val route = MessageRoute(address(plan.projectId, plan.parentSessionId), address(plan.projectId, attempt.sessionId),
+            kind = if (returning) "Возврат работы" else "Задание", stageLabel = stage.stageLabel())
+        val text = if (returning) "Оркестратор вернул работу в сессию «${route.target.name}» для продолжения."
+            else "Работа передана исполнителю в сессию «${route.target.name}»."
+        val message = CodingMessage("${attempt.id}-turn-${attempt.turnIndex}-started", CodingRole.AGENT,
+            text + if (count == 0) "" else " Передано сообщений: $count.", createdAt = Id.now(), route = route, systemNotice = true)
+        for (sessionId in listOf(plan.parentSessionId, attempt.sessionId).distinct()) {
+            if (projects.messages(plan.projectId, sessionId).none { it.id == message.id })
+                append(plan.projectId, sessionId, message)
+        }
     }
 
     override suspend fun finished(plan: Plan, stage: Milestone, attempt: StageAttempt): StageTurnDecision {
@@ -1472,7 +1479,7 @@ class OrchestrationService(
                 LlmMessage(LlmChatRole.ASSISTANT, json.encodeToString(record.decision)),
                 LlmMessage(LlmChatRole.USER, "Сохранённое решение нельзя применить: $savedDecisionProblem Пересмотри его по текущему состоянию правил и доставок. Не повторяй уже выполненную работу исполнителя."))
             append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-review", CodingRole.AGENT,
-                "Оркестратор разбирает ${if (reply.kind == StageReplyKind.RESULT) "результат" else "обращение"} этапа «${stage.title}» и определяет следующий шаг.", createdAt = Id.now()))
+                "Оркестратор разбирает ${if (reply.kind == StageReplyKind.RESULT) "результат" else "обращение"} этапа «${stage.title}» и определяет следующий шаг.", createdAt = Id.now(), systemNotice = true))
             decision = coordinatorDecision(judge, listOf(LlmMessage(LlmChatRole.SYSTEM,
                 "${schedulingInstructions()} Ты координатор плана. Ответь JSON {\"reply\":\"объяснение\",\"actions\":[{\"stageId\":\"id\",\"message\":\"информация или задание\"}],\"askUser\":false,\"replan\":false}. Передай сведения между этапами. Если неизвестны требования — askUser=true и questions=[{\"id\":\"уникальный id\",\"title\":\"вопрос пользователю\",\"kind\":\"SINGLE|MULTIPLE|TEXT\",\"options\":[{\"id\":\"id варианта\",\"label\":\"вариант ответа\"}]}]. Для свободного ответа используй TEXT и options=[]. При askUser не выдавай заданий, зависящих от ответа. Не выдумывай результаты. replan=true если надо изменить ещё не начатые этапы в рамках цели. Проверь пересечения изменённых файлов с соседними планами. Если результат требует перепроверки после чужих изменений, передай исполнителю задание перепроверить его. Начатые этапы не удаляй, добавляй продолжения."),
                 LlmMessage(LlmChatRole.USER, "${schedulingContext(latest)}\nЗапрос ожидания исполнителя: ${json.encodeToString(reply)}\nЦель: ${plan.goal}\nЭтапы:\n$context\nИстория текущей попытки:\n${latest.stageRecords(stage.id, attempt).evidenceText()}\nДругие планы:\n$peers\nОт ${stage.id} для ${reply.targetStageId} (${reply.kind}): ${reply.text}\nФайлы: ${reply.changedFiles}\nВходящие сообщения: ${latest.deliveries.takeLast(12)}")) + recoveryContext, targets, plan, eventId, activityId)
@@ -1687,7 +1694,7 @@ class OrchestrationService(
                 val sessionId = stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}"
                 if (stage.completed) append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-${stage.id}-completed", CodingRole.AGENT,
                     if (stage.status == MilestoneStatus.SKIPPED) "Этап «${stage.title}» пропущен."
-                    else "Этап «${stage.title}» завершён и проверен. ${stage.checkNote}", createdAt = stage.updatedAt))
+                    else "Этап «${stage.title}» завершён и проверен. ${stage.checkNote}", createdAt = stage.updatedAt, systemNotice = true))
                 stage.attempts.forEach { a ->
                     append(plan.projectId, sessionId, CodingMessage("${a.id}-prompt", CodingRole.USER, a.prompt.ifBlank { stage.description }, createdAt = a.startedAt))
                 }

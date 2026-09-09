@@ -568,6 +568,8 @@ data class CodingMessage(
     val scheduledRuleId: String? = null,
     val timelineId: String? = null,
     val systemContext: Boolean = false,
+    /** Уведомление приложения для пользователя; не входит в историю для модели. */
+    val systemNotice: Boolean = false,
 
 )
 

@@ -1131,7 +1131,9 @@ private fun CodingMessageBubble(
         return
     }
     val isUser = message.role == CodingRole.USER
-    val bubbleColor = if (isUser) {
+    val bubbleColor = if (message.systemNotice) {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    } else if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
@@ -1157,6 +1159,8 @@ private fun CodingMessageBubble(
                 .background(bubbleColor)
                 .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
         ) {
+            if (first && message.systemNotice) Text("Системное сообщение", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (first) header?.invoke()
             if (isUser) {
                 ChatPlainText(message.text)

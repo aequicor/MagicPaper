@@ -507,6 +507,14 @@ class PlanningChatServiceTest {
         f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
         assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
         assertEquals(2, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        val workerId = "plan-p-stage-stage"
+        for (sessionId in listOf("parent", workerId)) {
+            val returned = f.projects.messages(project.id, sessionId).single { it.route?.kind == "Возврат работы" }
+            assertContains(returned.text, "Оркестратор вернул работу в сессию «Stage»")
+            assertTrue(returned.systemNotice)
+            assertEquals("parent", returned.route!!.source.sessionId)
+            assertEquals(workerId, returned.route.target.sessionId)
+        }
         val report = f.verificationReports.single { it.first == "stage" }.second
         assertContains(report, "Links: PASS")
         assertContains(report, "Rollback test: PASS")
@@ -515,6 +523,24 @@ class PlanningChatServiceTest {
         val coordinatorContext = f.gateway.requests.last { it.first().content.contains("Ты координатор") }.joinToString { it.content }
         assertContains(coordinatorContext, "Links: PASS")
         assertContains(coordinatorContext, "Rollback test: PASS")
+        assertContains(coordinatorContext, "Проверь откат")
+        val notices = f.projects.messages(project.id, "parent").filter { it.systemNotice }
+        assertTrue(notices.any { it.route?.kind == "Возврат работы" })
+        assertTrue(notices.any { it.id == "p-stage-completed" })
+        notices.forEach { assertFalse(coordinatorContext.contains(it.text), it.text) }
+
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Этап завершён, проверки сохранены"}"""
+        val parent = f.projects.sessions(project.id).single { it.id == "parent" }
+        f.service.send(parent, "Что сделано и проверено?"); runCurrent()
+        val discussion = f.gateway.requests.last { it.first().content.contains("Ты оркестратор диалога") }
+            .joinToString("\n") { it.content }
+        notices.forEach { assertFalse(discussion.contains(it.text), it.text) }
+        assertContains(discussion, "status=DONE")
+        assertContains(discussion, "sessionId=$workerId")
+        assertContains(discussion, "проверка=Checked")
+        assertContains(discussion, "Rollback test: PASS")
+        assertContains(discussion, "Backend remains NOT_RUN")
+        assertContains(discussion, "Проверь откат")
     }
 
     @Test fun failedVerificationRemainsInCoordinatorContextAfterRepairClearsAttemptError() = runTest {
@@ -757,19 +783,19 @@ class PlanningChatServiceTest {
         f.gateway.coordinator = """{"reply":"Уточните формат","askUser":true}"""
         f.service.confirm(plan.id); runCurrent()
         val worker = f.projects.sessions(project.id).single { it.stageId != null }
-        val first = f.projects.messages(project.id, worker.id).last { it.role == CodingRole.AGENT && it.handoff == null }
+        val first = f.projects.messages(project.id, worker.id).last { it.role == CodingRole.AGENT && it.handoff == null && it.route == null }
         assertEquals("Какой формат?", first.text)
         val question = f.projects.messages(project.id, parent.id).pendingPlanningQuestion()!!
         f.service.send(parent, "PDF", replyTo = question.id); advanceTimeBy(1000); runCurrent()
         assertEquals(2, f.runtime.calls.size)
-        assertEquals(first, f.projects.messages(project.id, worker.id).single { it.role == CodingRole.AGENT && it.handoff == null })
+        assertEquals(first, f.projects.messages(project.id, worker.id).single { it.role == CodingRole.AGENT && it.handoff == null && it.route == null })
         val coordinatorGate = CompletableDeferred<Unit>()
         f.gateway.coordinatorGates += listOf(CompletableDeferred(Unit), coordinatorGate)
         secondTurn.complete(Unit); runCurrent()
         val saved = f.store.planFor(plan.id)!!.milestones.single().attempts.single()
         assertTrue(saved.awaitingPlanner)
         val history = f.projects.messages(project.id, worker.id)
-        val replies = history.filter { it.role == CodingRole.AGENT && it.handoff == null }
+        val replies = history.filter { it.role == CodingRole.AGENT && it.handoff == null && it.route == null }
         assertEquals(listOf("Какой формат?", "Экспорт PDF проверен"), replies.map { it.text })
         assertEquals(first, replies.first())
         val answerIndex = history.indexOfFirst { it.deliveryId != null && "PDF" in it.text }
@@ -1722,12 +1748,39 @@ class PlanningChatServiceTest {
         val attempt = StageAttempt("a", worker.id, StageAssignment(profile.id, "m"))
         f.service.instructions(f.store.planFor("p")!!, stage, attempt)
         assertEquals(DeliveryState.QUEUED, f.store.planFor("p")!!.deliveries.single().state)
+        val startedId = "a-turn-0-started"
+        assertTrue(listOf("parent", worker.id).all { sessionId ->
+            f.projects.messages(project.id, sessionId).none { it.id == startedId }
+        })
         f.service.started(f.store.planFor("p")!!, stage, attempt)
+        f.service.started(f.store.planFor("p")!!, stage, attempt)
+        for (sessionId in listOf("parent", worker.id)) {
+            val notice = f.projects.messages(project.id, sessionId).single { it.id == startedId }
+            assertContains(notice.text, "Работа передана исполнителю в сессию «Stage»")
+            assertTrue(notice.systemNotice)
+        }
         assertEquals(DeliveryState.DELIVERED, f.store.planFor("p")!!.deliveries.single().state)
         val route = f.projects.messages(project.id, "parent").first { it.route?.deliveryId != null }.route!!
         assertEquals("Stage", route.target.name)
         assertContains(route.target.subtitle, "Этап 1")
         assertEquals(worker.id, route.target.sessionId)
+    }
+
+    @Test fun systemNoticesStayInStoredHistoryButDoNotEnterModelContext() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val notice = CodingMessage("notice", CodingRole.AGENT, "SYSTEM_NOTICE_SENTINEL", createdAt = 2, systemNotice = true)
+        val answer = CodingMessage("answer", CodingRole.AGENT, "AGENT_ANSWER_SENTINEL", createdAt = 3)
+        f.projects.saveMessages(project.id, parent.id, listOf(notice, answer))
+        val restored = JsonCodingProjectRepository(f.kv, json).messages(project.id, parent.id)
+        assertTrue(restored.single { it.id == notice.id }.systemNotice)
+        assertFalse(restored.single { it.id == answer.id }.systemNotice)
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Объяснение"}"""
+        f.service.send(parent, "Что происходит?"); runCurrent()
+        val context = f.gateway.requests.single().joinToString("\n") { it.content }
+        assertFalse(context.contains(notice.text))
+        assertContains(context, answer.text)
+        assertTrue(f.projects.messages(project.id, parent.id).any { it == notice })
     }
 
     @Test fun anAnswerDoesNotResumeAnExplicitlyPausedPlan() = runTest {
