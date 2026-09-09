@@ -533,7 +533,8 @@ internal fun ProjectsPanel(
                                 {
                                     if (selected) projectCollapsed = !projectCollapsed
                                     else onSelectProject(project.id)
-                                }, { onDeleteProject(project.id) }, onDeleteAllSessions = { onDeleteAllSessions(project.id) })
+                                }, { onDeleteProject(project.id) }, onAddSession = onAddSession,
+                                onDeleteAllSessions = { onDeleteAllSessions(project.id) })
                         }
                     }
                     if (expanded) {
@@ -548,7 +549,6 @@ internal fun ProjectsPanel(
                                 }
                             }
                         }
-                        item(key = "add-${project.id}") { AddSessionRow(onAdd = onAddSession) }
                     }
                 }
             }
@@ -627,6 +627,7 @@ private fun ProjectRow(
     sessionCount: Int,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
+    onAddSession: () -> Unit,
     onDeleteAllSessions: () -> Unit = {},
 ) {
     val hoverInteraction = remember { MutableInteractionSource() }
@@ -671,11 +672,24 @@ private fun ProjectRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (showActions) RowMenu(
-            open = menuOpen,
-            onOpenChange = { menuOpen = it },
-            entries = listOf("Удалить все сессии" to onDeleteAllSessions, "Удалить проект" to onDelete),
-        )
+        if (showActions) {
+            // The action is deliberately available only on the current project: the
+            // creation dialog saves into the ViewModel's current project.
+            if (selected) {
+                TextButton(
+                    onClick = onAddSession,
+                    modifier = Modifier.semantics { contentDescription = "Новая сессия" },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                ) {
+                    Text("Новая сессия", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            RowMenu(
+                open = menuOpen,
+                onOpenChange = { menuOpen = it },
+                entries = listOf("Удалить все сессии" to onDeleteAllSessions, "Удалить проект" to onDelete),
+            )
+        }
     }
 }
 
@@ -765,26 +779,6 @@ private fun SessionRow(
                 if (item.running) add("Прервать прогон" to onAbort)
                 add((if (item.session.stageId != null) "В архив" else "Удалить сессию") to onDelete)
             },
-        )
-    }
-}
-
-@Composable
-private fun AddSessionRow(onAdd: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 2.dp, bottom = 6.dp)
-            .clip(MaterialTheme.shapes.small)
-            .clickable(onClick = onAdd)
-            .heightIn(min = 30.dp)
-            .padding(horizontal = 12.dp, vertical = 5.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Text(
-            "✦ новая сессия",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
         )
     }
 }

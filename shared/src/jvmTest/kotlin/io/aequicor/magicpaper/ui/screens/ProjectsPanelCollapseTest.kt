@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.use
@@ -22,7 +23,7 @@ import kotlin.test.*
 /** Real panel/pointer events; controlled UI state, no process, provider or project filesystem. */
 @OptIn(ExperimentalComposeUiApi::class)
 class ProjectsPanelCollapseTest {
-    private class Panel : AutoCloseable {
+    private class Panel(private val width: Int = 390) : AutoCloseable {
         val a = CodingProject("a", "Project A", "/fixture/a", 0)
         val b = CodingProject("b", "Project B", "/fixture/b", 0)
         val ui = mutableStateOf(CodingUi(projects = listOf(a, b), current = a, currentSessionId = "parent", sessions = listOf(
@@ -34,15 +35,17 @@ class ProjectsPanelCollapseTest {
         val list = LazyListState()
         var projectClicks = 0
         var sessionClicks = 0
+        var addSessionClicks = 0
         private var frame = 0L
-        private val scene = ImageComposeScene(390, 900) {
+        private val scene = ImageComposeScene(width, 900) {
             MagicPaperTheme {
                 ProjectsPanel(ui.value, {}, { id ->
                     projectClicks++
                     // Same selection contract as openCodingProject: selection is not cleared
                     // when the already-current project is opened again.
                     ui.value = ui.value.copy(current = ui.value.projects.single { it.id == id })
-                }, {}, { id -> sessionClicks++; ui.value = ui.value.copy(currentSessionId = id) }, {}, {}, {}, listState = list)
+                }, {}, { id -> sessionClicks++; ui.value = ui.value.copy(currentSessionId = id) },
+                    { addSessionClicks++ }, {}, {}, listState = list)
             }
         }
         init { render() }
@@ -64,6 +67,28 @@ class ProjectsPanelCollapseTest {
             }
             click(arrow.boundsInRoot.center)
         }
+        private fun nodes(): List<SemanticsNode> {
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            return scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+        }
+        fun hover(key: String) {
+            val item = list.layoutInfo.visibleItemsInfo.single { it.key == key }
+            scene.sendPointerEvent(PointerEventType.Move, Offset(100f, item.offset + item.size / 2f), type = PointerType.Mouse)
+            render()
+        }
+        fun newSessionButton(): SemanticsNode = nodes().single {
+            it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Новая сессия") == true
+        }
+        fun hasText(value: String): Boolean = nodes().any {
+            it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true
+        }
+        fun text(value: String): SemanticsNode = nodes().single {
+            it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true
+        }
+        fun actionsMenu(): SemanticsNode = nodes().single {
+            it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Действия") == true
+        }
+        fun click(node: SemanticsNode) = click(node.boundsInRoot.center)
         private fun click(point: Offset) {
             scene.sendPointerEvent(PointerEventType.Press, point)
             scene.sendPointerEvent(PointerEventType.Release, point)
@@ -134,5 +159,35 @@ class ProjectsPanelCollapseTest {
         p.click("project-a")
         assertTrue("session-parent" in p.keys(), "Selecting another project opens its list")
         assertTrue("session-child" in p.keys())
+    }
+
+    @Test fun newSessionButtonUsesOnlyItsCallback() = Panel().use { p ->
+        p.hover("project-a")
+        val button = p.newSessionButton()
+        assertNotNull(button.config.getOrNull(SemanticsActions.OnClick), "New-session control must be clickable by semantics")
+        assertFalse(p.hasText("Удалить проект"), "Project actions menu must be closed before the click")
+        p.snapshot("new-session-action")
+
+        p.click(button)
+
+        assertEquals(1, p.addSessionClicks, "New-session callback must run exactly once")
+        assertEquals(0, p.projectClicks, "New-session click must not select the project")
+        assertEquals(0, p.sessionClicks, "New-session click must not select a session")
+        assertTrue("session-parent" in p.keys(), "New-session click must not collapse the current project")
+        assertTrue("session-child" in p.keys(), "New-session click must preserve the expanded session group")
+        assertFalse(p.hasText("Удалить проект"), "New-session click must not open the project actions menu")
+    }
+
+    @Test fun newSessionActionKeepsHeaderControlsSeparateAtMinimumSidebarWidth() = Panel(width = 200).use { p ->
+        p.hover("project-a")
+        val title = p.text("Project A").boundsInRoot
+        val button = p.newSessionButton().boundsInRoot
+        val menu = p.actionsMenu().boundsInRoot
+
+        assertTrue(title.width > 0f, "Project title must remain visible at the minimum sidebar width")
+        assertTrue(title.right <= button.left, "New-session button must not cover the project title")
+        assertTrue(button.right <= menu.left, "New-session button must stay left of the actions menu")
+        assertTrue(menu.right <= 200f, "Actions menu must remain inside the sidebar")
+        p.snapshot("new-session-minimum-width")
     }
 }
