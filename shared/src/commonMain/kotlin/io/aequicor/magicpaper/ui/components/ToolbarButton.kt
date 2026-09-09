@@ -36,7 +36,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-internal enum class ToolbarIcon { Sidebar, Settings }
+internal enum class ToolbarIcon { Sidebar, Settings, Archive }
 
 /** Монохромные значки без зависимости от платформенного emoji-шрифта. */
 @Composable
@@ -89,6 +89,11 @@ internal fun ToolbarButton(
                     ToolbarIcon.Sidebar -> {
                         drawRoundRect(ink, Offset(1f, 2f), Size(14f, 12f), CornerRadius(2f), style = stroke)
                         drawLine(ink, Offset(5.5f, 2f), Offset(5.5f, 14f), strokeWidth = 1.2f)
+                    }
+                    ToolbarIcon.Archive -> {
+                        drawRoundRect(ink, Offset(2f, 5f), Size(12f, 9f), CornerRadius(1f), style = stroke)
+                        drawRoundRect(ink, Offset(1f, 2f), Size(14f, 3f), CornerRadius(0.5f), style = stroke)
+                        drawLine(ink, Offset(6f, 8f), Offset(10f, 8f), strokeWidth = 1.2f, cap = StrokeCap.Round)
                     }
                     ToolbarIcon.Settings -> {
                         drawPath(gear, ink, style = stroke)

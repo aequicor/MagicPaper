@@ -1337,6 +1337,26 @@ class MagicPaperViewModel(
         }
     }
 
+    fun archiveCodingSession(id: String) {
+        val repo = codingProjects ?: return
+        val target = _state.value.coding.sessions.firstOrNull { it.session.id == id } ?: return
+        scope.launch {
+            if (target.session.stageId != null && planningChat != null) {
+                planningChat.archiveSession(id)
+                return@launch
+            }
+            val latest = repo.sessions(target.session.projectId).firstOrNull { it.id == id } ?: return@launch
+            val archived = latest.copy(archived = true)
+            repo.saveSession(archived)
+            _state.update { state ->
+                state.copy(coding = state.coding.copy(
+                    sessions = state.coding.sessions.map { if (it.session.id == id) it.copy(session = archived) else it },
+                ))
+            }
+            refreshProjectStatus(target.session.projectId)
+        }
+    }
+
     fun deleteCodingSession(id: String) {
         val repo = codingProjects ?: return
         val coding = _state.value.coding

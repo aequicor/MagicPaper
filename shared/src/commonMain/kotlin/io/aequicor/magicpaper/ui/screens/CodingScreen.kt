@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.ui.components.ToolbarButton
+import io.aequicor.magicpaper.ui.components.ToolbarIcon
 import androidx.compose.runtime.CompositionLocalProvider
 import io.aequicor.magicpaper.domain.UserInteractionRequest
 import io.aequicor.magicpaper.domain.QuestionnaireDraft
@@ -227,6 +229,7 @@ fun CodingScreen(
                 onSelectSession = vm::selectCodingSession,
                 onAddSession = vm::requestCodingSession,
                 onDeleteSession = vm::deleteCodingSession,
+                onArchiveSession = vm::archiveCodingSession,
                 onAbortSession = vm::abortCodingSession,
                 modifier = panelModifier,
             )
@@ -482,6 +485,7 @@ internal fun ProjectsPanel(
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
     onDeleteAllSessions: (String) -> Unit = {},
+    onArchiveSession: (String) -> Unit = {},
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         val collapsed = remember { mutableStateMapOf<String, Boolean>() }
@@ -506,6 +510,7 @@ internal fun ProjectsPanel(
             SessionRow(session, session.session.id == ui.activeSessionIdOf(session.session.projectId),
                 { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
                 { onAbortSession(session.session.id) },
+                onArchive = { onArchiveSession(session.session.id) },
                 childCount = group.children.size, expanded = group.expanded,
                 onToggleChildren = {
                     if (group.expanded) {
@@ -547,7 +552,8 @@ internal fun ProjectsPanel(
                                 item(key = "session-${child.session.id}") {
                                     SessionRow(child, child.session.id == activeId,
                                         { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
-                                        { onAbortSession(child.session.id) }, nested = true)
+                                        { onAbortSession(child.session.id) },
+                                        onArchive = { onArchiveSession(child.session.id) }, nested = true)
                                 }
                             }
                         }
@@ -705,6 +711,7 @@ private fun SessionRow(
     onSelect: () -> Unit,
     onDelete: () -> Unit,
     onAbort: () -> Unit,
+    onArchive: () -> Unit,
     nested: Boolean = false,
     childCount: Int = 0,
     expanded: Boolean = false,
@@ -757,6 +764,24 @@ private fun SessionRow(
                 contentAlignment = Alignment.Center) {
                 Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.primary)
             }
+        }
+        if (showActions) TooltipBox(
+            positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                androidx.compose.material3.TooltipAnchorPosition.Above,
+            ),
+            tooltip = {
+                androidx.compose.material3.Surface(
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Text("В архив", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.inverseOnSurface)
+                }
+            },
+            state = rememberTooltipState(),
+        ) {
+            ToolbarButton(ToolbarIcon.Archive, label = "Архивировать сессию", size = 24.dp, onClick = onArchive)
         }
         if (showActions) RowMenu(
             open = menuOpen,
