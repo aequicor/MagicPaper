@@ -1317,8 +1317,11 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return
         val coding = _state.value.coding
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
-        if (target.session.stageId != null && planningChat != null) { planningChat.archiveSession(id); return }
         scope.launch {
+            if (target.session.stageId != null && planningChat != null && planningChat.hasLiveOrchestrator(target.session)) {
+                planningChat.archiveSession(id)
+                return@launch
+            }
             val projectId = target.session.projectId
             val ids = repo.sessions(projectId).sessionTreeIds(id).toMutableSet()
             ids.forEach { removedId ->

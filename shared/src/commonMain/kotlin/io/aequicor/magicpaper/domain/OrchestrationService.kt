@@ -85,7 +85,12 @@ class OrchestrationService(
         val ids = sessionLock.withLock {
             projects.sessions(projectId).sessionTreeIds(sessionId).also { deletedSessions.addAll(it) }
         }
-        val plans = store.plans().filter { it.projectId == projectId && it.parentSessionId in ids }
+        val remainingSessions = projects.sessions(projectId)
+        val ownedPlanIds = remainingSessions.filter { it.id in ids }.mapNotNull { it.planId }.toSet()
+        val plans = store.plans().filter { plan ->
+            plan.projectId == projectId && (plan.parentSessionId in ids ||
+                (plan.id in ownedPlanIds && remainingSessions.none { it.id == plan.parentSessionId }))
+        }
         deletedPlans.addAll(plans.map { it.id })
         ids.forEach { jobs.remove(it)?.cancelAndJoin() }
         plans.forEach { execution.stopAndJoin(it.id) }
@@ -1115,6 +1120,13 @@ class OrchestrationService(
         return next
     }
 
+    suspend fun hasLiveOrchestrator(session: CodingSession): Boolean {
+        val plan = session.planId?.let { store.planFor(it) } ?: return false
+        return plan.projectId == session.projectId && projects.sessions(session.projectId).any {
+            it.id == plan.parentSessionId && (session.parentSessionId == null || it.id == session.parentSessionId)
+        }
+    }
+
     fun archiveSession(sessionId: String) = launch { changeSession(sessionId, SessionCommandKind.ARCHIVE) }
     fun restoreSession(sessionId: String) = launch { changeSession(sessionId, SessionCommandKind.RESTORE) }
     fun renameSession(sessionId: String, name: String) = launch { changeSession(sessionId, SessionCommandKind.RENAME, name) }
@@ -1126,7 +1138,28 @@ class OrchestrationService(
             projects.saveSession(session.copy(name = name.trim(), nameManuallySet = true))
             refreshSessions(); return
         }
-        val plan = session.planId?.let { store.planFor(it) } ?: return
+        val plan = session.planId?.let { store.planFor(it) }
+        if (!hasLiveOrchestrator(session)) {
+            // Legacy workers can outlive their parent or plan. Their local actions
+            // must remain available without routing commands to a missing owner.
+            if (kind == SessionCommandKind.ARCHIVE && plan != null) execution.stopAndJoin(plan.id)
+            sessionLock.withLock {
+                val latest = projects.sessions(session.projectId).firstOrNull { it.id == sessionId } ?: return@withLock
+                val updated = when (kind) {
+                    SessionCommandKind.ARCHIVE -> latest.copy(archived = true)
+                    SessionCommandKind.RESTORE -> latest.copy(archived = false)
+                    SessionCommandKind.RENAME -> {
+                        require(name.isNotBlank()) { "Добавьте название" }
+                        latest.copy(name = name.trim(), nameManuallySet = true)
+                    }
+                    else -> return@withLock
+                }
+                projects.saveSession(updated)
+            }
+            refreshSessions()
+            return
+        }
+        if (plan == null) return
         performSessionCommand(plan, SessionCommand(Id.new(), kind, sessionId, plan.id, session.stageId.orEmpty(), name.trim()))
     }
 

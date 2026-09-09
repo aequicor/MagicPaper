@@ -289,6 +289,40 @@ class PlanningChatServiceTest {
         assertEquals(count, f.runtime.calls.size)
     }
 
+    @Test fun orphanWorkerCanBeArchivedRestoredAndRenamedWithoutPlan() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val worker = CodingSession("orphan", project.id, "Worker", 2,
+            parentSessionId = "deleted-parent", planId = "deleted-plan", stageId = "stage", role = CodingSessionRole.WORKER)
+        f.projects.saveSession(worker)
+        assertFalse(f.service.hasLiveOrchestrator(worker))
+        f.service.archiveSession(worker.id); runCurrent()
+        assertTrue(f.projects.sessions(project.id).first { it.id == worker.id }.archived)
+        f.service.restoreSession(worker.id); runCurrent()
+        assertFalse(f.projects.sessions(project.id).first { it.id == worker.id }.archived)
+        f.service.renameSession(worker.id, "Saved result"); runCurrent()
+        assertEquals("Saved result", f.projects.sessions(project.id).first { it.id == worker.id }.name)
+        assertNull(f.service.error.value)
+    }
+
+    @Test fun orphanWorkerWithStalePlanCanBeArchivedAndDeleted() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("plan", parent)
+        f.service.confirm(plan.id); runCurrent()
+        val worker = f.projects.sessions(project.id).first { it.parentSessionId == parent.id }
+        assertTrue(f.service.hasLiveOrchestrator(worker))
+        f.projects.deleteSession(project.id, parent.id)
+        assertFalse(f.service.hasLiveOrchestrator(worker))
+        f.service.archiveSession(worker.id); runCurrent()
+        assertTrue(f.projects.sessions(project.id).first { it.id == worker.id }.archived)
+        f.service.deleteSessionTree(project.id, worker.id)
+        f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertTrue(f.projects.sessions(project.id).none { it.id == worker.id })
+        assertTrue(f.projects.messages(project.id, worker.id).isEmpty())
+        assertNull(f.store.planFor(plan.id))
+        assertNull(f.service.error.value)
+    }
+
     @Test fun deletingOrchestratorStopsWorkersAndPreservesSiblingSessions() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
