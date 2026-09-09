@@ -15,6 +15,7 @@ import io.aequicor.magicpaper.ui.components.LocalHideSystemSteps
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import java.awt.EventQueue
 import java.io.File
+import kotlin.math.abs
 import kotlin.test.*
 
 /** Exercise the actual draft -> saved transition, including independently published snapshots. */
@@ -29,7 +30,7 @@ class CodingChatCommitTest {
         }
     }
 
-    private class Chat : AutoCloseable {
+    private class Chat(width: Int = 760) : AutoCloseable {
         val recorder = CodingRunRecorder().apply {
             repeat(60) {
                 apply(CodingEvent.Notice("System step $it"))
@@ -42,7 +43,7 @@ class CodingChatCommitTest {
         val list = LazyListState(Int.MAX_VALUE)
         val hidden = mutableStateOf(true)
         private var frame = 0L
-        private val scene = onUi { ImageComposeScene(760, 700) {
+        private val scene = onUi { ImageComposeScene(width, 700) {
             MagicPaperTheme { CompositionLocalProvider(LocalHideSystemSteps provides hidden.value) {
                 CodingChat(CodingProject("project", "Project", "/project", 0), value.value,
                     value.value.running, true, { _, _ -> }, {}, { _, _ -> }, listState = list)
@@ -195,6 +196,30 @@ class CodingChatCommitTest {
             assertNotNull(chat.textNode("Выполняется действие…"), "Cached equal rows must still be recognized as live")
         }
     }
+
+    @Test fun preparingAnswerKeepsTheStatusAtTheBottomOnEveryFrame() = listOf(390, 760).forEach { width -> Chat(width).use { chat ->
+        chat.recorder.apply(CodingEvent.TextDelta("Проверяю проект.", "answer"))
+        chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
+        chat.render()
+        assertNotNull(chat.textNode("Готовит ответ"))
+        val key = "draft-status:${chat.value.value.draft.timelineId}"
+        fun statusOffset() = chat.list.layoutInfo.visibleItemsInfo.single { it.key == key }.offset
+        val bottom = statusOffset()
+        val answerKey = "${chat.value.value.draft.timelineId}:step:${chat.value.value.draft.steps.last().id}"
+        fun answerHeight() = chat.list.layoutInfo.visibleItemsInfo.single { it.key == answerKey }.size
+        repeat(4) { chunk ->
+            val height = answerHeight()
+            chat.recorder.apply(CodingEvent.TextDelta("\n\nПроверка $chunk: результаты проверки проекта и обработки сообщений.", "answer"))
+            chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
+            val offsets = mutableListOf<Int>()
+            chat.render { offsets += statusOffset() }
+            assertTrue(offsets.all { abs(it - bottom) <= 1 },
+                "Streaming moved the bottom status between frames: $bottom -> $offsets")
+            assertTrue(answerHeight() > height, "Exercise visible answer growth at width $width")
+            assertNotNull(chat.textNode("Проверка $chunk:"), "The new text must finish rendering")
+        }
+        chat.snapshot("preparing-answer-$width")
+    } }
 
     @Test fun newCommandAppearsGraduallyAndStaysVisibleThroughCompletion() = Chat().use { chat ->
         chat.recorder.apply(CodingEvent.ToolStarted("command", "./gradlew check", callId = "animated-command", isExec = true))

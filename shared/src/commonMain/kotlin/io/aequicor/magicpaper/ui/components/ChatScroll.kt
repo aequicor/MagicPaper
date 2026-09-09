@@ -39,6 +39,9 @@ import kotlin.math.roundToInt
 
 /** Disclosure changes are reader actions, so they must take precedence over following output. */
 internal class ChatScrollState(private val listState: LazyListState) {
+    // Item placement can schedule another measure before the current frame is drawn.
+    var onLayoutCompleted: (() -> Unit)? = null
+
     var disclosureRevision by mutableIntStateOf(0)
         private set
 
@@ -160,7 +163,10 @@ internal fun ChatScrollItem(scroll: ChatScrollState, key: Any, content: @Composa
     val highlighted by remember(scroll, key) { derivedStateOf { scroll.highlightedKey == key } }
     val highlight = if (highlighted) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier
     val preserve = remember(scroll, key) { { header: LayoutCoordinates? -> scroll.preserveDisclosure(key, coordinates.value, header) } }
-    Box(Modifier.then(highlight).onGloballyPositioned { coordinates.value = it }) {
+    Box(Modifier.then(highlight).onGloballyPositioned {
+        coordinates.value = it
+        scroll.onLayoutCompleted?.invoke()
+    }) {
         CompositionLocalProvider(LocalChatDisclosure provides preserve) { content() }
     }
 }
@@ -222,25 +228,48 @@ internal fun stickToBottom(listState: LazyListState, resetKey: Any? = Unit): Cha
         // Открыли чат — сразу на дно, не дожидаясь изменений ленты.
         listState.pinToEnd { scroll.disclosureRevision == disclosureRevision && !scroll.navigating }
         var anchor = listState.anchor()
-        snapshotFlow { Triple(listState.wakeUp(), scroll.disclosureRevision, scroll.navigating) }
-            .distinctUntilChanged()
-            .collect {
-                // Размер ленты может обновиться внутри layout: прокручиваем после его завершения.
-                withFrameNanos { }
-                val atEnd = !listState.canScrollForward
-                val now = listState.anchor()
-                when {
-                    scroll.navigating -> following = false
-                    atEnd -> following = true
-                    scroll.disclosureRevision != disclosureRevision || now.before(anchor) -> following = false
-                }
-                disclosureRevision = scroll.disclosureRevision
-                anchor = now
-                if (following && !atEnd && !listState.isScrollInProgress) {
-                    listState.pinToEnd { scroll.disclosureRevision == disclosureRevision && !scroll.navigating }
-                    anchor = listState.anchor()
+        var correcting = false
+        scroll.onLayoutCompleted = {
+            if (!correcting && following && scroll.disclosureRevision == disclosureRevision && !scroll.navigating &&
+                !listState.isScrollInProgress && listState.canScrollForward && !listState.anchor().before(anchor)) {
+                val info = listState.layoutInfo
+                val lastIndex = info.totalItemsCount - 1
+                if (lastIndex >= 0) {
+                    val lastSize = info.visibleItemsInfo.lastOrNull { it.index == lastIndex }?.size ?: 0
+                    correcting = true
+                    // Do not force layout from a placement callback: the list consumes this
+                    // request in the next measure pass, before drawing the growing answer.
+                    listState.requestScrollToItem(lastIndex, lastSize)
                 }
             }
+        }
+        try {
+            snapshotFlow { Triple(listState.wakeUp(), scroll.disclosureRevision, scroll.navigating) }
+                .distinctUntilChanged()
+                .collect {
+                    // Layout callbacks pin a growing visible tail before drawing. The observer
+                    // handles navigation, offscreen changes and initial measurement after layout.
+                    withFrameNanos { }
+                    val atEnd = !listState.canScrollForward
+                    val now = listState.anchor()
+                    when {
+                        scroll.navigating -> following = false
+                        atEnd -> following = true
+                        // A scheduled correction updates the index before layout clamps it.
+                        // That temporary anchor is not an upward gesture by the reader.
+                        scroll.disclosureRevision != disclosureRevision || (!correcting && now.before(anchor)) -> following = false
+                    }
+                    disclosureRevision = scroll.disclosureRevision
+                    anchor = now
+                    correcting = false
+                    if (following && !atEnd && !listState.isScrollInProgress) {
+                        listState.pinToEnd { scroll.disclosureRevision == disclosureRevision && !scroll.navigating }
+                        anchor = listState.anchor()
+                    }
+                }
+        } finally {
+            scroll.onLayoutCompleted = null
+        }
     }
     return scroll
 }

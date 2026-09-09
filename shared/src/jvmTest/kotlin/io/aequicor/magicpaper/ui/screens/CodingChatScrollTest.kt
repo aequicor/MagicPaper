@@ -23,6 +23,7 @@ import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.awt.EventQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -30,13 +31,24 @@ import kotlin.test.*
 
 /** Actual tool disclosure, pointer events and lazy-list measurement, including offscreen headers. */
 class CodingChatScrollTest {
+    private companion object {
+        // Render and scroll on the same UI thread, as in the desktop application.
+        // Otherwise a layout notification can resume scrolling concurrently with render().
+        fun <T> onUi(block: () -> T): T {
+            if (EventQueue.isDispatchThread()) return block()
+            var result: Result<T>? = null
+            EventQueue.invokeAndWait { result = runCatching(block) }
+            return result!!.getOrThrow()
+        }
+    }
+
     private class StreamingChat : AutoCloseable {
         val list = LazyListState()
         val answer = mutableStateOf((1..18).joinToString("\n\n") { paragraph(it) })
         val measuredHeights = mutableListOf<Int>()
         var answerHeight = 0
         private var frame = 0L
-        private val scene = ImageComposeScene(680, 600) {
+        private val scene = onUi { ImageComposeScene(680, 600) {
             MagicPaperTheme {
                 val scroll = stickToBottom(list)
                 LazyColumn(state = list, contentPadding = PaddingValues(16.dp),
@@ -55,7 +67,7 @@ class CodingChatScrollTest {
                     }
                 }
             }
-        }
+        } }
 
         init {
             render()
@@ -63,7 +75,8 @@ class CodingChatScrollTest {
             assertFalse(list.canScrollForward)
         }
 
-        fun render() { repeat(16) { scene.render(++frame * 32_000_000L).close(); Thread.sleep(10) } }
+        fun render() { repeat(16) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(10) } }
+        fun scrollBy(delta: Float) = onUi { list.dispatchRawDelta(delta) }
         fun append(number: Int) {
             measuredHeights.clear()
             // Hold the parser's dispatcher so the intermediate frame is observable even on
@@ -88,7 +101,7 @@ class CodingChatScrollTest {
             }
             render()
         }
-        override fun close() = scene.close()
+        override fun close() = onUi { scene.close() }
 
         companion object {
             private fun paragraph(number: Int) =
@@ -104,7 +117,7 @@ class CodingChatScrollTest {
         var commandTop = 0f
         var commandBounds = Rect.Zero
         private var frame = 0L
-        private val scene = ImageComposeScene(680, 600) {
+        private val scene = onUi { ImageComposeScene(680, 600) {
             MagicPaperTheme {
                 val scroll = stickToBottom(list, session.value)
                 LazyColumn(state = list, contentPadding = PaddingValues(16.dp),
@@ -128,22 +141,25 @@ class CodingChatScrollTest {
                     }
                 }
             }
-        }
+        } }
 
         init { render() }
-        fun render() { repeat(16) { scene.render(++frame * 32_000_000L).close(); Thread.sleep(10) } }
+        fun render() { repeat(16) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(10) } }
+        fun scrollBy(delta: Float) = onUi { list.dispatchRawDelta(delta) }
         fun position(offset: Int) {
             val item = list.layoutInfo.visibleItemsInfo.single { it.key == "message" }
-            list.dispatchRawDelta((item.offset + offset).toFloat())
+            scrollBy((item.offset + offset).toFloat())
             render()
         }
         fun click(y: Float = commandTop + 18f) {
             assertTrue(y in 0f..599f, "Disclosure must be visible before clicking: $y")
-            scene.sendPointerEvent(PointerEventType.Press, Offset(120f, y))
-            scene.sendPointerEvent(PointerEventType.Release, Offset(120f, y))
+            onUi {
+                scene.sendPointerEvent(PointerEventType.Press, Offset(120f, y))
+                scene.sendPointerEvent(PointerEventType.Release, Offset(120f, y))
+            }
             render()
         }
-        override fun close() = scene.close()
+        override fun close() = onUi { scene.close() }
     }
 
     @Test fun visibleCommandStaysInPlaceWhenExpandedAndCollapsed() = Chat().use { chat ->
@@ -191,7 +207,7 @@ class CodingChatScrollTest {
         chat.tail.value += 200
         chat.render()
         assertEquals(top, chat.commandTop, "Reading history pauses following")
-        chat.list.dispatchRawDelta(10000f)
+        chat.scrollBy(10000f)
         chat.render()
         assertFalse(chat.list.canScrollForward)
         chat.tail.value += 200
@@ -215,7 +231,7 @@ class CodingChatScrollTest {
     }
 
     @Test fun streamingAnswerDoesNotMoveTheReaderInsideTheMessage() = StreamingChat().use { chat ->
-        chat.list.dispatchRawDelta(-240f)
+        chat.scrollBy(-240f)
         chat.render()
         assertTrue(chat.list.canScrollForward)
         val index = chat.list.firstVisibleItemIndex
