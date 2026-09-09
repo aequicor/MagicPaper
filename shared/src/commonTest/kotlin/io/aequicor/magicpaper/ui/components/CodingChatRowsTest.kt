@@ -5,6 +5,38 @@ import io.aequicor.magicpaper.domain.tools.ToolCategory
 import kotlin.test.*
 
 class CodingChatRowsTest {
+    @Test fun savedCoordinatorIsRemovedFromAMixedDraftWithoutHidingAnIdenticalParallelAnswer() {
+        fun answer(source: String) = CodingStep(CodingStepKind.ANSWER, "Результат передан на проверку", id = "answer",
+            sourceTimelineId = source)
+        val first = answer("first-coordinator")
+        val second = answer("second-coordinator")
+        val request = answer("request-response")
+        val draft = CodingDraft(active = true, timelineId = "request-response", steps = listOf(request, first, second))
+        val before = codingHistoryItems(listOf(codingDraftRow(draft, emptyList(), "fallback", true, true)!!))
+        val saved = CodingMessage("first-coordinator", CodingRole.AGENT, "Оркестратор: ${first.title}", createdAt = 1,
+            steps = listOf(first.copy(title = "Оркестратор: ${first.title}")))
+        val remaining = codingDraftRow(draft, listOf(saved), "fallback", true, true)!!
+        assertEquals(listOf(request, second), remaining.message.steps)
+        val after = codingHistoryItems(codingChatRows(listOf(saved)) + remaining)
+        assertEquals(before.map { it.key }.toSet(), after.map { it.key }.toSet())
+        assertEquals(3, after.map { it.key }.distinct().size)
+        val savedRequest = saved.copy(id = "request-response", steps = listOf(request))
+        assertEquals(listOf(second), codingDraftRow(draft, listOf(saved, savedRequest), "fallback", true, true)!!.message.steps)
+        assertNull(codingDraftRow(draft, listOf(saved, savedRequest, saved.copy(id = "second-coordinator", steps = listOf(second))), "fallback", true, true))
+        // A single remaining coordinator changes the aggregate draft's own ID, not its step keys.
+        val alone = codingDraftRow(CodingDraft(active = true, timelineId = "second-coordinator", steps = listOf(second)),
+            listOf(saved), "fallback", true, true)!!
+        assertEquals(after.last().key, codingHistoryItems(listOf(alone)).single().key)
+    }
+
+    @Test fun savedFailureRetiresTheWholeSourceIncludingAnUnpersistedPartialAnswer() {
+        val draft = CodingDraft(active = true, steps = listOf(CodingStep(CodingStepKind.ANSWER, "Partial answer",
+            id = "answer", sourceTimelineId = "coordinator")))
+        val failure = CodingMessage("review-error", CodingRole.AGENT, "Connection lost", createdAt = 1,
+            failed = true, timelineId = "coordinator")
+        assertNull(codingDraftRow(draft, listOf(failure), "fallback", true, true))
+    }
+
     @Test fun nestedToolCardsKeepKeysAndDoNotDuplicateWhileTheParentIsStillRunning() {
         fun tool(id: String) = CodingStep(CodingStepKind.TOOL, id, tool = "context.get", callId = "p/s/request/$id",
             running = true, id = id, toolCategory = ToolCategory.READ)

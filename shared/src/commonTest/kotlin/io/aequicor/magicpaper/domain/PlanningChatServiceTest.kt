@@ -6,6 +6,9 @@ import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.interactionCandidates
+import io.aequicor.magicpaper.ui.components.codingChatRows
+import io.aequicor.magicpaper.ui.components.codingDraftRow
+import io.aequicor.magicpaper.ui.components.codingHistoryItems
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -858,10 +861,23 @@ class PlanningChatServiceTest {
         f.service.confirm(base.id); runCurrent()
         assertEquals(2, f.gateway.coordinatorCallbacks.size)
         assertEquals(2, f.service.drafts.value[parent.id]!!.steps.count { it.kind == CodingStepKind.THINKING })
+        f.gateway.coordinatorCallbacks.forEach { it(CodingStep(CodingStepKind.ANSWER, """{"reply":"Результат принят"}""", callId = "answer")) }
+        runCurrent()
+        val together = f.service.drafts.value.getValue(parent.id)
+        val before = codingHistoryItems(listOf(codingDraftRow(together, emptyList(), "fallback", true, true)!!))
+        assertEquals(2, before.filter { it.step?.kind == CodingStepKind.ANSWER }.map { it.key }.distinct().size)
         first.complete(Unit); runCurrent()
         val remaining = assertNotNull(f.service.drafts.value[parent.id])
         assertTrue(remaining.active)
         assertEquals("Разбираю результат 2", remaining.steps.single { it.kind == CodingStepKind.THINKING }.title)
+        val saved = f.projects.messages(project.id, parent.id)
+        val during = codingHistoryItems(codingChatRows(saved) + listOfNotNull(codingDraftRow(together, saved, "fallback", true, true)))
+            .filter { it.step?.kind == CodingStepKind.ANSWER && it.step!!.title.contains("Результат принят") }
+        assertEquals(2, during.size, "One saved and one parallel live answer must remain, even with identical text")
+        assertEquals(before.filter { it.step?.kind == CodingStepKind.ANSWER }.map { it.key }.toSet(), during.map { it.key }.toSet())
+        val remainingAnswer = codingHistoryItems(listOf(codingDraftRow(remaining, saved, "fallback", true, true)!!))
+            .single { it.step?.kind == CodingStepKind.ANSWER }
+        assertTrue(remainingAnswer.key in during.map { it.key })
         second.complete(Unit); advanceTimeBy(1000); runCurrent()
         assertNull(f.service.drafts.value[parent.id])
         assertEquals(PlanStatus.DONE, f.store.planFor(base.id)!!.status)
@@ -893,6 +909,56 @@ class PlanningChatServiceTest {
         val final = f.projects.messages(project.id, parent.id).single { it.text == "Оркестратор: Проверки приняты" }
         assertEquals(listOf("Оркестратор: Проверки приняты"), final.steps.filter { it.kind == CodingStepKind.ANSWER }.map { it.title })
         assertTrue(f.store.planFor(plan.id)!!.coordination.single().activity.none { it.kind == CodingStepKind.ANSWER })
+    }
+
+    @Test fun savedCoordinatorReplySuppressesItsStaleLiveCopyBeforeCleanup() = runTest {
+        val backing = InMemoryKeyValueStore()
+        var observeWrite: (String, String) -> Unit = { _, _ -> }
+        val disk = object : KeyValueStore by backing {
+            override fun write(key: String, value: String) { backing.write(key, value); observeWrite(key, value) }
+        }
+        val f = Fixture(this, disk); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        val gate = CompletableDeferred<Unit>()
+        f.gateway.coordinatorGates += gate
+        f.runtime.gate.complete(Unit); f.service.confirm(plan.id); runCurrent()
+        f.gateway.coordinatorCallbacks.single()(CodingStep(CodingStepKind.ANSWER, """{"reply":"Проверки приняты"}""", callId = "answer"))
+        runCurrent()
+        val live = f.service.drafts.value.getValue(parent.id)
+        val liveRow = codingDraftRow(live, emptyList(), "draft:${parent.id}", true, true)!!
+        val liveAnswerKey = codingHistoryItems(listOf(liveRow)).single { it.step?.kind == CodingStepKind.ANSWER }.key
+        var transition: Pair<CodingDraft, List<CodingMessage>>? = null
+        observeWrite = { key, value ->
+            if (key == "coding-log:${project.id}:${parent.id}") {
+                val history = json.decodeFromString<List<CodingMessage>>(value)
+                if (transition == null && history.any { it.text == "Оркестратор: Проверки приняты" })
+                    transition = f.service.drafts.value.getValue(parent.id) to history
+            }
+        }
+        f.gateway.coordinator = """{"reply":"Проверки приняты","actions":[]}"""
+        gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        val (staleDraft, saved) = assertNotNull(transition)
+        val rows = codingChatRows(saved) + listOfNotNull(codingDraftRow(staleDraft, saved, "draft:${parent.id}", true, true))
+        val answers = codingHistoryItems(rows).filter { it.step?.kind == CodingStepKind.ANSWER && it.step!!.title.contains("Проверки приняты") }
+        assertEquals(1, answers.size, "A persisted coordinator answer must not remain in the live bubble")
+        assertEquals(liveAnswerKey, answers.single().key, "Saving must retain the answer's lazy-list key")
+        assertNull(f.service.drafts.value[parent.id])
+        f.execution.shutdown(); f.service.shutdown()
+    }
+
+    @Test fun errorAfterPublishingCoordinatorReplyDoesNotCopyItsTimelineIntoAnotherMessage() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val plan = f.readyPlan("p", parent)
+        f.gateway.coordinator = """{"reply":"Результат сохранён","resultAction":"VERIFY","sessionActions":[{"kind":"RENAME","stageId":"stage","name":""}]}"""
+        f.runtime.gate.complete(Unit); f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
+        val history = f.projects.messages(project.id, parent.id)
+        assertEquals(1, history.count { it.text == "Оркестратор: Результат сохранён" })
+        assertTrue(history.any { it.failed && it.text.startsWith("Ошибка оркестратора:") })
+        val keys = codingHistoryItems(codingChatRows(history, hideSystemSteps = false)).map { it.key }
+        assertEquals(keys.size, keys.distinct().size, "The already saved steps must not acquire duplicate lazy-list keys on error")
+        f.execution.shutdown(); f.service.shutdown()
     }
 
     @Test fun planningQuestionsStreamReadableTextBeforeWizardAppears() = runTest {

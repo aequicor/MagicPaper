@@ -46,15 +46,17 @@ class OrchestrationService(
     private val refinementLocks = mutableMapOf<String, Mutex>()
     private val jobs = mutableMapOf<String, Job>()
     private val _drafts = MutableStateFlow<Map<String, CodingDraft>>(emptyMap())
-    private data class CoordinatorActivity(val planId: String, val sessionId: String, val steps: List<CodingStep>)
+    private data class CoordinatorActivity(val planId: String, val sessionId: String, val timelineId: String, val steps: List<CodingStep>) {
+        fun draft() = CodingDraft(active = true, timelineId = timelineId, steps = steps.map { it.copy(sourceTimelineId = timelineId) })
+    }
     private val coordinatorActivity = MutableStateFlow<Map<String, CoordinatorActivity>>(emptyMap())
     val drafts: StateFlow<Map<String, CodingDraft>> = combine(_drafts, coordinatorActivity) { requests, coordinators ->
         val combined = requests.toMutableMap()
         coordinators.entries.groupBy { it.value.sessionId }.forEach { (sessionId, turns) ->
             val request = requests[sessionId] ?: CodingDraft()
-            combined[sessionId] = request.copy(active = true, steps = request.steps + turns.flatMap { (id, activity) ->
-                activity.steps.map { if (it.toolCategory != null) it else it.copy(callId = "$id:${it.callId}", id = "$id:${it.id}") }
-            })
+            combined[sessionId] = request.copy(active = true,
+                timelineId = request.timelineId ?: turns.singleOrNull()?.value?.timelineId,
+                steps = request.steps + turns.flatMap { it.value.draft().steps })
         }
         combined
     }.flowOn(workerDispatcher).stateIn(scope, SharingStarted.Eagerly, emptyMap())
@@ -541,7 +543,9 @@ class OrchestrationService(
         val history = projects.messages(projectId, sessionId)
         val index = history.indexOfFirst { it.id == message.id }
         val previous = history.getOrNull(index)
-        val draft = _drafts.value[sessionId]?.takeIf { it.timelineId == message.id }
+        val timelineId = message.timelineId ?: message.id
+        val draft = _drafts.value[sessionId]?.takeIf { it.timelineId == timelineId }
+            ?: coordinatorActivity.value.values.firstOrNull { it.sessionId == sessionId && it.timelineId == timelineId }?.draft()
             ?: previous?.let { CodingDraft(steps = it.steps, timelineId = it.timelineId) }
         val saved = message.withPlanningDraft(draft)
         val next = if (index < 0) history + saved else history.map { if (it.id == saved.id) saved.copy(createdAt = it.createdAt) else it }
@@ -1173,7 +1177,7 @@ class OrchestrationService(
         fun event(rawStep: CodingStep) {
             activity.update { it.withPlanningActivity(rawStep.inPlanningCall("$requestId:refine")) }
             if (nestedActivityId == null) _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
-            else coordinatorActivity.update { it + (nestedActivityId to CoordinatorActivity(id, sessionId, activity.value)) }
+            else coordinatorActivity.update { it + (nestedActivityId to CoordinatorActivity(id, sessionId, "$requestId-reply", activity.value)) }
         }
         try {
             val roster = profiles.load()
@@ -1724,7 +1728,7 @@ class OrchestrationService(
         }
         updateHandoff(plan.id, transferId, HandoffStatus.PROCESSING, "Оркестратор обрабатывает обращение")
         val activityId = "${plan.id}-${attempt.id}-turn-${attempt.turnIndex}"
-        coordinatorActivity.update { it + (activityId to CoordinatorActivity(plan.id, plan.parentSessionId,
+        coordinatorActivity.update { it + (activityId to CoordinatorActivity(plan.id, plan.parentSessionId, "$transferId-coordinator",
             listOf(CodingStep(CodingStepKind.INFO, "Оркестратор обрабатывает этап «${stage.title}»…", running = true)))) }
         try {
             val result = coordinateTurn(store.planFor(plan.id)!!, stage, attempt, activityId)
@@ -1741,9 +1745,12 @@ class OrchestrationService(
                 else "Ошибка оркестратора: ${e.message ?: "не удалось обработать результат этапа"}"
             withContext(NonCancellable) {
                 updateHandoff(plan.id, transferId, HandoffStatus.FAILED, text)
+                val responseId = "$transferId-coordinator"
+                val published = projects.messages(plan.projectId, plan.parentSessionId).any { (it.timelineId ?: it.id) == responseId }
                 append(plan.projectId, plan.parentSessionId, CodingMessage("${attempt.id}-turn-${attempt.turnIndex}-review", CodingRole.AGENT,
-                    text, createdAt = Id.now(), failed = !cancelled,
-                    steps = completedCoordinatorActivity(activityId) + CodingStep(if (cancelled) CodingStepKind.INFO else CodingStepKind.ERROR, text)))
+                    text, createdAt = Id.now(), failed = !cancelled, timelineId = responseId.takeUnless { published },
+                    steps = (if (published) emptyList() else completedCoordinatorActivity(activityId)) +
+                        CodingStep(if (cancelled) CodingStepKind.INFO else CodingStepKind.ERROR, text)))
             }
             throw e
         } finally {
@@ -1759,7 +1766,7 @@ class OrchestrationService(
     }
 
     private fun completedCoordinatorActivity(id: String): List<CodingStep> =
-        coordinatorActivity.value[id]?.steps.orEmpty().filter { it.kind != CodingStepKind.ANSWER }.map { it.copy(running = false) }
+        coordinatorActivity.value[id]?.draft()?.steps.orEmpty().filter { it.kind != CodingStepKind.ANSWER }.map { it.copy(running = false) }
 
     private suspend fun coordinateTurn(plan: Plan, stage: Milestone, attempt: StageAttempt, activityId: String): StageTurnDecision {
         val eventId = "${attempt.id}-turn-${attempt.turnIndex}"
