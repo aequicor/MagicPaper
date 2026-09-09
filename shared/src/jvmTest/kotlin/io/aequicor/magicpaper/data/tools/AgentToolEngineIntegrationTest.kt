@@ -57,8 +57,8 @@ class AgentToolEngineIntegrationTest {
             val outputs = input.filter { it["type"] == JsonPrimitive("function_call_output") }
             val completed = outputs.mapNotNull { it["call_id"]?.jsonPrimitive?.content }.toSet()
             val index = (0..2).firstOrNull { "call_$it" !in completed } ?: 3
-            val discovered = request.toString().contains("\"name\":\"magicpaper_context_get\"") ||
-                input.any { it["type"] == JsonPrimitive("tool_search_output") }
+            val discovered = request["tools"].toString().contains("magicpaper_context_get") ||
+                input.any { it["type"] == JsonPrimitive("tool_search_output") && it.toString().contains("magicpaper_context_get") }
             val item = if (!discovered && completed.isEmpty()) buildJsonObject {
                 put("id", "search_${requests.size}"); put("type", "tool_search_call"); put("call_id", "search_${requests.size}")
                 put("execution", "client"); put("status", "completed")
@@ -82,10 +82,13 @@ class AgentToolEngineIntegrationTest {
             mapOf("plan.propose" to { _, _, args -> args }))
     }
     private fun verify(events: List<CodingEvent>, tools: ToolSession, fixture: Fixture) {
-        assertTrue(fixture.errors.isEmpty(), fixture.errors.toString())
+        assertTrue(fixture.errors.isEmpty(), fixture.errors.toString() + "\nSearch outputs: " + fixture.requests.last()["input"]?.jsonArray
+            ?.filter { (it as? JsonObject)?.get("type") == JsonPrimitive("tool_search_output") }?.take(1)?.toString()?.take(6000) + "\nSearch definition: " + fixture.requests.first()["tools"]?.jsonArray
+            ?.filter { it.jsonObject["type"] == JsonPrimitive("tool_search") }?.toString()?.take(6000))
         assertTrue(events.none { it is CodingEvent.Failed }, events.toString())
         assertTrue(events.filterIsInstance<CodingEvent.FinalText>().any { it.text.contains("TOOLS_DONE") }, events.toString())
-        assertEquals(JsonPrimitive("CONTEXT_OK"), tools.results.value["context.get"])
+        assertEquals(JsonPrimitive("CONTEXT_OK"), tools.results.value["context.get"], fixture.requests.last()["input"]?.jsonArray
+            ?.filter { (it as? JsonObject)?.get("type") != JsonPrimitive("message") }?.toString()?.take(12000))
         assertTrue("plan.propose" in tools.results.value)
         assertFalse("stage.send" in tools.results.value)
         assertContains(fixture.requests.last().toString(), "CONTEXT_OK")

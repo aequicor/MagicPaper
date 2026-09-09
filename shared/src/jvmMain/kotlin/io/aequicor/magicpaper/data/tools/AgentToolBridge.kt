@@ -110,13 +110,29 @@ internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
         exchange.sendResponseHeaders(status, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
     }
-    fun codexConfig(base: JsonObject) = buildJsonObject {
-        base.forEach { (key, value) -> put(key, value) }
-        put("mcp_servers.magicpaper_agent_tools", buildJsonObject {
+    fun codexConfig(base: JsonObject): JsonObject {
+        val config = buildJsonObject {
             put("url", url); put("enabled", true); put("required", true)
             put("default_tools_approval_mode", "approve")
             put("startup_timeout_sec", 10); put("tool_timeout_sec", 604800)
             put("http_headers", buildJsonObject { put("Authorization", "Bearer $token") })
-        })
+        }
+        return buildJsonObject {
+            val restrictedServers = base["mcp_servers"] as? JsonObject
+            if (restrictedServers == null) {
+                // Leave inherited user MCP servers intact in an ordinary working session.
+                base.forEach { (key, value) -> put(key, value) }
+                put("mcp_servers.magicpaper_agent_tools", config)
+            } else {
+                // Codex applies root and dotted overrides in unspecified order. A single root
+                // prevents the read-only empty allowlist from erasing our authenticated bridge.
+                base.filterKeys { it != "mcp_servers" && !it.startsWith("mcp_servers.") }.forEach { (key, value) -> put(key, value) }
+                put("mcp_servers", buildJsonObject {
+                    restrictedServers.forEach { (key, value) -> put(key, value) }
+                    base.filterKeys { it.startsWith("mcp_servers.") }.forEach { (key, value) -> put(key.removePrefix("mcp_servers."), value) }
+                    put("magicpaper_agent_tools", config)
+                })
+            }
+        }
     }
 }
