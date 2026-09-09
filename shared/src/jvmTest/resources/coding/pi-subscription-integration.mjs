@@ -40,7 +40,7 @@ try {
   await writeFile(join(root, 'settings.json'), '{"defaultProjectTrust":"never","telemetry":false}');
   await writeFile(join(root, 'fixture.txt'), 'fixture content');
   const extension = new URL('../../../jvmMain/resources/coding/subscription-provider.mjs', import.meta.url).pathname;
-  pi = spawn(process.execPath, [process.env.MAGICPAPER_PI_CLI, '--mode', 'json', '--provider', 'magicpaper', '--model', 'fixture-gpt', '--session-dir', join(root, 'sessions'), '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-approve', '--extension', extension], {
+  pi = spawn(process.execPath, [process.env.MAGICPAPER_PI_CLI, '--mode', 'json', '--provider', 'magicpaper', '--model', 'fixture-gpt', '--session-dir', join(root, 'sessions'), '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-approve', '--extension', extension, '--extension', new URL('../../../jvmMain/resources/coding/usage-context.mjs', import.meta.url).pathname], {
     cwd: root, env: { ...process.env, PI_CODING_AGENT_DIR: root, PI_OFFLINE: '1', PI_SKIP_VERSION_CHECK: '1', PI_TELEMETRY: '0',
       MAGICPAPER_PI_AI: pathToFileURL(join(root, 'adapter/')).href, MAGICPAPER_TOKEN_URL: 'http://127.0.0.1:' + auth.address().port + '/token', MAGICPAPER_TOKEN_KEY: 'broker-fixture' }, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdout = '', stderr = ''; pi.stdout.on('data', c => stdout += c); pi.stderr.on('data', c => stderr += c);
@@ -49,6 +49,9 @@ try {
   const [code] = await once(pi, 'exit'); clearTimeout(timer);
   assert.equal(code, 0, stderr + stdout.slice(-2000));
   assert.ok(stdout.includes('Pi subscription verified.'), stderr + stdout.slice(-2500));
+  const metrics = stdout.split('\n').filter(line => line.includes('magicpaper_context') || line.includes('magicpaper_request'));
+  assert.ok(metrics.length > 2, 'Missing context metrics: ' + stderr + stdout.slice(-2000));
+  assert.ok(metrics.map(line => JSON.parse(line)).some(event => event.type === 'magicpaper_context' && event.tokens > 0));
   assert.ok(tokenCalls >= 2, 'a fresh access token is requested for each model call');
   assert.ok(modelCalls >= 2, 'pi executed the read tool and returned its result');
   assert.ok(!stdout.includes(token), 'credentials never enter the event log');

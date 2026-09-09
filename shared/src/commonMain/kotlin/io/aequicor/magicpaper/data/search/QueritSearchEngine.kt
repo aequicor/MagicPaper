@@ -9,7 +9,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
 
 /** Querit Search (including optional Webpage Text) and independent Contents connection. */
-class QueritSearchEngine(private val client: HttpClient, private val json: Json) : SearchEngine {
+class QueritSearchEngine(private val client: HttpClient, private val json: Json, private val usage: UsageLedger? = null) : SearchEngine {
     override val provider = SearchProvider.QUERIT
     override val displayName = "Querit.ai"
     override fun isConfigured(settings: AppSettings) = settings.queritApiKey.isNotBlank()
@@ -55,7 +55,11 @@ class QueritSearchEngine(private val client: HttpClient, private val json: Json)
         }
     }
 
-    private suspend fun request(base: String, path: String, key: String, payload: JsonObject): JsonObject {
+    private suspend fun request(base: String, path: String, key: String, payload: JsonObject): JsonObject = measuredSearch(usage, displayName,
+        if (path == "contents") UsageKind.CONTENT else UsageKind.SEARCH,
+        pages = (payload["urls"] as? JsonArray)?.size?.toLong()
+            ?: if (payload["needContent"] == JsonPrimitive(true)) (payload["count"] as? JsonPrimitive)?.longOrNull ?: 0 else 0,
+        contentRequests = if (path == "contents" || payload["needContent"] == JsonPrimitive(true)) 1 else 0) {
         val response = client.post(endpoint(base, path)) {
             contentType(ContentType.Application.Json)
             header(HttpHeaders.Authorization, "Bearer ${key.trim()}")
@@ -66,7 +70,7 @@ class QueritSearchEngine(private val client: HttpClient, private val json: Json)
             ?: error("Querit $path: invalid response")
         val code = (root["error_code"] as? JsonPrimitive)?.intOrNull
         check(code == null || code == 200 || code == 0) { "Querit $path: API $code" }
-        return root
+        root
     }
 
     internal fun parseHits(root: JsonObject, includeText: Boolean): List<SearchHit> {

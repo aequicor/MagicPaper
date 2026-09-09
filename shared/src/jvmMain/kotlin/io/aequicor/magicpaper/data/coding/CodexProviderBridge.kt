@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.data.llm.UsageParsing
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -8,12 +9,14 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 
 /** Translates Codex Responses requests with tools using the provider library, without starting a pi agent. */
-internal class CodexProviderBridge private constructor(private val process: Process, val providerId: String, val configuration: JsonObject) : AutoCloseable {
+internal class CodexProviderBridge private constructor(private val process: Process, val providerId: String, val configuration: JsonObject, private val metricsJob: Job?) : AutoCloseable {
     override fun close() {
         try { process.outputStream.close() }
         finally {
             process.destroy()
             if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            runBlocking { withTimeoutOrNull(2_000) { metricsJob?.join() } }
+            metricsJob?.cancel()
         }
     }
     companion object {
@@ -46,6 +49,27 @@ internal class CodexProviderBridge private constructor(private val process: Proc
                     Json.parseToJsonElement(stdout.readLine()).jsonObject
                 }
                 val port = ready["port"]!!.jsonPrimitive.int
+                val tracking = currentCoroutineContext()[RuntimeUsageContext]
+                val metricsJob = if (tracking != null) CoroutineScope(Dispatchers.IO).launch {
+                    val started = mutableMapOf<String, UsageRecord>()
+                    try {
+                        while (true) {
+                            val line = stdout.readLine() ?: break
+                            val metric = runCatching { Json.parseToJsonElement(line) as? JsonObject }.getOrNull() ?: continue
+                            if (metric["type"]?.jsonPrimitive?.content != "magicpaper_usage") continue
+                            val id = metric["id"]?.jsonPrimitive?.content ?: continue
+                            val initial = started.getOrPut(id) { UsageRecord("bridge:$id", scope = tracking.owner,
+                                provider = profile.provider.name, model = profile.modelId) }
+                            val usage = metric["usage"] as? JsonObject
+                            val tokens = usage?.let(UsageParsing::pi) ?: TokenUsage()
+                            val cost = profile.modelCatalog.firstOrNull { it.id == profile.modelId }?.pricing?.estimate(tokens)
+                            tracking.ledger.record(initial.copy(tokens = tokens, cost = cost,
+                                completed = metric["phase"]?.jsonPrimitive?.content == "completed"))
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: java.io.IOException) { /* Pipe closes when the owned bridge exits. */ }
+                }
+                else null
                 CodexProviderBridge(child, providerId, buildJsonObject {
                     put("model_provider", providerId)
                     put("model_providers.$providerId", buildJsonObject {
@@ -54,7 +78,7 @@ internal class CodexProviderBridge private constructor(private val process: Proc
                         put("requires_openai_auth", false); put("supports_websockets", false)
                     })
                     put("web_search", "disabled")
-                })
+                }, metricsJob)
             } catch (e: Throwable) { child.destroyForcibly(); throw e }
         }
     }

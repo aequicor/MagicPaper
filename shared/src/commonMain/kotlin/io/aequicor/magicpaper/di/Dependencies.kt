@@ -78,6 +78,8 @@ internal fun buildDependencies(
     experiencePlugin: ((io.aequicor.magicpaper.domain.LlmGateway, io.aequicor.magicpaper.domain.LlmProfileRepository) -> io.aequicor.magicpaper.plugins.MagicPlugin)? = null,
 ): MagicPaperDependencies {
     val json = appJson
+    val usageLedger = io.aequicor.magicpaper.domain.UsageLedger(io.aequicor.magicpaper.data.storage.JsonUsageRepository(store, json))
+    val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(it, usageLedger) }
     val client = HttpClient()
     val settingsRepo = JsonSettingsRepository(store, json)
     val chatRepo = JsonChatRepository(store, json)
@@ -85,9 +87,9 @@ internal fun buildDependencies(
     val docs = EmbeddedDocRepository()
     val search = CompositeSearchEngine(
         listOf(
-            WikipediaSearchEngine(client, json),
-            QueritSearchEngine(client, json),
-            GoogleSearchEngine(client, json),
+            WikipediaSearchEngine(client, json, usageLedger),
+            QueritSearchEngine(client, json, usageLedger),
+            GoogleSearchEngine(client, json, usageLedger),
         )
     )
     // Шлюз-роутер: формат запроса выбирается по типу провайдера в профиле.
@@ -104,6 +106,7 @@ internal fun buildDependencies(
                 ),
             )
         },
+        usage = usageLedger,
     )
     // Каталог моделей у провайдеров — тем же роутером.
     val modelDirectory = RoutingModelDirectory(
@@ -132,10 +135,10 @@ internal fun buildDependencies(
     val planningStore = PlanningStore(JsonPlanningRepository(store, json))
     val acceptanceChecks = io.aequicor.magicpaper.domain.AcceptanceChecks()
     val planComposer = PlanComposer(gateway, json, search,
-        io.aequicor.magicpaper.domain.RuntimePlanningGateway(codingRuntime ?: NoopCodingRuntime),
+        io.aequicor.magicpaper.domain.RuntimePlanningGateway(runtime ?: NoopCodingRuntime),
         projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks)
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
-        planningStore, codingRuntime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
+        planningStore, runtime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
         LlmMilestoneVerifier(gateway, json), planningWorkspace, acceptanceChecks = acceptanceChecks,
     )
     val planner = CodingPlanningPlugin(
@@ -143,7 +146,7 @@ internal fun buildDependencies(
         composer = planComposer,
         researcher = DossierResearcher(gateway, search, json),
         execution = planningExecution,
-        runtime = codingRuntime ?: NoopCodingRuntime,
+        runtime = runtime ?: NoopCodingRuntime,
         projectsRepo = codingProjects,
         profileRepo = profileRepo,
         settingsRepo = settingsRepo,
@@ -170,16 +173,17 @@ internal fun buildDependencies(
         skills = skillStore,
         planning = planningStore,
         planningChat = planningChat,
-        codingRuntime = codingRuntime,
+        codingRuntime = runtime,
         codingProjects = codingProjects,
         dirPicker = dirPicker,
         modelDirectory = modelDirectory,
         gateway = gateway,
         dossierResearcher = DossierResearcher(gateway, search, json),
-        searchConnectionChecker = io.aequicor.magicpaper.data.search.HttpSearchConnectionChecker(client, json),
+        searchConnectionChecker = io.aequicor.magicpaper.data.search.HttpSearchConnectionChecker(client, json, usageLedger),
         filePicker = filePicker,
         openAiSubscription = openAiSubscription,
         requestPinRepository = JsonRequestPinRepository(store, json),
+        usage = usageLedger,
     )
     planningChat?.bootstrap()
     planningExecution.bootstrap()

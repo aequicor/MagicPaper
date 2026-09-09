@@ -112,10 +112,10 @@ class DesktopCodingRuntime(
                     clients[session.id] = client
                     try {
                         if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
-                            client.runCoding(project, fresh, prompt, profile, emptyList(), planning = true).collect { emit(it) }
+                            client.runCoding(project, fresh, prompt, profile, emptyList(), planning = true).collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
                         } else pi.startProviderBridge(profile.forModel()).use { bridge ->
                             client.runCoding(project, fresh, prompt, profile, emptyList(), bridge.providerId, bridge.configuration,
-                                planning = true).collect { emit(it) }
+                                planning = true).collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
                         }
                     } finally {
                         withContext(NonCancellable) {
@@ -228,7 +228,7 @@ class DesktopCodingRuntime(
                             pi.startProviderBridge(profile.forCoding()).use { bridge ->
                                 val events = client.runCoding(project, input.session, input.prompt, profile, attachments, bridge.providerId, bridge.configuration)
                                 emit(CodingEvent.Notice("SKILLS run=$runId: вход передан адаптеру Codex; принятие моделью и результат задачи не подтверждены."))
-                                events.collect { emit(it) }
+                                events.collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
                             }
                         }
                     } finally {

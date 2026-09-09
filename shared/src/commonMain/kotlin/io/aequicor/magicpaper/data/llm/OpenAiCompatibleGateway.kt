@@ -31,6 +31,7 @@ internal suspend fun HttpClient.postJson(
     headers: Map<String, String>,
     body: String,
     timeoutSeconds: Int,
+    usageProvider: io.aequicor.magicpaper.domain.ProviderType? = null,
 ): String {
     suspend fun request(): String {
     val response = post(url) {
@@ -39,6 +40,7 @@ internal suspend fun HttpClient.postJson(
         setBody(body)
     }
     val text = response.bodyAsText()
+    usageProvider?.let { UsageParsing.report(text, it, kotlinx.serialization.json.Json) }
     if (!response.status.isSuccess()) {
         throw LlmTransportException(response.status.value, response.headers["Retry-After"], text.take(300).ifBlank { "пустой ответ" })
     }
@@ -65,6 +67,7 @@ class OpenAiCompatibleGateway(
             headers = headers,
             body = json.encodeToString(JsonObject.serializer(), payload),
             timeoutSeconds = profile.advanced.timeoutSeconds,
+            usageProvider = profile.provider,
         )
         return parseResponse(body)
     }

@@ -104,7 +104,9 @@ class PiEventParserTest {
     @Test
     fun emptyTurnCutByLengthIsReportedAsTruncation() {
         val line = """{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"length","usage":{"input":59969,"output":8192,"reasoning":8192}}}"""
-        val events = PiEventParser.parseEvents(line)
+        val events = PiEventParser.parseEvents(line).also { events ->
+            assertEquals(8192, events.filterIsInstance<CodingEvent.UsageObserved>().single().tokens.output?.toInt())
+        }.filterNot { it is CodingEvent.UsageObserved }
         assertEquals(1, events.size, "причина должна быть одна и та же, что в usage")
         val event = assertIs<CodingEvent.OutputTruncated>(events.first())
         assertEquals(8192, event.outputTokens)
@@ -118,7 +120,9 @@ class PiEventParserTest {
     fun thinkingOnlyContentCutByLengthIsTruncationToo() {
         // Мышление — не ответ: текст сообщения так и остался незаполненным.
         val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"разбор..."}],"stopReason":"length","usage":{"output":16384,"reasoning":16384}}}"""
-        val events = PiEventParser.parseEvents(line)
+        val events = PiEventParser.parseEvents(line).also { events ->
+            assertEquals(16384, events.filterIsInstance<CodingEvent.UsageObserved>().single().tokens.output?.toInt())
+        }.filterNot { it is CodingEvent.UsageObserved }
         // Рассуждение показываем даже когда до тела сообщения потолок не дошёл.
         assertEquals(CodingEvent.FinalThinking("разбор..."), events[0])
         assertIs<CodingEvent.OutputTruncated>(events[1])
@@ -127,7 +131,9 @@ class PiEventParserTest {
     @Test
     fun truncatedAnswerKeepsTextAndAddsNotice() {
         val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Прочитал файл"}],"stopReason":"length","usage":{"output":8192,"reasoning":200}}}"""
-        val events = PiEventParser.parseEvents(line)
+        val events = PiEventParser.parseEvents(line).also { events ->
+            assertEquals(8192, events.filterIsInstance<CodingEvent.UsageObserved>().single().tokens.output?.toInt())
+        }.filterNot { it is CodingEvent.UsageObserved }
         assertEquals(2, events.size)
         assertEquals(CodingEvent.FinalText("Прочитал файл"), events[0])
         // Обрезанный ответ не должен выглядеть целым.
@@ -138,7 +144,9 @@ class PiEventParserTest {
     fun truncatedTurnWithToolCallIsNotAnEmptyTurn() {
         // Намерение выражено: правка началась, просто не хватило текста рядом.
         val line = """{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"1","name":"edit","arguments":{"path":"a.txt"}}],"stopReason":"length","usage":{"output":8192}}}"""
-        assertTrue(PiEventParser.parseEvents(line).isEmpty())
+        assertTrue(PiEventParser.parseEvents(line).also { events ->
+            assertEquals(8192, events.filterIsInstance<CodingEvent.UsageObserved>().single().tokens.output?.toInt())
+        }.filterNot { it is CodingEvent.UsageObserved }.isEmpty())
     }
 
     @Test

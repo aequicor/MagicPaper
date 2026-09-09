@@ -325,6 +325,8 @@ private fun SessionArea(
             CodingChat(
                 project = project,
                 session = effective,
+                contextUsage = vm.usage.state.collectAsState().value.contexts["coding:${sessionInfo.id}"]?.takeIf { it.model == vm.codingProfileOf(sessionInfo, workerPlan)?.modelId }
+                    ?: io.aequicor.magicpaper.domain.ContextUsageSnapshot("coding:${sessionInfo.id}", vm.codingProfileOf(sessionInfo, workerPlan)?.modelId.orEmpty()),
                 pins = pins[PinConversation(sessionInfo.id, sessionInfo.projectId)].orEmpty(),
                 approvals = ui.approvals.filter { it.projectId == project.id },
                 onApproval = vm::respondCodingApproval,
@@ -893,6 +895,7 @@ internal fun CodingChat(
     onOpenQuestionnaire: (InteractionKind, String) -> Unit = { _, _ -> },
     composerDraft: CodingComposerDraft = remember(session.session.id) { CodingComposerDraft() },
     pins: List<RequestPinGroup> = emptyList(),
+    contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
     listState: LazyListState = key(session.session.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
@@ -1044,6 +1047,7 @@ internal fun CodingChat(
                 } else
                 CodingComposer(
                     state = composerDraft,
+                    contextUsage = contextUsage,
                     enabled = engineReady && (!busy || allowQueue),
                     busy = busy && !allowQueue,
                     controls = modelChip,
@@ -1181,6 +1185,17 @@ private fun CodingMessageBubble(
         io.aequicor.magicpaper.ui.components.SessionContextMessage(message.id, message.text)
         return
     }
+    val systemStep = step?.kind in listOf(CodingStepKind.SYSTEM, CodingStepKind.INFO)
+    if (message.systemNotice || systemStep) {
+        PaperSystemMessage {
+            PaperText("Системное сообщение", role = PaperTextRole.LABEL)
+            header?.invoke()
+            if (body != null) body() else ChatPlainText(step?.title ?: message.text,
+                style = LocalPaperTypography.current.body, color = LocalPaperColors.current.systemText)
+            if (showFooter) footer?.invoke()
+        }
+        return
+    }
     val previewState = rememberSaveableStateHolder()
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (message.systemNotice) {
@@ -1290,9 +1305,9 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
                 modifier = Modifier.padding(vertical = 3.dp),
             )
         }
-        CodingStepKind.INFO -> {
+        CodingStepKind.INFO, CodingStepKind.SYSTEM -> {
             ChatPlainText(
-                "◷ ${step.title}",
+                step.title,
                 style = LocalPaperTypography.current.body,
                 color = LocalPaperColors.current.secondaryText,
                 modifier = Modifier.padding(vertical = 2.dp),
@@ -1622,6 +1637,7 @@ internal fun CodingComposer(
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
     onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
     onResume: ((String, List<Attachment>) -> Unit)? = null,
+    contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
 ) {
     var text by state.text
     var attachments by state.attachments
@@ -1633,6 +1649,7 @@ internal fun CodingComposer(
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val trailingLimit = maxWidth * 0.45f
+        val narrowContext = maxWidth < 600.dp
         Column(Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(14.dp).copy(
                 bottomStart = CornerSize(0.dp),
@@ -1772,6 +1789,7 @@ internal fun CodingComposer(
                 Row(Modifier.widthIn(max = trailingLimit).horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
+                    if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
                     controls?.invoke()
                 }
                 PaperVerticalDivider(
@@ -1783,6 +1801,9 @@ internal fun CodingComposer(
                     contentPadding = PaddingValues(horizontal = 4.dp)) {
                     PaperText(if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить", style = LocalPaperTypography.current.label)
                 }
+            }
+            if (narrowContext) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
             }
         }
     }

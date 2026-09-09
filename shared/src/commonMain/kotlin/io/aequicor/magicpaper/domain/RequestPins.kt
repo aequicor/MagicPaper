@@ -99,6 +99,8 @@ class RequestPinService(
     private val gateway: LlmGateway?,
     private val scope: CoroutineScope,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    private val usageScope: (PinConversation) -> UsageScope = { conversation -> UsageScope(
+        if (conversation.projectId == null) "chat:${conversation.sessionId}" else "coding:${conversation.sessionId}", projectId = conversation.projectId) },
 ) {
     private class Entry {
         var messages: List<PinMessage> = emptyList()
@@ -136,7 +138,7 @@ class RequestPinService(
         if (conversation !in _groups.value) publish(conversation, entry)
         if (entry.job?.isActive != true && gateway != null && profile?.configured == true &&
             entry.records.any { !it.analysed && it.source.id !in entry.attempted }) {
-            entry.job = scope.launch(start = CoroutineStart.LAZY) { analysePending(conversation, entry) }
+            entry.job = scope.launch(UsageOwner(usageScope(conversation), updatesContext = false), start = CoroutineStart.LAZY) { analysePending(conversation, entry) }
             entry.job?.start()
         }
     }

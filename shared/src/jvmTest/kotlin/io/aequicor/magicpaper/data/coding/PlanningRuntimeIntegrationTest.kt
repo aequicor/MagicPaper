@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.coding
 import com.sun.net.httpserver.HttpServer
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.data.storage.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
@@ -92,6 +93,10 @@ class PlanningRuntimeIntegrationTest {
                 }
                 fun chunk(d: JsonObject, finish: JsonElement) = buildJsonObject {
                     put("id", "fixture-$call"); put("object", "chat.completion.chunk"); put("model", "planning-fixture")
+                    if (finish != JsonNull) putJsonObject("usage") {
+                        put("prompt_tokens", 120); put("completion_tokens", 10); put("total_tokens", 130)
+                        putJsonObject("prompt_tokens_details") { put("cached_tokens", 20) }
+                    }
                     putJsonArray("choices") { add(buildJsonObject { put("index", 0); put("delta", d); put("finish_reason", finish) }) }
                 }
                 val response = "data: ${chunk(delta, JsonNull)}\n\ndata: ${chunk(buildJsonObject {}, JsonPrimitive(if (calls.isEmpty()) "stop" else "tool_calls"))}\n\ndata: [DONE]\n\n"
@@ -102,7 +107,8 @@ class PlanningRuntimeIntegrationTest {
         }
         server.start()
         val codex = CodexAppServerOpenAiSubscription(Json { ignoreUnknownKeys = true }, root.resolve("codex").toPath())
-        val runtime = DesktopCodingRuntime(PiCodingRuntime(), codex)
+        val ledger = UsageLedger(JsonUsageRepository(InMemoryKeyValueStore(), Json))
+        val runtime = MeteredCodingRuntime(DesktopCodingRuntime(PiCodingRuntime(), codex), ledger)
         try {
             val profile = LlmProfile("fixture", "Fixture", baseUrl = "http://127.0.0.1:${server.address.port}/v1", apiKey = "fixture",
                 modelId = "planning-fixture", codingModelId = "wrong-executor-model", favoriteModels = listOf("planning-fixture"))
@@ -110,7 +116,7 @@ class PlanningRuntimeIntegrationTest {
             val text = object : LlmGateway { override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Text-only fallback") }
             val composer = PlanComposer(text, planningGateway = RuntimePlanningGateway(runtime), projectLookup = { project })
             val activity = mutableListOf<CodingStep>()
-            val result = withTimeout(90000) { composer.refine(Plan("plan", project.id, "Изучи код и подготовь фикс", engine = engine),
+            val result = withTimeout(90000) { composer.refine(Plan("plan", project.id, "Изучи код и подготовь фикс", engine = engine, parentSessionId = "owner"),
                 "Составь план по текущему коду", profile, listOf(profile), emptyList(), onActivity = activity::add) }
             assertTrue(serverErrors.isEmpty(), serverErrors.toString())
             assertTrue(result.dialogue.last().text.contains("CURRENT-CODE"), "$engine: ${result.dialogue.last().text}\n$activity")
@@ -118,6 +124,12 @@ class PlanningRuntimeIntegrationTest {
             assertTrue(result.dialogue.last().questions.isEmpty(), "First turn can return a plan without questions")
             assertTrue(activity.any { it.kind == CodingStepKind.EXEC || it.kind == CodingStepKind.TOOL })
             assertTrue(requests.size >= 3)
+            val records = ledger.state.value.records
+            assertEquals(requests.size.toLong(), records.sumOf { it.requests }, "$engine: duplicate or missing requests: $records")
+            assertTrue(records.all { it.tokens.input == 100L && it.tokens.output == 10L && it.tokens.cacheRead == 20L }, "$engine: $records")
+            assertTrue(records.all { it.scope.includes("coding:owner") }, "$engine: $records")
+            assertTrue(records.all { it.cost == null }, "Adapter placeholder rates must stay unknown")
+            assertNotNull(ledger.state.value.contexts["coding:owner"]?.used, "$engine: missing context extension events: ${ledger.state.value.contexts}")
             assertTrue(requests.all { it["model"]?.jsonPrimitive?.content == "planning-fixture" })
             if (engine == CodingEngine.PI) {
                 val names = requests.first()["tools"]!!.jsonArray.map { it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content }.toSet()

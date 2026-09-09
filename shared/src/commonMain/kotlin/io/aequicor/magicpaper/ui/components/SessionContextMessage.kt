@@ -11,8 +11,8 @@ import io.aequicor.magicpaper.designsystem.*
 @Composable
 internal fun SessionContextMessage(id: String, text: String) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
-    PaperPanel(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp), kind = PaperSurfaceKind.RAISED) {
-        Column(Modifier.padding(12.dp)) {
+    PaperSystemMessage {
+        Column {
             PaperText("Системное сообщение", role = PaperTextRole.LABEL)
             PaperText("Контекст сессии: системный промпт, навыки и настройки")
             PaperAction(onClick = { expanded = !expanded }) { PaperText(if (expanded) "Свернуть" else "Показать контекст") }

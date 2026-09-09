@@ -524,7 +524,7 @@ class OrchestrationService(
 
     private fun drainInputs(session: CodingSession) {
         if (closing || jobs[session.id]?.isActive == true || session.id in _persistenceErrors.value) return
-        val job = scope.launch(start = CoroutineStart.LAZY) {
+        val job = scope.launch(UsageOwner(UsageScope.coding(session)), start = CoroutineStart.LAZY) {
             try {
                 while (true) {
                     // Claim under the same lock as withdrawal, before reading or sending the text.

@@ -7,7 +7,7 @@ import io.aequicor.magicpaper.domain.forPendingRun
 import io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge
 import io.aequicor.magicpaper.data.questionnaire.QuestionnaireTool
 import io.aequicor.magicpaper.domain.AttachmentKind
-import io.aequicor.magicpaper.domain.CodingEvent
+import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.DeclaredReasoning
@@ -247,7 +247,7 @@ class CodexAppServerOpenAiSubscription(
         ).jsonObject
         val threadId = thread["thread"]?.jsonObject?.requireString("id")
             ?: error("Codex не вернул идентификатор диалога.")
-        val accumulator = TurnAccumulator(onActivity)
+        val accumulator = TurnAccumulator(onActivity).also { it.usage = kotlinx.coroutines.currentCoroutineContext()[UsageCall] }
         turns[threadId] = accumulator
         var turnId: String? = null
         try {
@@ -644,6 +644,31 @@ class CodexAppServerOpenAiSubscription(
     private fun handleNotification(method: String?, params: JsonObject?) {
         if (params == null) return
         when (method) {
+            "thread/tokenUsage/updated" -> {
+                val threadId = params.string("threadId") ?: return
+                val usage = params["tokenUsage"] as? JsonObject ?: return
+                val total = usage["total"] as? JsonObject ?: return
+                val last = usage["last"] as? JsonObject ?: return
+                val fingerprint = params.string("turnId").orEmpty() + ":" + total.toString()
+                val totals = UsageParsing.codex(total)
+                val latest = UsageParsing.codex(last)
+                val window = usage.count("modelContextWindow")
+                codingRuns[threadId]?.let { run ->
+                    if (run.turnId != null) {
+                        run.emit(CodingEvent.UsageObserved(latest, fingerprint, cumulative = totals))
+                        run.emit(CodingEvent.ContextUpdated(latest.totalTokens, window))
+                    }
+                }
+                turns[threadId]?.let { run ->
+                    if (run.usageFingerprint != fingerprint) { run.usageRequests++; run.usageFingerprint = fingerprint }
+                    run.usage?.result?.value = UsageCallResult(totals, contextTokens = latest.totalTokens,
+                        contextLimit = window, requests = run.usageRequests.coerceAtLeast(1))
+                }
+            }
+            "thread/compacted" -> {
+                // Older app-server compatibility; suppress duplicate completion when an item was seen.
+                codingRuns[params.string("threadId")]?.legacyCompacted()
+            }
             "serverRequest/resolved" -> {
                 val threadId = params.string("threadId") ?: return
                 params["requestId"]?.let { approvalBroker.resolved(threadId, it); questionnaireBroker.resolved(threadId, it) }
@@ -739,6 +764,9 @@ class CodexAppServerOpenAiSubscription(
     }
 
     internal class TurnAccumulator(private val onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit) {
+        var usage: UsageCall? = null
+        var usageFingerprint = ""
+        var usageRequests = 0L
         private val activity = Channel<Unit>(Channel.CONFLATED)
         private var receivedCharacters = 0
         private val identity = io.aequicor.magicpaper.util.Id.new()
@@ -823,6 +851,8 @@ class CodexAppServerOpenAiSubscription(
     }
 
     private class CodingAccumulator(val planning: Boolean = false, val research: Boolean = false) {
+        private var compactionItemSeen = false
+        fun legacyCompacted() { if (!compactionItemSeen) emit(CodingEvent.Compaction(CompactionStatus("legacy:${turnId.orEmpty()}", CompactionPhase.COMPLETED))) }
         private class Reasoning {
             val content = IndexedText()
             val summary = IndexedText()
@@ -853,6 +883,7 @@ class CodexAppServerOpenAiSubscription(
             val id = item.string("id").orEmpty()
             if (id.isNotBlank()) items[id] = item
             when (item.string("type")) {
+                "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.STARTED))) }
                 "agentMessage", "reasoning" -> emit(CodingEvent.MessageStarted)
                 "commandExecution" -> emit(
                     CodingEvent.ToolStarted("command", item.string("command").orEmpty(), id, isExec = true),
@@ -869,6 +900,14 @@ class CodexAppServerOpenAiSubscription(
             val id = item.string("id").orEmpty()
             items.remove(id)
             when (item.string("type")) {
+                "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.COMPLETED))) }
+                "webSearch" -> {
+                    val action = item["action"] as? JsonObject
+                    val content = action?.string("type") == "openPage"
+                    if (action?.string("type") != "findInPage") emit(CodingEvent.SearchObserved(id,
+                        pages = if (content) 1 else 0, content = content,
+                        requests = (action?.get("queries") as? JsonArray)?.size?.toLong()?.coerceAtLeast(1) ?: 1))
+                }
                 "agentMessage" -> item.string("text")?.takeIf { it.isNotBlank() }?.let { emit(CodingEvent.FinalText(it, id)) }
                 "mcpToolCall" -> if (item.string("server") == "magicpaper_computer") {
                     val result = item["result"] as? JsonObject
@@ -909,6 +948,10 @@ class CodexAppServerOpenAiSubscription(
         }
 
         fun finish(error: String?, confirmed: Boolean = true) {
+            items.values.filter { it.string("type") == "contextCompaction" }.forEach {
+                emit(CodingEvent.Compaction(CompactionStatus(it.string("id").orEmpty(),
+                    if (error.isNullOrBlank()) CompactionPhase.CANCELLED else CompactionPhase.FAILED)))
+            }
             items.clear()
             this.confirmed = confirmed
             if (!error.isNullOrBlank()) emit(CodingEvent.Failed(error))

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -23,7 +24,7 @@ import kotlinx.coroutines.test.*
 import java.io.File
 import kotlin.test.*
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingComposerRenderTest {
     @Test fun continueWorksWithEmptyComposerAtBothWidthsAndSendStaysDisabled() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
@@ -32,7 +33,7 @@ class CodingComposerRenderTest {
                 var bounds = Rect.Zero
                 var resumed = 0
                 var sent = 0
-                ImageComposeScene(width, 72) {
+                ImageComposeScene(width, 120) {
                     MagicPaperTheme { Surface {
                         Box(Modifier.onGloballyPositioned { bounds = it.boundsInRoot() }) {
                             CodingComposer(enabled = true, busy = false, onSend = { _, _ -> sent++ },
@@ -44,7 +45,11 @@ class CodingComposerRenderTest {
                     } }
                 }.use { scene ->
                     repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
-                    val button = androidx.compose.ui.geometry.Offset(bounds.right - 35, bounds.center.y)
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    val label = if (resumable) "Продолжить" else "Отправить"
+                    val button = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.first {
+                        it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true
+                    }.boundsInRoot.center
                     scene.sendPointerEvent(PointerEventType.Press, button)
                     scene.sendPointerEvent(PointerEventType.Release, button)
                     scene.render(112_000_000L).close(); runCurrent()

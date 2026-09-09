@@ -172,7 +172,8 @@ class PlanningExecutionService(
 
     private suspend fun launchProject(id: String) = jobsLock.withLock {
         if (closing || jobs[id]?.isActive == true) return@withLock
-        jobs[id] = scope.launch { executeProject(id) }
+        val plan = store.planFor(id)
+        jobs[id] = scope.launch(UsageOwner(UsageScope(plan?.parentSessionId?.let { "coding:$it" }, projectId = plan?.projectId, planId = id), updatesContext = false)) { executeProject(id) }
     }
     private suspend fun executeProject(id: String) {
         val workspaces = workspaceFor(id)

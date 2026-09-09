@@ -13,6 +13,7 @@ data class ProviderModel(
     val defaultParameters: Map<String, JsonElement> = emptyMap(),
     val supportedParameters: Set<String>? = null,
     val reasoning: DeclaredReasoning? = null,
+    val pricing: ModelPricing? = null,
 )
 
 /** A named fork. Its identity is independent of the provider's wire model id and effort. */

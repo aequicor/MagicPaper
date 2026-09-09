@@ -20,6 +20,7 @@ import kotlinx.serialization.json.contentOrNull
 class GoogleSearchEngine(
     private val client: HttpClient,
     private val json: Json,
+    private val usage: io.aequicor.magicpaper.domain.UsageLedger? = null,
 ) : SearchEngine {
 
     override val provider = SearchProvider.GOOGLE
@@ -30,6 +31,7 @@ class GoogleSearchEngine(
 
     override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> {
         if (!isConfigured(settings)) return emptyList()
+        return measuredSearch(usage, displayName) {
         val response = client.get(settings.googleSearchUrl.trim()) {
             parameter("q", query)
             parameter("key", settings.googleApiKey)
@@ -38,7 +40,7 @@ class GoogleSearchEngine(
         }
         val body = response.bodyAsText()
         check(response.status.isSuccess()) { "Google: HTTP ${response.status.value}" }
-        return run {
+        run {
             val root = json.parseToJsonElement(body).jsonObject
             check(root["error"] == null) { "Google: ошибка поискового API" }
             val items = root["items"]?.jsonArray ?: return@run emptyList<SearchHit>()
@@ -52,6 +54,7 @@ class GoogleSearchEngine(
                     provider = displayName,
                 )
             }
+        }
         }
     }
 }

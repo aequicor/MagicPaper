@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.data.coding
 
-import io.aequicor.magicpaper.domain.CodingEvent
+import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.data.llm.UsageParsing
+import io.aequicor.magicpaper.data.llm.count
 import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -25,7 +27,7 @@ object PiEventParser {
     private val json = Json { ignoreUnknownKeys = true }
 
     /** Разбирает одну строку протокола. Нераспознанные и повреждённые строки дают null. */
-    fun parse(line: String): CodingEvent? = parseEvents(line).firstOrNull()
+    fun parse(line: String): CodingEvent? = parseEvents(line).let { events -> events.firstOrNull { it !is CodingEvent.UsageObserved } ?: events.firstOrNull() }
 
     /**
      * Разбирает строку протокола в события. Больше одного — финал сообщения,
@@ -33,7 +35,19 @@ object PiEventParser {
      */
     fun parseEvents(line: String, summaryOnly: Boolean = false): List<CodingEvent> {
         val obj = parseObject(line) ?: return emptyList()
-        if (obj.type() == "message_end") return parseMessageEnd(obj, summaryOnly)
+        if (obj.type() == "message_end") {
+            val message = obj["message"] as? JsonObject
+            val usage = message?.takeIf { it.primitive("role") == "assistant" }?.get("usage") as? JsonObject
+            val metrics = usage?.let { CodingEvent.UsageObserved(UsageParsing.pi(it),
+                "message:" + (message.primitive("id") ?: message.primitive("timestamp") ?: message.toString().hashCode().toString()), cost = UsageParsing.piCost(it)) }
+            return listOfNotNull(metrics) + parseMessageEnd(obj, summaryOnly)
+        }
+        if (obj.type() == "compaction_end") {
+            val result = obj["result"] as? JsonObject
+            val usage = result?.get("usage") as? JsonObject
+            return listOfNotNull(usage?.let { CodingEvent.UsageObserved(UsageParsing.pi(it),
+                "compaction:" + (result.primitive("id") ?: result.toString().hashCode().toString()), cost = UsageParsing.piCost(it)) }, parseEvent(obj, summaryOnly))
+        }
         return listOfNotNull(parseEvent(obj, summaryOnly))
     }
 
@@ -54,12 +68,14 @@ object PiEventParser {
                     null
                 }
             "agent_end" -> CodingEvent.AgentEnd
-            "compaction_start" -> CodingEvent.Notice("Уплотняю контекст…")
-            "compaction_end" -> if (obj["cancelled"] == JsonPrimitive(true) || obj["error"] != null) {
-                CodingEvent.Notice("Уплотнение контекста не удалось")
-            } else {
-                CodingEvent.Notice("Контекст уплотнён")
-            }
+            "magicpaper_request" -> CodingEvent.ModelRequest(obj.primitive("id").orEmpty())
+            "magicpaper_context" -> CodingEvent.ContextUpdated(obj.count("tokens"), obj.count("contextWindow"), approximate = true)
+            "compaction_start" -> CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED, obj.primitive("reason").orEmpty()))
+            "compaction_end" -> CodingEvent.Compaction(CompactionStatus("", when {
+                obj["aborted"] == JsonPrimitive(true) || obj["cancelled"] == JsonPrimitive(true) -> CompactionPhase.CANCELLED
+                !obj.primitive("errorMessage").isNullOrBlank() || obj["error"]?.let { it != JsonNull } == true -> CompactionPhase.FAILED
+                else -> CompactionPhase.COMPLETED
+            }, obj.primitive("reason").orEmpty()))
             "auto_retry_start" -> CodingEvent.Notice(
                 "Сбой у провайдера, автоповтор №${obj.primitive("attempt") ?: "?"}…"
             )

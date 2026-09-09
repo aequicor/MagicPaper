@@ -88,7 +88,7 @@ internal fun CodingMessage.withPlanningDraft(draft: CodingDraft?): CodingMessage
     val persisted = steps.ifEmpty {
         if (answer != null && text.isNotBlank()) listOf(CodingStep(CodingStepKind.ANSWER, text)) else emptyList()
     }
-    val retained = draft.steps.filter { it.kind == CodingStepKind.ANSWER && it.id != answer?.id &&
+    val retained = draft.steps.filter { it.kind in listOf(CodingStepKind.ANSWER, CodingStepKind.SYSTEM) && it.id != answer?.id &&
         persisted.none { saved -> saved.id == it.id } }.map { it.copy(running = false) }
     val savedSteps = retained + persisted
     val lastAnswer = savedSteps.indexOfLast { it.kind == CodingStepKind.ANSWER }

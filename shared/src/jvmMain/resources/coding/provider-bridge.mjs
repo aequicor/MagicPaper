@@ -64,7 +64,7 @@ export function contextFromResponses(body, model) {
   return context;
 }
 
-export function createBridge(config, streamSimple) {
+export function createBridge(config, streamSimple, observeUsage = () => {}) {
   const controllers = new Set();
   const server = http.createServer(async (req, res) => {
     if (req.headers.authorization !== 'Bearer ' + config.key || req.headers.origin) { res.writeHead(403).end(); return; }
@@ -92,6 +92,7 @@ export function createBridge(config, streamSimple) {
       const body = JSON.parse(bytes.toString('utf8'));
       if (body.previous_response_id) throw new Error('Адаптеру нужна полная история запроса.');
       const context = contextFromResponses(body, config.model);
+      observeUsage({ id: responseId, phase: 'started' });
       const parameters = config.parameters || {};
       const options = { apiKey: config.apiKey, signal: abort.signal, maxTokens: config.model.maxTokens,
         reasoning: config.reasoning, temperature: parameters.temperature, transport: 'sse',
@@ -104,10 +105,12 @@ export function createBridge(config, streamSimple) {
         context.tools = [];
         context.messages.push({ role: 'user', content: 'Write the continuation summary now.', timestamp: Date.now() });
         const final = await streamSimple(config.model, context, options).result();
+        observeUsage({ id: responseId, phase: 'completed', usage: final.usage });
         if (final.stopReason === 'error' || final.stopReason === 'aborted') throw new Error(final.errorMessage || 'Сводка не создана');
         const summary = final.content.filter(p => p.type === 'text').map(p => p.text).join('\n');
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ output: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: summary }] }] })); return;
+        res.end(JSON.stringify({ usage: { input_tokens: (final.usage.input || 0) + (final.usage.cacheRead || 0) + (final.usage.cacheWrite || 0),
+          output_tokens: final.usage.output, total_tokens: final.usage.totalTokens, input_tokens_details: { cached_tokens: final.usage.cacheRead, cache_creation_tokens: final.usage.cacheWrite } }, output: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: summary }] }] })); return;
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
       emit('response.created', { response }); emit('response.in_progress', { response });
@@ -137,7 +140,7 @@ export function createBridge(config, streamSimple) {
       const upstream = streamSimple(config.model, context, options);
       for await (const event of upstream) {
         if (abort.signal.aborted) break;
-        if (event.type === 'error') throw new Error(event.error.errorMessage || 'Ошибка провайдера');
+        if (event.type === 'error') { observeUsage({ id: responseId, phase: 'completed', usage: event.error?.usage }); throw new Error(event.error.errorMessage || 'Ошибка провайдера'); }
         const part = event.partial?.content?.[event.contentIndex];
         if (!part || part.redacted || (part.type === 'toolCall' && !part.name)) continue;
         const entry = ensure(event.contentIndex, part);
@@ -159,6 +162,7 @@ export function createBridge(config, streamSimple) {
         }
       }
       const final = await upstream.result();
+      observeUsage({ id: responseId, phase: 'completed', usage: final.usage });
       if (final.stopReason === 'error' || final.stopReason === 'aborted') throw new Error(final.errorMessage || 'Запрос остановлен');
       if (final.stopReason === 'length') throw new Error('Ответ провайдера обрезан лимитом токенов. Увеличьте лимит модели.');
       final.content.forEach((part, index) => {
@@ -195,8 +199,10 @@ export function createBridge(config, streamSimple) {
         emit('response.output_item.done', { output_index: entry.index, item });
       });
       response.status = 'completed';
-      response.usage = { input_tokens: (final.usage.input || 0) + (final.usage.cacheRead || 0), output_tokens: final.usage.output || 0,
-        total_tokens: final.usage.totalTokens || 0, input_tokens_details: { cached_tokens: final.usage.cacheRead || 0 } };
+      response.usage = { input_tokens: (final.usage.input || 0) + (final.usage.cacheRead || 0) + (final.usage.cacheWrite || 0), output_tokens: final.usage.output || 0,
+        total_tokens: final.usage.totalTokens || 0, input_tokens_details: { cached_tokens: final.usage.cacheRead || 0, cache_creation_tokens: final.usage.cacheWrite || 0 },
+        // Required by the Codex wire schema; accounting uses the unsynthesized telemetry above.
+        output_tokens_details: { reasoning_tokens: final.usage.reasoning ?? 0 } };
       emit('response.completed', { response }); res.end();
     } catch (error) {
       if (res.destroyed) return;
@@ -212,7 +218,7 @@ async function main() {
   const reader = readline.createInterface({ input: process.stdin });
   const config = JSON.parse(await new Promise(resolve => reader.once('line', resolve)));
   const { streamSimple } = await import(process.env.MAGICPAPER_PI_AI + 'compat.js');
-  const bridge = createBridge(config, streamSimple);
+  const bridge = createBridge(config, streamSimple, metric => process.stdout.write(JSON.stringify({ type: 'magicpaper_usage', ...metric }) + '\n'));
   process.stdin.on('end', bridge.close);
   process.on('SIGTERM', () => { bridge.close(); process.exit(0); });
   bridge.server.listen(0, '127.0.0.1', () => process.stdout.write(JSON.stringify({ port: bridge.server.address().port }) + '\n'));

@@ -30,6 +30,7 @@ class GoogleGateway(
             headers = headers,
             body = json.encodeToString(JsonObject.serializer(), payload),
             timeoutSeconds = profile.advanced.timeoutSeconds,
+            usageProvider = profile.provider,
         )
         return parseResponse(body)
     }

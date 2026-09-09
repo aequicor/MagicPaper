@@ -84,3 +84,41 @@ for (const [api, expectedEvent, field] of [
     } finally { release(); bridge.close(); }
   });
 }
+
+test('telemetry preserves cache writes and compaction usage without duplicating a request', async () => {
+  const metrics = [];
+  const final = { content: [{ type: 'text', text: 'Summary' }], stopReason: 'stop',
+    usage: { input: 10, output: 8, cacheRead: 30, cacheWrite: 20, reasoning: 3, totalTokens: 68 } };
+  const bridge = createBridge({ key: 'local-key', apiKey: 'private-key', model }, () => stream(final), value => metrics.push(value));
+  bridge.server.listen(0, '127.0.0.1'); await once(bridge.server, 'listening');
+  const url = 'http://127.0.0.1:' + bridge.server.address().port;
+  try {
+    const normal = await (await fetch(url + '/responses', { method: 'POST', headers: { Authorization: 'Bearer local-key' }, body: JSON.stringify({ input: 'secret prompt' }) })).text();
+    assert.match(normal, /"input_tokens":60/);
+    assert.match(normal, /"cache_creation_tokens":20/);
+    assert.match(normal, /"reasoning_tokens":3/);
+    assert.equal(metrics.length, 2);
+    assert.equal(metrics[0].id, metrics[1].id);
+    assert.equal(metrics[1].usage.cacheWrite, 20);
+    const compact = await (await fetch(url + '/responses/compact', { method: 'POST', headers: { Authorization: 'Bearer local-key' }, body: JSON.stringify({ input: 'secret prompt' }) })).json();
+    assert.equal(compact.usage.total_tokens, 68);
+    assert.equal(compact.usage.input_tokens_details.cache_creation_tokens, 20);
+    assert.equal(metrics.length, 4);
+    assert.equal(metrics[2].id, metrics[3].id);
+    assert.notEqual(metrics[0].id, metrics[2].id);
+    assert.doesNotMatch(JSON.stringify(metrics), /private-key|secret prompt|Summary/);
+  } finally { bridge.close(); }
+});
+
+test('telemetry retains usage when a response is truncated', async () => {
+  const metrics = [];
+  const bridge = createBridge({ key: 'local-key', apiKey: 'private-key', model }, () => stream({ content: [], usage, stopReason: 'length' }), value => metrics.push(value));
+  bridge.server.listen(0, '127.0.0.1'); await once(bridge.server, 'listening');
+  try {
+    const text = await (await fetch('http://127.0.0.1:' + bridge.server.address().port + '/responses', {
+      method: 'POST', headers: { Authorization: 'Bearer local-key' }, body: JSON.stringify({ input: 'Hi' }) })).text();
+    assert.match(text, /response.failed/);
+    assert.equal(metrics.at(-1).usage.output, 3);
+    assert.equal(metrics.at(-1).id, metrics[0].id);
+  } finally { bridge.close(); }
+});

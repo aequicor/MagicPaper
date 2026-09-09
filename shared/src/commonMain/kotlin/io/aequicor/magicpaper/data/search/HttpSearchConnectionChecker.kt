@@ -10,7 +10,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
 
 /** Checks the draft directly: no saving, fallback provider or swallowed crawl failures. */
-class HttpSearchConnectionChecker(private val client: HttpClient, private val json: Json) : SearchConnectionChecker {
+class HttpSearchConnectionChecker(private val client: HttpClient, private val json: Json, private val usage: UsageLedger? = null) : SearchConnectionChecker {
     override suspend fun check(connection: SearchConnection, settings: AppSettings): SearchConnectionResult {
         val key = when (connection) {
             SearchConnection.QUERIT -> settings.queritApiKey
@@ -33,6 +33,8 @@ class HttpSearchConnectionChecker(private val client: HttpClient, private val js
             }
         } catch (_: Exception) { return failure("Проверьте адрес сервера: нужен URL с https:// или http://.") }
         return try {
+            measuredSearch(usage, connection.name, if (connection == SearchConnection.CONTENT) UsageKind.CONTENT else UsageKind.SEARCH,
+                pages = if (connection == SearchConnection.CONTENT) 1 else 0) {
             withTimeoutOrNull(20_000) {
                 val response = when (connection) {
                     SearchConnection.QUERIT, SearchConnection.CONTENT -> client.post(endpoint) {
@@ -92,6 +94,7 @@ class HttpSearchConnectionChecker(private val client: HttpClient, private val js
                 } else if (items.isEmpty()) return@withTimeoutOrNull failure("API доступен, но тестовый поиск не дал результатов.")
                 SearchConnectionResult(true, if (connection == SearchConnection.CONTENT) "Подключено · тестовая страница прочитана" else "Подключено · поиск работает")
             } ?: failure("Сервер не ответил за 20 секунд. Проверьте адрес и сеть.")
+        }
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) {
             // Exception messages can contain URLs, query-string keys and server response bodies.

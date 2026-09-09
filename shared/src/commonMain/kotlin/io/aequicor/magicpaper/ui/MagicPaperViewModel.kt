@@ -102,6 +102,7 @@ class MagicPaperViewModel(
     val planningChat: PlanningChatService? = null,
     private val searchConnectionChecker: SearchConnectionChecker? = null,
     requestPinRepository: RequestPinRepository? = null,
+    val usage: io.aequicor.magicpaper.domain.UsageLedger = io.aequicor.magicpaper.domain.UsageLedger(io.aequicor.magicpaper.data.storage.JsonUsageRepository(store, json)),
     private val workerDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
 ) : ViewModel() {
     val projectSkills get() = codingRuntime?.projectSkills
@@ -113,7 +114,12 @@ class MagicPaperViewModel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
-    val requestPins = requestPinRepository?.let { RequestPinService(it, gateway, scope, json) }
+    val requestPins = requestPinRepository?.let { RequestPinService(it, gateway, scope, json) { conversation ->
+        if (conversation.projectId == null) io.aequicor.magicpaper.domain.UsageScope.chat(conversation.sessionId)
+        else _state.value.coding.sessions.firstOrNull { it.session.id == conversation.sessionId }?.session
+            ?.let(io.aequicor.magicpaper.domain.UsageScope::coding)
+            ?: io.aequicor.magicpaper.domain.UsageScope("coding:${conversation.sessionId}", projectId = conversation.projectId)
+    } }
 
     private val interactionQueue = UserInteractionQueue()
     private val interactionDecisions = runCatching { json.decodeFromString<Set<String>>(store.read("coding-interaction-decisions") ?: "[]") }.getOrDefault(emptySet()).toMutableSet()
@@ -634,7 +640,7 @@ class MagicPaperViewModel(
                 busy = true,
             )
         }
-        scope.launch(workerDispatcher) {
+        scope.launch(workerDispatcher + io.aequicor.magicpaper.domain.UsageOwner(io.aequicor.magicpaper.domain.UsageScope.chat(session.id))) {
             chats.save(updated)
             val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile)
             val agentMessage = ChatMessage(
@@ -1094,6 +1100,7 @@ class MagicPaperViewModel(
                 skills = skills?.all().orEmpty(),
                 llmProfiles = s.llmProfiles,
                 modelDescriptions = planning?.dossiers().orEmpty(),
+                usage = usage.state.value,
             )
             val encoded = json.encodeToString(ProfileBundle.serializer(), bundle)
             val ok = bridge.export(encoded)
@@ -1115,6 +1122,7 @@ class MagicPaperViewModel(
                 return@launch
             }
             requestPins?.clear()
+            usage.replace(bundle.usage)
             settingsRepo.save(bundle.settings)
             settingsRepo.savePluginStates(bundle.plugins)
             bundle.sessions.forEach { chats.save(it) }
@@ -1129,6 +1137,7 @@ class MagicPaperViewModel(
     fun wipeAll() {
         scope.launch {
             requestPins?.clear()
+            usage.clear()
             chats.wipe()
             settingsRepo.wipe()
             skills?.wipe()

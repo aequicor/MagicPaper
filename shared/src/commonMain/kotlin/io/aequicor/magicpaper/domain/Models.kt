@@ -102,4 +102,5 @@ data class ProfileBundle(
     val skills: List<io.aequicor.magicpaper.domain.Skill> = emptyList(),
     val llmProfiles: List<LlmProfile> = emptyList(),
     val modelDescriptions: List<ModelDossier> = emptyList(),
+    val usage: UsageArchive = UsageArchive(),
 )

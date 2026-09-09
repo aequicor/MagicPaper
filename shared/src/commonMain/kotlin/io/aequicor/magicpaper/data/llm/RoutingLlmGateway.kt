@@ -13,16 +13,20 @@ import io.aequicor.magicpaper.domain.forModel
  */
 class RoutingLlmGateway(
     private val transports: Map<ProviderType, LlmGateway>,
+    private val usage: io.aequicor.magicpaper.domain.UsageLedger? = null,
 ) : LlmGateway {
 
     override suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit): String {
         val transport = transports[profile.provider] ?: error("Нет транспорта для провайдера ${profile.provider}.")
-        return transport.completeWithActivity(profile.forModel(), messages, onActivity)
+        val effective = profile.forModel()
+        return usage?.measure(effective) { transport.completeWithActivity(effective, messages, onActivity) }
+            ?: transport.completeWithActivity(effective, messages, onActivity)
     }
 
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
         val transport = transports[profile.provider]
             ?: error("Нет транспорта для провайдера ${profile.provider}.")
-        return transport.complete(profile.forModel(), messages)
+        val effective = profile.forModel()
+        return usage?.measure(effective) { transport.complete(effective, messages) } ?: transport.complete(effective, messages)
     }
 }

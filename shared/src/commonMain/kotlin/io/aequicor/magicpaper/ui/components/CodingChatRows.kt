@@ -11,8 +11,8 @@ internal data class CodingChatRow(
 
 /** A run can contain thousands of steps; each one must be its own lazy-list item. */
 internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int? = null) {
-    val first: Boolean get() = stepIndex == null || stepIndex == 0
-    val last: Boolean get() = stepIndex == null || stepIndex == row.message.steps.lastIndex
+    val first: Boolean get() = stepIndex == null || stepIndex == 0 || step?.kind == CodingStepKind.SYSTEM || row.message.steps.getOrNull(stepIndex - 1)?.kind == CodingStepKind.SYSTEM
+    val last: Boolean get() = stepIndex == null || stepIndex == row.message.steps.lastIndex || step?.kind == CodingStepKind.SYSTEM || row.message.steps.getOrNull(stepIndex + 1)?.kind == CodingStepKind.SYSTEM
     val key: String = if (stepIndex == null) row.message.id else
         "${row.message.timelineId ?: row.message.id}:step:${row.stepKeys[stepIndex]}"
     val step: CodingStep? get() = stepIndex?.let { row.message.steps[it] }
@@ -60,6 +60,7 @@ private fun CodingMessage.visibleChatContent(indices: List<Int>): CodingMessage?
 internal fun CodingStep.isVisibleInChat(hideSystemSteps: Boolean): Boolean = when (kind) {
     CodingStepKind.SUMMARY -> false // Provider summaries belong to the current status, not the transcript.
     CodingStepKind.INFO -> !hideSystemSteps && isVisibleActivity
+    CodingStepKind.SYSTEM -> true
     CodingStepKind.ANSWER, CodingStepKind.THINKING -> title.isNotBlank()
     else -> true // Errors and tool calls remain visible, even without a textual result.
 }

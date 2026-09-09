@@ -44,6 +44,8 @@ public data class PaperColors(
     public val error: Color = Color(0xFF864747),
     public val errorSurface: Color = Color(0xFFF3E3DF),
     public val disabled: Color = Color(0xFFAAA39B),
+    public val systemText: Color = Color(0xFF713A86),
+    public val systemSurface: Color = Color(0xFFF0E2F4),
 )
 
 @Immutable

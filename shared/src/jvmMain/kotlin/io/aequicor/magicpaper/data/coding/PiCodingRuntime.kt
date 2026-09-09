@@ -321,6 +321,7 @@ class PiCodingRuntime(
             "--extension", resourceScript("planning-tools.mjs").absolutePath)
         if (research) args += listOf("--extension", File(sessionHome(session.id), "research.mjs").absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
+        args += listOf("--extension", resourceScript("usage-context.mjs").absolutePath)
         if (questionnaireBridge != null) args += listOf("--extension", File(sessionHome(session.id), "questionnaire.mjs").absolutePath)
         if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)
         // Уровень мышления — явным флагом: выбор из профиля иначе до pi не доходит

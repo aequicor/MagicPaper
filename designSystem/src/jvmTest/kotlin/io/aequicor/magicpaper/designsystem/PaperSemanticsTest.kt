@@ -5,6 +5,7 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -22,6 +23,30 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperSemanticsTest {
+    @Test fun contextIndicatorExposesProgressAndSupportsKeyboard() {
+        val focus = FocusRequester()
+        val fraction = mutableStateOf<Float?>(.5f)
+        var clicks = 0
+        ImageComposeScene(320, 120) { PaperTheme {
+            PaperContextIndicator(fraction.value, if (fraction.value == null) "—" else "50%", { clicks++ }, Modifier.focusRequester(focus))
+        } }.use { scene ->
+            scene.render(16_000_000).close()
+            fun control() = scene.nodes().first { it.config.getOrNull(SemanticsProperties.StateDescription) != null }
+            assertEquals(.5f, control().config[SemanticsProperties.ProgressBarRangeInfo].current)
+            assertTrue(focus.requestFocus())
+            scene.render(32_000_000).close()
+            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown))
+            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))
+            scene.sendKeyEvent(KeyEvent(Key.Spacebar, KeyEventType.KeyDown))
+            scene.sendKeyEvent(KeyEvent(Key.Spacebar, KeyEventType.KeyUp))
+            assertEquals(2, clicks)
+            fraction.value = null
+            scene.render(48_000_000).close()
+            assertEquals("—", control().config[SemanticsProperties.StateDescription])
+            assertEquals(null, control().config.getOrNull(SemanticsProperties.ProgressBarRangeInfo))
+        }
+    }
+
     private fun ImageComposeScene.nodes(): List<SemanticsNode> {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }

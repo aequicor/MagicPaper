@@ -33,7 +33,9 @@ class PlanComposer(
         require(project.id == plan.projectId) { "План принадлежит другому проекту." }
         // Null is the legacy migration marker; explicit saved engines always win over provider type.
         val engine = plan.engine ?: legacyCodingEngine(profile)
-        return planningGateway.completeWithActivity(project, engine, plan.requestId.ifBlank { plan.id }, profile, messages, onActivity)
+        return kotlinx.coroutines.withContext(UsageOwner(UsageScope(plan.parentSessionId?.let { "coding:$it" }, projectId = plan.projectId, planId = plan.id))) {
+            planningGateway.completeWithActivity(project, engine, plan.requestId.ifBlank { plan.id }, profile, messages, onActivity)
+        }
     }
 
     suspend fun refine(

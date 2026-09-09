@@ -19,6 +19,7 @@ import kotlinx.serialization.json.contentOrNull
 class WikipediaSearchEngine(
     private val client: HttpClient,
     private val json: Json,
+    private val usage: io.aequicor.magicpaper.domain.UsageLedger? = null,
 ) : SearchEngine {
 
     override val provider = SearchProvider.WIKIPEDIA
@@ -27,6 +28,7 @@ class WikipediaSearchEngine(
     override fun isConfigured(settings: AppSettings) = true
 
     override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> {
+        return measuredSearch(usage, displayName) {
         val response = client.get("https://ru.wikipedia.org/w/api.php") {
             parameter("action", "query")
             parameter("list", "search")
@@ -37,8 +39,8 @@ class WikipediaSearchEngine(
         }
         val body = response.bodyAsText()
         val root = json.parseToJsonElement(body).jsonObject
-        val items = root["query"]?.jsonObject?.get("search")?.jsonArray ?: return emptyList()
-        return items.mapNotNull { item ->
+        val items = root["query"]?.jsonObject?.get("search")?.jsonArray ?: return@measuredSearch emptyList()
+        items.mapNotNull { item ->
             val title = item.jsonObject["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             val snippet = item.jsonObject["snippet"]?.jsonPrimitive?.contentOrNull ?: ""
             val url = "https://ru.wikipedia.org/wiki/" + title.replace(' ', '_')
@@ -48,6 +50,7 @@ class WikipediaSearchEngine(
                 snippet = snippet.replace(Regex("<[^>]+>"), ""),
                 provider = displayName,
             )
+        }
         }
     }
 }

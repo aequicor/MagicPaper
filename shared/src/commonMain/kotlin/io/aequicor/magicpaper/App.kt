@@ -181,6 +181,12 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
                     )
                 }
             }
+            val usageState by vm.usage.state.collectAsState()
+            val usageFailure by vm.usage.failure.collectAsState()
+            val uiState by vm.state.collectAsState()
+            val usageConversation = if (screen == Screen.CODING) uiState.coding.currentSession?.session?.id?.let { "coding:$it" }
+                else uiState.current?.id?.let { "chat:$it" }
+            io.aequicor.magicpaper.ui.components.UsageMenu(usageState, usageConversation, usageFailure)
             PaperIconButton(
                 label = if (screen == Screen.SETTINGS) "Вернуться в чат" else "Настройки",
                 selected = screen == Screen.SETTINGS,

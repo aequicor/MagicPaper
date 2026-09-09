@@ -198,7 +198,15 @@ class CodingRunRecorder {
     /** Применяет событие. true, если прогон завершён. */
     fun apply(event: CodingEvent): Boolean {
         when (event) {
-            is CodingEvent.SessionStarted -> Unit
+            is CodingEvent.SessionStarted, is CodingEvent.UsageObserved, is CodingEvent.ModelRequest, is CodingEvent.ContextUpdated, is CodingEvent.SearchObserved -> Unit
+            is CodingEvent.Compaction -> {
+                flushMessage()
+                val key = "compaction:${event.status.id}"
+                val step = CodingStep(CodingStepKind.SYSTEM, event.status.text, id = key, callId = key, systemEvent = event.status,
+                    running = event.status.phase == CompactionPhase.STARTED, ok = event.status.phase != CompactionPhase.FAILED)
+                val index = steps.indexOfFirst { it.id == key }
+                if (index >= 0) steps[index] = step else steps += step
+            }
             is CodingEvent.MessageStarted -> {
                 flushMessage()
                 awaiting = false
@@ -316,7 +324,11 @@ class CodingRunRecorder {
                 awaiting = false
                 flushMessage()
             }
-            is CodingEvent.Finished -> return true
+            is CodingEvent.Finished -> {
+                for (i in steps.indices) if (steps[i].kind == CodingStepKind.SYSTEM && steps[i].running)
+                    steps[i] = steps[i].copy(running = false, title = "Сжатие контекста прервано", systemEvent = steps[i].systemEvent?.copy(phase = CompactionPhase.CANCELLED))
+                return true
+            }
         }
         return false
     }
@@ -403,7 +415,16 @@ class CodingRunRecorder {
         )
     }
 
+    private fun MutableList<CodingStep>.replaceAllSystemsInterrupted() {
+        indices.forEach { index ->
+            val step = this[index]
+            if (step.kind == CodingStepKind.SYSTEM && step.running)
+                this[index] = step.copy(title = "Сжатие контекста прервано", running = false, systemEvent = step.systemEvent?.copy(phase = CompactionPhase.CANCELLED))
+        }
+    }
+
     fun message(id: String, createdAt: Long): CodingMessage {
+        steps.replaceAllSystemsInterrupted()
         flushThinking()
         flushText()
         val answerText = steps.filter { it.kind == CodingStepKind.ANSWER }
@@ -518,6 +539,13 @@ sealed interface CodingEvent {
      */
     data class Notice(val message: String) : CodingEvent
 
+    data class UsageObserved(val tokens: TokenUsage, val sourceId: String, val cumulative: TokenUsage? = null,
+        val cost: UsageCost? = null, val accounting: Boolean = true) : CodingEvent
+    data class ModelRequest(val id: String) : CodingEvent
+    data class ContextUpdated(val used: Long?, val limit: Long?, val approximate: Boolean = false) : CodingEvent
+    data class Compaction(val status: CompactionStatus) : CodingEvent
+    data class SearchObserved(val id: String, val pages: Long = 0, val requests: Long = 1, val content: Boolean = false) : CodingEvent
+
     /** Движок сообщил, что прогон завершён (agent_end) — текста могло и не быть. */
     data object AgentEnd : CodingEvent
 
@@ -530,7 +558,7 @@ sealed interface CodingEvent {
 
 /** Роль строки ленты прогона: действие агента, его текст, рассуждение или ошибка. */
 @Serializable
-enum class CodingStepKind { TOOL, EXEC, ANSWER, THINKING, ERROR, INFO, SUMMARY }
+enum class CodingStepKind { TOOL, EXEC, ANSWER, THINKING, ERROR, INFO, SUMMARY, SYSTEM }
 
 /** Строка ленты прогона кодинг-агента (chronological timeline). */
 @Serializable
@@ -545,6 +573,7 @@ data class CodingStep(
     val running: Boolean = false,
     /** Stable across streaming, final reconciliation and persistence; empty in old logs. */
     val id: String = "",
+    val systemEvent: CompactionStatus? = null,
 )
 
 /** Роли в журнале проекта. */
