@@ -1,25 +1,26 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 
-/** The chat keeps a bounded preview; the full reader has its own finite, lazy viewport. */
+/** Preview work stays bounded; chat hosts expand the document into their own lazy items. */
 @Composable
 internal fun MessagePreview(
     source: String,
@@ -28,33 +29,38 @@ internal fun MessagePreview(
     preview: @Composable () -> Unit,
     reader: @Composable (Modifier) -> Unit,
 ) {
-    var open by rememberSaveable { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     var contentHeight by remember { mutableIntStateOf(0) }
     val limit = with(LocalDensity.current) { 360.dp.roundToPx() }
+    val expansion = LocalMessageExpansion.current?.takeIf { it.source == source }
     Column(modifier) {
-        Box(Modifier.heightIn(max = 360.dp).clipToBounds()) {
-            Column(Modifier.wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged { contentHeight = it.height }) { preview() }
-        }
-        if (truncated || contentHeight > limit) TextButton(onClick = { open = true }) { Text("Читать полностью") }
-    }
-    if (open) MessageReaderDialog(source, { open = false }, reader)
-}
-
-@Suppress("DEPRECATION")
-@Composable
-private fun MessageReaderDialog(source: String, onDismiss: () -> Unit, content: @Composable (Modifier) -> Unit) {
-    val clipboard = LocalClipboardManager.current
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth(.92f).widthIn(max = 1000.dp).fillMaxHeight(.9f), shape = MaterialTheme.shapes.large) {
-            Column(Modifier.padding(16.dp)) {
-                Row(Modifier.fillMaxWidth()) {
-                    Text("Сообщение целиком", Modifier.weight(1f).padding(vertical = 12.dp), style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(source)) }) { Text("Копировать") }
-                    TextButton(onClick = onDismiss) { Text("Закрыть") }
-                }
-                HorizontalDivider()
-                content(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp))
+        if (expanded) {
+            reader(Modifier.fillMaxWidth())
+            CollapseMessage { expanded = false }
+        } else Box {
+            val clipped = truncated || contentHeight > limit
+            val fade = if (clipped) Modifier
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    // Mask only the finite preview, never allocate a layer for the hidden text.
+                    drawRect(Brush.radialGradient(
+                        0f to Color.Transparent, .55f to Color.Transparent, 1f to Color.White,
+                        center = Offset(size.width, size.height), radius = 180.dp.toPx()),
+                        blendMode = BlendMode.DstIn)
+                    drawRect(Brush.verticalGradient(listOf(Color.White, Color.Transparent),
+                        startY = (size.height - 12.dp.toPx()).coerceAtLeast(0f), endY = size.height),
+                        blendMode = BlendMode.DstIn)
+                } else Modifier
+            Box(Modifier.heightIn(max = 360.dp).clipToBounds().then(fade)) {
+                Column(Modifier.wrapContentHeight(Alignment.Top, unbounded = true)
+                    .onSizeChanged { contentHeight = it.height }) { preview() }
             }
+            if (clipped) Text("Читать далее",
+                Modifier.align(Alignment.BottomEnd).chatDisclosure {
+                    if (expansion != null) expansion.expand() else expanded = true
+                }.padding(horizontal = 12.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -75,8 +81,8 @@ internal fun ChatPlainText(text: String, modifier: Modifier = Modifier, style: T
     }, reader = { readerModifier ->
         val ranges = remember(text) { textBlockRanges(text) }
         SelectionContainer {
-            LazyColumn(readerModifier) {
-                items(ranges.size) { index -> Text(text.substring(ranges[index]), style = style, color = color) }
+            Column(readerModifier) {
+                ranges.forEach { range -> Text(text.substring(range), style = style, color = color) }
             }
         }
     })

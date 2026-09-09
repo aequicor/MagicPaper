@@ -1,4 +1,12 @@
 package io.aequicor.magicpaper.ui.screens
+import androidx.compose.runtime.CompositionLocalProvider
+import io.aequicor.magicpaper.ui.components.InlineMessageParts
+import io.aequicor.magicpaper.ui.components.MessageExpansion
+import io.aequicor.magicpaper.ui.components.LocalMessageExpansion
+import io.aequicor.magicpaper.ui.components.rememberInlineMessageParts
+import io.aequicor.magicpaper.ui.components.PreserveInlineExpansion
+import io.aequicor.magicpaper.ui.components.CollapseMessage
+
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -95,15 +103,37 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
 }
 
 @Composable
-internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier, pins: List<RequestPinGroup> = emptyList()) {
-    val messages = session?.messages.orEmpty()
-    val listState = androidx.compose.runtime.key(session?.id) {
+internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
+    pins: List<RequestPinGroup> = emptyList(),
+    listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.runtime.key(session?.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
-    }
+    },
+) {
+    val messages = session?.messages.orEmpty()
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = stickToBottom(listState, session?.id)
-    val indices = remember(messages) { messages.mapIndexed { index, message -> message.id to index }.toMap() }
+    var expandedMessages by rememberSaveable(session?.id) { mutableStateOf(emptyList<String>()) }
+    val expandedParts = buildMap<String, InlineMessageParts> {
+        messages.filter { it.id in expandedMessages }.forEach { message ->
+            androidx.compose.runtime.key(message.id) {
+                rememberInlineMessageParts(message.text, message.role != ChatRole.USER)?.let { put(message.id, it) }
+            }
+        }
+    }
+    val fragments = remember(messages, expandedParts) {
+        messages.flatMap { message ->
+            val parts = expandedParts[message.id]
+            if (parts == null || parts.size == 0) listOf(ChatMessageFragment(message))
+            else (0 until parts.size).map { ChatMessageFragment(message, parts, it) }
+        }
+    }
+    val indices = remember(fragments) {
+        fragments.mapIndexedNotNull { index, fragment ->
+            if (fragment.index == 0) fragment.message.id to index else null
+        }.toMap()
+    }
+    PreserveInlineExpansion(expandedParts, scroll)
     val pinNumbers = remember(pins, indices) { requestPinNumbers(pins, indices.keys) }
     var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
@@ -114,11 +144,19 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 state = listState,
                 modifier = Modifier.fillMaxSize().chatScrollInput(scroll),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.Top,
             ) {
-                items(messages, key = { it.id }, contentType = { it.role }) { message ->
-                    ChatScrollItem(scroll, message.id) {
-                        MessageBubble(message, pinNumbers[message.id]) { browserMessageId = message.id }
+                items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
+                    val message = fragment.message
+                    ChatScrollItem(scroll, fragment.key) {
+                        CompositionLocalProvider(LocalMessageExpansion provides MessageExpansion(message.text,
+                            { expandedMessages = expandedMessages + message.id })) {
+                            MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
+                                fragment = fragment, onCollapse = {
+                                    listState.requestScrollToItem(indices.getValue(message.id))
+                                    expandedMessages = expandedMessages - message.id
+                                })
+                        }
                     }
                 }
             }
@@ -167,8 +205,15 @@ private fun EmptyHint() {
     }
 }
 
+private data class ChatMessageFragment(val message: ChatMessage, val parts: InlineMessageParts? = null, val index: Int = 0) {
+    val key: String get() = if (index == 0) message.id else "${message.id}:text:$index"
+    val first: Boolean get() = index == 0
+    val last: Boolean get() = parts == null || index == parts.size - 1
+}
+
 @Composable
-private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {}) {
+private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
+    fragment: ChatMessageFragment = ChatMessageFragment(message), onCollapse: () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     val bubbleColor = if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -176,39 +221,45 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
         MaterialTheme.colorScheme.surfaceContainerHigh
     }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 10.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         MessagePinColumn(
-            number = pinNumber.takeIf { isUser },
+            number = pinNumber.takeIf { isUser && fragment.last },
             onClick = onShowPins,
             modifier = Modifier
                 // На узких экранах бабл не должна занимать всю ширину —
                 // 100% не даёт читаемой строки.
                 .widthIn(max = 560.dp)
+                .then(if (fragment.parts != null) Modifier.fillMaxWidth() else Modifier)
                 .clip(
                     // «хвост» бабла со стороны автора: верхний угол у его края — почти острый.
                     RoundedCornerShape(
-                        topStart = if (isUser) 20.dp else 6.dp,
-                        topEnd = if (isUser) 6.dp else 20.dp,
-                        bottomStart = 20.dp,
-                        bottomEnd = 20.dp,
+                        topStart = if (!fragment.first) 0.dp else if (isUser) 20.dp else 6.dp,
+                        topEnd = if (!fragment.first) 0.dp else if (isUser) 6.dp else 20.dp,
+                        bottomStart = if (fragment.last) 20.dp else 0.dp,
+                        bottomEnd = if (fragment.last) 20.dp else 0.dp,
                     )
                 )
                 .background(bubbleColor)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(start = 14.dp, end = 14.dp, top = if (fragment.first) 10.dp else 0.dp,
+                    bottom = if (fragment.last) 10.dp else 0.dp),
         ) {
-            if (isUser) {
+            if (fragment.parts != null) {
+                fragment.parts.Content(fragment.index)
+                if (fragment.last) CollapseMessage(onCollapse)
+            } else if (isUser) {
                 // Пользователь пишет обычный текст — без разметки.
                 ChatPlainText(message.text)
                 // Прикреплённые файлы: миниатюры изображений, файлы чипами.
-                MessageAttachments(message.attachments)
+
             } else {
                 // Ответ агента рендерим как markdown: заголовки, списки,
                 // блоки кода с подсветкой синтаксиса и кнопкой копирования.
                 ChatMarkdown(message.text)
             }
-            if (message.sources.isNotEmpty()) {
+            if (isUser && fragment.last) MessageAttachments(message.attachments)
+            if (fragment.last && message.sources.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(Modifier.height(6.dp))
