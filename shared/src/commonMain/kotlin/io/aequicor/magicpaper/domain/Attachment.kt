@@ -100,6 +100,9 @@ interface FilePicker {
 
     /** Пустой список — пользователь отменил выбор. */
     suspend fun pickFiles(): List<PickedFile>
+
+    /** Снимок вложений буфера; null оставляет стандартную вставку текста. */
+    fun clipboardFiles(): (suspend () -> List<PickedFile>)? = null
 }
 
 /** Максимум вложений на одно сообщение. */

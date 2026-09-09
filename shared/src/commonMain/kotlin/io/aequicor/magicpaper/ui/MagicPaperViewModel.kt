@@ -532,6 +532,30 @@ class MagicPaperViewModel(
         }
     }
 
+    /** true поглощает Paste только если буфер содержит вложения. */
+    fun pasteAttachments(alreadyAttached: Int, onResult: (List<Attachment>) -> Unit): Boolean {
+        val read = filePicker?.clipboardFiles() ?: return false
+        val room = (MAX_ATTACHMENTS_PER_MESSAGE - alreadyAttached).coerceAtLeast(0)
+        if (room == 0) {
+            _state.update { it.copy(notice = "Не больше $MAX_ATTACHMENTS_PER_MESSAGE вложений на сообщение.") }
+            return true
+        }
+        scope.launch {
+            try {
+                val picked = read()
+                onResult(picked.take(room).map { Attachment.fromBytes(it.name, it.mimeType, it.bytes) })
+                if (picked.size > room) {
+                    _state.update { it.copy(notice = "Не больше $MAX_ATTACHMENTS_PER_MESSAGE вложений на сообщение.") }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(notice = e.message ?: "Не удалось вставить вложение из буфера обмена.") }
+            }
+        }
+        return true
+    }
+
     fun dismissNotice() = _state.update { it.copy(notice = null) }
 
     // ---- Чат --------------------------------------------------------------

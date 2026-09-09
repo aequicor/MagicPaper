@@ -45,9 +45,11 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.Attachment
+import io.aequicor.magicpaper.domain.MAX_ATTACHMENTS_PER_MESSAGE
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
@@ -87,6 +89,7 @@ fun ChatScreen(vm: MagicPaperViewModel, state: UiState) {
             onSend = { text, attachments -> vm.send(text, attachments) },
             onOpenSwitcher = { vm.toggleModelSwitcher(true) },
             onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
+            onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
         )
     }
 }
@@ -275,6 +278,7 @@ private fun Composer(
     onSend: (String, List<Attachment>) -> Unit,
     onOpenSwitcher: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
+    onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
 ) {
     // Черновик переживает поворот экрана и потерю фокуса окна.
     var text by rememberSaveable { mutableStateOf("") }
@@ -318,7 +322,12 @@ private fun Composer(
                 modifier = Modifier
                     .weight(1f)
                     .onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown && event.isMetaPressed && event.key == Key.Enter) {
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.V &&
+                            (event.isCtrlPressed || event.isMetaPressed)) {
+                            onPasteAttachments(attachments.size) {
+                                attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
+                            }
+                        } else if (event.type == KeyEventType.KeyDown && event.isMetaPressed && event.key == Key.Enter) {
                             submit()
                             true
                         } else {

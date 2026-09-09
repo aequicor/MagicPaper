@@ -110,6 +110,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
@@ -133,6 +134,7 @@ import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.domain.eventWaitLabel
 import io.aequicor.magicpaper.domain.Attachment
+import io.aequicor.magicpaper.domain.MAX_ATTACHMENTS_PER_MESSAGE
 import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingApproval
@@ -349,6 +351,7 @@ private fun SessionArea(
                 },
                 onSkills = onSkills,
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
+                onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
                 onPlanning = if (service != null && sessionInfo.stageId == null) {
                     { scope.launch { service.configure(sessionInfo, planning = true) } }
                 } else null,
@@ -874,6 +877,7 @@ internal fun CodingChat(
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
+    onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
     modelChip: (@Composable () -> Unit)? = null,
     planningService: PlanningChatService? = null,
     planningQuestionsSession: CodingSessionUi = session,
@@ -1031,6 +1035,7 @@ internal fun CodingChat(
                     onAbort = onAbort,
                     onSkills = onSkills,
                     onPickAttachments = onPickAttachments,
+                    onPasteAttachments = onPasteAttachments,
                 )
             }
         }
@@ -1503,6 +1508,7 @@ internal fun CodingComposer(
     onSend: (String, List<Attachment>) -> Unit,
     onAbort: () -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
+    onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
     onResume: ((String, List<Attachment>) -> Unit)? = null,
 ) {
     var text by state.text
@@ -1611,7 +1617,12 @@ internal fun CodingComposer(
                         .weight(1f)
                         .padding(horizontal = 4.dp, vertical = 4.dp)
                         .onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.isMetaPressed && event.key == Key.Enter) {
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.V &&
+                                (event.isCtrlPressed || event.isMetaPressed)) {
+                                onPasteAttachments(attachments.size) {
+                                    attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
+                                }
+                            } else if (event.type == KeyEventType.KeyDown && event.isMetaPressed && event.key == Key.Enter) {
                                 submit()
                                 true
                             } else {
