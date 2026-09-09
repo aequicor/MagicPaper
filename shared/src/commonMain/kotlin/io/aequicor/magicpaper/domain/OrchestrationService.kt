@@ -53,7 +53,7 @@ class OrchestrationService(
         coordinators.entries.groupBy { it.value.sessionId }.forEach { (sessionId, turns) ->
             val request = requests[sessionId] ?: CodingDraft()
             combined[sessionId] = request.copy(active = true, steps = request.steps + turns.flatMap { (id, activity) ->
-                activity.steps.map { it.copy(callId = "$id:${it.callId}", id = "$id:${it.id}") }
+                activity.steps.map { if (it.toolCategory != null) it else it.copy(callId = "$id:${it.callId}", id = "$id:${it.id}") }
             })
         }
         combined
@@ -1170,11 +1170,15 @@ class OrchestrationService(
             pendingRecalculationNodeId = nodeId ?: if (it.requestId == requestId) it.pendingRecalculationNodeId else null,
             dialogue = if (it.dialogue.any { m -> m.id == requestId }) it.dialogue else it.dialogue + PlanningMessage(requestId, "user", text)) }
         val sessionId = pending.parentSessionId
+        val nestedActivityId = currentCoroutineContext()[ToolSession]?.takeIf {
+            it.context.role == ToolRole.ORCHESTRATOR && it.context.ownerSessionId == sessionId
+        }?.let { "planner:$requestId" }
         val activity = MutableStateFlow(_drafts.value[sessionId]?.takeIf { it.timelineId == "$requestId-reply" }
             ?.steps.orEmpty().map { it.copy(running = false) })
         fun event(rawStep: CodingStep) {
             activity.update { it.withPlanningActivity(rawStep.inPlanningCall("$requestId:refine")) }
-            _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
+            if (nestedActivityId == null) _drafts.update { it + (sessionId to CodingDraft(steps = activity.value, active = true, timelineId = "$requestId-reply")) }
+            else coordinatorActivity.update { it + (nestedActivityId to CoordinatorActivity(id, sessionId, activity.value)) }
         }
         try {
             val roster = profiles.load()
@@ -1226,7 +1230,11 @@ class OrchestrationService(
             append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, message, failed = true, createdAt = Id.now(), steps = activity.value.map { it.copy(running = false) } + CodingStep(CodingStepKind.ERROR, message)))
             store.update(id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null) }
             throw IllegalStateException(message, e)
-        } finally { _drafts.update { it - sessionId }; changed() }
+        } finally {
+            if (nestedActivityId == null) _drafts.update { it - sessionId }
+            else coordinatorActivity.update { it - nestedActivityId }
+            changed()
+        }
     }
     fun chooseOption(id: String, revision: Long, choiceId: String, optionId: String) = launch {
         if (id in deletedPlans) return@launch

@@ -216,6 +216,7 @@ class OrchestrationToolsTest {
         f.store.update("plan") { it.copy(confirmedRevision = null,
             milestones = it.milestones.map { stage -> stage.copy(attempts = emptyList()) }) }
         val roles = mutableListOf<ToolRole>()
+        val proposalGate = CompletableDeferred<Unit>()
         f.planningRun = { tools ->
             roles += tools.context.role
             if (tools.context.role == ToolRole.ORCHESTRATOR) {
@@ -223,6 +224,8 @@ class OrchestrationToolsTest {
                 tools.call("refine", "plan.refine", f.args("""{"message":"Create a plan","requiresConfirmation":true}"""))
                 "План подготовлен"
             } else {
+                tools.call("read-context", "context.get", JsonObject(emptyMap()))
+                proposalGate.await()
                 tools.call("proposal", "plan.propose", f.args("""{"reply":"Предлагаю выполнить этап","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["node"]},{"id":"node","title":"Stage","kind":"STAGE","stageId":"stage"}],"milestones":[{"id":"stage","title":"Stage","description":"Implement the change","acceptance":"Tests pass"}]}"""))
                 "Предложение готово"
             }
@@ -231,6 +234,11 @@ class OrchestrationToolsTest {
         f.service.send(f.parent, "Составь план изменения")
         runCurrent()
         assertEquals(listOf(ToolRole.ORCHESTRATOR, ToolRole.PLANNER), roles)
+        val liveSteps = f.service.drafts.value["parent"]!!.steps
+        assertTrue(liveSteps.any { it.tool == "plan.refine" && it.running }, "Nested planning must retain the parent command card")
+        assertEquals(2, liveSteps.count { it.tool == "context.get" })
+        val liveCalls = liveSteps.filter { it.toolCategory != null }.map { it.callId }
+        proposalGate.complete(Unit); runCurrent()
         val saved = f.store.planFor("plan")!!
         assertNull(saved.confirmedRevision)
         assertEquals(ExecutionIntent.STOP, saved.intent)
@@ -239,6 +247,9 @@ class OrchestrationToolsTest {
         val history = f.projects.messages("p", "parent")
         assertTrue(history.any { it.text.contains("План подготовлен") }, history.toString())
         assertTrue(history.flatMap { it.steps }.any { it.tool == "plan.refine" && !it.running && it.ok })
+        val savedCalls = history.flatMap { it.steps }.filter { it.toolCategory != null }.map { it.callId }
+        assertTrue(savedCalls.containsAll(liveCalls), "Saving nested planning must preserve tool identities")
+        assertEquals(savedCalls.distinct(), savedCalls)
         f.workerRun = { tools ->
             if (tools.context.role == ToolRole.CHAT) {
                 assertNotNull(tools.context.planId, "Internal verification retains the plan context")

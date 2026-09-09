@@ -1,9 +1,30 @@
 package io.aequicor.magicpaper.ui.components
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.domain.tools.ToolCategory
 import kotlin.test.*
 
 class CodingChatRowsTest {
+    @Test fun nestedToolCardsKeepKeysAndDoNotDuplicateWhileTheParentIsStillRunning() {
+        fun tool(id: String) = CodingStep(CodingStepKind.TOOL, id, tool = "context.get", callId = "p/s/request/$id",
+            running = true, id = id, toolCategory = ToolCategory.READ)
+        val parent = tool("parent")
+        val child = tool("child")
+        val draft = CodingDraft(steps = listOf(parent, child), active = true, timelineId = "parent-response")
+        val live = codingHistoryItems(listOf(codingDraftRow(draft, emptyList(), "fallback", true, true)!!))
+        val savedChild = CodingMessage("child-response", CodingRole.AGENT, "", createdAt = 0, steps = listOf(child.copy(running = false)))
+        val remaining = codingDraftRow(draft, listOf(savedChild), "fallback", true, true)!!
+        val combined = codingHistoryItems(codingChatRows(listOf(savedChild)) + remaining)
+        assertEquals(live.map { it.key }.toSet(), combined.map { it.key }.toSet())
+        assertEquals(2, combined.size)
+        assertEquals(parent, remaining.message.steps.single())
+        val savedParent = savedChild.copy(id = "parent-response", steps = listOf(parent.copy(running = false)))
+        assertNull(codingDraftRow(draft, listOf(savedParent, savedChild), "fallback", true, true))
+        val next = tool("next-coordinator")
+        assertEquals(next, codingDraftRow(draft.copy(steps = draft.steps + next), listOf(savedParent, savedChild),
+            "fallback", true, true)!!.message.steps.single())
+    }
+
     @Test fun summariesStayOutOfChatEvenWhenSystemStepsAreVisible() {
         val message = CodingMessage("m", CodingRole.AGENT, "", createdAt = 0, steps = listOf(
             CodingStep(CodingStepKind.SUMMARY, "Running final verification")))
