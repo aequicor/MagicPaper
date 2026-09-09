@@ -260,7 +260,7 @@ public fun PaperApprovalDock(modifier: Modifier = Modifier, content: @Composable
 
 @Composable
 public fun PaperQuestionnaire(modifier: Modifier = Modifier, content: @Composable () -> Unit) =
-    PaperPanel(modifier, PaperSurfaceKind.PANEL, content)
+    PaperWorkspaceComposer(modifier) { content() }
 
 /** Reusable host for interactive canvas/tree views; feature modules own graph data and gestures. */
 @Composable

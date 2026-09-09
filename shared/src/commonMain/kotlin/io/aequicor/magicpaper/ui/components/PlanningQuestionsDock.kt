@@ -19,7 +19,7 @@ import io.aequicor.magicpaper.designsystem.PaperAction
 import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperChoice
-import io.aequicor.magicpaper.designsystem.PaperComposerField
+import io.aequicor.magicpaper.designsystem.PaperPromptField
 import io.aequicor.magicpaper.designsystem.PaperQuestionnaire
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
@@ -113,9 +113,9 @@ private fun Questionnaire(
                                         advance = question.kind != QuestionKind.MULTIPLE && answer.text.isBlank())
                                 })
                         }
-                        if (question.allowCustomInput) PaperComposerField(answer.text, { change(answer.copy(text = it, skipped = false)) },
-                            label = { PaperText("Свой вариант", role = PaperTextRole.LABEL) }, enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().testTag("questionnaire.custom"), minLines = 1, maxLines = 4,
+                        if (question.allowCustomInput) PaperPromptField(answer.text, { change(answer.copy(text = it, skipped = false)) },
+                            placeholder = "Свой вариант", enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().testTag("questionnaire.custom"), maxLines = 4,
                             visualTransformation = if (question.secret) PasswordVisualTransformation() else VisualTransformation.None)
                     }
                     if (error != null) PaperText(error, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL)

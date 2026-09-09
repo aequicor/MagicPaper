@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.questionnaire
 
+import io.aequicor.magicpaper.data.tools.respondJson
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.aequicor.magicpaper.domain.*
@@ -81,10 +82,10 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
             reply(exchange, 202); return
         }
         if (id !is JsonPrimitive || id == JsonNull) { reply(exchange, 400); return }
-        val result = runBlocking {
+        respondJson(exchange, heartbeat = method == "tools/call") {
             val response = CompletableDeferred<JsonObject>()
             val previous = results.putIfAbsent(id, response)
-            if (previous != null) return@runBlocking previous.await()
+            if (previous != null) return@respondJson previous.await()
             jobs[id] = currentCoroutineContext()[Job]!!
             val value = try {
                 check(!closed.get()) { "Запрос завершён" }
@@ -116,7 +117,6 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
             response.complete(value)
             value
         }
-        reply(exchange, 200, result)
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

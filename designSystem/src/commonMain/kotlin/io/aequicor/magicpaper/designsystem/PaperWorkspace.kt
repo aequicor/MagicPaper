@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -88,14 +89,15 @@ public fun PaperWorkspaceComposer(modifier: Modifier = Modifier, content: @Compo
 /** The shared interaction source lets the outer writing surface indicate focus without a nested outline. */
 @Composable
 public fun PaperPromptField(value: String, onValueChange: (String) -> Unit, placeholder: String,
-    modifier: Modifier = Modifier, maxLines: Int = 6) {
+    modifier: Modifier = Modifier, maxLines: Int = 6, enabled: Boolean = true,
+    visualTransformation: VisualTransformation = VisualTransformation.None) {
     val source = LocalComposerInteraction.current ?: remember { MutableInteractionSource() }
     BasicTextField(value, onValueChange, modifier.fillMaxWidth().semantics { contentDescription = placeholder }
-        .paperFeedback(source, RoundedCornerShape(6.dp), true, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
+        .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
         .padding(horizontal = 8.dp, vertical = 8.dp),
         textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text),
         cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = maxLines,
-        interactionSource = source,
+        interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
         decorationBox = { inner -> Box {
             if (value.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
             inner()

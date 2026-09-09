@@ -52,10 +52,10 @@ internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
         if (id !is JsonPrimitive || id == JsonNull) { reply(exchange, 400); return }
         val previousRequest = requestBodies.putIfAbsent(id, request)
         if (previousRequest != null && previousRequest != request) { reply(exchange, 400); return }
-        val result = runBlocking {
+        respondJson(exchange, heartbeat = method == "tools/call") {
             val response = CompletableDeferred<JsonObject>()
             val previous = results.putIfAbsent(id, response)
-            if (previous != null) return@runBlocking previous.await()
+            if (previous != null) return@respondJson previous.await()
             jobs[id] = currentCoroutineContext()[Job]!!
             val value = try {
                 check(!closed.get()) { "Запрос завершён" }
@@ -94,7 +94,6 @@ internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
             response.complete(value)
             value
         }
-        reply(exchange, 200, result)
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
@@ -17,6 +20,29 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class PaperComposerEffectsTest {
+    @Test fun questionnairePromptPreservesSecretAndDisabledSemantics() {
+        for (enabled in listOf(true, false)) {
+            var edits = 0
+            ImageComposeScene(300, 180) {
+                PaperTheme {
+                    PaperQuestionnaire {
+                        PaperPromptField("secret", { edits++ }, "Ответ", enabled = enabled,
+                            visualTransformation = PasswordVisualTransformation())
+                    }
+                }
+            }.use { scene ->
+                repeat(5) { scene.render(it * 16_000_000L).close() }
+                fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                val field = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    .first { it.config.getOrNull(SemanticsProperties.EditableText) != null }
+                assertNotNull(field.config.getOrNull(SemanticsProperties.Password))
+                assertEquals(!enabled, field.config.getOrNull(SemanticsProperties.Disabled) != null)
+                field.config.getOrNull(SemanticsActions.SetText)?.action?.invoke(AnnotatedString("updated"))
+                assertEquals(if (enabled) 1 else 0, edits)
+            }
+        }
+    }
+
     @Test fun repeatedTextFieldPressesDoNotFlashTheSurface() {
         for (composer in listOf(false, true)) {
             ImageComposeScene(300, 180) {
