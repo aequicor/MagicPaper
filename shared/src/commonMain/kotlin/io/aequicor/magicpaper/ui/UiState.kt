@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.domain.UserInteractionRequest
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.ExecutionPhase
 import io.aequicor.magicpaper.domain.interruptedCodingRequest
+import io.aequicor.magicpaper.domain.hasSuccessfulResponse
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingDraft
@@ -57,7 +58,8 @@ data class CodingSessionUi(
                     current.phase == ExecutionPhase.WAITING
             }
             if (session.planningMode || session.stageId != null) return false
-            return session.pendingRun != null || messages.interruptedCodingRequest() != null
+            return session.pendingRun?.let { !it.hasSuccessfulResponse(messages) }
+                ?: (messages.interruptedCodingRequest() != null)
         }
 
     /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */

@@ -502,7 +502,9 @@ internal fun ProjectsPanel(
         val groups = buildList {
             var index = projectIndex + 1
             if (!projectCollapsed) ownSessions.filter { it.session.parentSessionId !in sessionIds }.forEach { parent ->
+                // Read the orchestrator's work in creation order, from top to bottom.
                 val children = ownSessions.filter { it.session.parentSessionId == parent.session.id }
+                    .sortedBy { it.session.createdAt }
                 val expanded = collapsed[parent.session.id] != true
                 val start = index++
                 if (expanded) index += children.size
@@ -1138,7 +1140,9 @@ private fun CodingMessageBubble(
         return
     }
     val isUser = message.role == CodingRole.USER
-    val bubbleColor = if (isUser) {
+    val bubbleColor = if (message.systemNotice) {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    } else if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
@@ -1164,6 +1168,8 @@ private fun CodingMessageBubble(
                 .background(bubbleColor)
                 .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
         ) {
+            if (first && message.systemNotice) Text("Системное сообщение", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (first) header?.invoke()
             if (isUser) {
                 ChatPlainText(message.text)
@@ -1441,13 +1447,13 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
     val hasThinking = remember(fragments) { fragments.any { it.isNotBlank() } }
     val isWorking = draft.active && !waitingForUser && draft.failedMessage == null &&
         (progress != null || tool != null || !draft.awaitingModel)
-    var dots by remember { mutableStateOf(3) }
+    var dots by remember { mutableStateOf(1) }
     LaunchedEffect(isWorking) {
-        dots = 3
+        dots = 1
         if (isWorking) {
             while (true) {
                 delay(500)
-                dots = if (dots == 1) 3 else dots - 1
+                dots = dots % 3 + 1
             }
         }
     }
@@ -1474,9 +1480,6 @@ internal fun AgentMessageStatus(draft: CodingDraft, expanded: Boolean, waitingFo
                 size = 6,
             )
             Spacer(Modifier.width(6.dp))
-            Text("Сейчас:", style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.width(4.dp))
             Text(label, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
