@@ -1,28 +1,29 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
+import io.aequicor.magicpaper.designsystem.LocalPaperColors
+import io.aequicor.magicpaper.designsystem.PaperAction
+import io.aequicor.magicpaper.designsystem.PaperDialog
+import io.aequicor.magicpaper.designsystem.PaperDivider
+import io.aequicor.magicpaper.designsystem.PaperField
+import io.aequicor.magicpaper.designsystem.PaperMenuHost
+import io.aequicor.magicpaper.designsystem.PaperRichMenuAction
+import io.aequicor.magicpaper.designsystem.PaperStatusPanel
+import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextRole
 
 @Composable
 internal fun OrchestrationStatus(
@@ -70,25 +71,18 @@ internal fun OrchestrationStatus(
         plan.scheduledMessages.any { it.status == ScheduledMessageStatus.WAITING } || plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> "Ожидание события или времени"
         else -> "Ожидание следующего этапа"
     }
-    val elevation by animateDpAsState(if (scrolled) 6.dp else 0.dp)
-    Surface(modifier.fillMaxWidth().padding(horizontal = 8.dp).drawWithContent {
-        // Keep the scrolling shadow below the navigation bar.
-        val shadowInset = elevation.toPx() * 3
-        clipRect(left = -shadowInset, top = 0f, right = size.width + shadowInset, bottom = size.height + shadowInset) {
-            this@drawWithContent.drawContent()
-        }
-    }.semantics { contentDescription = "Состояние оркестратора" },
-        shape = MaterialTheme.shapes.medium.copy(topStart = CornerSize(0.dp), topEnd = CornerSize(0.dp)),
-        color = MaterialTheme.colorScheme.surfaceContainerLow, shadowElevation = elevation) {
+    PaperStatusPanel(modifier.fillMaxWidth().padding(horizontal = 8.dp).semantics {
+        contentDescription = "Состояние оркестратора"
+    }, scrolled = scrolled) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("${session.session.subtitle()} · ${session.session.name}",
-                style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            PaperText("${session.session.subtitle()} · ${session.session.name}", role = PaperTextRole.TITLE,
+                fontWeight = FontWeight.SemiBold)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(phase, style = MaterialTheme.typography.bodyMedium)
+                    PaperText(phase)
                     plan?.finalAttempt?.acceptanceRecord?.let { record ->
-                        Text(when (record.status) {
+                        PaperText(when (record.status) {
                             AcceptanceStatus.ACCEPTED -> "Обязательные критерии приняты"
                             AcceptanceStatus.ACCEPTED_WITH_SKIPS -> "Завершено с пропуском проверок по вашему решению"
                             AcceptanceStatus.PARTIAL -> "Приёмка частичная: часть проверок не выполнена"
@@ -96,23 +90,22 @@ internal fun OrchestrationStatus(
                             AcceptanceStatus.FAILED -> "Приёмка не пройдена"
                             AcceptanceStatus.STALE -> "Результаты проверки устарели"
                             AcceptanceStatus.UNKNOWN -> "Приёмка не подтверждена"
-                        }, style = MaterialTheme.typography.bodySmall)
+                        }, role = PaperTextRole.LABEL)
                     }
-                    if (session.interactions.isNotEmpty()) Text("Обращений: ${session.interactions.size}", style = MaterialTheme.typography.bodySmall)
-                    if (stages.isNotEmpty()) Text("Текущий запуск: $done/${stages.size} этапов", style = MaterialTheme.typography.labelMedium)
-                    questions.take(2).forEach { q -> Text("Ответ для: ${q.scopeLabel}", color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodySmall) }
-                    if (questions.size > 2) Text("Ещё ожидают ответа: ${questions.size - 2}", style = MaterialTheme.typography.bodySmall)
-                    if (active.isNotEmpty()) Text("Сейчас: ${active.take(2).joinToString { it.stageLabel() }}" +
-                        if (active.size > 2) " и ещё ${active.size - 2}" else "", style = MaterialTheme.typography.bodySmall)
-                    if (blockers.isNotEmpty()) Text(blockers.joinToString("\n") { it.title },
-                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (session.interactions.isNotEmpty()) PaperText("Обращений: ${session.interactions.size}", role = PaperTextRole.LABEL)
+                    if (stages.isNotEmpty()) PaperText("Текущий запуск: $done/${stages.size} этапов", role = PaperTextRole.LABEL)
+                    questions.take(2).forEach { q -> PaperText("Ответ для: ${q.scopeLabel}", color = LocalPaperColors.current.action,
+                        role = PaperTextRole.LABEL) }
+                    if (questions.size > 2) PaperText("Ещё ожидают ответа: ${questions.size - 2}", role = PaperTextRole.LABEL)
+                    if (active.isNotEmpty()) PaperText("Сейчас: ${active.take(2).joinToString { it.stageLabel() }}" +
+                        if (active.size > 2) " и ещё ${active.size - 2}" else "", role = PaperTextRole.LABEL)
+                    if (blockers.isNotEmpty()) PaperText(blockers.joinToString("\n") { it.title },
+                        color = LocalPaperColors.current.error, role = PaperTextRole.LABEL)
                 }
-                Text(if (expanded) "Свернуть ▴" else "Подробнее ▾",
-                    modifier = Modifier.clip(MaterialTheme.shapes.small)
-                        .clickable(role = Role.Button) { expanded = !expanded }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                PaperAction({ expanded = !expanded }) {
+                    PaperText(if (expanded) "Свернуть ▴" else "Подробнее ▾", role = PaperTextRole.LABEL,
+                        color = LocalPaperColors.current.action)
+                }
             }
             if (plan?.proposal != null) PlanningProposalCard(plan, questions.isNotEmpty()) { proposalId ->
                 openQuestionnaire(InteractionKind.CONFIRM_PLAN, plan.id)
@@ -120,45 +113,51 @@ internal fun OrchestrationStatus(
             if (expanded) Column(Modifier.heightIn(max = 270.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SessionActions(session.session, service, onOpenSession, allowArchive = false)
-                questions.forEach { q -> Text("Ожидается ответ: ${q.scopeLabel}", style = MaterialTheme.typography.bodySmall) }
+                questions.forEach { q -> PaperText("Ожидается ответ: ${q.scopeLabel}", role = PaperTextRole.LABEL) }
                 state?.inputs?.filter { it.status in listOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING,
                     OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED) }?.forEach { input ->
-                    Text("${input.status.inputLabel()}: ${input.text}", style = MaterialTheme.typography.bodySmall)
+                    PaperText("${input.status.inputLabel()}: ${input.text}", role = PaperTextRole.LABEL)
                     if (input.status == OrchestrationInputStatus.QUEUED && input.scheduledRuleId == null) {
-                        TextButton({ service.cancelQueuedInput(session.session.id, input.id) }) { Text("Отменить отправку") }
+                        PaperAction({ service.cancelQueuedInput(session.session.id, input.id) }) {
+                            PaperText("Отменить отправку", role = PaperTextRole.LABEL)
+                        }
                     }
                     if (input.status in listOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED)) {
-                        if (input.error.isNotBlank()) Text(input.error, color = MaterialTheme.colorScheme.error)
-                        TextButton({ openQuestionnaire(InteractionKind.RECOVER_INPUT, input.id) }) { Text("Повторить обработку") }
+                        if (input.error.isNotBlank()) PaperText(input.error, color = LocalPaperColors.current.error)
+                        PaperAction({ openQuestionnaire(InteractionKind.RECOVER_INPUT, input.id) }) {
+                            PaperText("Повторить обработку", role = PaperTextRole.LABEL)
+                        }
                     }
                 }
                 if (plan != null) ScheduledMessages(plan,
                     onCancel = { service.cancelScheduledMessage(plan.id, it) },
                     onEdit = { id, request -> service.send(session.session, "Измени правило $id: $request") })
-                Text("Сессии", style = MaterialTheme.typography.labelLarge)
+                PaperText("Сессии", role = PaperTextRole.TITLE)
                 children.filter { !it.archived }.forEach { child ->
                     val childPlan = plans.firstOrNull { it.id == child.planId }
                     val stage = childPlan?.milestones?.firstOrNull { it.id == child.stageId }
                     SessionActions(child, service, onOpenSession, allowArchive = stage?.completed == true)
-                    Text(when {
+                    PaperText(when {
                         questions.any { child.id == it.sourceSessionId || child.stageId in it.stageIds } -> "Ждёт вашего ответа"
                         stage?.id in pausedStages || stage?.waitingForAnswer() == true -> "Ждёт вашего ответа"
                         stage?.attempts?.lastOrNull()?.waitingForEvent != null -> childPlan.eventWaitLabel(stage.id)
                         stage?.completed == true -> "Завершено"
                         stage != null && childPlan.isStageWorking(stage) -> "Работает"
                         else -> "Ожидает задания"
-                    }, style = MaterialTheme.typography.labelSmall)
+                    }, role = PaperTextRole.LABEL)
                 }
                 if (children.any { it.archived }) {
-                    TextButton({ archive = !archive }) { Text("Архив сессий (${children.count { it.archived }}) ${if (archive) "▴" else "▾"}") }
+                    PaperAction({ archive = !archive }) {
+                        PaperText("Архив сессий (${children.count { it.archived }}) ${if (archive) "▴" else "▾"}", role = PaperTextRole.LABEL)
+                    }
                     if (archive) children.filter { it.archived }.forEach { SessionActions(it, service, onOpenSession) }
                 }
                 plan?.deliveries?.takeLast(5)?.forEach { delivery ->
                     val target = children.firstOrNull { it.stageId == delivery.targetStageId && it.planId == plan.id }
-                    Text("${delivery.state.deliveryLabel()} → ${target?.name ?: plan.milestones.firstOrNull { it.id == delivery.targetStageId }?.title.orEmpty()}",
-                        style = MaterialTheme.typography.bodySmall)
+                    PaperText("${delivery.state.deliveryLabel()} → ${target?.name ?: plan.milestones.firstOrNull { it.id == delivery.targetStageId }?.title.orEmpty()}",
+                        role = PaperTextRole.LABEL)
                 }
-                Text("Следующий шаг: " + when {
+                PaperText("Следующий шаг: " + when {
                     failedInput != null -> "повторить обработку сообщения"
                     questions.isNotEmpty() -> "ответить в карточке уточнения под диалогом"
                     plan?.proposalReadyForConfirmation == true -> "проверить и подтвердить предложение доработки"
@@ -166,13 +165,15 @@ internal fun OrchestrationStatus(
                     plan?.phase == ExecutionPhase.COMPLETE -> "обсудить результат или описать доработку"
                     plan?.confirmedRevision == null -> "уточнить и подтвердить план"
                     else -> "дождаться результатов исполнителей"
-                }, style = MaterialTheme.typography.bodySmall)
+                }, role = PaperTextRole.LABEL)
                 if (plan != null && plan.phase != ExecutionPhase.COMPLETE && plan.confirmedRevision != null) {
                     Row {
-                        TextButton({ if (plan.intent != ExecutionIntent.RUN && plan.blockingIssues(session.messages).isNotEmpty()) openQuestionnaire(InteractionKind.RECOVER_PLAN, plan.id) else service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) {
-                            Text(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить")
+                        PaperAction({ if (plan.intent != ExecutionIntent.RUN && plan.blockingIssues(session.messages).isNotEmpty()) openQuestionnaire(InteractionKind.RECOVER_PLAN, plan.id) else service.control(plan.id, if (plan.intent == ExecutionIntent.RUN) "pause" else "resume") }) {
+                            PaperText(if (plan.intent == ExecutionIntent.RUN) "Пауза" else "Продолжить", role = PaperTextRole.LABEL)
                         }
-                        TextButton({ service.control(plan.id, "stop") }) { Text("Остановить") }
+                        PaperAction({ service.control(plan.id, "stop") }) {
+                            PaperText("Остановить", role = PaperTextRole.LABEL)
+                        }
                     }
                 }
             }
@@ -183,9 +184,9 @@ internal fun OrchestrationStatus(
 @Composable
 internal fun OrchestrationInputFailure(input: OrchestrationInput, onRetry: () -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(planningFailureMessage(input.error.ifBlank { "Не удалось обработать сообщение." }),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        TextButton(onRetry) { Text("Повторить обработку") }
+        PaperText(planningFailureMessage(input.error.ifBlank { "Не удалось обработать сообщение." }),
+            role = PaperTextRole.LABEL, color = LocalPaperColors.current.error)
+        PaperAction(onRetry) { PaperText("Повторить обработку", role = PaperTextRole.LABEL) }
     }
 }
 
@@ -197,29 +198,22 @@ private fun SessionActions(session: CodingSession, service: OrchestrationService
     var rename by remember { mutableStateOf(false) }
     var name by remember(session.name) { mutableStateOf(session.name) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        TextButton({ onOpen(session.id) }, Modifier.weight(1f)) {
-            Column { Text(session.name); Text(session.subtitle(), style = MaterialTheme.typography.labelSmall) }
+        PaperAction({ onOpen(session.id) }, Modifier.weight(1f)) {
+            Column { PaperText(session.name); PaperText(session.subtitle(), role = PaperTextRole.LABEL) }
         }
         Box {
-            TextButton({ menu = true }) { Text("⋯") }
-            DropdownMenu(menu, { menu = false }) {
-                DropdownMenuItem(text = { Text("Переименовать") }, onClick = { menu = false; rename = true })
-                if (session.archived) DropdownMenuItem(text = { Text("Восстановить") }, onClick = { menu = false; service.restoreSession(session.id) })
-                else if (allowArchive) DropdownMenuItem(text = { Text("В архив") }, onClick = { menu = false; service.archiveSession(session.id) })
+            PaperAction({ menu = true }) { PaperText("⋯", role = PaperTextRole.LABEL) }
+            PaperMenuHost(menu, { menu = false }) {
+                PaperRichMenuAction(text = { PaperText("Переименовать") }, onClick = { menu = false; rename = true })
+                if (session.archived) PaperRichMenuAction(text = { PaperText("Восстановить") }, onClick = { menu = false; service.restoreSession(session.id) })
+                else if (allowArchive) PaperRichMenuAction(text = { PaperText("В архив") }, onClick = { menu = false; service.archiveSession(session.id) })
             }
         }
     }
-    if (rename) Dialog(onDismissRequest = { rename = false }) {
-        Surface(shape = MaterialTheme.shapes.large) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Название сессии", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(name, { name = it }, singleLine = true)
-                Row {
-                    TextButton({ rename = false }) { Text("Отмена") }
-                    Button({ service.renameSession(session.id, name); rename = false }, enabled = name.isNotBlank()) { Text("Сохранить") }
-                }
-            }
-        }
+    if (rename) PaperDialog("Название сессии", { rename = false }, confirmLabel = "Сохранить",
+        onConfirm = { service.renameSession(session.id, name); rename = false }, confirmEnabled = name.isNotBlank(),
+        dismissLabel = "Отмена") {
+        PaperField(name, { name = it }, label = "Название сессии")
     }
 }
 
@@ -233,36 +227,45 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
             if (maxWidth < 480.dp * LocalDensity.current.fontScale) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     AddressLink(route.source, "От", onOpen, Modifier.fillMaxWidth())
-                    Text("↓", Modifier.padding(start = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PaperText("↓", Modifier.padding(start = 8.dp), role = PaperTextRole.LABEL,
+                        color = LocalPaperColors.current.secondaryText)
                     AddressLink(route.target, "Кому", onOpen, Modifier.fillMaxWidth())
                 }
             } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AddressLink(route.source, "От", onOpen, Modifier.weight(1f))
-                Text("→", Modifier.padding(top = 30.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                PaperText("→", Modifier.padding(top = 30.dp), role = PaperTextRole.LABEL,
+                    color = LocalPaperColors.current.secondaryText)
                 AddressLink(route.target, "Кому", onOpen, Modifier.weight(1f))
             }
         }
         route.via?.takeIf { it.sessionId != route.source.sessionId }?.let {
-            Text("Через оркестратора: ${it.name}", style = MaterialTheme.typography.labelSmall)
+            PaperText("Через оркестратора: ${it.name}", role = PaperTextRole.LABEL)
         }
-        if (route.stageLabel.isNotBlank()) Text(route.stageLabel, style = MaterialTheme.typography.labelMedium)
-        Text(route.kind + (delivery?.let { " · ${it.state.deliveryLabel()}" } ?: ""), style = MaterialTheme.typography.labelSmall)
+        if (route.stageLabel.isNotBlank()) PaperText(route.stageLabel, role = PaperTextRole.LABEL)
+        PaperText(route.kind + (delivery?.let { " · ${it.state.deliveryLabel()}" } ?: ""), role = PaperTextRole.LABEL)
         message.handoff?.let { HandoffDetails(it) }
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        PaperDivider(Modifier.padding(vertical = 4.dp))
     }
 }
 
 @Composable private fun AddressLink(address: SessionAddress, label: String, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
-    val link = if (address.sessionId.isNotBlank()) Modifier.clip(MaterialTheme.shapes.small)
-        .clickable(role = Role.Button) { onOpen(address.sessionId) } else Modifier
-    Column(modifier.then(link).heightIn(min = 48.dp).padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(address.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
-            color = if (address.sessionId.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-        if (address.subtitle.isNotBlank()) Text(address.subtitle, style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (address.orchestratorName.isNotBlank()) Text(address.orchestratorName, style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val body: @Composable () -> Unit = {
+        Column(Modifier.heightIn(min = 48.dp).padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            PaperText(label, role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
+            PaperText(address.name, role = PaperTextRole.BODY, fontWeight = FontWeight.SemiBold,
+                color = if (address.sessionId.isNotBlank()) LocalPaperColors.current.action else LocalPaperColors.current.text)
+            if (address.subtitle.isNotBlank()) PaperText(address.subtitle, role = PaperTextRole.LABEL,
+                color = LocalPaperColors.current.secondaryText)
+            if (address.orchestratorName.isNotBlank()) PaperText(address.orchestratorName, role = PaperTextRole.LABEL,
+                color = LocalPaperColors.current.secondaryText)
+        }
+    }
+    if (address.sessionId.isNotBlank()) {
+        PaperAction(onClick = { onOpen(address.sessionId) }, modifier = modifier, contentPadding = PaddingValues(0.dp)) {
+            body()
+        }
+    } else {
+        Box(modifier) { body() }
     }
 }
 
@@ -273,10 +276,12 @@ internal fun OrchestrationMessageInputStatus(message: CodingMessage, sessionId: 
     val input = states?.get(sessionId)?.inputs?.firstOrNull { it.id == message.id }
     val status = input?.status ?: message.inputStatus
     Column {
-        Text(status.inputLabel(), style = MaterialTheme.typography.labelSmall)
+        PaperText(status.inputLabel(), role = PaperTextRole.LABEL)
         if (service != null && message.role == CodingRole.USER && status == OrchestrationInputStatus.QUEUED &&
             message.scheduledRuleId == null && input?.scheduledRuleId == null) {
-            TextButton({ service.cancelQueuedInput(sessionId, message.id) }) { Text("Отменить отправку") }
+            PaperAction({ service.cancelQueuedInput(sessionId, message.id) }) {
+                PaperText("Отменить отправку", role = PaperTextRole.LABEL)
+            }
         }
     }
 }

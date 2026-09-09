@@ -3,16 +3,12 @@ package io.aequicor.magicpaper.plugins.builtin
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import io.aequicor.magicpaper.ui.components.planningGraphProjection
 import io.aequicor.magicpaper.data.planning.PlanningStore
-import io.aequicor.magicpaper.ui.components.MagicFilterChip
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.plugins.CodingSessionPanel
@@ -21,6 +17,7 @@ import io.aequicor.magicpaper.ui.screens.CodingStepRow
 import io.aequicor.magicpaper.ui.components.DecisionGraph
 import io.aequicor.magicpaper.ui.components.FavoriteModelPicker
 import io.aequicor.magicpaper.ui.components.EffortControl
+import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -130,59 +127,58 @@ class CodingPlanningPlugin(
                 } finally { busy = false }
             }
         }
-        Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Планирование", style = MaterialTheme.typography.headlineMedium)
+        PaperWizard(modifier.fillMaxWidth()) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            PaperText("Планирование", role = PaperTextRole.HEADLINE)
             if (locked == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                projects.forEach { p -> MagicFilterChip(project?.id == p.id, { projectId = p.id }, enabled = !busy && !submitting, label = { Text(p.name) }) }
+                projects.forEach { p -> PaperChoice(project?.id == p.id, { projectId = p.id }, enabled = !busy && !submitting, label = p.name) }
             }
-            if (!loaded) { LinearProgressIndicator(Modifier.fillMaxWidth()); notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }; return@Column }
-            if (project == null) { Text("Сначала добавьте проект в разделе «Проекты и код»."); return@Column }
+            if (!loaded) { PaperProgress(Modifier.fillMaxWidth()); notice?.let { PaperText(it, color = LocalPaperColors.current.error) }; return@Column }
+            if (project == null) { PaperText("Сначала добавьте проект в разделе «Проекты и код»."); return@Column }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PlanningStep.entries.filter { it != PlanningStep.STATUS }.forEachIndexed { index, target ->
-                    MagicFilterChip(step == target, { navigate(target) }, enabled = !busy && !submitting && when (target) {
+                    PaperChoice(step == target, { navigate(target) }, enabled = !busy && !submitting && when (target) {
                         PlanningStep.GOAL -> !running
                         PlanningStep.CLARIFY -> plan != null && !running
                         PlanningStep.REVIEW -> plan?.milestones?.isNotEmpty() == true
                         PlanningStep.STATUS -> running
-                    }, label = { Text("${index + 1} · ${wizardLabel(target)}") })
+                    }, label = "${index + 1} · ${wizardLabel(target)}")
                 }
             }
-            Text("Шаг ${step.ordinal + 1} из 3 · ${wizardLabel(step)}", style = MaterialTheme.typography.titleLarge)
+            PaperText("Шаг ${step.ordinal + 1} из 3 · ${wizardLabel(step)}", role = PaperTextRole.TITLE)
             (notice ?: serviceError)?.let { error ->
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                PaperPanel(Modifier.fillMaxWidth(), kind = PaperSurfaceKind.ERROR) {
                     Column(Modifier.padding(16.dp)) {
-                        Text(error, color = MaterialTheme.colorScheme.onErrorContainer)
-                        if (plan != null && !running) TextButton(enabled = !busy && !submitting,
-                            onClick = { doRefine(plan.dialogue.lastOrNull { it.role == "user" }?.text ?: INITIAL_PLANNING_MESSAGE) }) { Text("Повторить запрос") }
+                        PaperText(error, color = LocalPaperColors.current.error)
+                        if (plan != null && !running) PaperButton("Повторить запрос", enabled = !busy && !submitting, kind = PaperButtonKind.QUIET,
+                            onClick = { doRefine(plan.dialogue.lastOrNull { it.role == "user" }?.text ?: INITIAL_PLANNING_MESSAGE) })
                     }
                 }
             }
             when (step) {
                 PlanningStep.GOAL -> {
-                    Text("Опишите результат и выберите, кто поможет составить план.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedTextField(goal, { goal = it }, label = { Text("Цель и ожидаемый результат") }, minLines = 4,
-                        enabled = !busy, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Что нужно сделать и как проверить результат?") })
-                    Card(Modifier.fillMaxWidth()) {
+                    PaperText("Опишите результат и выберите, кто поможет составить план.", color = LocalPaperColors.current.secondaryText)
+                    PaperComposerField(goal, { goal = it }, label = { PaperText("Цель и ожидаемый результат", role = PaperTextRole.LABEL) }, minLines = 4,
+                        enabled = !busy, modifier = Modifier.fillMaxWidth(), placeholder = { PaperText("Что нужно сделать и как проверить результат?", color = LocalPaperColors.current.secondaryText) })
+                    PaperPanel(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text("Модель для планирования", style = MaterialTheme.typography.titleMedium)
-                            OutlinedButton(onClick = { pickPlanner = true }, enabled = !busy && !submitting) {
-                                Text("${planner?.shortLabel ?: "Выбрать модель"} · ${planner?.effort?.shortLabel ?: "default"} ▾")
-                            }
-                            Text("Движок сессий", style = MaterialTheme.typography.titleMedium)
+                            PaperText("Модель для планирования", role = PaperTextRole.TITLE)
+                            PaperButton("${planner?.shortLabel ?: "Выбрать модель"} · ${planner?.effort?.shortLabel ?: "default"} ▾", onClick = { pickPlanner = true }, enabled = !busy && !submitting, kind = PaperButtonKind.SECONDARY)
+                            PaperText("Движок сессий", role = PaperTextRole.TITLE)
                             if (plan == null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                CodingEngine.entries.forEach { engine -> MagicFilterChip(selected = (draftEngine ?: settings.defaultCodingEngine) == engine,
-                                    onClick = { draftEngine = engine }, enabled = !busy && !submitting, label = { Text(engine.title) }) }
-                            } else Text(plan.engine?.title ?: "Закреплён за сессиями", style = MaterialTheme.typography.bodySmall)
-                            Text("Search engine", style = MaterialTheme.typography.titleMedium)
+                                CodingEngine.entries.forEach { engine -> PaperChoice(selected = (draftEngine ?: settings.defaultCodingEngine) == engine,
+                                    onSelect = { draftEngine = engine }, enabled = !busy && !submitting, label = engine.title) }
+                            } else PaperText(plan.engine?.title ?: "Закреплён за сессиями", role = PaperTextRole.LABEL)
+                            PaperText("Search engine", role = PaperTextRole.TITLE)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SearchProvider.entries.forEach { provider -> MagicFilterChip((plan?.searchProvider ?: draftSearch ?: settings.searchProvider) == provider,
-                                    { if (plan == null) draftSearch = provider else edit { it.copy(searchProvider = provider) } }, enabled = !busy && !submitting, label = { Text(searchLabel(provider)) }) }
+                                SearchProvider.entries.forEach { provider -> PaperChoice((plan?.searchProvider ?: draftSearch ?: settings.searchProvider) == provider,
+                                    { if (plan == null) draftSearch = provider else edit { it.copy(searchProvider = provider) } }, enabled = !busy && !submitting, label = searchLabel(provider)) }
                             }
-                            Text("Ключи Google и Querit задаются в настройках приложения.", style = MaterialTheme.typography.bodySmall)
+                            PaperText("Ключи Google и Querit задаются в настройках приложения.", role = PaperTextRole.LABEL)
                         }
                     }
-                    if (planner?.configured != true) Text("Выберите подключённую модель из избранного.", color = MaterialTheme.colorScheme.error)
-                    Button(enabled = !busy && !submitting && goal.isNotBlank() && planner?.configured == true, onClick = {
+                    if (planner?.configured != true) PaperText("Выберите подключённую модель из избранного.", color = LocalPaperColors.current.error)
+                    PaperButton("Далее · Уточнения", enabled = !busy && !submitting && goal.isNotBlank() && planner?.configured == true, onClick = {
                         if (plan == null) {
                             val fresh = Plan(Id.new(), project.id, goal.trim(), plannerSelection = draftPlanner, engine = draftEngine ?: settings.defaultCodingEngine, searchProvider = draftSearch ?: settings.searchProvider,
                                 wizardStep = PlanningStep.CLARIFY, createdAt = Id.now(), updatedAt = Id.now())
@@ -195,64 +191,64 @@ class CodingPlanningPlugin(
                                 input = "Цель изменена: ${goal.trim()}. Уточни детали и обнови план."
                             }
                         } else navigate(PlanningStep.CLARIFY)
-                    }) { Text("Далее · Уточнения") }
+                    })
                 }
                 PlanningStep.CLARIFY -> if (plan != null) {
-                    Text(plan.goal, style = MaterialTheme.typography.titleMedium)
-                    Text("Ответьте на вопросы, добавьте ограничения и детали. Когда всё готово — постройте план.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PaperText(plan.goal, role = PaperTextRole.TITLE)
+                    PaperText("Ответьте на вопросы, добавьте ограничения и детали. Когда всё готово — постройте план.", color = LocalPaperColors.current.secondaryText)
                     Dialogue(plan, input, { input = it }, busy || submitting, { doRefine(it) }, activity)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = !busy && !submitting, onClick = { navigate(PlanningStep.GOAL) }) { Text("Назад · Цель") }
-                        Button(enabled = !busy && !submitting && plan.dialogue.any { it.role == "assistant" }, onClick = {
+                        PaperButton("Назад · Цель", enabled = !busy && !submitting, kind = PaperButtonKind.SECONDARY, onClick = { navigate(PlanningStep.GOAL) })
+                        PaperButton("Построить план", enabled = !busy && !submitting && plan.dialogue.any { it.role == "assistant" }, onClick = {
                             doRefine(buildString { if (input.isNotBlank()) appendLine(input.trim()); append("Построй и оцени варианты по имеющимся ответам. Сохрани ручные решения.") })
-                        }) { Text("Построить план") }
+                        })
                     }
                 }
                 PlanningStep.REVIEW -> if (plan != null) {
-                    Text(plan.goal, style = MaterialTheme.typography.titleMedium)
-                    Text(if (running) "Статус выполнения отображается на графике. Нажмите на этап, чтобы открыть задание и работу агента." else "Проверьте этапы и модели. Нажмите на этап, чтобы открыть его задание. Подтверждение запускает реализацию.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PaperText(plan.goal, role = PaperTextRole.TITLE)
+                    PaperText(if (running) "Статус выполнения отображается на графике. Нажмите на этап, чтобы открыть задание и работу агента." else "Проверьте этапы и модели. Нажмите на этап, чтобы открыть его задание. Подтверждение запускает реализацию.", color = LocalPaperColors.current.secondaryText)
                     if (running) {
-                    LinearProgressIndicator(progress = { plan.progress }, modifier = Modifier.fillMaxWidth())
-                    Text("${phaseLabel(plan)} · ${plan.doneCount}/${plan.selectedMilestones.size} этапов", style = MaterialTheme.typography.titleMedium)
+                    PaperProgress(progress = plan.progress, modifier = Modifier.fillMaxWidth())
+                    PaperText("${phaseLabel(plan)} · ${plan.doneCount}/${plan.selectedMilestones.size} этапов", role = PaperTextRole.TITLE)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = !submitting && plan.intent == ExecutionIntent.RUN, onClick = { action { execution.pause(plan.projectId) } }) { Text("Пауза") }
-                        Button(enabled = runtime.supported && !submitting && plan.intent != ExecutionIntent.RUN && plan.phase != ExecutionPhase.COMPLETE, onClick = { action { execution.start(plan.projectId) } }) { Text("Продолжить") }
-                        TextButton(enabled = !submitting && plan.intent != ExecutionIntent.STOP, onClick = { action { execution.stop(plan.projectId) } }) { Text("Остановить") }
-                        if (plan.issue != null) TextButton(enabled = !submitting, onClick = { action { execution.retry(plan.projectId) } }) { Text("Повторить после исправления") }
+                        PaperButton("Пауза", enabled = !submitting && plan.intent == ExecutionIntent.RUN, kind = PaperButtonKind.SECONDARY, onClick = { action { execution.pause(plan.projectId) } })
+                        PaperButton("Продолжить", enabled = runtime.supported && !submitting && plan.intent != ExecutionIntent.RUN && plan.phase != ExecutionPhase.COMPLETE, onClick = { action { execution.start(plan.projectId) } })
+                        PaperButton("Остановить", enabled = !submitting && plan.intent != ExecutionIntent.STOP, kind = PaperButtonKind.QUIET, onClick = { action { execution.stop(plan.projectId) } })
+                        if (plan.issue != null) PaperButton("Повторить после исправления", enabled = !submitting, kind = PaperButtonKind.QUIET, onClick = { action { execution.retry(plan.projectId) } })
                     }
-                    plan.issue?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                    plan.issue?.let { PaperText(it.message, color = LocalPaperColors.current.error) }
                     }
                     DecisionGraph(plan, selected, { selected = it }, Modifier.fillMaxWidth().height(480.dp), fitInitially = true,
                         onChooseOption = if (busy || submitting) null else { choiceId, optionId -> edit { selectPlanningOption(it, choiceId, optionId) } })
                     if (!running) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = !busy && !submitting && !running, onClick = { navigate(PlanningStep.CLARIFY) }) { Text("Уточнить") }
-                        Button(enabled = !busy && !submitting && !running && runtime.supported && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid,
-                            onClick = { action { execution.start(plan.projectId); viewedStep = PlanningStep.REVIEW } }) { Text("Подтвердить") }
+                        PaperButton("Уточнить", enabled = !busy && !submitting && !running, kind = PaperButtonKind.SECONDARY, onClick = { navigate(PlanningStep.CLARIFY) })
+                        PaperButton("Подтвердить", enabled = !busy && !submitting && !running && runtime.supported && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid,
+                            onClick = { action { execution.start(plan.projectId); viewedStep = PlanningStep.REVIEW } })
 
                     }
-                    if (!runtime.supported) Text("Запуск реализации доступен в Desktop.")
+                    if (!runtime.supported) PaperText("Запуск реализации доступен в Desktop.")
                     val validation = DecisionCompiler.compile(plan)
-                    if (!validation.valid) Text(validation.errors.joinToString("\n"), color = MaterialTheme.colorScheme.error)
+                    if (!validation.valid) PaperText(validation.errors.joinToString("\n"), color = LocalPaperColors.current.error)
                     if (!running) {
-                        TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "▾ Скрыть параметры" else "▸ Приоритеты и параллельность") }
+                        PaperAction(onClick = { advanced = !advanced }) { PaperText(if (advanced) "▾ Скрыть параметры" else "▸ Приоритеты и параллельность", role = PaperTextRole.LABEL) }
                         if (advanced) {
                             Row {
-                                Text("Параллельно: ${plan.parallelism}", Modifier.weight(1f))
-                                TextButton(enabled = !submitting, onClick = { edit { it.copy(parallelism = (it.parallelism - 1).coerceAtLeast(1)) } }) { Text("−") }
-                                TextButton(enabled = !submitting, onClick = { edit { it.copy(parallelism = (it.parallelism + 1).coerceAtMost(8)) } }) { Text("+") }
+                                PaperText("Параллельно: ${plan.parallelism}", Modifier.weight(1f))
+                                PaperAction(enabled = !submitting, onClick = { edit { it.copy(parallelism = (it.parallelism - 1).coerceAtLeast(1)) } }) { PaperText("−", role = PaperTextRole.LABEL) }
+                                PaperAction(enabled = !submitting, onClick = { edit { it.copy(parallelism = (it.parallelism + 1).coerceAtMost(8)) } }) { PaperText("+", role = PaperTextRole.LABEL) }
                             }
                             FlowRow { listOf("Качество" to plan.priorities.quality, "Скорость" to plan.priorities.speed, "Экономичность" to plan.priorities.economy, "Надёжность" to plan.priorities.safety).forEachIndexed { index, (label, value) ->
-                                TextButton(enabled = !submitting, onClick = { edit { old ->
+                                PaperAction(enabled = !submitting, onClick = { edit { old ->
                                     val v = (value + 1) % 4
                                     val priorities = when (index) { 0 -> old.priorities.copy(quality = v); 1 -> old.priorities.copy(speed = v); 2 -> old.priorities.copy(economy = v); else -> old.priorities.copy(safety = v) }
                                     composer.recommendChoices(old.copy(priorities = priorities))
-                                } }) { Text("$label: $value") }
+                                } }) { PaperText("$label: $value", role = PaperTextRole.LABEL) }
                             } }
                         }
                     }
                     PlanningHistory(plan)
-                    if (running && (plan.intent == ExecutionIntent.STOP || plan.phase == ExecutionPhase.COMPLETE)) TextButton(enabled = !submitting,
-                        onClick = { action { store.deletePlan(plan.projectId); viewedStep = null; selected = null; goal = "" } }) { Text("Новая цель") }
+                    if (running && (plan.intent == ExecutionIntent.STOP || plan.phase == ExecutionPhase.COMPLETE)) PaperButton("Новая цель", enabled = !submitting,
+                        kind = PaperButtonKind.QUIET, onClick = { action { store.deletePlan(plan.projectId); viewedStep = null; selected = null; goal = "" } })
                 }
                 PlanningStep.STATUS -> Unit // Legacy persisted step is displayed on the graph.
 
@@ -263,54 +259,55 @@ class CodingPlanningPlugin(
                     StageDetailsDialog(projected, node, { selected = null }) {
                         if (!running && plan.tree.any { it.id == node.id }) {
                             NodeEditor(plan, node, profiles, ::edit)
-                            TextButton(enabled = !busy && !submitting, onClick = {
+                            PaperButton("Уточнить этап", enabled = !busy && !submitting, kind = PaperButtonKind.QUIET, onClick = {
                                 selected = null; doRefine("Пересчитай участок «${node.title}».", node.id)
-                            }) { Text("Уточнить этап") }
+                            })
                         }
                     }
                 }
             }
             if (pickPlanner) FavoriteModelPicker(profiles, choice,
                 { selection -> if (plan == null) draftPlanner = selection else edit { it.copy(plannerSelection = selection) } }, { pickPlanner = false }, "Модель оркестратора",
-                footer = { TextButton(onClick = { if (plan == null) draftPlanner = null else edit { it.copy(plannerSelection = null) }; pickPlanner = false }) { Text("Модель по умолчанию") } })
+                footer = { PaperButton("Модель по умолчанию", kind = PaperButtonKind.QUIET, onClick = { if (plan == null) draftPlanner = null else edit { it.copy(plannerSelection = null) }; pickPlanner = false }) })
         }
     }
+}
 }
 
 @Composable private fun Dialogue(plan: Plan, input: String, onInput: (String) -> Unit, busy: Boolean, onSend: (String) -> Unit, activity: List<CodingStep>) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Уточнение цели", style = MaterialTheme.typography.titleMedium)
+        PaperText("Уточнение цели", role = PaperTextRole.TITLE)
         val dialogueScroll = rememberScrollState()
         LaunchedEffect(plan.dialogue.size, dialogueScroll.maxValue) { dialogueScroll.animateScrollTo(dialogueScroll.maxValue) }
         Column(Modifier.heightIn(max = 360.dp).verticalScroll(dialogueScroll)) {
-            if (plan.dialogue.isEmpty() && !busy) Text("Начните уточнение: модель задаст вопросы о результате и ограничениях.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (plan.dialogue.isEmpty() && !busy) PaperText("Начните уточнение: модель задаст вопросы о результате и ограничениях.", color = LocalPaperColors.current.secondaryText)
             plan.dialogue.forEach { message ->
-                Surface(Modifier.fillMaxWidth().padding(vertical = 4.dp), shape = MaterialTheme.shapes.medium,
-                    color = if (message.role == "user") MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.secondaryContainer) {
+                PaperPanel(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    if (message.role == "user") PaperSurfaceKind.RAISED else PaperSurfaceKind.SELECTED) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(if (message.role == "user") "Вы" else "Оркестратор", style = MaterialTheme.typography.labelMedium)
+                        PaperText(if (message.role == "user") "Вы" else "Оркестратор", role = PaperTextRole.LABEL)
                         message.activity.forEach { CodingStepRow(it, false) }
                         ChatMarkdown(message.text)
                     }
                 }
             }
         }
-        if (busy || activity.isNotEmpty()) Card(Modifier.fillMaxWidth()) {
+        if (busy || activity.isNotEmpty()) PaperPanel(Modifier.fillMaxWidth()) {
             val activityScroll = rememberScrollState()
             LaunchedEffect(activity, activityScroll.maxValue) { activityScroll.scrollTo(activityScroll.maxValue) }
             Column(Modifier.heightIn(max = 320.dp).verticalScroll(activityScroll).padding(12.dp)) {
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (busy) PaperProgress(Modifier.fillMaxWidth())
                 activity.forEach { CodingStepRow(it, busy) }
             }
         }
-        OutlinedTextField(input, onInput, label = { Text("Ответ, ограничение или изменение") }, modifier = Modifier.fillMaxWidth(), enabled = !busy)
-        Button(onClick = { onSend(input) }, enabled = !busy && input.isNotBlank()) { Text(if (busy) "Уточняю…" else "Отправить") }
+        PaperComposerField(input, onInput, label = { PaperText("Ответ, ограничение или изменение", role = PaperTextRole.LABEL) }, modifier = Modifier.fillMaxWidth(), enabled = !busy)
+        PaperButton(if (busy) "Уточняю…" else "Отправить", onClick = { onSend(input) }, enabled = !busy && input.isNotBlank())
 
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable private fun NodeEditor(plan: Plan, node: DecisionNode, profiles: List<LlmProfile>, edit: ((Plan) -> Plan) -> Unit) {
+@Composable internal fun NodeEditor(plan: Plan, node: DecisionNode, profiles: List<LlmProfile>, edit: ((Plan) -> Plan) -> Unit) {
     val stage = plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }
     val frozen = stage != null && (stage.attempts.isNotEmpty() || stage.status != MilestoneStatus.PENDING)
     var title by remember(node.id, node.title) { mutableStateOf(node.title) }
@@ -321,40 +318,38 @@ class CodingPlanningPlugin(
     val complexityValid = complexity.isBlank() || (parsedComplexity != null && parsedComplexity.isFinite() && parsedComplexity > 0)
     fun updateStage(change: (Milestone) -> Milestone) = edit { old -> old.copy(milestones = old.milestones.map { if (it.id == stage?.id) change(it) else it }) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        HorizontalDivider(); Text("Выбрано: ${node.title}", style = MaterialTheme.typography.titleMedium)
+        PaperDivider(); PaperText("Выбрано: ${node.title}", role = PaperTextRole.TITLE)
         val a = stage?.assessment ?: node.assessment
-        Text("Качество: ${grade(a.quality)} · Скорость: ${grade(a.speed)} · Экономичность: ${grade(a.economy)} · Надёжность: ${grade(a.safety)}")
-        if (a.explanation.isNotBlank()) Text(a.explanation)
+        PaperText("Качество: ${grade(a.quality)} · Скорость: ${grade(a.speed)} · Экономичность: ${grade(a.economy)} · Надёжность: ${grade(a.safety)}")
+        if (a.explanation.isNotBlank()) PaperText(a.explanation)
         if (!frozen) FlowRow {
             listOf("Качество" to a.quality, "Скорость" to a.speed, "Экономичность" to a.economy, "Надёжность" to a.safety).forEachIndexed { i, (label, value) ->
-                TextButton(onClick = { edit { old ->
+                PaperAction(onClick = { edit { old ->
                     val updated = a.withGrade(i, (value + 1) % 4)
                     old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(assessment = updated) else it },
                         milestones = old.milestones.map { if (it.id == stage?.id) it.copy(assessment = updated) else it })
-                } }) { Text("$label: ${grade(value)}") }
+                } }) { PaperText("$label: ${grade(value)}", role = PaperTextRole.LABEL) }
             }
         }
         if (node.kind == DecisionKind.CHOICE) plan.tree.filter { it.id in node.children }.forEach { option ->
-            MagicFilterChip(option.id == node.selectedOptionId, { edit { old -> old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(selectedOptionId = option.id, manualSelection = true) else it }) } }, label = { Text(option.title) })
+            PaperChoice(option.id == node.selectedOptionId, { edit { old -> old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(selectedOptionId = option.id, manualSelection = true) else it }) } }, label = option.title)
         }
-        OutlinedTextField(title, { title = it }, enabled = !frozen, label = { Text("Название") }, modifier = Modifier.fillMaxWidth())
+        PaperField(title, { title = it }, enabled = !frozen, label = "Название", singleLine = false, modifier = Modifier.fillMaxWidth())
         if (stage != null) {
-            OutlinedTextField(complexity, { complexity = it }, enabled = !frozen, label = { Text("Сложность, усл. ед.") },
-                supportingText = { Text("Относительная оценка: например, 1, 2, 3, 5, 8, 13") },
-                isError = !complexityValid, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(description, { description = it }, enabled = !frozen, label = { Text("Что сделать") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(acceptance, { acceptance = it }, enabled = !frozen, label = { Text("Критерии проверки") }, modifier = Modifier.fillMaxWidth())
+            PaperField(complexity, { complexity = it }, enabled = !frozen, label = "Сложность, усл. ед.", errorMessage = if (complexityValid) null else "Введите положительное число", supportingText = "Относительная оценка: например, 1, 2, 3, 5, 8, 13", modifier = Modifier.fillMaxWidth())
+            PaperField(description, { description = it }, enabled = !frozen, label = "Что сделать", singleLine = false, modifier = Modifier.fillMaxWidth())
+            PaperField(acceptance, { acceptance = it }, enabled = !frozen, label = "Критерии проверки", singleLine = false, modifier = Modifier.fillMaxWidth())
         }
-        TextButton(enabled = !frozen && title.isNotBlank() && complexityValid, onClick = { edit { old -> old.copy(goal = if (node.kind == DecisionKind.GOAL) title else old.goal, tree = old.tree.map { if (it.id == node.id) it.copy(title = title) else it }, milestones = old.milestones.map { if (it.id == stage?.id) it.copy(title = title, description = description, acceptance = acceptance, complexityPoints = parsedComplexity) else it }) } }) { Text("Сохранить изменения") }
+        PaperAction(enabled = !frozen && title.isNotBlank() && complexityValid, onClick = { edit { old -> old.copy(goal = if (node.kind == DecisionKind.GOAL) title else old.goal, tree = old.tree.map { if (it.id == node.id) it.copy(title = title) else it }, milestones = old.milestones.map { if (it.id == stage?.id) it.copy(title = title, description = description, acceptance = acceptance, complexityPoints = parsedComplexity) else it }) } }) { PaperText("Сохранить изменения", role = PaperTextRole.LABEL) }
         if (stage != null) {
             val assignment = stage.assignment
-            Text(assignment?.let { "Модель: ${profiles.firstOrNull { p -> p.id == it.profileId }?.modelName(it.modelId) ?: it.displayName.ifBlank { it.modelId }} · effort: ${it.effort.shortLabel}" } ?: "Исполнитель не назначен")
+            PaperText(assignment?.let { "Модель: ${profiles.firstOrNull { p -> p.id == it.profileId }?.modelName(it.modelId) ?: it.displayName.ifBlank { it.modelId }} · effort: ${it.effort.shortLabel}" } ?: "Исполнитель не назначен")
             if (!frozen) {
                 var menu by remember { mutableStateOf(false) }
                 Box {
-                    TextButton(onClick = { menu = true }) { Text("Выбрать модель") }
-                    DropdownMenu(menu, { menu = false }) { profiles.filter { it.connectionConfigured && it.supportsCoding }.forEach { p -> p.displayModels.forEach { model ->
-                        DropdownMenuItem(text = { Text("${p.name} · ${p.modelName(model)}") }, onClick = {
+                    PaperAction(onClick = { menu = true }) { PaperText("Выбрать модель", role = PaperTextRole.LABEL) }
+                    PaperMenuHost(menu, { menu = false }) { profiles.filter { it.connectionConfigured && it.supportsCoding }.forEach { p -> p.displayModels.forEach { model ->
+                        PaperMenuAction(label = "${p.name} · ${p.modelName(model)}", onClick = {
                             val effective = EffortSelection.ofOrNull(ModelDefaults.capability(p.copy(modelId = model)).resolveEffort(p.effortSelectionFor(model)).level)
                             updateStage { it.copy(agentProfileId = p.id, agentModelId = model, assignment = StageAssignment(p.id, model, effective, effective, manual = true, displayName = p.modelName(model))) }; menu = false
                         })
@@ -366,32 +361,32 @@ class CodingPlanningPlugin(
                     EffortControl(capability, assignment.effort, { effort -> updateStage { it.copy(assignment = assignment.copy(effort = effort, effectiveEffort = EffortSelection.ofOrNull(capability.resolveEffort(effort).level), manual = true)) } })
                 }
             }
-            assignment?.explanation?.takeIf { it.isNotBlank() }?.let { Text(it) }
-            if (frozen) Text("Этап начат. Конфигурация и история закреплены.")
-            Text("Зависит от:")
+            assignment?.explanation?.takeIf { it.isNotBlank() }?.let { PaperText(it) }
+            if (frozen) PaperText("Этап начат. Конфигурация и история закреплены.")
+            PaperText("Зависит от:")
             FlowRow { plan.milestones.filter { it.id != stage.id }.forEach { dep ->
-                MagicFilterChip(dep.id in stage.dependsOn, enabled = !frozen, onClick = { updateStage { it.copy(dependsOn = if (dep.id in it.dependsOn) it.dependsOn - dep.id else it.dependsOn + dep.id) } }, label = { Text(dep.title) })
+                PaperChoice(dep.id in stage.dependsOn, enabled = !frozen, onSelect = { updateStage { it.copy(dependsOn = if (dep.id in it.dependsOn) it.dependsOn - dep.id else it.dependsOn + dep.id) } }, label = dep.title)
             } }
             stage.attempts.forEach { attempt ->
-                Text("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)} · ${attempt.assignment.displayName.ifBlank { attempt.assignment.modelId }} · ${attempt.assignment.effort.shortLabel}")
-                if (attempt.activity.isNotBlank()) Text(attempt.activity)
-                attempt.error?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
-                if (attempt.report.isNotBlank()) Text(attempt.report)
+                PaperText("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)} · ${attempt.assignment.displayName.ifBlank { attempt.assignment.modelId }} · ${attempt.assignment.effort.shortLabel}")
+                if (attempt.activity.isNotBlank()) PaperText(attempt.activity)
+                attempt.error?.let { PaperText(it.message, color = LocalPaperColors.current.error) }
+                if (attempt.report.isNotBlank()) PaperText(attempt.report)
             }
-            if (stage.checkNote.isNotBlank()) Text("Проверка: ${stage.checkNote}")
+            if (stage.checkNote.isNotBlank()) PaperText("Проверка: ${stage.checkNote}")
         }
         if (node.kind != DecisionKind.STAGE) Row {
-            if (node.kind != DecisionKind.CHOICE) TextButton(onClick = { edit { old ->
+            if (node.kind != DecisionKind.CHOICE) PaperAction(onClick = { edit { old ->
                 val id = Id.uuid()
                 old.copy(milestones = old.milestones + Milestone(id, "Новый этап"), tree = old.tree.map { if (it.id == node.id) it.copy(children = it.children + id) else it } + DecisionNode(id, "Новый этап", DecisionKind.STAGE, stageId = id))
-            } }) { Text("+ Этап") }
-            TextButton(onClick = { edit { old ->
+            } }) { PaperText("+ Этап", role = PaperTextRole.LABEL) }
+            PaperAction(onClick = { edit { old ->
                 val choice = if (node.kind == DecisionKind.CHOICE) node.id else Id.new(); val option = Id.new()
                 if (node.kind == DecisionKind.CHOICE) old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(children = it.children + option) else it } + DecisionNode(option, "Новый вариант", DecisionKind.OPTION))
                 else old.copy(tree = old.tree.map { if (it.id == node.id) it.copy(children = it.children + choice) else it } + listOf(DecisionNode(choice, "Выбор подхода", DecisionKind.CHOICE, listOf(option), option), DecisionNode(option, "Новый вариант", DecisionKind.OPTION)))
-            } }) { Text(if (node.kind == DecisionKind.CHOICE) "+ Вариант" else "+ Выбор подхода") }
+            } }) { PaperText(if (node.kind == DecisionKind.CHOICE) "+ Вариант" else "+ Выбор подхода", role = PaperTextRole.LABEL) }
         }
-        if (node.kind != DecisionKind.GOAL && !frozen) TextButton(onClick = { edit { old -> DecisionCompiler.removeNode(old, node.id) } }) { Text("Удалить узел и его ветвь") }
+        if (node.kind != DecisionKind.GOAL && !frozen) PaperAction(onClick = { edit { old -> DecisionCompiler.removeNode(old, node.id) } }) { PaperText("Удалить узел и его ветвь", role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
     }
 }
 private fun grade(value: Int) = when (value) { 1 -> "низкая"; 2 -> "средняя"; 3 -> "высокая"; else -> "неизвестно" }
@@ -438,28 +433,30 @@ private fun wizardLabel(step: PlanningStep) = when (step) {
 
 @Composable private fun PlanningHistory(plan: Plan) {
     var expanded by remember { mutableStateOf(false) }
-    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "▾ Скрыть историю планирования" else "▸ История планирования и действия агента") }
+    PaperAction(onClick = { expanded = !expanded }) {
+        PaperText(if (expanded) "▾ Скрыть историю планирования" else "▸ История планирования и действия агента", role = PaperTextRole.LABEL)
+    }
     if (expanded) plan.dialogue.forEach { message ->
-        Text(if (message.role == "user") "Вы" else "Оркестратор", style = MaterialTheme.typography.labelLarge)
+        PaperText(if (message.role == "user") "Вы" else "Оркестратор", role = PaperTextRole.LABEL)
         message.activity.forEach { CodingStepRow(it, false) }
         ChatMarkdown(message.text)
     }
 }
 
 @Composable private fun AttemptActivity(attempt: StageAttempt) {
-    Text("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)}", style = MaterialTheme.typography.labelLarge)
+    PaperText("Попытка ${attempt.id.take(8)} · ${attemptLabel(attempt.phase)}", role = PaperTextRole.LABEL)
     val visibleSteps = readableStageActivity(attempt.steps.filter { it.isVisibleActivity })
     if (visibleSteps.isNotEmpty()) visibleSteps.forEach { CodingStepRow(it, attempt.phase == AttemptPhase.EXECUTING) }
     else if (attempt.activity.isNotBlank()) CodingStepRow(CodingStep(CodingStepKind.INFO, attempt.activity), attempt.phase == AttemptPhase.EXECUTING)
     if (visibleSteps.isEmpty() && attempt.report.isNotBlank()) ChatMarkdown(attempt.report)
     if (attempt.phase == AttemptPhase.EXECUTING && visibleSteps.isEmpty() && attempt.activity.isBlank() && attempt.report.isBlank()) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-            Text("Ожидание первых событий агента…", style = MaterialTheme.typography.bodyMedium)
+            PaperProgress(Modifier.size(16.dp), kind = PaperProgressKind.CIRCULAR, label = "Ожидание первых событий агента")
+            PaperText("Ожидание первых событий агента…")
         }
     }
-    if (attempt.mergeReport.isNotBlank()) { Text("Объединение результата"); ChatMarkdown(attempt.mergeReport) }
-    attempt.error?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+    if (attempt.mergeReport.isNotBlank()) { PaperText("Объединение результата"); ChatMarkdown(attempt.mergeReport) }
+    attempt.error?.let { PaperText(it.message, color = LocalPaperColors.current.error) }
 }
 
 private fun milestoneLabel(status: MilestoneStatus) = when (status) {
@@ -471,44 +468,44 @@ private fun milestoneLabel(status: MilestoneStatus) = when (status) {
 }
 
 @Composable internal fun StageDetailsDialog(plan: Plan, node: DecisionNode, onDismiss: () -> Unit, editor: @Composable () -> Unit = {}) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    PaperWideDialog(onDismissRequest = onDismiss) {
         StageDetailsContent(plan, node, onDismiss, Modifier.padding(16.dp).widthIn(max = 860.dp).fillMaxWidth().fillMaxHeight(.9f), editor)
     }
 }
 
 @Composable internal fun StageDetailsContent(plan: Plan, node: DecisionNode, onDismiss: () -> Unit, modifier: Modifier = Modifier, editor: @Composable () -> Unit = {}) {
     val stage = plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }
-        Surface(modifier, shape = MaterialTheme.shapes.large) {
+        PaperPanel(modifier) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(node.title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = onDismiss) { Text("Закрыть") }
+                    PaperText(node.title, Modifier.weight(1f), role = PaperTextRole.TITLE)
+                    PaperAction(onClick = onDismiss) { PaperText("Закрыть", role = PaperTextRole.LABEL) }
                 }
                 val scroll = rememberScrollState()
                 Column(Modifier.weight(1f).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (stage != null) {
-                        Text(milestoneLabel(stage.status), style = MaterialTheme.typography.titleMedium)
-                        stage.assignment?.let { Text("${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        Text("Задание этапа", style = MaterialTheme.typography.titleMedium)
+                        PaperText(milestoneLabel(stage.status), role = PaperTextRole.TITLE)
+                        stage.assignment?.let { PaperText("${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}", color = LocalPaperColors.current.secondaryText) }
+                        PaperText("Задание этапа", role = PaperTextRole.TITLE)
                         ChatMarkdown(stage.description.ifBlank { stage.title })
-                        if (stage.acceptance.isNotBlank()) { Text("Критерии готовности", style = MaterialTheme.typography.labelLarge); ChatMarkdown(stage.acceptance) }
-                        if (stage.dependsOn.isNotEmpty()) Text("Зависимости: " + stage.dependsOn.joinToString { id -> plan.milestones.firstOrNull { it.id == id }?.title ?: id })
-                        HorizontalDivider()
-                        Text("Работа агента", style = MaterialTheme.typography.titleMedium)
-                        if (stage.attempts.isEmpty()) Text("Этап ещё не запущен. Здесь появятся ответ и действия агента.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (stage.acceptance.isNotBlank()) { PaperText("Критерии готовности", role = PaperTextRole.LABEL); ChatMarkdown(stage.acceptance) }
+                        if (stage.dependsOn.isNotEmpty()) PaperText("Зависимости: " + stage.dependsOn.joinToString { id -> plan.milestones.firstOrNull { it.id == id }?.title ?: id })
+                        PaperDivider()
+                        PaperText("Работа агента", role = PaperTextRole.TITLE)
+                        if (stage.attempts.isEmpty()) PaperText("Этап ещё не запущен. Здесь появятся ответ и действия агента.", color = LocalPaperColors.current.secondaryText)
                         stage.attempts.forEach { attempt ->
                             var showPrompt by remember(attempt.id) { mutableStateOf(false) }
                             if (attempt.prompt.isNotBlank()) {
-                                TextButton(onClick = { showPrompt = !showPrompt }) { Text(if (showPrompt) "▾ Скрыть отправленный промпт" else "▸ Отправленный промпт") }
-                                if (showPrompt) androidx.compose.foundation.text.selection.SelectionContainer { Text(attempt.prompt) }
+                                PaperAction(onClick = { showPrompt = !showPrompt }) { PaperText(if (showPrompt) "▾ Скрыть отправленный промпт" else "▸ Отправленный промпт", role = PaperTextRole.LABEL) }
+                                if (showPrompt) androidx.compose.foundation.text.selection.SelectionContainer { PaperText(attempt.prompt) }
                             }
                             AttemptActivity(attempt)
                         }
-                        if (stage.checkNote.isNotBlank()) { Text("Проверка результата", style = MaterialTheme.typography.labelLarge); ChatMarkdown(stage.checkNote) }
+                        if (stage.checkNote.isNotBlank()) { PaperText("Проверка результата", role = PaperTextRole.LABEL); ChatMarkdown(stage.checkNote) }
                     } else {
                         ChatMarkdown(plan.goal)
-                        Text(phaseLabel(plan), style = MaterialTheme.typography.titleMedium)
-                        plan.issue?.let { Text(it.message, color = MaterialTheme.colorScheme.error) }
+                        PaperText(phaseLabel(plan), role = PaperTextRole.TITLE)
+                        plan.issue?.let { PaperText(it.message, color = LocalPaperColors.current.error) }
                         plan.journal.forEach { CodingStepRow(CodingStep(CodingStepKind.INFO, "${it.operation} · ${it.detail}"), false) }
                     }
                     editor()

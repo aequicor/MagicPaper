@@ -2,22 +2,15 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -106,7 +99,7 @@ private fun points(value: Double): String {
     val graphWidth = layout.finish.x + 112f
     val graphHeight = maxOf((positions.values.maxOfOrNull { it.y } ?: 0f) + 180f, layout.start.y + 112f, layout.finish.y + 112f)
     val density = LocalDensity.current.density
-    val scheme = MaterialTheme.colorScheme
+    val colors = LocalPaperColors.current
     val branches = remember(projected.tree) { planningStageBranches(projected) }
     val activeStageIds = schedule.order.toSet()
     val activeGraphNodes = plan.tree.filter { it.kind == DecisionKind.STAGE && (it.stageId ?: it.id) in activeStageIds }.map { it.id }.toSet()
@@ -141,33 +134,33 @@ private fun points(value: Double): String {
     val regularStroke = remember(density) { Stroke(2 * density) }
     val alternativeStroke = remember(density) { Stroke(2 * density, pathEffect = PathEffect.dashPathEffect(floatArrayOf(7 * density, 5 * density))) }
     val selectedStages = schedule.order.toSet()
-    Column(modifier) {
+    PaperGraph(modifier) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MagicFilterChip(!network, { network = false }, label = { Text("Все варианты") })
-            MagicFilterChip(network, { network = true }, label = { Text("Выбранный путь") })
+            PaperChoice(!network, { network = false }, label = "Все варианты")
+            PaperChoice(network, { network = true }, label = "Выбранный путь")
         }
-        Text(when {
+        PaperText(when {
             schedule.errors.isNotEmpty() -> schedule.errors.joinToString("; ")
             schedule.order.isEmpty() -> "Добавьте этапы в план"
             else -> "Выберите вариант над схемой · названия путей указаны на задачах"
-        }, style = MaterialTheme.typography.labelSmall)
+        }, role = PaperTextRole.LABEL)
         if (!showNetwork) Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
             projected.tree.filter { it.kind == DecisionKind.CHOICE }.forEach { choice ->
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(choice.title, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(180.dp))
+                    PaperText(choice.title, role = PaperTextRole.LABEL, modifier = Modifier.width(180.dp))
                     choice.children.forEach { id -> projected.tree.firstOrNull { it.id == id }?.let { option ->
                         val enabled = remember(sourcePlan, choice.id, id) { runCatching { selectPlanningOption(sourcePlan, choice.id, id) }.isSuccess }
-                        MagicFilterChip(selected = choice.selectedOptionId == id,
-                            onClick = { onChooseOption?.invoke(choice.id, id) },
+                        PaperChoice(selected = choice.selectedOptionId == id,
+                            onSelect = { onChooseOption?.invoke(choice.id, id) },
                             enabled = onChooseOption != null && enabled,
-                            label = { Text(option.title) })
+                            label = option.title)
                     } }
                 }
             }
         }
-        if (layout.cyclic) Text("В зависимостях есть цикл — исправьте связи задач", color = scheme.error, style = MaterialTheme.typography.labelSmall)
+        if (layout.cyclic) PaperText("В зависимостях есть цикл — исправьте связи задач", color = colors.error, role = PaperTextRole.LABEL)
 
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds().background(scheme.surfaceVariant.copy(alpha = .3f))) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clipToBounds().background(colors.raisedSurface.copy(alpha = .3f))) {
             val viewportWidth = maxWidth.value; val viewportHeight = (maxHeight.value - 48).coerceAtLeast(1f)
             LaunchedEffect(plan.id, fitInitially, viewportWidth, viewportHeight, showNetwork, graphWidth, graphHeight) {
                 if (fitInitially) {
@@ -195,19 +188,15 @@ private fun points(value: Double): String {
                 }) {
                     Canvas(Modifier.fillMaxSize()) {
                         paths.forEach { (path, kind, active) ->
-                            drawPath(path, (if (active) scheme.primary else scheme.outline).copy(alpha = if (active) 1f else .65f),
+                            drawPath(path, (if (active) colors.action else colors.border).copy(alpha = if (active) 1f else .65f),
                                 style = if (!active || kind == PlanningEdgeKind.ALTERNATIVE) alternativeStroke else regularStroke)
                         }
                     }
                     fun terminal(point: GraphPosition): Modifier = Modifier.offset {
                         IntOffset((point.x * density).roundToInt(), (point.y * density).roundToInt())
-                    }.size(96.dp).background(scheme.surface, CircleShape).border(2.dp, scheme.primary, CircleShape)
-                    Box(terminal(layout.start), contentAlignment = Alignment.Center) {
-                        Text("Начало", style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
                     }
-                    Box(terminal(layout.finish).padding(6.dp).border(1.dp, scheme.primary, CircleShape), contentAlignment = Alignment.Center) {
-                        Text("Завершение", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
-                    }
+                    PaperGraphTerminal("Начало", terminal = false, modifier = terminal(layout.start))
+                    PaperGraphTerminal("Завершение", terminal = true, modifier = terminal(layout.finish))
                     plan.tree.distinctBy { if (it.kind == DecisionKind.STAGE) it.stageId ?: it.id else it.id }.forEach { node -> positions[node.id]?.let { point ->
                         val stage = plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }
                         val inactive = !showNetwork && (node.stageId ?: node.id) !in selectedStages
@@ -223,35 +212,37 @@ private fun points(value: Double): String {
                             MilestoneStatus.SKIPPED -> "↷ Пропущен"
                             else -> "○ Ожидает"
                         } } ?: ""
-                        Column(Modifier.offset { IntOffset((point.x * density).roundToInt(), (point.y * density).roundToInt()) }
-                            .size(220.dp, 156.dp).background(if (selected == node.id) scheme.primaryContainer else if (!inactive && membership != null) scheme.primaryContainer.copy(alpha = .35f) else scheme.surface, MaterialTheme.shapes.medium)
-                            .border(if (selected == node.id) 2.dp else 1.dp, if (selected == node.id || (!inactive && membership != null)) scheme.primary else scheme.outlineVariant, MaterialTheme.shapes.medium)
-                            .graphicsLayer { alpha = if (inactive) .72f else 1f }
-                            .clip(MaterialTheme.shapes.medium).clickable { onSelect(node.id) }.padding(8.dp)) {
-                            Text(plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }?.stageLabel() ?: node.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            if (membership != null) Text(
+                        PaperGraphNode(selected = selected == node.id, related = !inactive && membership != null, inactive = inactive,
+                            onClick = { onSelect(node.id) }, modifier = Modifier.offset {
+                                IntOffset((point.x * density).roundToInt(), (point.y * density).roundToInt())
+                            }.size(220.dp, 156.dp)) {
+                            PaperText(plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }?.stageLabel() ?: node.title,
+                                role = PaperTextRole.TITLE, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            if (membership != null) PaperText(
                                 if (membership.shared) "↔ Общая для вариантов" else
                                     (if (inactive) "◇ " else "● ") + membership.labels.joinToString(" → ") { it.title },
-                                maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall,
-                                color = if (inactive) scheme.onSurfaceVariant else scheme.primary)
-                            Text(if (inactive) "Альтернативная задача" else status, style = MaterialTheme.typography.labelSmall)
-                            stage?.assignment?.let { Text("${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}", maxLines = 1, style = MaterialTheme.typography.labelSmall, overflow = TextOverflow.Ellipsis) }
+                                maxLines = 2, overflow = TextOverflow.Ellipsis, role = PaperTextRole.LABEL,
+                                color = if (inactive) colors.secondaryText else colors.action)
+                            PaperText(if (inactive) "Альтернативная задача" else status, role = PaperTextRole.LABEL)
+                            stage?.assignment?.let { PaperText("${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}", maxLines = 1, role = PaperTextRole.LABEL, overflow = TextOverflow.Ellipsis) }
                             if (stage != null) {
                                 val complexity = stage.complexityPoints ?: stage.assessment.complexity.takeIf { it > 0 }?.toDouble()
-                                Text(complexity?.let { "Сложность: ${points(it)}" } ?: "Сложность пока не оценена", style = MaterialTheme.typography.labelSmall)
+                                PaperText(complexity?.let { "Сложность: ${points(it)}" } ?: "Сложность пока не оценена", role = PaperTextRole.LABEL)
                             }
 
                         }
                     } }
                 }
             }
-            TextButton(modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd).background(scheme.surface, MaterialTheme.shapes.small),
-                onClick = { zoom = minOf(viewportWidth / graphWidth, viewportHeight / graphHeight).coerceIn(.005f, 1f); pan = Offset.Zero }) { Text("Показать целиком") }
+            PaperAction(modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd),
+                onClick = { zoom = minOf(viewportWidth / graphWidth, viewportHeight / graphHeight).coerceIn(.005f, 1f); pan = Offset.Zero }) {
+                PaperText("Показать целиком", role = PaperTextRole.LABEL)
+            }
         }
         Row {
-            TextButton(onClick = { zoom = (zoom / 1.2f).coerceAtLeast(.005f) }) { Text("−") }
-            TextButton(onClick = { zoom = (zoom * 1.2f).coerceAtMost(2.5f) }) { Text("+") }
-            Text(if (showNetwork) "${(zoom * 100).toInt()}% · стрелки: зависимости" else "${(zoom * 100).toInt()}% · сплошная: выбранный путь · пунктир: альтернатива · ↔ общая задача", style = MaterialTheme.typography.labelSmall)
+            PaperAction(onClick = { zoom = (zoom / 1.2f).coerceAtLeast(.005f) }) { PaperText("−") }
+            PaperAction(onClick = { zoom = (zoom * 1.2f).coerceAtMost(2.5f) }) { PaperText("+") }
+            PaperText(if (showNetwork) "${(zoom * 100).toInt()}% · стрелки: зависимости" else "${(zoom * 100).toInt()}% · сплошная: выбранный путь · пунктир: альтернатива · ↔ общая задача", role = PaperTextRole.LABEL)
         }
     }
 }

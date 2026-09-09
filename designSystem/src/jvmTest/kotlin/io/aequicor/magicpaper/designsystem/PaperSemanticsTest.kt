@@ -119,4 +119,16 @@ class PaperSemanticsTest {
             assertTrue(scene.nodes().any { it.config.getOrNull(SemanticsProperties.Error) == "Введите имя" })
         }
     }
+
+    @Test
+    fun fieldKeepsItsGuidanceWhenValidationFails() {
+        ImageComposeScene(320, 160) {
+            PaperTheme { PaperField("", {}, label = "Сложность", supportingText = "Введите положительное число", errorMessage = "Некорректное значение") }
+        }.use { scene ->
+            scene.render(16_000_000).close()
+            val text = scene.nodes().flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }.map { it.text }
+            assertTrue("Введите положительное число" in text)
+            assertTrue("Некорректное значение" in text)
+        }
+    }
 }

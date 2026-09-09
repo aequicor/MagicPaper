@@ -326,13 +326,22 @@ public fun PaperField(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     errorMessage: String? = null,
+    supportingText: String? = null,
     singleLine: Boolean = true,
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     val policy = LocalPaperPlatformPolicy.current
     OutlinedTextField(value, onValueChange, modifier.heightIn(min = policy.density.fieldHeight).semantics {
         if (errorMessage != null) error(errorMessage)
-    }, enabled = enabled, isError = errorMessage != null, label = { PaperText(label, role = PaperTextRole.LABEL) }, singleLine = singleLine, visualTransformation = visualTransformation)
+    }, enabled = enabled, isError = errorMessage != null, label = { PaperText(label, role = PaperTextRole.LABEL) },
+        supportingText = if (supportingText != null || errorMessage != null) {
+            {
+                Column {
+                    supportingText?.let { PaperText(it, role = PaperTextRole.LABEL) }
+                    errorMessage?.let { PaperText(it, role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
+                }
+            }
+        } else null, singleLine = singleLine, visualTransformation = visualTransformation)
 }
 
 @Composable
@@ -412,6 +421,7 @@ public fun PaperDialog(
     modifier: Modifier = Modifier,
     confirmLabel: String? = null,
     onConfirm: (() -> Unit)? = null,
+    confirmEnabled: Boolean = true,
     dismissLabel: String = "Закрыть",
     focusRestorer: PaperFocusRestorer? = null,
     content: @Composable () -> Unit,
@@ -422,7 +432,7 @@ public fun PaperDialog(
         Unit
     }
     AlertDialog(dismiss, modifier = modifier, title = { PaperText(title, role = PaperTextRole.TITLE) }, text = { Column { content() } },
-        confirmButton = { if (confirmLabel != null && onConfirm != null) PaperButton(confirmLabel, onConfirm) },
+        confirmButton = { if (confirmLabel != null && onConfirm != null) PaperButton(confirmLabel, onConfirm, enabled = confirmEnabled) },
         dismissButton = { PaperButton(dismissLabel, dismiss, kind = PaperButtonKind.QUIET) })
 }
 

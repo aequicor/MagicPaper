@@ -1,10 +1,17 @@
 package io.aequicor.magicpaper.plugins
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.mutableStateOf
 import io.aequicor.magicpaper.plugins.builtin.StageDetailsContent
+import io.aequicor.magicpaper.plugins.builtin.NodeEditor
 import androidx.compose.material3.Surface
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.data.planning.*
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
@@ -19,8 +26,47 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import kotlin.test.*
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalComposeUiApi::class)
 class PlanningWizardRenderTest {
+    private fun ImageComposeScene.nodes(): List<SemanticsNode> {
+        fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+        return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+    }
+
+    private fun SemanticsNode.texts(): List<String> =
+        config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } + children.flatMap { it.texts() }
+
+    private fun ImageComposeScene.invokeAction(label: String) {
+        val node = nodes().single { it.config.getOrNull(SemanticsActions.OnClick) != null && label in it.texts() }
+        node.config[SemanticsActions.OnClick].action!!.invoke()
+    }
+
+    @Test fun nodeEditorPreservesBranchCallbacks() {
+        val root = DecisionNode("root", "Цель", DecisionKind.GOAL)
+        val planState = mutableStateOf(Plan("plan", "project", "Цель", tree = listOf(root)))
+        val selectedNode = mutableStateOf(root)
+        ImageComposeScene(720, 700) {
+            MagicPaperTheme {
+                NodeEditor(planState.value, selectedNode.value, emptyList()) { transform ->
+                    planState.value = transform(planState.value)
+                }
+            }
+        }.use { scene ->
+            fun render() { repeat(4) { scene.render(it * 16_000_000L).close() } }
+            render()
+            scene.invokeAction("+ Этап")
+            assertEquals(1, planState.value.milestones.size)
+            assertEquals(1, planState.value.tree.count { it.kind == DecisionKind.STAGE })
+            scene.invokeAction("+ Выбор подхода")
+            val choice = planState.value.tree.single { it.kind == DecisionKind.CHOICE }
+            selectedNode.value = choice
+            render()
+            scene.invokeAction("Удалить узел и его ветвь")
+            assertTrue(planState.value.tree.none { it.id == choice.id })
+            assertTrue(planState.value.tree.none { it.kind == DecisionKind.OPTION })
+        }
+    }
+
     @Test fun rendersStagePromptAndLiveConversation() {
         val stage = Milestone("s", "Редактор документов", description = "Добавить экспорт документов в PDF.", acceptance = "Содержимое и форматирование сохраняются.",
             status = MilestoneStatus.ACTIVE, attempts = listOf(StageAttempt("a", "session", StageAssignment("agent", "model"),
