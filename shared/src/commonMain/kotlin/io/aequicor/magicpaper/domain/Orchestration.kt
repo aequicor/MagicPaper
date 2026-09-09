@@ -21,6 +21,8 @@ import kotlinx.serialization.Serializable
     val schedules: List<ScheduleCommand> = emptyList(),
     /** An explicit answer to a pending clarification, not permission to start execution. */
     val refinePlan: Boolean? = null,
+    /** Selected by the orchestrator; empty means no affected work. */
+    val pauseStageIds: List<String> = emptyList(),
 )
 
 @Serializable data class OrchestrationInput(
@@ -49,6 +51,10 @@ import kotlinx.serialization.Serializable
     /** Original clarification, retained until the user decides whether to revise the plan. */
     val refinementRequest: String? = null,
     val forDiscussion: Boolean = false,
+    /** Null retains legacy recipient-based scope; empty explicitly pauses no stages. */
+    val pauseStageIds: List<String>? = null,
+    val resolutionPending: Boolean = false,
+    val requirementContext: String? = null,
 )
 
 @Serializable data class SessionCommand(
@@ -75,6 +81,8 @@ internal fun OrchestrationQuestion.workerAnswerText(answers: List<PlanningAnswer
     }
 }.trim()
 
+@Serializable data class OrchestrationPause(val planId: String, val stageIds: List<String>, val proposalId: String? = null)
+
 @Serializable data class OrchestrationState(
     val sessionId: String, val projectId: String,
     val version: Int = 1, val activePlanId: String? = null,
@@ -85,6 +93,7 @@ internal fun OrchestrationQuestion.workerAnswerText(answers: List<PlanningAnswer
     /** Allocated once per stage, across every plan belonging to this orchestrator. */
     val stageNumbers: Map<String, Int> = emptyMap(),
     val nextStageNumber: Int = 1,
+    val workPauses: Map<String, OrchestrationPause> = emptyMap(),
 )
 
 @Serializable data class PlanProposal(
@@ -95,7 +104,7 @@ internal fun OrchestrationQuestion.workerAnswerText(answers: List<PlanningAnswer
 
 /** Execution has settled enough to review a follow-up; open questions are checked separately. */
 internal val Plan.proposalReadyForConfirmation: Boolean
-    get() = proposal != null && (phase == ExecutionPhase.COMPLETE || canExtendAfterFinalVerification)
+    get() = proposal != null && (phase == ExecutionPhase.COMPLETE || canExtendAfterFinalVerification || finalAttempt == null)
 
 @Serializable data class PlanRunSnapshot(
     val runId: String, val tree: List<DecisionNode>, val milestones: List<Milestone>,
@@ -142,3 +151,20 @@ internal fun List<PlanningQuestion>.validQuestions(): Boolean = size <= 3 && map
 }
 
 class OrchestrationPersistenceException(message: String, cause: Throwable) : IllegalStateException(message, cause)
+
+/** Pause recipients and their transitive dependants, without affecting independent work. */
+internal fun OrchestrationState.pausedStages(plan: Plan): Set<String> {
+    val selected = plan.selectedMilestones.map { it.id }.toSet()
+    val roots = questions.filter { it.planId == plan.id && (it.status == UserRequestStatus.OPEN || it.resolutionPending) }
+        .flatMap { it.pauseStageIds ?: it.stageIds.ifEmpty { selected.toList() } } +
+        workPauses.values.filter { pause ->
+            pause.planId == plan.id && (pause.proposalId == null || plan.proposal?.id == pause.proposalId ||
+                pause.stageIds.any { stageId -> plan.deliveries.none { it.id == "${pause.proposalId}-approved-$stageId" } })
+        }.flatMap { it.stageIds }
+    val blocked = roots.filter { it in selected }.toMutableSet()
+    val dependencies = DecisionCompiler.compile(plan).dependencies
+    do {
+        val changed = blocked.addAll(selected.filter { stage -> dependencies[stage].orEmpty().any { it in blocked } })
+    } while (changed)
+    return blocked
+}

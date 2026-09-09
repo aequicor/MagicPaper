@@ -634,6 +634,15 @@ class OrchestrationService(
         }.also { saved -> updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
             if (it.id == input.id) it.copy(decision = saved) else it
         }) } }
+        val pauseIds = (decision.pauseStageIds + state(session.id, session.projectId).workPauses[input.id]?.stageIds.orEmpty() + if (decision.intent == UserTurnIntent.INSTRUCT) listOf(decision.stageId) else emptyList()).distinct()
+        if (pauseIds.isNotEmpty()) {
+            val saved = updateState(session.id, session.projectId) { old -> old.copy(workPauses = old.workPauses +
+                (input.id to OrchestrationPause(current.id, pauseIds))) }
+            execution.interruptStages(current.id, saved.pausedStages(current))
+            append(session.projectId, session.id, CodingMessage("${input.id}-pause", CodingRole.AGENT,
+                "Приостановлены затронутые этапы: " + current.selectedMilestones.filter { it.id in saved.pausedStages(current) }
+                    .joinToString { it.stageLabel() } + ". Уточняю требования перед продолжением.", createdAt = clock(), systemNotice = true))
+        }
         syncInputMessage(session, input.id)
         when (decision.intent) {
             UserTurnIntent.SCHEDULE -> {
@@ -651,13 +660,13 @@ class OrchestrationService(
                 if (current.intent == ExecutionIntent.RUN) execution.start(current.id)
             }
             UserTurnIntent.REFINE -> refine(current.id, input.id, input.text, decision.requiresConfirmation)
-            UserTurnIntent.CLARIFY -> askToRefine(session, current, input, decision)
+            UserTurnIntent.CLARIFY -> askToRefine(session, current, input, decision.copy(pauseStageIds = pauseIds))
             UserTurnIntent.DISCUSS -> {
                 val message = decision.reply.ifBlank { "Уточните, что вы хотите узнать." }
                 val saved = store.update(current.id) { it.copy(dialogue = it.dialogue +
                     PlanningMessage(input.id, "user", input.text) + PlanningMessage("${input.id}-reply", "assistant", message,
                         activity = _drafts.value[session.id]?.steps.orEmpty().filter { it.kind != CodingStepKind.ANSWER }.map { it.copy(running = false) },
-                        questions = decision.questions)) }
+                        questions = decision.questions, questionStageIds = decision.pauseStageIds)) }
                 // Publish while the draft still supplies the visible fragment identities.
                 publish(saved)
             }
@@ -679,6 +688,17 @@ class OrchestrationService(
                     decision.reply.ifBlank { "Команда выполнена." }, createdAt = Id.now()))
             }
         }
+        updateState(session.id, session.projectId) { old ->
+            val proposal = store.plans.value.firstOrNull { it.id == current.id }?.proposal
+            val pause = old.workPauses[input.id]
+            val retained = old.workPauses.mapValues { (_, value) ->
+                if (value.planId == current.id && value.proposalId != null && proposal != null) value.copy(proposalId = proposal.id) else value
+            }
+            old.copy(workPauses = if (pause != null && proposal != null)
+                retained + (input.id to pause.copy(proposalId = proposal.id)) else retained - input.id)
+        }
+        if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER)
+            store.planFor(current.id)?.takeIf { it.intent == ExecutionIntent.RUN }?.let { execution.start(it.id) }
     }
 
     private suspend fun inputScheduleProblem(plan: Plan, input: OrchestrationInput, decision: UserTurnDecision): String? {
@@ -700,7 +720,7 @@ class OrchestrationService(
                 "${schedulingContext(current)}\nОткрытые запросы: ${json.encodeToString(kotlinx.serialization.builtins.ListSerializer(OrchestrationQuestion.serializer()), requests)}"
         val messages = mutableListOf(LlmMessage(LlmChatRole.SYSTEM, """
             Ты оркестратор диалога. Определи смысл сообщения и верни JSON:
-            {"intent":"DISCUSS|CLARIFY|REFINE|ANSWER|INSTRUCT|CONTROL|SCHEDULE","reply":"ответ пользователю","replyTo":null,"completeAnswer":true,"command":"","questions":[],"refinePlan":null}.
+            {"intent":"DISCUSS|CLARIFY|REFINE|ANSWER|INSTRUCT|CONTROL|SCHEDULE","reply":"ответ пользователю","replyTo":null,"completeAnswer":true,"command":"","questions":[],"refinePlan":null,"pauseStageIds":[]}.
             ${schedulingInstructions()}
             Ты управляешь исполнением через команды приложения. Сообщение по расписанию не передаёт тебе инструменты исполнителя и не меняет владельца этапа.
             Для выполнения и проверок используй INSTRUCT или REFINE. Не обещай запуск тестов, удаление сессии или принятие этапа, если соответствующая команда не выполнена.
@@ -708,10 +728,15 @@ class OrchestrationService(
             DISCUSS: вопрос пользователя, объяснение результата или встречный вопрос к уточнению. Ответь по фактическому контексту, не меняй план и не закрывай ожидающий вопрос.
             Вопросы «что это значит?», «что сделано?», «почему пропущены проверки?», «какой сейчас план?», «почему все файлы?» — DISCUSS, даже после завершения работы или при открытом предложении. Вопрос о последствиях варианта не означает выбор этого варианта. Не добавляй к объяснению новый план и не предлагай доработку без уточнения требований.
             Объясняя остановку, учитывай ошибку плана и итоговую проверку. Завершение всех этапов не означает, что итоговая проверка пройдена. Отделяй проваленные проверки от не запущенных и внешних ограничений.
-            CLARIFY: пользователь сообщает уточнение, ограничение, поправку или предпочтение по задаче, но явно не поручает изменить план. Например: «я имел в виду только изменённые файлы», «уточнение: кнопка должна быть слева», «вообще нужен PDF». Кратко отрази уточнение в reply; приложение спросит «Нужно ли доработать план с учётом этого уточнения?». Не вызывай REFINE или INSTRUCT и не составляй предложение заранее. При неоднозначности между уточнением и поручением выбирай CLARIFY; между вопросом и действием — DISCUSS с уточняющим вопросом.
+            Для поправок пользователя автоматически определи затронутые этапы по их заданиям и зависимостям и укажи pauseStageIds (ID этапов текущего плана).
+            Они немедленно прерываются до уточнения и передачи требований. Независимое исследование должно продолжаться при изменении только дизайн-системы.
+            Для обычного вопроса о статусе pauseStageIds=[]. Получатель stageId и список паузы различаются: зависимые этапы приложение блокирует автоматически.
+            Если деталей не хватает, выбери CLARIFY с questions и pauseStageIds. Если поправка конкретна и достаточно передать её исполнителю в рамках цели, выбери INSTRUCT.
+            При изменении структуры, зависимостей или критериев выбери REFINE с requiresConfirmation=true и pauseStageIds.
+            CLARIFY: пользователь сообщает уточнение, ограничение, поправку или предпочтение по задаче, но явно не поручает изменить план. Например: «я имел в виду только изменённые файлы», «уточнение: кнопка должна быть слева», «вообще нужен PDF». Кратко отрази уточнение в reply; приложение спросит «Нужно ли доработать план с учётом этого уточнения?». При недостающих деталях сначала задай questions. При неоднозначности между уточнением и поручением выбирай CLARIFY; между вопросом и действием — DISCUSS с уточняющим вопросом.
             REFINE: явное поручение построить или изменить план, выполнить задачу или доработку, например «составь план», «доработай план с учётом этого», «добавь обработку ошибок», «можешь добавить кнопку?». Вопросительный знак сам по себе не отличает поручение от вопроса. Для изменения утверждённых требований укажи requiresConfirmation=true. Доработка завершённого плана будет предложена на подтверждение.
             ANSWER: пользователь отвечает на конкретный открытый запрос; укажи его id в replyTo. При частичном ответе completeAnswer=false и объясни, что ещё требуется.
-            INSTRUCT: только явное поручение конкретному исполнителю утверждённого плана в рамках утверждённой цели, включая исправление проваленной проверки; укажи stageId. Само уточнение без поручения — CLARIFY. Явное поручение изменить требования, добавить новые результаты или доработать завершённый план — REFINE.
+            INSTRUCT: только явное поручение конкретному исполнителю утверждённого плана в рамках утверждённой цели, включая исправление проваленной проверки; укажи stageId. Конкретную поправку в рамках цели передай через INSTRUCT без лишнего вопроса. Явное поручение изменить требования, добавить новые результаты или доработать завершённый план — REFINE.
             CONTROL: явная команда pause, stop, resume или confirm. confirm допустим только для показанного предложения или плана.
             Наличие открытого вопроса НЕ означает, что любое сообщение является ответом. При неоднозначности верни DISCUSS с уточнением и questions=[{"id":"id","title":"вопрос","kind":"TEXT","options":[]}].
             Если открытый запрос содержит refinementRequest, это вопрос о доработке плана. Только однозначное согласие или отказ — ANSWER с replyTo и refinePlan=true или false. Встречный вопрос — DISCUSS, новое уточнение — CLARIFY. Не подменяй согласие командой confirm: она запускает выполнение, а здесь разрешена только подготовка доработки.
@@ -731,7 +756,7 @@ class OrchestrationService(
             require(current.runId == plan.runId) { "Запуск изменился во время ответа; решение не применено" }
             requests = state(session.id, session.projectId).openQuestions(plan.id)
             messages[1] = LlmMessage(LlmChatRole.USER, context(current) +
-                "\nЦель: ${current.goal}; утверждён=${current.confirmedRevision != null}; предложение=${current.proposal?.explanation}; этапы=${current.selectedMilestones.joinToString { "${it.id}: ${it.stageLabel()}: ${it.status}; проверка=${it.checkNote}; отчёт=${it.report}" }}\n" +
+                "\nЦель: ${current.goal}; утверждён=${current.confirmedRevision != null}; предложение=${current.proposal?.explanation}; этапы=${current.selectedMilestones.joinToString { "${it.id}: ${it.stageLabel()}: ${it.status}; задание=${it.description}; критерии=${it.acceptance}; зависимости=${DecisionCompiler.compile(current).dependencies[it.id].orEmpty()}; проверка=${it.checkNote}; отчёт=${it.report}" }}\n" +
                 "Источник: ${if (input.scheduledRuleId == null) "пользователь" else "автоматическая доставка ${input.scheduledRuleId}"}\nДиалог (история):\n$history\nСообщение: ${input.text}")
             _drafts.update { all ->
                 val retained = all[session.id]?.takeIf { it.timelineId == "${input.id}-reply" }?.steps.orEmpty()
@@ -752,7 +777,7 @@ class OrchestrationService(
             require(latest.runId == current.runId) { "Запуск изменился во время ответа; решение не применено" }
             val scheduleProblem = result?.takeIf { it.intent == UserTurnIntent.SCHEDULE }?.let { inputScheduleProblem(plan, input, it) }
             lastProblem = scheduleProblem
-            val valid = result != null && scheduleProblem == null && (result.intent != UserTurnIntent.ANSWER || requests.any { it.id == result.replyTo }) &&
+            val valid = result != null && result.pauseStageIds.all { id -> current.selectedMilestones.any { it.id == id } } && scheduleProblem == null && (result.intent != UserTurnIntent.ANSWER || requests.any { it.id == result.replyTo }) &&
                 (result.intent != UserTurnIntent.ANSWER || requests.none { it.id == result.replyTo && it.refinementRequest != null } || result.refinePlan != null) &&
                 (result.intent != UserTurnIntent.CONTROL || result.command in listOf("pause", "stop", "resume", "confirm") &&
                     (input.scheduledRuleId == null || result.command !in listOf("resume", "confirm"))) &&
@@ -774,15 +799,16 @@ class OrchestrationService(
 
     private suspend fun askToRefine(session: CodingSession, plan: Plan, input: OrchestrationInput, decision: UserTurnDecision) {
         val id = "${input.id}-reply"
-        val text = listOf(decision.reply.takeIf { it.isNotBlank() }, "Нужно ли доработать план с учётом этого уточнения?")
+        val needsDetails = decision.questions.isNotEmpty()
+        val text = listOf(decision.reply.takeIf { it.isNotBlank() }, if (needsDetails) null else "Нужно ли доработать план с учётом этого уточнения?")
             .filterNotNull().joinToString("\n\n")
-        val questions = listOf(PlanningQuestion("refine-plan", "Нужно ли доработать план с учётом этого уточнения?",
+        val questions = decision.questions.ifEmpty { listOf(PlanningQuestion("refine-plan", "Нужно ли доработать план с учётом этого уточнения?",
             QuestionKind.SINGLE, listOf(QuestionOption("yes", "Да, доработать план"), QuestionOption("no", "Нет, оставить план")),
-            allowCustomInput = false, canSkip = false))
+            allowCustomInput = false, canSkip = false)) }
         updateState(session.id, session.projectId) { old ->
             if (old.questions.any { it.id == id }) old else old.copy(questions = old.questions +
                 OrchestrationQuestion(id, plan.id, text, questions, session.id, scopeLabel = "Уточнение плана",
-                    refinementRequest = input.text))
+                    refinementRequest = if (needsDetails) null else input.text, forDiscussion = needsDetails, pauseStageIds = decision.pauseStageIds, requirementContext = input.text))
         }
         val saved = store.update(plan.id) { old -> old.copy(dialogue = old.dialogue +
             PlanningMessage(input.id, "user", input.text) + PlanningMessage(id, "assistant", text, questions = questions)) }
@@ -810,7 +836,7 @@ class OrchestrationService(
         } ?: decision.refinePlan
         require(question.refinementRequest == null || !complete || refinePlan != null) { "Укажите, нужно ли доработать план" }
         updateState(session.id, session.projectId) { old -> old.copy(questions = old.questions.map {
-            if (it.id == id) it.copy(partialAnswers = combined, partialMessages = it.partialMessages + (input.id to input.text), status = if (complete) UserRequestStatus.ANSWERED else UserRequestStatus.OPEN,
+            if (it.id == id) it.copy(partialAnswers = combined, partialMessages = it.partialMessages + (input.id to input.text), status = if (complete) UserRequestStatus.ANSWERED else UserRequestStatus.OPEN, resolutionPending = complete,
                 answerInputId = if (complete) input.id else null, answeredAt = if (complete) clock() else null,
                 answeredRunId = if (complete) plan.runId else null) else it
         }) }
@@ -823,35 +849,51 @@ class OrchestrationService(
                 decision.reply.ifBlank { "Часть ответов сохранена. Остальные вопросы остаются открытыми." }, createdAt = Id.now()))
             return
         }
-        if (question.refinementRequest != null) {
-            if (refinePlan == true) refine(plan.id, input.id, question.refinementRequest, requireApproval = true)
-            else {
-                val saved = store.update(plan.id) { old -> old.copy(dialogue = old.dialogue +
-                    PlanningMessage(input.id, "user", input.text) +
-                    PlanningMessage("${input.id}-reply", "assistant", "План оставлен без изменений.")) }
-                publish(saved)
+        suspend fun deliverAnswer() {
+            if (question.refinementRequest != null) {
+                if (refinePlan == true) refine(plan.id, input.id, question.refinementRequest, requireApproval = true)
+                else {
+                    val saved = store.update(plan.id) { old -> old.copy(dialogue = old.dialogue +
+                        PlanningMessage(input.id, "user", input.text) +
+                        PlanningMessage("${input.id}-reply", "assistant", "План оставлен без изменений.")) }
+                    publish(saved)
+                }
+                return
             }
-            return
+            val answerText = question.workerAnswerText(combined, input)
+            if (question.forDiscussion && !question.pauseStageIds.isNullOrEmpty()) {
+                val followup = OrchestrationInput("${input.id}-requirements", "Уточнялись требования: ${question.requirementContext ?: question.text}\n$answerText\n" +
+                    "Детали получены. Определи, достаточно ли передать актуальные требования исполнителю (INSTRUCT), нужен ли REFINE или остались вопросы CLARIFY.", clock())
+                updateState(session.id, session.projectId) { old -> old.copy(
+                    inputs = if (old.inputs.any { it.id == followup.id }) old.inputs else old.inputs + followup,
+                    workPauses = old.workPauses + (followup.id to OrchestrationPause(plan.id, question.pauseStageIds))) }
+                return
+            }
+            if (question.forDiscussion) {
+                askToRefine(session, plan, input.copy(text = answerText), decision.copy(reply = "Уточнение сохранено.", pauseStageIds = question.pauseStageIds ?: question.stageIds))
+                return
+            }
+            if (plan.confirmedRevision == null || question.forPlanning) { refine(plan.id, input.id, answerText); return }
+            val targets = question.stageIds.ifEmpty { plan.selectedMilestones.filterNot { it.completed }.map { it.id } }
+            targets.forEach { stageId -> enqueue(plan.id, session.id, stageId, answerText, "${input.id}-answer-$stageId", replyTo = id) }
+            store.update(plan.id) { old -> old.copy(issue = old.issue?.takeUnless { it.isPlannerAnswerWait },
+                milestones = old.milestones.map { m -> if (m.id !in targets) m else m.copy(attempts = m.attempts.map { a ->
+                    a.copy(waitingForUser = null, error = a.error?.takeUnless { it.isPlannerAnswerWait })
+                }) }) }
+            if (plan.intent == ExecutionIntent.RUN) execution.start(plan.id)
         }
-        val answerText = question.workerAnswerText(combined, input)
-        if (question.forDiscussion) {
-            askToRefine(session, plan, input.copy(text = answerText), decision.copy(reply = "Уточнение сохранено."))
-            return
-        }
-        if (plan.confirmedRevision == null || question.forPlanning) { refine(plan.id, input.id, answerText); return }
-        val targets = question.stageIds.ifEmpty { plan.selectedMilestones.filterNot { it.completed }.map { it.id } }
-        targets.forEach { stageId -> enqueue(plan.id, session.id, stageId, answerText, "${input.id}-answer-$stageId", replyTo = id) }
-        store.update(plan.id) { old -> old.copy(issue = old.issue?.takeUnless { it.isPlannerAnswerWait },
-            milestones = old.milestones.map { m -> if (m.id !in targets) m else m.copy(attempts = m.attempts.map { a ->
-                a.copy(waitingForUser = null, error = a.error?.takeUnless { it.isPlannerAnswerWait })
-            }) }) }
-        if (plan.intent == ExecutionIntent.RUN) execution.start(plan.id)
+        deliverAnswer()
+        updateState(session.id, session.projectId) { old -> old.copy(
+            questions = old.questions.map { if (it.id == id) it.copy(resolutionPending = false) else it },
+            workPauses = store.plans.value.firstOrNull { it.id == plan.id }?.proposal?.let { proposal ->
+                old.workPauses + (input.id to OrchestrationPause(plan.id,
+                    question.pauseStageIds ?: question.stageIds.ifEmpty { plan.selectedMilestones.map { it.id } }, proposal.id))
+            } ?: old.workPauses) }
     }
 
     override suspend fun blockedStages(plan: Plan): Set<String> =
-        if (plan.parentSessionId in _persistenceErrors.value) plan.selectedMilestones.map { it.id }.toSet() else state(plan.parentSessionId, plan.projectId).openQuestions(plan.id).filter { it.refinementRequest == null && !it.forDiscussion }.flatMap {
-            it.stageIds.ifEmpty { plan.selectedMilestones.map { stage -> stage.id } }
-        }.toSet()
+        if (plan.parentSessionId in _persistenceErrors.value) plan.selectedMilestones.map { it.id }.toSet()
+        else state(plan.parentSessionId, plan.projectId).pausedStages(plan)
 
     private suspend fun syncQuestionMessages(session: CodingSession) {
         val history = projects.messages(session.projectId, session.id)
@@ -955,10 +997,21 @@ class OrchestrationService(
             require(extended.selectedMilestones.any { !it.completed }) { "В предложении нет новых этапов" }
             val snapshot = PlanRunSnapshot(plan.runId, plan.tree, plan.milestones, plan.workspace, plan.finalAttempt, Id.now())
             val completedRun = plan.phase == ExecutionPhase.COMPLETE
+            val paused = state(plan.parentSessionId, plan.projectId).workPauses.values
+                .filter { it.planId == plan.id && it.proposalId == proposalId }.flatMap { it.stageIds }.toSet()
             plan = store.update(id) { latest ->
                 require(expectedRevision == null || latest.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
                 require(latest.proposal?.id == proposalId) { "Предложение изменилось" }
-                extended.copy(revision = latest.revision, runHistory = latest.runHistory + snapshot,
+                val reconciled = latest.copy(tree = proposal.tree, milestones = proposal.milestones.map { proposed ->
+                    latest.milestones.firstOrNull { it.id == proposed.id }?.takeIf { it.attempts.isNotEmpty() || it.completed } ?: proposed
+                })
+                DecisionCompiler.validateEdit(latest, reconciled)
+                reconciled.copy(revision = latest.revision, runHistory = latest.runHistory + snapshot,
+                    // Commit approved requirements with the plan, so recovery cannot release a pause before delivery.
+                    deliveries = (latest.deliveries + paused.map { stageId -> PlanDelivery(
+                        "$proposalId-approved-$stageId", latest.parentSessionId, stageId,
+                        "Подтверждённые уточнения плана:\n${proposal.explanation}",
+                        state = if (latest.milestones.firstOrNull { it.id == stageId }?.completed == true) DeliveryState.ANSWERED else DeliveryState.QUEUED) }).distinctBy { it.id },
                     proposal = null, runId = if (completedRun) Id.new() else latest.runId,
                     workspace = if (completedRun) null else latest.workspace,
                     finalAttemptHistory = latest.finalAttemptHistory + listOfNotNull(latest.finalAttempt),
@@ -984,6 +1037,9 @@ class OrchestrationService(
                 status = PlanStatus.RUNNING, runId = it.runId.ifBlank { Id.new() },
                 versions = it.versions + PlanVersion(it.revision, it.tree, it.milestones.map { m -> m.copy(attempts = emptyList()) }, Id.now())) }
         }
+        updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(workPauses = old.workPauses.filterValues {
+            it.planId != plan.id || it.proposalId != proposalId || proposalId == null
+        }) }
         prepareSessions(plan)
         append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-${proposalId ?: "initial"}-confirmed", CodingRole.AGENT,
             "План подтверждён. Оркестратор распределяет задания между исполнителями; зависимые этапы ждут завершения предыдущих.", createdAt = Id.now()))
@@ -1673,7 +1729,10 @@ class OrchestrationService(
                     stages, block.scopeLabel.ifBlank { if (stages.isEmpty()) "Для всего плана" else stages.joinToString("; ") { stageId -> (plan.milestones + plan.proposal?.milestones.orEmpty()).firstOrNull { it.id == stageId }?.stageLabel() ?: "Этап" } },
                     status = if (questionMessages.any { it.planning?.replyTo == m.id && it.planning.closesRequest }) UserRequestStatus.ANSWERED else block.requestStatus,
                     forPlanning = plan.dialogue.any { it.id == m.id },
-                    forDiscussion = old.inputs.any { "${it.id}-reply" == m.id && it.decision?.intent == UserTurnIntent.DISCUSS })
+                    forDiscussion = old.inputs.any { "${it.id}-reply" == m.id && it.decision?.intent == UserTurnIntent.DISCUSS },
+                    pauseStageIds = old.workPauses[m.id.removeSuffix("-reply")]?.stageIds ?: old.inputs.firstOrNull { "${it.id}-reply" == m.id }?.decision?.let {
+                        it.pauseStageIds.takeIf { ids -> ids.isNotEmpty() || it.intent == UserTurnIntent.DISCUSS }
+                    })
             }
             if (imported.isEmpty()) old else old.copy(questions = old.questions + imported)
         }

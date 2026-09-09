@@ -46,11 +46,13 @@ internal fun OrchestrationStatus(
     var archive by rememberSaveable(session.session.id) { mutableStateOf(false) }
     val previousStages = plan?.runHistory?.lastOrNull()?.milestones?.filter { it.completed }?.map { it.id }.orEmpty().toSet()
     val stages = plan?.selectedMilestones.orEmpty().filter { it.id !in previousStages }
+    val pausedStages = plan?.let { state?.pausedStages(it) }.orEmpty()
     val done = stages.count { it.completed }
     val blockers = plan?.blockingIssues(session.messages).orEmpty()
-    val active = plan?.selectedMilestones.orEmpty().filter { plan?.isStageWorking(it) == true }
+    val active = plan?.selectedMilestones.orEmpty().filter { plan?.isStageWorking(it) == true && it.id !in pausedStages }
     val failedInput = state?.inputs?.lastOrNull()?.takeIf { it.status == OrchestrationInputStatus.FAILED }
     val phase = when {
+        pausedStages.isNotEmpty() -> "Ожидание ответа пользователя · приостановлено этапов: ${pausedStages.size}"
         session.interactions.isNotEmpty() -> "Ждём вашего ответа"
         session.session.id in persistenceErrors -> "Ошибка сохранения · выполнение остановлено"
         failedInput != null -> "Ошибка обработки сообщения"
@@ -140,7 +142,7 @@ internal fun OrchestrationStatus(
                     SessionActions(child, service, onOpenSession, allowArchive = stage?.completed == true)
                     Text(when {
                         questions.any { child.id == it.sourceSessionId || child.stageId in it.stageIds } -> "Ждёт вашего ответа"
-                        stage?.waitingForAnswer() == true -> "Ждёт вашего ответа"
+                        stage?.id in pausedStages || stage?.waitingForAnswer() == true -> "Ждёт вашего ответа"
                         stage?.attempts?.lastOrNull()?.waitingForEvent != null -> childPlan.eventWaitLabel(stage.id)
                         stage?.completed == true -> "Завершено"
                         stage != null && childPlan.isStageWorking(stage) -> "Работает"

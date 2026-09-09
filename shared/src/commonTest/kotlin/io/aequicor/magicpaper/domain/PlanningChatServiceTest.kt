@@ -1439,6 +1439,60 @@ class PlanningChatServiceTest {
         assertTrue(f.runtime.calls.isEmpty())
     }
 
+    @Test fun activePlanProposalHoldsWorkerUntilApprovedRequirementsAreDurable() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.readyPlan("p", parent)
+        f.service.confirm("p"); advanceTimeBy(200); runCurrent()
+        f.gateway.userDecision = """{"intent":"REFINE","requiresConfirmation":true,"pauseStageIds":["stage"]}"""
+        f.gateway.overrideReply = """{"reply":"Добавить обработку ошибок","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["stage","errors"]},{"id":"stage","title":"Stage","kind":"STAGE","stageId":"stage"},{"id":"errors","title":"Errors","kind":"STAGE","stageId":"errors"}],"milestones":[{"id":"stage","title":"Stage","acceptance":"Checks pass"},{"id":"errors","title":"Errors","acceptance":"Error checks pass","description":"Handle errors","dependsOn":["stage"],"continuationOf":"stage"}]}"""
+        f.service.send(parent, "Доработай план: добавь обработку ошибок"); advanceTimeBy(200); runCurrent()
+        val pending = f.store.planFor("p")!!
+        val proposal = assertNotNull(pending.proposal)
+        assertEquals(setOf("stage"), f.service.blockedStages(pending))
+        assertTrue(pending.proposalReadyForConfirmation)
+        assertEquals(1, f.runtime.calls.size)
+        f.service.confirm("p", proposal.id); advanceTimeBy(200); runCurrent()
+        val approved = f.store.planFor("p")!!
+        assertNull(approved.proposal)
+        assertTrue(f.service.blockedStages(approved).isEmpty())
+        assertEquals(2, f.runtime.calls.size)
+        assertContains(f.runtime.calls.last().second, "Добавить обработку ошибок")
+        assertTrue(approved.deliveries.any { it.id == "${proposal.id}-approved-stage" })
+        f.service.shutdown(); f.execution.shutdown()
+    }
+
+    @Test fun designClarificationPausesDesignWhileResearchContinuesAndDeliversBeforeResume() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.store.save(base.copy(tree = emptyList(), parallelism = 2, milestones = base.milestones +
+            base.milestones.single().copy(id = "research", title = "Research")))
+        f.service.confirm("p"); advanceTimeBy(200); runCurrent()
+        assertEquals(2, f.runtime.calls.size)
+        f.gateway.userDecision = """{"intent":"CLARIFY","reply":"Уточним дизайн","pauseStageIds":["stage"],"questions":[{"id":"color","title":"Цвет?"},{"id":"size","title":"Размер?"}]}"""
+        f.service.send(parent, "Мне не нравится дизайн, хочу по-другому"); runCurrent()
+        val question = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        assertEquals(setOf("stage"), f.service.blockedStages(f.store.planFor("p")!!))
+        advanceTimeBy(300); runCurrent()
+        assertEquals(2, f.runtime.calls.size)
+        f.service.send(parent, "Синий", listOf(PlanningAnswer("color", text = "Синий")), question.id); runCurrent()
+        assertEquals(UserRequestStatus.OPEN, f.projects.orchestration(parent.id)!!.questions.single().status)
+        assertEquals(setOf("stage"), f.service.blockedStages(f.store.planFor("p")!!))
+        f.gateway.userDecision = """{"intent":"INSTRUCT","stageId":"stage","pauseStageIds":["stage"]}"""
+        f.service.send(parent, "Крупный", listOf(PlanningAnswer("size", text = "Крупный")), question.id)
+        advanceTimeBy(300); runCurrent()
+        assertTrue(f.service.blockedStages(f.store.planFor("p")!!).isEmpty())
+        assertEquals(3, f.runtime.calls.size)
+        assertEquals(1, f.runtime.calls.count { it.first.id.endsWith("research") })
+        val resumed = f.runtime.calls.last()
+        assertTrue(resumed.first.id.endsWith("stage"))
+        assertContains(resumed.second, "Синий")
+        assertContains(resumed.second, "Крупный")
+        assertTrue(f.store.planFor("p")!!.milestones.all { it.attempts.size == 1 && it.attempts.single().error == null })
+        f.service.shutdown(); f.execution.shutdown()
+    }
+
     @Test fun clarificationWaitsForDecisionAndCounterquestionAndRefusalKeepCompletedPlan() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")

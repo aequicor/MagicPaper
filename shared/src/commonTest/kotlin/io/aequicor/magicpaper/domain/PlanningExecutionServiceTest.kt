@@ -71,6 +71,43 @@ class PlanningExecutionServiceTest {
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
 
+    @Test fun questionInterruptsOnlyAffectedWorkerAndResumesSameAttempt() = runTest {
+        val (store, service, runtime) = fixture(Runtime(CompletableDeferred(), trailingDelta = "Saved progress"))
+        var blocked = emptySet<String>()
+        service.chatHooks = object : PlanningExecutionHooks {
+            override suspend fun blockedStages(plan: Plan) = blocked
+            override suspend fun prepareSessions(plan: Plan) = Unit
+            override suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt) = ""
+            override suspend fun finished(plan: Plan, stage: Milestone, attempt: StageAttempt) = StageTurnDecision(StageTurnAction.VERIFY, attempt.report)
+        }
+        store.save(plan(stage("research"), stage("design")).copy(parallelism = 2))
+        service.start(project.id); advanceTimeBy(200); runCurrent()
+        val before = store.planFor(project.id)!!.milestones.first { it.id == "design" }.attempts.single()
+        val research = store.planFor(project.id)!!.milestones.first { it.id == "research" }.attempts.single()
+        blocked = setOf("design")
+        advanceTimeBy(200); runCurrent()
+        assertContains(runtime.aborted, before.sessionId)
+        assertFalse(research.sessionId in runtime.aborted)
+        val paused = store.planFor(project.id)!!.milestones.first { it.id == "design" }.attempts.single()
+        assertEquals("Saved progress", paused.report)
+        assertNull(paused.error)
+        assertEquals(before.transportRetries, paused.transportRetries)
+        val calls = runtime.calls.size
+        advanceTimeBy(1000); runCurrent()
+        assertEquals(calls, runtime.calls.size)
+        service.pause(project.id)
+        blocked = emptySet()
+        advanceTimeBy(200); runCurrent()
+        assertEquals(calls, runtime.calls.size)
+        assertEquals(ExecutionIntent.PAUSE, store.planFor(project.id)!!.intent)
+        service.stopAndJoin("plan")
+        service.start(project.id); advanceTimeBy(200); runCurrent()
+        val resumed = store.planFor(project.id)!!.milestones.first { it.id == "design" }.attempts.single()
+        assertEquals(before.id, resumed.id)
+        assertEquals(paused.engineSessionId, resumed.engineSessionId)
+        service.shutdown()
+    }
+
     @Test fun chosenEngineIsInheritedByWorkersAndFinalVerification() = runTest {
         val (store, service, runtime) = fixture()
         store.save(plan(stage("a")).copy(engine = CodingEngine.CODEX))
