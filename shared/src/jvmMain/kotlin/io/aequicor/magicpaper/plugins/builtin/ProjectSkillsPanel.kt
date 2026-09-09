@@ -17,8 +17,9 @@ class ProjectSkillsPanel(private val repository: () -> LocalSkillRepository) : P
     override fun Content(projectId: String) {
         key(projectId) {
             var catalogOpen by remember { mutableStateOf(false) }
+            var connectKey by remember { mutableStateOf<String?>(null) }
             if (catalogOpen) {
-                SkillCatalogPanel(repository) { catalogOpen = false }
+                SkillCatalogPanel(repository, onConnect = { connectKey = it; catalogOpen = false }) { catalogOpen = false }
             } else {
             val scope = rememberCoroutineScope()
             var entries by remember { mutableStateOf<List<LocalSkillCatalogEntry>>(emptyList()) }
@@ -39,7 +40,21 @@ class ProjectSkillsPanel(private val repository: () -> LocalSkillRepository) : P
                     finally { busy = false }
                 }
             }
-            LaunchedEffect(projectId) { action { } }
+            LaunchedEffect(projectId) {
+                action {
+                    refresh()
+                    connectKey?.let { selectedKey ->
+                        val release = snapshot.installed.getValue(selectedKey)
+                        require(release.status == SkillCandidateStatus.VERIFIED && release.improvement?.passed != false) {
+                            "Перед подключением завершите проверку скилла."
+                        }
+                        val pins = snapshot.projects[projectId].orEmpty()
+                        pending = pins.filterKeys { snapshot.installed[it]?.pkg?.manifest?.id != release.pkg.manifest.id } +
+                            (selectedKey to release.pkg.checksum)
+                        connectKey = null
+                    }
+                }
+            }
             Column(Modifier.widthIn(max = 680.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Проект: $projectId")
                 TextButton(enabled = !busy, onClick = { catalogOpen = true }) { Text("Добавить скилы из репозиториев") }
@@ -61,6 +76,19 @@ class ProjectSkillsPanel(private val repository: () -> LocalSkillRepository) : P
                 Text(if (trusted) "Режим: доверенный текст. Фактические инструменты: штатная политика backend; отдельной ACL пакета нет." else "Применение подключённых пакетов заблокировано: нет согласия на доверенный текст точного состава.")
                 if (projectId in snapshot.projectTextConsents) Text("Новая engine-сессия на каждом запуске; прежняя история не передаётся.")
                 TextButton(enabled = !busy && pins.isNotEmpty(), onClick = { pending = pins; permissionConsent = false; trustedTextConsent = false }) { Text("Настроить доверенный текст…") }
+                pending?.let { target ->
+                    val requested = target.keys.flatMap { snapshot.installed.getValue(it).pkg.manifest.permissions }.toSet()
+                    Text("Подтвердите новый состав проекта:\n" + target.entries.joinToString("\n") { "${it.key}: ${it.value}" })
+                    Row { Checkbox(permissionConsent, { permissionConsent = it }); Text("Отдельное согласие на заявленные разрешения: $requested (не выдаёт доступ)") }
+                    Row { Checkbox(trustedTextConsent, { trustedTextConsent = it }); Text("Разрешаю доверенный текст для перечисленных checksum. " + CodingSkillProtection.trustedTextWarning) }
+                    Row {
+                        TextButton(enabled = !busy && (requested.isEmpty() || permissionConsent), onClick = {
+                            val consent = SkillActivationConsent(snapshot.generation, target, true, if (permissionConsent) requested else emptySet(), trustedCodingText = trustedTextConsent)
+                            action { repository().bindProject(projectId, target, consent); pending = null }
+                        }) { Text("Подтвердить изменение") }
+                        TextButton(onClick = { pending = null }) { Text("Отмена") }
+                    }
+                }
                 for (section in listOf("Подключённые", "Созданы автоматически", "Библиотека")) {
                     Text(section, style = MaterialTheme.typography.titleMedium)
                     val items = entries.filter { when (section) {
@@ -81,22 +109,10 @@ class ProjectSkillsPanel(private val repository: () -> LocalSkillRepository) : P
                             pending = if (r.pkg.key in proposed) proposed - r.pkg.key else proposed.filterKeys { key -> snapshot.installed[key]?.pkg?.manifest?.id != m.id } + (r.pkg.key to r.pkg.checksum)
                             permissionConsent = false
                             trustedTextConsent = false
-                        }) { Text(if (connected) "Отключить…" else "Подключить / обновить…") }
+                        }) { Text(if (connected) "Отключить…" else "Подключить скилл") }
                     }
                 }
-                pending?.let { target ->
-                    val requested = target.keys.flatMap { snapshot.installed.getValue(it).pkg.manifest.permissions }.toSet()
-                    Text("Подтвердите новый состав проекта:\n" + target.entries.joinToString("\n") { "${it.key}: ${it.value}" })
-                    Row { Checkbox(permissionConsent, { permissionConsent = it }); Text("Отдельное согласие на заявленные разрешения: $requested (не выдаёт доступ)") }
-                    Row { Checkbox(trustedTextConsent, { trustedTextConsent = it }); Text("Разрешаю доверенный текст для перечисленных checksum. " + CodingSkillProtection.trustedTextWarning) }
-                    Row {
-                        TextButton(enabled = !busy && (requested.isEmpty() || permissionConsent), onClick = {
-                            val consent = SkillActivationConsent(snapshot.generation, target, true, if (permissionConsent) requested else emptySet(), trustedCodingText = trustedTextConsent)
-                            action { repository().bindProject(projectId, target, consent); pending = null }
-                        }) { Text("Подтвердить изменение") }
-                        TextButton(onClick = { pending = null }) { Text("Отмена") }
-                    }
-                }
+
             }
             }
         }

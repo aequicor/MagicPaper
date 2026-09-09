@@ -12,7 +12,12 @@ import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.*
 
 @Composable
-internal fun SkillCatalogPanel(repository: () -> LocalSkillRepository, catalogFactory: () -> GithubSkillCatalog = { GithubSkillCatalog() }, onClose: () -> Unit) {
+internal fun SkillCatalogPanel(
+    repository: () -> LocalSkillRepository,
+    catalogFactory: () -> GithubSkillCatalog = { GithubSkillCatalog() },
+    onConnect: ((String) -> Unit)? = null,
+    onClose: () -> Unit,
+) {
     val catalog = remember { catalogFactory() }
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
@@ -102,6 +107,11 @@ internal fun SkillCatalogPanel(repository: () -> LocalSkillRepository, catalogFa
         matches.forEach { entry ->
             val p = entry.release.pkg
             Text("${p.manifest.name} · ${p.key}\n${entry.source}\nChecksum: ${p.checksum}\nЛицензия: ${p.manifest.license ?: "не установлена"}; ${entry.release.status}")
+            if (onConnect != null) {
+                val eligible = entry.release.status == SkillCandidateStatus.VERIFIED && entry.release.improvement?.passed != false
+                Button(enabled = !busy && eligible, onClick = { onConnect(p.key) }) { Text("Подключить скилл") }
+                if (!eligible) Text("Для подключения завершите проверку скилла через «Просмотр и review».")
+            }
             TextButton(enabled = !busy, onClick = {
                 action {
                     val diff = withContext(Dispatchers.IO) { repository().diff(p.key) }
