@@ -127,6 +127,45 @@ class RequestPinServiceTest {
         assertTrue(f.repo.load(coding).isEmpty())
     }
 
+    @Test fun planningQuestionsNeverFlashAsPinsAndClarificationsStayWithTheirRequest() = runTest {
+        // Even a disagreeing summary model cannot turn an established clarification into a task.
+        val f = Fixture(this) { id -> """{"summary":"$id","newRequest":true}""" }
+        val task = CodingMessage("task", CodingRole.USER, "Добавь кнопку", createdAt = 1,
+            planning = PlanningChatBlock("p", inputIntent = UserTurnIntent.REFINE))
+        val question = CodingMessage("question", CodingRole.USER, "Что это значит?", createdAt = 2)
+        f.service.sync(key, listOf(task, question).pinMessages(planningMode = true), null)
+        assertEquals(listOf("task"), f.service.groups.value.getValue(key).map { it.request.messageId })
+        val discussed = question.copy(planning = PlanningChatBlock("p", inputIntent = UserTurnIntent.DISCUSS))
+        val clarification = CodingMessage("clarification", CodingRole.USER, "Я имел в виду слева", createdAt = 3,
+            planning = PlanningChatBlock("p", inputIntent = UserTurnIntent.CLARIFY))
+        val messages = listOf(task, discussed, clarification).pinMessages(planningMode = true)
+        f.service.sync(key, messages, profile)
+        assertEquals("clarification", f.service.groups.value.getValue(key).single().clarifications.single().messageId)
+        advanceUntilIdle()
+        assertEquals(2, f.calls.size)
+        assertEquals("task", f.service.groups.value.getValue(key).single().request.messageId)
+        assertEquals("clarification", f.service.groups.value.getValue(key).single().clarifications.single().messageId)
+        assertContains(f.calls.last().second.last().content, "Что это значит?", message = "Questions are still conversation context")
+        val restored = RequestPinService(f.repo, f.gateway, this)
+        restored.sync(key, messages, profile, reopened = true)
+        advanceUntilIdle()
+        assertEquals(f.service.groups.value[key], restored.groups.value[key])
+        assertEquals(2, f.calls.size)
+    }
+
+    @Test fun loadingPlanningDecisionsRemovesOldQuestionPinsEvenWithoutAModel() = runTest {
+        val f = Fixture(this) { """{"summary":"Старое закрепление","newRequest":true}""" }
+        val question = CodingMessage("question", CodingRole.USER, "Что это значит?", createdAt = 1)
+        f.service.sync(key, listOf(question).pinMessages(), profile)
+        advanceUntilIdle()
+        assertEquals(1, f.repo.load(key).size)
+        val restored = RequestPinService(f.repo, null, this)
+        restored.sync(key, listOf(question.copy(planning = PlanningChatBlock("p", inputIntent = UserTurnIntent.DISCUSS)))
+            .pinMessages(planningMode = true), null)
+        assertTrue(restored.groups.value.getValue(key).isEmpty())
+        assertTrue(f.repo.load(key).isEmpty())
+    }
+
     @Test fun orchestrationAdaptersIgnoreOutgoingCopiesAndStatusOnlyUpdates() {
         val address = SessionAddress("orchestrator", "Большой план", "Оркестратор 1")
         val route = MessageRoute(address, address.copy(sessionId = "worker"), deliveryId = "delivery")

@@ -1119,7 +1119,7 @@ class PlanningChatServiceTest {
     @Test fun plannerCancellationPreservesSavedPlanAndClearsPendingRequest() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val session = f.session("parent")
-        f.gateway.gate = CompletableDeferred()
+        f.gateway.requestGates += listOf(CompletableDeferred(Unit), CompletableDeferred())
         f.service.send(session, "Goal"); runCurrent()
         assertTrue(f.store.plans.value.single().pendingRequest.isNotBlank())
         f.service.cancelRequest(session.id); runCurrent()
@@ -1300,6 +1300,118 @@ class PlanningChatServiceTest {
         assertFalse(f.projects.sessions(project.id).first { it.id == worker.id }.archived)
         assertContains(f.service.error.value.orEmpty(), "незавершённого")
         assertTrue(f.projects.orchestration("parent")!!.sessionCommands.none { it.kind == SessionCommandKind.ARCHIVE })
+    }
+
+    @Test fun sessionQuestionIsClassifiedEvenBeforeTheFirstPlanReplyAndNeverPinned() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Это текущая сессия планирования."}"""
+        f.service.send(parent, "Что это значит?"); runCurrent()
+        val plan = f.store.plans.value.single()
+        assertTrue(plan.milestones.isEmpty())
+        assertTrue(plan.versions.isEmpty())
+        assertNull(plan.proposal)
+        assertTrue(f.gateway.requests.all { it.first().content.contains("Ты оркестратор диалога") })
+        val messages = f.projects.messages(project.id, parent.id)
+        assertTrue(messages.none { it.planning?.graph == true })
+        assertTrue(messages.pinMessages(planningMode = true).none { it.input && it.pinnable })
+        assertEquals(UserTurnIntent.DISCUSS, messages.first { it.role == CodingRole.USER }.planning?.inputIntent)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun clarificationWaitsForDecisionAndCounterquestionAndRefusalKeepCompletedPlan() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent).copy(confirmedRevision = 1, phase = ExecutionPhase.COMPLETE,
+            status = PlanStatus.DONE, runId = "completed", milestones = emptyList())
+        f.store.save(base)
+        f.gateway.userDecision = """{"intent":"CLARIFY","reply":"Уточнение касается состава коммита."}"""
+        f.service.send(parent, "Я имел в виду только файлы этой задачи"); runCurrent()
+        val question = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        assertEquals("Я имел в виду только файлы этой задачи", question.refinementRequest)
+        assertEquals(listOf("yes", "no"), question.questions.single().options.map { it.id })
+        assertTrue(f.service.blockedStages(base).isEmpty())
+        assertEquals(base.tree, f.store.planFor(base.id)!!.tree)
+        assertNull(f.store.planFor(base.id)!!.proposal)
+        assertTrue(f.gateway.requests.all { it.first().content.contains("Ты оркестратор диалога") })
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Будут учтены только файлы задачи."}"""
+        f.service.send(parent, "Что изменится?", replyTo = question.id); runCurrent()
+        assertEquals(question.id, f.projects.orchestration(parent.id)!!.openQuestions().single().id)
+        assertNull(f.store.planFor(base.id)!!.proposal)
+        val request = f.interactions(parent).single { it.sourceId == question.id }
+        f.service.submitInteraction(request, listOf(PlanningAnswer("refine-plan", listOf("no")))); runCurrent()
+        assertTrue(f.projects.orchestration(parent.id)!!.openQuestions().isEmpty())
+        val unchanged = f.store.planFor(base.id)!!
+        assertEquals(base.tree, unchanged.tree)
+        assertEquals(base.milestones, unchanged.milestones)
+        assertEquals(base.runId, unchanged.runId)
+        assertEquals(base.phase, unchanged.phase)
+        assertEquals(base.versions, unchanged.versions)
+        assertNull(unchanged.proposal)
+        assertEquals("План оставлен без изменений.", unchanged.dialogue.last().text)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun acceptedClarificationSurvivesRestartAndOnlyPreparesAProposalOnce() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        f.readyPlan("p", parent); runCurrent()
+        val base = f.store.planFor("p")!!.copy(confirmedRevision = 1, phase = ExecutionPhase.COMPLETE,
+            status = PlanStatus.DONE, runId = "completed")
+        f.store.save(base)
+        f.gateway.userDecision = """{"intent":"CLARIFY","reply":"Учту формат."}"""
+        f.service.send(parent, "Уточнение: нужен PDF"); runCurrent()
+        val questionId = f.projects.orchestration(parent.id)!!.openQuestions().single().id
+        f.service.shutdown(); f.execution.shutdown()
+        val restored = Fixture(this, f.kv); restored.initialize(); runCurrent()
+        val request = restored.interactions(parent).single { it.sourceId == questionId }
+        restored.gateway.overrideReply = """{"reply":"Предлагаю экспорт PDF","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["stage","pdf"]},{"id":"stage","title":"Stage","kind":"STAGE","stageId":"stage"},{"id":"pdf","title":"PDF","kind":"STAGE","stageId":"pdf"}],"milestones":[{"id":"stage","title":"Stage","description":"Change files","acceptance":"Checks pass"},{"id":"pdf","title":"PDF","description":"Export PDF","acceptance":"PDF opens","dependsOn":["stage"]}]}"""
+        restored.service.submitInteraction(request, listOf(PlanningAnswer("refine-plan", listOf("yes")))); runCurrent()
+        val proposed = restored.store.planFor(base.id)!!
+        assertNotNull(proposed.proposal)
+        assertEquals(base.milestones, proposed.milestones)
+        assertEquals(base.runId, proposed.runId)
+        assertEquals(ExecutionPhase.COMPLETE, proposed.phase)
+        assertTrue(restored.runtime.calls.isEmpty())
+        assertTrue(restored.gateway.requests.last().last().content.contains("Уточнение: нужен PDF"))
+        val count = restored.gateway.requests.size
+        assertFailsWith<IllegalStateException> {
+            restored.service.submitInteraction(request, listOf(PlanningAnswer("refine-plan", listOf("yes"))))
+        }
+        runCurrent()
+        assertEquals(count, restored.gateway.requests.size)
+        assertTrue(restored.projects.orchestration(parent.id)!!.openQuestions().none { it.id == questionId })
+    }
+
+    @Test fun freeTextRefinementRefusalDoesNotBecomePlanExecutionConfirmation() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); f.readyPlan("p", parent); runCurrent()
+        val base = f.store.planFor("p")!!
+        f.gateway.userDecision = """{"intent":"CLARIFY","reply":"Уточнение принято."}"""
+        f.service.send(parent, "Я имел в виду синюю кнопку"); runCurrent()
+        val question = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        f.gateway.userDecision = """{"intent":"ANSWER","replyTo":"${question.id}","refinePlan":false}"""
+        f.service.send(parent, "Нет, оставь как есть"); runCurrent()
+        assertTrue(f.projects.orchestration(parent.id)!!.openQuestions().isEmpty())
+        assertEquals(base.milestones, f.store.planFor(base.id)!!.milestones)
+        assertNull(f.store.planFor(base.id)!!.confirmedRevision)
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
+    @Test fun answeringAQuestionFromDiscussionAsksBeforeRevisingThePlan() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent"); f.readyPlan("p", parent); runCurrent()
+        val base = f.store.planFor("p")!!
+        f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Какое ограничение вы уточняете?","questions":[{"id":"scope","title":"Какое ограничение?","kind":"TEXT"}]}"""
+        f.service.send(parent, "А если только часть?"); runCurrent()
+        val discussion = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        assertTrue(discussion.forDiscussion)
+        f.service.send(parent, "Только файлы задачи", listOf(PlanningAnswer("scope", text = "Только файлы задачи")), discussion.id); runCurrent()
+        val approval = f.projects.orchestration(parent.id)!!.openQuestions().single()
+        assertContains(approval.refinementRequest.orEmpty(), "Только файлы задачи")
+        assertEquals(base.milestones, f.store.planFor(base.id)!!.milestones)
+        assertNull(f.store.planFor(base.id)!!.proposal)
+        assertTrue(f.gateway.requests.all { it.first().content.contains("Ты оркестратор диалога") })
     }
 
     @Test fun discussionDuringAQuestionKeepsTheOriginalRequestOpen() = runTest {
@@ -1730,7 +1842,7 @@ class PlanningChatServiceTest {
         val parent = f.session("parent", engine = CodingEngine.CODEX)
         f.service.send(parent, "Сделай редактор"); runCurrent()
         assertEquals(CodingEngine.CODEX, f.store.plans.value.single().engine)
-        assertEquals(project to CodingEngine.CODEX, f.planningCalls.single())
+        assertEquals(listOf(project to CodingEngine.CODEX, project to CodingEngine.CODEX), f.planningCalls)
     }
 
     @Test fun firstTurnCanPublishPlanWithoutQuestionsAndDiscussionReadsProjectToo() = runTest {
@@ -1744,7 +1856,7 @@ class PlanningChatServiceTest {
         assertTrue(f.gateway.lastMessages.none { it.content.contains("Пока не строй дерево этапов") })
         f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Проверил текущий source.kt."}"""
         f.service.send(parent, "Изучи сам: что сейчас в файле?"); runCurrent()
-        assertEquals(2, f.planningCalls.size)
+        assertEquals(3, f.planningCalls.size)
         assertTrue(f.planningCalls.all { it == project to CodingEngine.CODEX })
         assertTrue(f.store.planFor(plan.id)!!.dialogue.last().activity.any { it.tool == "read" })
         assertEquals(plan.milestones, f.store.planFor(plan.id)!!.milestones)
