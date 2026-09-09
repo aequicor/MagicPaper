@@ -150,6 +150,7 @@ class OrchestrationService(
                 if (plan != null) {
                     put("planId", plan.id); put("revision", plan.revision); put("runId", plan.runId)
                     put("goal", plan.goal); put("intent", plan.intent.name); put("phase", plan.phase.name)
+                    put("pausedStageIds", json.encodeToJsonElement(state(plan.parentSessionId, context.projectId).pausedStages(plan)))
                     put("tree", json.encodeToJsonElement(plan.tree))
                     put("stages", buildJsonArray { plan.selectedMilestones.forEach { stage -> add(buildJsonObject {
                         put("id", stage.id); put("title", stage.title); put("status", stage.status.name)
@@ -921,13 +922,7 @@ class OrchestrationService(
             }
         }
         updateState(session.id, session.projectId) { old ->
-            val proposal = store.plans.value.firstOrNull { it.id == current.id }?.proposal
-            val pause = old.workPauses[input.id]
-            val retained = old.workPauses.mapValues { (_, value) ->
-                if (value.planId == current.id && value.proposalId != null && proposal != null) value.copy(proposalId = proposal.id) else value
-            }
-            old.copy(workPauses = if (pause != null && proposal != null)
-                retained + (input.id to pause.copy(proposalId = proposal.id)) else retained - input.id)
+            old.finishWorkPause(store.plans.value.first { it.id == current.id }, input.id)
         }
         if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER || decision.toolsApplied)
             store.planFor(current.id)?.takeIf { it.intent == ExecutionIntent.RUN }?.let { execution.start(it.id) }
@@ -1220,6 +1215,16 @@ class OrchestrationService(
                     execution.start(id)
             }
         } catch (e: Exception) {
+            // The outer model can handle a failed tool and still finish successfully.
+            // Preserve its selective pause until a new proposal or an explicit user resume.
+            val source = currentCoroutineContext()[ToolSession]?.context
+            withContext(NonCancellable) {
+                if (source?.role == ToolRole.ORCHESTRATOR) updateState(sessionId, pending.projectId) { old ->
+                    val key = source.sourceInput?.id ?: source.requestId
+                    val pause = old.workPauses[key]
+                    if (pause == null) old else old.copy(workPauses = old.workPauses + (key to pause.copy(requiresUser = true)))
+                }
+            }
             // A model/request timeout cancels its child coroutine, not this planning turn.
             // Preserve actual cancellation, but publish timeouts like other request failures.
             currentCoroutineContext().ensureActive()
@@ -1339,6 +1344,9 @@ class OrchestrationService(
         val plan = store.planFor(id) ?: return
         require(plan.confirmedRevision != null) { "Сначала подтвердите план" }
         require(plan.parentSessionId !in _persistenceErrors.value) { "Сначала восстановите хранилище оркестратора" }
+        if (plan.proposal == null) updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(workPauses = old.workPauses.filterValues {
+            it.planId != plan.id || !it.requiresUser
+        }) }
         if (plan.canExtendAfterFinalVerification) { control(id, "retry"); return }
         recoverAssignments(plan)
         val current = store.planFor(id) ?: return
@@ -1916,10 +1924,7 @@ class OrchestrationService(
                     schedulingInstructions()), LlmMessage(LlmChatRole.USER, context.drop(1).joinToString("\n") { it.content }))
             val text = withContext(workerDispatcher) { composer.completeToolTurn(plan, judge, instructions, tools) { coordinatorEvent(activityId, it) } }
             updateState(plan.parentSessionId, plan.projectId) { saved ->
-                val key = tools.context.requestId
-                val pause = saved.workPauses[key]
-                val proposal = store.plans.value.firstOrNull { it.id == plan.id }?.proposal
-                saved.copy(workPauses = if (pause != null && proposal != null) saved.workPauses + (key to pause.copy(proposalId = proposal.id)) else saved.workPauses - key)
+                saved.finishWorkPause(store.plans.value.first { it.id == plan.id }, tools.context.requestId)
             }
             val resolved = tools.results.value["stage.resolve"]?.let { json.decodeFromJsonElement<ToolStageResolve>(it) }
             require(record.reply.kind != StageReplyKind.RESULT || resolved != null) { "Вызовите stage.resolve для текущего результата" }

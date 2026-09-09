@@ -45,6 +45,7 @@ class OrchestrationToolsTest {
                 emit(CodingEvent.Finished)
             }
             override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile) = flow {
+                emit(CodingEvent.SessionStarted("native-${session.id}"))
                 emit(CodingEvent.MessageStarted)
                 val tools = currentCoroutineContext()[ToolSession] ?: error("Missing tools")
                 assertEquals(session.id, tools.context.sessionId)
@@ -172,6 +173,56 @@ class OrchestrationToolsTest {
         assertEquals(1, f.store.planFor("plan")!!.scheduledMessages.size)
     }
 
+    @Test fun failedRevisionKeepsSelectivePauseUntilAnExplicitUserResume() = runTest {
+        val f = Fixture(this); f.init()
+        f.store.update("plan") { it.copy(intent = ExecutionIntent.RUN) }
+        f.planningRun = { tools ->
+            if (tools.context.role == ToolRole.PLANNER) error("Model connection lost")
+            tools.call("pause", "stage.pause", f.args("""{"stageIds":["stage"],"reason":"Change requirements"}"""))
+            assertFailsWith<IllegalStateException> {
+                tools.call("refine", "plan.refine", f.args("""{"message":"Revise the plan","requiresConfirmation":true}"""))
+            }
+            "Не удалось подготовить предложение. Этап остаётся на паузе."
+        }
+        f.service.bootstrap(); runCurrent()
+        f.service.send(f.parent, "Приостанови этап и измени план"); runCurrent()
+        val paused = withContext(Dispatchers.Default) { withTimeout(5000) {
+            f.service.states.first { it["parent"]?.inputs?.lastOrNull()?.status == OrchestrationInputStatus.DONE }.getValue("parent")
+        } }
+        assertEquals(OrchestrationInputStatus.DONE, paused.inputs.last().status)
+        assertTrue(paused.workPauses.values.single().requiresUser)
+        assertEquals(setOf("stage"), paused.pausedStages(f.store.planFor("plan")!!))
+        assertTrue(f.workerCalls.isEmpty(), "A handled planning error must not restart workers")
+        assertTrue(f.json.decodeFromString<OrchestrationState>(f.json.encodeToString(paused)).workPauses.values.single().requiresUser)
+        f.workerRun = { awaitCancellation() }
+        val latest = f.store.planFor("plan")!!
+        val automatic = f.orchestrator("auto", OrchestrationInput("auto", "Resume", 0, scheduledRuleId = "rule"))
+        assertFailsWith<IllegalArgumentException> {
+            automatic.call("resume", "plan.control", f.args("""{"action":"resume","revision":${latest.revision}}"""))
+        }
+        assertTrue(f.projects.orchestration("parent")!!.workPauses.values.single().requiresUser)
+        f.orchestrator("resume", OrchestrationInput("resume", "Continue", 0)).call("resume", "plan.control",
+            f.args("""{"action":"resume","revision":${latest.revision}}"""))
+        runCurrent()
+        assertTrue(f.projects.orchestration("parent")!!.workPauses.isEmpty())
+        assertEquals(1, f.workerCalls.size)
+        f.execution.shutdown(); f.service.shutdown()
+    }
+
+    @Test fun aNewProposalRetainsEarlierFailedRevisionPausesUntilConfirmation() {
+        val plan = Plan("plan", "p", "Goal", proposal = PlanProposal("new-proposal", "run", emptyList(), emptyList(), emptyList(), emptyList(), "Revision"))
+        val state = OrchestrationState("parent", "p", workPauses = mapOf(
+            "failed" to OrchestrationPause("plan", listOf("stage"), requiresUser = true),
+            "current" to OrchestrationPause("plan", listOf("dependent")),
+            "other" to OrchestrationPause("other-plan", listOf("other-stage"), requiresUser = true)))
+        val saved = state.finishWorkPause(plan, "current")
+        assertEquals("new-proposal", saved.workPauses["failed"]?.proposalId)
+        assertFalse(saved.workPauses["failed"]!!.requiresUser)
+        assertEquals("new-proposal", saved.workPauses["current"]?.proposalId)
+        assertEquals(state.workPauses["other"], saved.workPauses["other"])
+        assertEquals(OrchestrationPause("plan", listOf("stage")), Json.decodeFromString<OrchestrationPause>("""{"planId":"plan","stageIds":["stage"]}"""))
+    }
+
     @Test fun plannerUsesProposalToolAndRejectsTextPretendingToApplyAPlan() = runTest {
         val f = Fixture(this); f.init()
         val plan = f.store.planFor("plan")!!
@@ -238,6 +289,8 @@ class OrchestrationToolsTest {
         assertTrue(liveSteps.any { it.tool == "plan.refine" && it.running }, "Nested planning must retain the parent command card")
         assertEquals(2, liveSteps.count { it.tool == "context.get" })
         val liveCalls = liveSteps.filter { it.toolCategory != null }.map { it.callId }
+        advanceTimeBy(125_000); runCurrent()
+        assertTrue(f.service.drafts.value["parent"]!!.steps.any { it.tool == "plan.refine" && it.running })
         proposalGate.complete(Unit); runCurrent()
         val saved = f.store.planFor("plan")!!
         assertNull(saved.confirmedRevision)

@@ -123,6 +123,7 @@ fun List<CodingMessage>.pendingPlanningQuestion(planIds: Set<String>? = null): C
 
 fun Plan.isStageWorking(stage: Milestone): Boolean = intent == ExecutionIntent.RUN &&
     stage.status == MilestoneStatus.ACTIVE && stage.attempts.lastOrNull()?.error == null &&
+    stage.attempts.lastOrNull()?.interrupted != true &&
     stage.attempts.lastOrNull()?.awaitingPlanner != true && stage.attempts.lastOrNull()?.waitingForUser == null && stage.attempts.lastOrNull()?.waitingForEvent == null
 
 /** Keep the coordination envelope out of the user-facing conversation. */

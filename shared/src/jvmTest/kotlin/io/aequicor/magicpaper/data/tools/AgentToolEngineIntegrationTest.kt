@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.data.tools
 
 import com.sun.net.httpserver.HttpServer
 import io.aequicor.magicpaper.data.coding.PiCodingRuntime
+import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.*
@@ -15,7 +16,7 @@ import kotlin.test.*
 
 /** Production transports, real installed binaries, local scripted models; no account or paid request. */
 class AgentToolEngineIntegrationTest {
-    private class Fixture(val responses: Boolean) : AutoCloseable {
+    private class Fixture(val responses: Boolean, val quietModel: Boolean = false) : AutoCloseable {
         val requests = CopyOnWriteArrayList<JsonObject>()
         val errors = CopyOnWriteArrayList<Throwable>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -26,6 +27,8 @@ class AgentToolEngineIntegrationTest {
                     val request = Json.parseToJsonElement(exchange.requestBody.readBytes().decodeToString()).jsonObject
                     check(requests.size < 12) { "Unexpected model loop: ${requests.map { it["input"]?.jsonArray?.map { item -> (item as? JsonObject)?.get("type") } }}" }
                     requests += request
+                    // No app-server/UI deltas while the model assembles tool arguments.
+                    if (quietModel && requests.size == 3) Thread.sleep(6000)
                     val output = if (responses) responses(request) else chat(request)
                     val bytes = output.toByteArray()
                     exchange.responseHeaders.set("Content-Type", "text/event-stream")
@@ -128,6 +131,45 @@ class AgentToolEngineIntegrationTest {
                     emptyList(), "agent_tools_test", config, planning = true).withTools(tools).onEach { observed += it }.toList() }
                 verify(events, tools, fixture)
             } finally { runtime.close(); root.toFile().deleteRecursively() }
+        }
+    }
+
+    @Test fun piPlanProposalSurvivesAQuietModelBeyondTheChatTimeout() = runBlocking { quietPlanning(CodingEngine.PI) }
+    @Test fun codexPlanProposalSurvivesAQuietModelBeyondTheChatTimeout() = runBlocking { quietPlanning(CodingEngine.CODEX) }
+
+    private suspend fun quietPlanning(engine: CodingEngine) {
+        if (System.getProperty(if (engine == CodingEngine.PI) "magicpaper.pi.it" else "magicpaper.codex.it") != "true") return
+        val root = Files.createTempDirectory("magicpaper-quiet-planner-")
+        val pi = if (engine == CodingEngine.PI) PiCodingRuntime() else null
+        val codex = if (engine == CodingEngine.CODEX) CodexAppServerOpenAiSubscription(Json { ignoreUnknownKeys = true }, root.resolve("home")) else null
+        Fixture(engine == CodingEngine.CODEX, quietModel = true).use { fixture ->
+            try {
+                val profile = LlmProfile("local", "Local", modelId = if (pi != null) "mock-model" else "gpt-5.4",
+                    baseUrl = fixture.url, apiKey = if (pi != null) "local-test" else "",
+                    advanced = AdvancedLlmOptions(timeoutSeconds = 5))
+                val driver = pi ?: object : CodingRuntime by NoopCodingRuntime {
+                    override val supported = true
+                    override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile) =
+                        codex!!.runCoding(project, session, prompt, profile, emptyList(), "quiet_model_test", buildJsonObject {
+                            putJsonObject("model_providers.quiet_model_test") {
+                                put("name", "Local test"); put("base_url", fixture.url); put("wire_api", "responses")
+                            }
+                        }, planning = true)
+                    override fun abort(sessionId: String) { codex!!.abortCoding(sessionId) }
+                }
+                val tools = tools()
+                val steps = mutableListOf<CodingStep>()
+                val result = withTimeout(60_000) { withContext(tools) {
+                    RuntimePlanningGateway(driver).completeWithActivity(CodingProject("p", "Project", root.toString(), 0),
+                        engine, "quiet-plan", profile, listOf(LlmMessage(LlmChatRole.USER, "Use application tools and submit the plan")), steps::add)
+                } }
+                assertEquals("TOOLS_DONE", result)
+                assertTrue(fixture.errors.isEmpty(), fixture.errors.toString())
+                assertTrue(fixture.requests.size >= 4)
+                assertTrue("plan.propose" in tools.results.value)
+                assertFalse("stage.send" in tools.results.value)
+                assertTrue(steps.any { it.tool == "plan.propose" && !it.running && it.ok })
+            } finally { pi?.abortAll(); codex?.close(); root.toFile().deleteRecursively() }
         }
     }
 }

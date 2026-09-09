@@ -70,6 +70,8 @@ import kotlinx.serialization.Serializable
     val acceptanceRecord: AcceptanceRecord? = null,
     val mergeAcceptanceRecord: AcceptanceRecord? = null,
     val mergeVerificationSnapshot: String? = null,
+    /** Execution stopped; phase remains the recovery checkpoint, not a liveness signal. */
+    val interrupted: Boolean = false,
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",

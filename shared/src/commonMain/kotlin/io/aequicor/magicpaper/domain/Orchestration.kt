@@ -82,7 +82,18 @@ internal fun OrchestrationQuestion.workerAnswerText(answers: List<PlanningAnswer
     }
 }.trim()
 
-@Serializable data class OrchestrationPause(val planId: String, val stageIds: List<String>, val proposalId: String? = null)
+@Serializable data class OrchestrationPause(val planId: String, val stageIds: List<String>, val proposalId: String? = null,
+    /** A failed revision cannot silently resume work against the old requirements. */
+    val requiresUser: Boolean = false)
+
+internal fun OrchestrationState.finishWorkPause(plan: Plan, requestId: String): OrchestrationState {
+    val proposal = plan.proposal
+    val retained = workPauses.mapValues { (key, pause) ->
+        if (pause.planId == plan.id && proposal != null && (key == requestId || pause.proposalId != null || pause.requiresUser))
+            pause.copy(proposalId = proposal.id, requiresUser = false) else pause
+    }
+    return copy(workPauses = if (proposal == null && retained[requestId]?.requiresUser != true) retained - requestId else retained)
+}
 
 @Serializable data class OrchestrationState(
     val sessionId: String, val projectId: String,

@@ -40,4 +40,14 @@ class StageChatStateTest {
         assertTrue(state.draft.steps.isEmpty())
         assertTrue(state.running)
     }
+
+    @Test fun interruptedCheckpointStopsTheSidebarAndLiveAnswerDespiteStaleLiveState() {
+        val stopped = attempt.copy(interrupted = true, updatedAt = 50,
+            chatTurns = attempt.chatTurns.map { it.copy(completedAt = 50) })
+        val state = CodingSessionUi(worker, running = true).withStageChat(plan(stopped), mapOf(attempt.id to attempt), emptyList())
+        assertFalse(state.running)
+        assertFalse(state.draft.active)
+        assertEquals(CodingSessionStatus.QUEUED, state.copy(plan = plan(stopped)).status)
+        assertEquals(listOf("Какой формат?", "PDF готов"), state.messages.map { it.text })
+    }
 }
