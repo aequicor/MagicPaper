@@ -10,6 +10,38 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RequestPinViewModelTest {
+    @Test fun planningSessionPinsOnlyClassifiedRequestsAndRetainsTheirClarifications() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        var vm: MagicPaperViewModel? = null
+        try {
+            val f = ModelSettingsFixture()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            val pins = JsonRequestPinRepository(f.kv, f.json)
+            repo.save(CodingProject("project", "Проект", "/tmp/project", 1))
+            repo.saveSession(CodingSession("coding", "project", "Сессия", 1, planningMode = true, engine = CodingEngine.PI))
+            val task = CodingMessage("task", CodingRole.USER, "Добавь кнопку", createdAt = 1,
+                planning = PlanningChatBlock("plan", inputIntent = UserTurnIntent.REFINE))
+            val question = CodingMessage("question", CodingRole.USER, "Что это значит?", createdAt = 2,
+                planning = PlanningChatBlock("plan", inputIntent = UserTurnIntent.DISCUSS))
+            val pending = CodingMessage("pending", CodingRole.USER, "Я имел в виду слева", createdAt = 3)
+            repo.saveMessages("project", "coding", listOf(task, question, pending))
+            val model = f.prepare(codingProjects = repo, requestPinRepository = pins).also { vm = it }
+            model.open(Screen.CODING); advanceUntilIdle()
+            val key = PinConversation("coding", "project")
+            assertEquals(listOf("task"), pins.load(key).map { it.source.id })
+            repo.saveMessages("project", "coding", listOf(task, question,
+                pending.copy(planning = PlanningChatBlock("plan", inputIntent = UserTurnIntent.CLARIFY))))
+            model.selectCodingProject("project"); advanceUntilIdle()
+            val group = model.requestPins!!.groups.value.getValue(key).single()
+            assertEquals("task", group.request.messageId)
+            assertEquals("pending", group.clarifications.single().messageId)
+            assertEquals(2, f.calls.size)
+        } finally {
+            vm?.shutdownCoding()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun chatAnswerUsesOverrideButPinsUseOperationalDefaultAndOldChatsAreLazy() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         var vm: MagicPaperViewModel? = null

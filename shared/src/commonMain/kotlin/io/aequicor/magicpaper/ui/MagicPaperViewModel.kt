@@ -276,7 +276,7 @@ class MagicPaperViewModel(
                     if (key == opened || session.running || pins.isTracking(key)) {
                         val reopened = key == opened && key != previousOpen
                         if (reopened || pinSources[key] !== session.messages) {
-                            pins.sync(key, session.messages.pinMessages(), profile, reopened = reopened)
+                            pins.sync(key, session.messages.pinMessages(session.session.effectiveRole == CodingSessionRole.ORCHESTRATOR), profile, reopened = reopened)
                             pinSources[key] = session.messages
                         }
                     }

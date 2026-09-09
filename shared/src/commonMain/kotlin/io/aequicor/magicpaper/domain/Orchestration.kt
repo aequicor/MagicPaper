@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable enum class CodingSessionRole { CHAT, ORCHESTRATOR, WORKER }
 @Serializable enum class OrchestrationInputStatus { QUEUED, PROCESSING, DONE, FAILED, CANCELLED, WITHDRAWN }
-@Serializable enum class UserTurnIntent { DISCUSS, REFINE, ANSWER, INSTRUCT, CONTROL, SCHEDULE }
+@Serializable enum class UserTurnIntent { DISCUSS, CLARIFY, REFINE, ANSWER, INSTRUCT, CONTROL, SCHEDULE }
 @Serializable enum class UserRequestStatus { OPEN, ANSWERED, CANCELLED }
 @Serializable enum class SessionCommandKind { CREATE, ARCHIVE, RESTORE, RENAME }
 
@@ -19,6 +19,8 @@ import kotlinx.serialization.Serializable
     val requiresConfirmation: Boolean = false,
     val questions: List<PlanningQuestion> = emptyList(),
     val schedules: List<ScheduleCommand> = emptyList(),
+    /** An explicit answer to a pending clarification, not permission to start execution. */
+    val refinePlan: Boolean? = null,
 )
 
 @Serializable data class OrchestrationInput(
@@ -44,6 +46,9 @@ import kotlinx.serialization.Serializable
     val forPlanning: Boolean = false,
     val answeredAt: Long? = null,
     val answeredRunId: String? = null,
+    /** Original clarification, retained until the user decides whether to revise the plan. */
+    val refinementRequest: String? = null,
+    val forDiscussion: Boolean = false,
 )
 
 @Serializable data class SessionCommand(

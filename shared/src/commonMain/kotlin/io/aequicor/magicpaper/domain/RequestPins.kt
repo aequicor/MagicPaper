@@ -19,13 +19,15 @@ data class PinMessage(
     val input: Boolean,
     val author: String = "Пользователь",
     val attachments: List<String> = emptyList(),
+    val pinnable: Boolean = true,
+    val clarification: Boolean = false,
 )
 
 fun ChatSession.pinMessages(): List<PinMessage> = messages.map {
     PinMessage(it.id, it.text, it.role == ChatRole.USER, attachments = it.attachments.map { file -> file.name })
 }
 
-fun List<CodingMessage>.pinMessages(): List<PinMessage> {
+fun List<CodingMessage>.pinMessages(planningMode: Boolean = false): List<PinMessage> {
     val deliveries = mutableSetOf<String>()
     return filter { it.handoff == null }.mapNotNull { message ->
         val input = message.role == CodingRole.USER
@@ -36,7 +38,14 @@ fun List<CodingMessage>.pinMessages(): List<PinMessage> {
             author = message.route?.source?.takeUnless { it.sessionId == "user" }?.let {
                 it.subtitle.ifBlank { it.name }
             }?.takeIf { it.isNotBlank() } ?: "Пользователь",
-            attachments = message.attachments.map { it.name })
+            attachments = message.attachments.map { it.name },
+            // Questions and unclassified inputs remain context. The orchestrator's saved
+            // decision owns eligibility; a second model only summarizes eligible requests.
+            pinnable = !planningMode || message.planning?.inputIntent in setOf(
+                UserTurnIntent.REFINE, UserTurnIntent.CLARIFY, UserTurnIntent.ANSWER,
+                UserTurnIntent.INSTRUCT, UserTurnIntent.SCHEDULE),
+            clarification = planningMode && message.planning?.inputIntent in setOf(
+                UserTurnIntent.CLARIFY, UserTurnIntent.ANSWER, UserTurnIntent.INSTRUCT))
     }
 }
 
@@ -114,11 +123,11 @@ class RequestPinService(
         if (reopened || entry.profile != profile) entry.attempted.clear()
         entry.profile = profile
         entry.messages = messages
-        val inputs = messages.filter { it.input && (it.text.isNotBlank() || it.attachments.isNotEmpty()) }.distinctBy { it.id }
+        val inputs = messages.filter { it.input && it.pinnable && (it.text.isNotBlank() || it.attachments.isNotEmpty()) }.distinctBy { it.id }
         val prefix = inputs.zip(entry.records).takeWhile { (source, record) -> source == record.source }.size
         val replaced = entry.records.drop(prefix).map { it.source.id }.toSet()
         entry.attempted.removeAll(replaced)
-        val records = entry.records.take(prefix) + inputs.drop(prefix).map { RequestPinRecord(it, it.pinExcerpt()) }
+        val records = entry.records.take(prefix) + inputs.drop(prefix).map { RequestPinRecord(it, it.pinExcerpt(), newRequest = !it.clarification) }
         if (records != entry.records) {
             entry.records = records
             save(conversation, entry)
@@ -169,7 +178,7 @@ class RequestPinService(
             if (result != null) {
                 entry.records = entry.records.mapIndexed { i, item ->
                     if (i == index) item.copy(summary = result.summary,
-                        newRequest = index == 0 || result.newRequest, analysed = true) else item
+                        newRequest = index == 0 || !item.source.clarification && result.newRequest, analysed = true) else item
                 }
                 save(conversation, entry)
                 publish(conversation, entry)

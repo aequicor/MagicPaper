@@ -38,7 +38,7 @@ internal fun interactionCandidates(
     states.values.forEach { state ->
         val parent = sessions.firstOrNull { it.id == state.sessionId && !it.archived } ?: return@forEach
         state.openQuestions().filter { q -> plans.any { it.id == q.planId } }.forEach { q ->
-            val workers = sessions.filter { it.parentSessionId == parent.id && it.planId == q.planId &&
+            val workers = sessions.filter { q.refinementRequest == null && !q.forDiscussion && it.parentSessionId == parent.id && it.planId == q.planId &&
                 (q.stageIds.isEmpty() || it.stageId in q.stageIds || it.id == q.sourceSessionId) }.map { it.id }
             add(UserInteractionRequest("question:${q.id}", parent.projectId, q.sourceSessionId, InteractionKind.QUESTION,
                 q.questions, sourceId = q.id, ownerSessionId = parent.id, affectedSessionIds = (workers + parent.id + q.sourceSessionId).toSet(),
