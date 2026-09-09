@@ -1,23 +1,14 @@
 package io.aequicor.magicpaper.ui.components
 
-import androidx.compose.foundation.Canvas
 import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -29,6 +20,7 @@ import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import io.aequicor.magicpaper.designsystem.PaperAction
 import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.PaperModal
+import io.aequicor.magicpaper.designsystem.PaperPinnedMessage
 import io.aequicor.magicpaper.designsystem.PaperPanel
 import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
 import io.aequicor.magicpaper.designsystem.PaperText
@@ -48,42 +40,7 @@ internal fun requestPinNumbers(groups: List<RequestPinGroup>, messageIds: Set<St
 @Composable
 internal fun MessagePinColumn(number: Int?, onClick: () -> Unit, modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit) {
-    Box {
-        Column(modifier, content = content)
-        if (number != null) {
-            // Matching the measured bubble keeps the marker out of content measurement.
-            Box(Modifier.matchParentSize()) {
-                MessagePinButton(number, onClick, Modifier.align(Alignment.BottomEnd).offset(y = (-3).dp))
-            }
-        }
-    }
-}
-
-@Composable
-internal fun MessagePinButton(number: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val ink = LocalPaperColors.current.text.copy(alpha = .6f)
-    Box(
-        modifier = modifier.size(20.dp).clip(CircleShape)
-            .paperClickable(shape = CircleShape, role = Role.Button, onClickLabel = "Открыть список закреплений", onClick = onClick)
-            .semantics { contentDescription = "Закреплённое сообщение №$number. Открыть список" },
-        // The glyph fits in the bubble's existing right padding, beside the last line.
-        contentAlignment = Alignment.CenterEnd,
-    ) {
-        Canvas(Modifier.size(16.dp)) {
-            val path = Path().apply {
-                moveTo(size.width * .3f, size.height * .12f)
-                lineTo(size.width * .7f, size.height * .12f)
-                lineTo(size.width * .64f, size.height * .44f)
-                lineTo(size.width * .8f, size.height * .62f)
-                lineTo(size.width * .2f, size.height * .62f)
-                lineTo(size.width * .36f, size.height * .44f)
-                close()
-            }
-            drawPath(path, ink, style = Stroke(width = 1.4.dp.toPx()))
-            drawLine(ink, Offset(size.width * .5f, size.height * .62f),
-                Offset(size.width * .5f, size.height * .92f), 1.4.dp.toPx(), StrokeCap.Round)
-        }
-    }
+    PaperPinnedMessage(number, onClick, modifier, content)
 }
 
 @Composable
