@@ -120,7 +120,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.aequicor.magicpaper.domain.subtitle
 import io.aequicor.magicpaper.domain.effectiveRole
 import io.aequicor.magicpaper.domain.CodingSessionRole
 import io.aequicor.magicpaper.ui.components.OrchestrationStatus
@@ -741,28 +740,13 @@ private fun SessionRow(
     ) {
         StatusTooltip(status) { ActivityDot(status, size = 8) }
         Spacer(Modifier.width(7.dp))
-        Column(Modifier.weight(1f)) {
-            FadingSingleLineText(
-                item.session.name,
-                style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-            )
-            FadingSingleLineText(
-                buildString {
-                    append(item.session.subtitle())
-                    if (childCount > 0) append(" · $childCount ${sessionCountWord(childCount)}")
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (item.running || status in listOf(CodingSessionStatus.WAITING, CodingSessionStatus.CONFIRMATION, CodingSessionStatus.BLOCKED, CodingSessionStatus.WORKING) || nested) FadingSingleLineText(
-                if (status == CodingSessionStatus.IDLE && item.plan?.milestones?.firstOrNull { it.id == item.session.stageId }?.attempts?.lastOrNull()?.awaitingPlanner == true)
-                    "передан оркестратору" else status.label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        FadingSingleLineText(
+            item.session.name,
+            modifier = Modifier.weight(1f),
+            style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        )
         if (showActions && childCount > 0) {
             Box(Modifier.size(24.dp)
                 .clip(MaterialTheme.shapes.small)
@@ -1369,7 +1353,7 @@ private fun DraftFragment(first: Boolean, last: Boolean, content: @Composable ()
                 topEnd = if (first) MaterialTheme.shapes.medium.topEnd else CornerSize(0.dp),
                 bottomStart = if (last) MaterialTheme.shapes.medium.bottomStart else CornerSize(0.dp),
                 bottomEnd = if (last) MaterialTheme.shapes.medium.bottomEnd else CornerSize(0.dp)))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(start = 14.dp, end = 14.dp, top = if (first) 10.dp else 0.dp, bottom = if (last) 10.dp else 0.dp),
     ) {
         content()
