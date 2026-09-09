@@ -45,7 +45,9 @@ class MeteredCodingRuntime(private val delegate: CodingRuntime, private val ledg
                         ledger.record(pending!!)
                     }
                     is CodingEvent.UsageObserved -> if (event.accounting) {
-                        val record = base("$native:${event.sourceId}").copy(tokens = event.tokens, completed = true,
+                        val source = if (event.sourceId.startsWith("compaction:") && compaction != null)
+                            "compaction:$compaction" else event.sourceId
+                        val record = base("$native:$source").copy(tokens = event.tokens, completed = true,
                             cost = if (subscription) null else event.cost ?: profile?.modelCatalog?.firstOrNull { it.id == model }?.pricing?.estimate(event.tokens))
                         if (event.cumulative != null) ledger.cumulative("codex:$native", event.sourceId, event.cumulative, event.tokens, record)
                         else { ledger.record(record, pending?.id); pending = null }

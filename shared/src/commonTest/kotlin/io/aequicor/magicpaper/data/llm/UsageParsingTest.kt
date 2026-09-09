@@ -12,6 +12,9 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class UsageParsingTest {
+    @Test fun piPlaceholderCountersDoNotClaimKnownZeroUsage() {
+        assertEquals(TokenUsage(), UsageParsing.pi(Json.parseToJsonElement("""{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0}""").jsonObject))
+    }
     private fun obj(value: String) = Json.parseToJsonElement(value).jsonObject
     @Test fun nativeFormatsNormalizeCacheAndReasoningWithoutDoubleCounting() {
         val openai = UsageParsing.openAi(obj("""{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":100},"completion_tokens_details":{"reasoning_tokens":20}}"""))

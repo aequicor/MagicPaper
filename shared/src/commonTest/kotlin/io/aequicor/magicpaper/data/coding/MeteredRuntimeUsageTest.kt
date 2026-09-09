@@ -9,6 +9,27 @@ import kotlinx.serialization.json.Json
 import kotlin.test.*
 
 class MeteredRuntimeUsageTest {
+    @Test fun repeatedRealCompactionsKeepSeparateExpensesAndClearContext() = runTest {
+        val ledger = UsageLedger(JsonUsageRepository(InMemoryKeyValueStore(), Json))
+        val delegate = object : CodingRuntime by NoopCodingRuntime {
+            override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
+                repeat(2) {
+                    emit(CodingEvent.ContextUpdated(900, 1000))
+                    emit(CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED)))
+                    repeat(2) { emit(CodingEvent.UsageObserved(TokenUsage(900, 50), "compaction:same-summary")) }
+                    emit(CodingEvent.Compaction(CompactionStatus("", CompactionPhase.COMPLETED)))
+                }
+            }
+        }
+        val recorder = CodingRunRecorder()
+        MeteredCodingRuntime(delegate, ledger).run(CodingProject("p", "P", "/fixture", 1),
+            CodingSession("s", "p", "S", 1), "test", LlmProfile("p", "M"), emptyList()).collect { recorder.apply(it) }
+        assertEquals(2, ledger.state.value.records.size)
+        assertEquals(1900L, ledger.state.value.records.sumOf { it.tokens.totalTokens ?: 0 })
+        assertNull(ledger.state.value.contexts["coding:s"]?.used)
+        assertEquals(2, recorder.message("m", 1).steps.count { it.systemEvent?.phase == CompactionPhase.COMPLETED })
+    }
+
     @Test fun isolatesParallelStageContextAndDeduplicatesBridgeMetrics() = runTest {
         val ledger = UsageLedger(JsonUsageRepository(InMemoryKeyValueStore(), Json))
         val delegate = object : CodingRuntime by NoopCodingRuntime {
