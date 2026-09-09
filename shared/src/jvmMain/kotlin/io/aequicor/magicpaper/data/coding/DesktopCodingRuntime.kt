@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.coding
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.data.skills.*
+import io.aequicor.magicpaper.data.research.ResearchCheckRunner
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.util.concurrent.ConcurrentHashMap
@@ -40,14 +41,18 @@ class DesktopCodingRuntime(
         }
         val environment = buildString {
             appendLine("Проект: ${project.name}\nРабочая папка: ${project.path}")
-            appendLine("Движок: ${session.engine?.title ?: "не выбран"}; режим: ${if (session.planningMode) "планирование" else "код"}; роль: ${session.role}")
+            appendLine("Движок: ${session.engine?.title ?: "не выбран"}; режим: ${session.interactionMode.title}; роль: ${session.role}")
             appendLine("Дополнительные источники: встроенные инструкции движка, настройки инструментов и доступа, инструкции проекта (например, AGENTS.md). Они могут загружаться при запуске и чтении файлов; полный контекст движка здесь недоступен.")
             if (session.engine == CodingEngine.PI) appendLine("Нативная автозагрузка навыков Pi отключена (--no-skills).")
             else appendLine("Нативные навыки и плагины Codex определяются его конфигурацией при запуске; список ниже относится к пакетам MagicPaper.")
-            appendLine("Инструменты и доступ: ${if (session.planningMode) "режим чтения проекта" else "политика выбранного движка; доступ к компьютеру выдаётся отдельно для сессии"}.")
+            appendLine("Инструменты и доступ: ${when {
+                session.researchMode -> "чтение проекта и Git; запись в исходники запрещена; проверки только через research_check в песочнице ОС; повышение прав и управление компьютером отключены"
+                session.planningMode -> "режим чтения проекта"
+                else -> "политика выбранного движка; доступ к компьютеру выдаётся отдельно для сессии"
+            }}.")
         }
         sessionContextReport(effective, environment,
-            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty()), skills)
+            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode), skills)
     }
 
     override val computerUse get() = subscription.computerUse
@@ -91,7 +96,7 @@ class DesktopCodingRuntime(
             val status = pi.ensureReady().last(); check(status.ready) { status.detail }
         }
     }
-    override suspend fun reconcile(sessionId: String) { pi.reconcile(sessionId); (clients[sessionId] ?: subscription).reconcileCoding(sessionId) }
+    override suspend fun reconcile(sessionId: String) { ResearchCheckRunner.shared.reconcile(sessionId); pi.reconcile(sessionId); (clients[sessionId] ?: subscription).reconcileCoding(sessionId) }
     override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> = flow {
         require(session.projectId == project.id) { "План принадлежит другому проекту." }
         check(java.io.File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
@@ -126,9 +131,25 @@ class DesktopCodingRuntime(
 
     override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> {
         val runId = session.pendingRun?.let { skillRunIdentity(session.id, it.runId) } ?: java.util.UUID.randomUUID().toString()
-        return runIdentified(runId, project, session, prompt, profile, attachments)
-            .withSkillExperience(runId, experience, resultVerifier, cancelled = { runId in cancelledRuns })
-            .onCompletion { runIds.remove(session.id, runId); cancelledRuns.remove(runId) }
+        session.forPendingRun()
+        require(!session.planningMode) { "Планирование требует отдельного защищённого маршрута" }
+        val events = runIdentified(runId, project, session, prompt, profile, attachments)
+        val effective = if (session.researchMode) events else events.withSkillExperience(runId, experience, resultVerifier, cancelled = { runId in cancelledRuns })
+        return (if (session.researchMode) channelFlow {
+            val activeTool = java.util.concurrent.atomic.AtomicReference<CodingEvent.ToolStarted?>()
+            val progressJob = launch {
+                ResearchCheckRunner.shared.progress.collect { progress ->
+                    if (progress.sessionId == session.id) activeTool.get()?.let { tool ->
+                        send(CodingEvent.ToolProgress(tool.tool, tool.callId, progress.output))
+                    }
+                }
+            }
+            try { effective.collect { event ->
+                if (event is CodingEvent.ToolStarted && event.tool.contains("research_check")) activeTool.set(event)
+                send(event)
+                if (event is CodingEvent.ToolFinished && event.tool.contains("research_check")) activeTool.set(null)
+            } } finally { progressJob.cancel(); ResearchCheckRunner.shared.abort(session.id) }
+        } else effective).onCompletion { runIds.remove(session.id, runId); cancelledRuns.remove(runId) }
     }
 
     private fun runIdentified(runId: String, project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> = flow {
@@ -144,7 +165,7 @@ class DesktopCodingRuntime(
         }
         check(active.add(session.id)) { "Сессия уже выполняется" }
         runIds[session.id] = runId
-        val grant = computerUse?.grant(session.id)
+        val grant = if (session.researchMode) null else computerUse?.grant(session.id)
         try {
             val adapter = if (engine == CodingEngine.CODEX) "Codex" else "Pi"
             val selection = try { skillSelection(project.id).let { it.copy(instructions = it.instructions.map { s -> s.copy(permissions = s.permissions.toSet()) }) } } catch (e: CancellationException) { throw e } catch (_: Exception) {
@@ -229,8 +250,8 @@ class DesktopCodingRuntime(
             if (grant != null) computerUse?.release(session.id, grant)
         }
     }
-    override fun abort(sessionId: String) { runIds[sessionId]?.let { cancelledRuns.add(it) }; computerUse?.disable(sessionId); clients[sessionId]?.abortCoding(sessionId); pi.abort(sessionId) }
-    override fun abortAll() { cancelledRuns.addAll(runIds.values); computerUse?.disable(); clients.forEach { (id, client) -> client.abortCoding(id) }; pi.abortAll() }
+    override fun abort(sessionId: String) { ResearchCheckRunner.shared.abort(sessionId); runIds[sessionId]?.let { cancelledRuns.add(it) }; computerUse?.disable(sessionId); clients[sessionId]?.abortCoding(sessionId); pi.abort(sessionId) }
+    override fun abortAll() { ResearchCheckRunner.shared.abortAll(); cancelledRuns.addAll(runIds.values); computerUse?.disable(); clients.forEach { (id, client) -> client.abortCoding(id) }; pi.abortAll() }
     override suspend fun uninstall() = uninstall(CodingEngine.PI)
     override suspend fun uninstall(engine: CodingEngine) {
         check(active.isEmpty() && !pi.hasActiveRuns) { "Сначала остановите выполняющиеся сессии" }

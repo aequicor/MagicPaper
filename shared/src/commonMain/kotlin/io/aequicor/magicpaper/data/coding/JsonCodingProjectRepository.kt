@@ -6,8 +6,12 @@ import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingProjectRepository
 import io.aequicor.magicpaper.domain.OrchestrationState
 import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.interactionMode
+import io.aequicor.magicpaper.domain.changeInteractionMode
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Хранилище проектов, их кодинг-сессий и журналов поверх KeyValueStore
@@ -25,6 +29,7 @@ class JsonCodingProjectRepository(
     private val migrateEngine: suspend (CodingSession, CodingProject?) -> io.aequicor.magicpaper.domain.CodingEngine = { _, _ -> io.aequicor.magicpaper.domain.CodingEngine.PI },
 ) : CodingProjectRepository {
 
+    private val sessionWriteLock = Mutex()
     private val projectsSerializer = ListSerializer(CodingProject.serializer())
     private val sessionsSerializer = ListSerializer(CodingSession.serializer())
     private val messagesSerializer = ListSerializer(CodingMessage.serializer())
@@ -96,9 +101,26 @@ class JsonCodingProjectRepository(
         return listOf(migrated)
     }
 
-    override suspend fun saveSession(session: CodingSession) {
+    override suspend fun saveSession(session: CodingSession) = sessionWriteLock.withLock { saveSessionUnlocked(session) }
+
+    override suspend fun updateSession(projectId: String, sessionId: String, update: (CodingSession) -> CodingSession): CodingSession = sessionWriteLock.withLock {
+        val latest = allSessions().firstOrNull { it.id == sessionId && it.projectId == projectId } ?: error("Сессия удалена")
+        val updated = update(latest)
+        require(updated.id == latest.id && updated.projectId == latest.projectId) { "Идентичность сессии изменить нельзя" }
+        val saved = if (latest.interactionMode != updated.interactionMode) {
+            val transition = latest.changeInteractionMode(updated.interactionMode)
+            updated.copy(piSessionId = transition.piSessionId, pendingRun = transition.pendingRun, needsHistorySeed = true)
+        } else updated
+        saveSessionUnlocked(saved, allowModeChange = true)
+        saved
+    }
+
+    private suspend fun saveSessionUnlocked(session: CodingSession, allowModeChange: Boolean = false) {
+        require(!(session.planningMode && session.researchMode)) { "Исследование и планирование несовместимы" }
+        require(!session.researchMode || session.stageId == null) { "Исполнитель не может быть исследователем" }
         val current = allSessions()
         val previous = current.firstOrNull { it.id == session.id }
+        require(allowModeChange || previous == null || previous.interactionMode == session.interactionMode) { "Режим сессии изменился; обновите актуальную запись" }
         require(previous?.engine == null || session.engine == null || session.engine == previous.engine) { "Движок существующей сессии изменить нельзя" }
         val saved = if (session.engine != null) session else session.copy(engine = previous?.engine ?: migrateEngine(session, all().firstOrNull { it.id == session.projectId }))
         if (previous == null) all().firstOrNull { it.id == saved.projectId }?.let { initializeContext(saved, it) }

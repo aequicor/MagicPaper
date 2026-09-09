@@ -323,10 +323,14 @@ class OrchestrationService(
         if (next != history) { projects.saveMessages(projectId, sessionId, next); changed() }
     }
     suspend fun configure(session: CodingSession, planning: Boolean = session.planningMode, search: SearchProvider = session.searchProvider) {
-        val latest = projects.sessions(session.projectId).firstOrNull { it.id == session.id } ?: session
-        require(!latest.planningMode || planning) { "Режим планирования закреплён за сессией" }
-        require(latest.stageId == null || planning == latest.planningMode) { "Режим сессии исполнителя менять нельзя" }
-        projects.saveSession(latest.copy(planningMode = planning, role = if (planning) CodingSessionRole.ORCHESTRATOR else latest.role, searchProvider = search)); refreshSessions()
+        projects.updateSession(session.projectId, session.id) { latest ->
+            require(!latest.planningMode || planning) { "Режим планирования закреплён за сессией" }
+            require(latest.stageId == null || planning == latest.planningMode) { "Режим сессии исполнителя менять нельзя" }
+            val next = if (planning && !latest.planningMode) latest.changeInteractionMode(CodingInteractionMode.PLANNING,
+                busy = _drafts.value[latest.id]?.active == true) else latest
+            next.copy(searchProvider = search)
+        }
+        refreshSessions()
     }
     private suspend fun persistenceFailure(sessionId: String, projectId: String, error: Exception): Nothing {
         val message = "Не удалось сохранить состояние оркестратора: ${error.message.orEmpty()}"
@@ -1256,10 +1260,14 @@ class OrchestrationService(
         if (parent != null) {
             val defaultName = parent.name == "Новая сессия" || parent.name == "Основная" || parent.name.startsWith("Сессия ") || parent.name.startsWith("План:")
             val title = plan.tree.firstOrNull { it.kind == DecisionKind.GOAL }?.title ?: plan.goal
-            val updated = parent.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true,
+            val updated = parent.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true, researchMode = false,
                 orchestratorNumber = parent.orchestratorNumber ?: ((existing.mapNotNull { it.orchestratorNumber }.maxOrNull() ?: 0) + 1),
                 name = if (!parent.nameManuallySet && defaultName) title else parent.name)
-            if (parent != updated) projects.saveSession(updated)
+            if (parent != updated) projects.updateSession(parent.projectId, parent.id) { latest ->
+                latest.copy(role = updated.role, planningMode = true, researchMode = false,
+                    orchestratorNumber = updated.orchestratorNumber,
+                    name = if (latest.nameManuallySet) latest.name else updated.name)
+            }
         }
         plan.selectedMilestones.forEach { stage ->
             val id = stage.attempts.firstOrNull()?.sessionId ?: "plan-${plan.id}-stage-${stage.id}"
@@ -1732,7 +1740,7 @@ class OrchestrationService(
                 if (parent != null) {
                     val engine = parent.engine ?: migratedPlan.engine ?: legacyCodingEngine(
                         (parent.modelSelection ?: migratedPlan.plannerSelection)?.let { ProfileResolver.selection(it, profiles.load()) })
-                    projects.saveSession(parent.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true, engine = engine))
+                    projects.updateSession(parent.projectId, parent.id) { it.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true, researchMode = false, engine = engine) }
                     if (migratedPlan.engine == null) store.update(migratedPlan.id) { it.copy(engine = engine) }
                     updateState(parent.id, parent.projectId) { old ->
                         if (plan.pendingRequest.isBlank()) old

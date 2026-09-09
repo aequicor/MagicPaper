@@ -35,6 +35,8 @@ class BackgroundCodingProjectRepository(
     }
     override suspend fun sessions(projectId: String) = access { delegate.sessions(projectId) }
     override suspend fun saveSession(session: CodingSession) = access { delegate.saveSession(session) }
+    override suspend fun updateSession(projectId: String, sessionId: String, update: (CodingSession) -> CodingSession) =
+        access { delegate.updateSession(projectId, sessionId, update) }
     override suspend fun deleteSession(projectId: String, sessionId: String) = access {
         histories.remove(HistoryKey(projectId, sessionId))
         delegate.deleteSession(projectId, sessionId)

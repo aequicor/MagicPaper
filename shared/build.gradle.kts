@@ -103,5 +103,6 @@ compose {
 // Интеграционные тесты включаются флагами magicpaper.pi.it / magicpaper.codex.it.
 tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
+    systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
 }

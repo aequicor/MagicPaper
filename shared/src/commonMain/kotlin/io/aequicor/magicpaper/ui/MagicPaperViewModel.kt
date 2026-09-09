@@ -301,7 +301,7 @@ class MagicPaperViewModel(
                 val stored = repo.all().flatMap { repo.sessions(it.id) }
                 codingRuntime?.computerUse?.let { computer ->
                     val owner = stored.firstOrNull { it.id == computer.state.value.sessionId }
-                    if (owner == null || owner.planningMode || owner.stageId != null) computer.disable()
+                    if (owner == null || owner.planningMode || owner.researchMode || owner.stageId != null) computer.disable()
                 }
                 val old = _state.value.coding.sessions.associateBy { it.session.id }
                 old.values.filter { item -> stored.none { it.id == item.session.id } }.forEach {
@@ -748,9 +748,9 @@ class MagicPaperViewModel(
             // То же для кодинг-сессий (переопределение источника агента).
             val codingRepo = codingProjects
             _state.value.coding.sessions.filter { it.session.llmProfileId == id }.forEach { item ->
-                val cleared = item.session.copy(llmProfileId = null)
-                codingRepo?.saveSession(cleared)
-                updateCodingSession(item.session.id) { it.copy(session = cleared) }
+                codingRepo?.updateSession(item.session.projectId, item.session.id) { it.copy(llmProfileId = null) }?.let { cleared ->
+                    updateCodingSession(item.session.id) { it.copy(session = cleared) }
+                }
             }
             bootstrap()
             _state.update { it.copy(notice = "Источник удалён.") }
@@ -786,7 +786,7 @@ class MagicPaperViewModel(
                     })
                 }
             }
-            codingProjects?.saveSession(updated)
+            updateStoredCodingSession(ui.session) { it.copy(modelSelection = selection, llmProfileId = selection.profileId) }
         }
         if (forProject) {
             val project = _state.value.coding.projects.firstOrNull { it.id == updated.projectId } ?: return
@@ -1345,9 +1345,7 @@ class MagicPaperViewModel(
                 planningChat.archiveSession(id)
                 return@launch
             }
-            val latest = repo.sessions(target.session.projectId).firstOrNull { it.id == id } ?: return@launch
-            val archived = latest.copy(archived = true)
-            repo.saveSession(archived)
+            val archived = repo.updateSession(target.session.projectId, id) { it.copy(archived = true) }
             _state.update { state ->
                 state.copy(coding = state.coding.copy(
                     sessions = state.coding.sessions.map { if (it.session.id == id) it.copy(session = archived) else it },
@@ -1385,6 +1383,29 @@ class MagicPaperViewModel(
                 ))
             }
             refreshProjectStatus(target.session.projectId)
+        }
+    }
+
+    fun changeCodingInteractionMode(sessionId: String, mode: CodingInteractionMode) {
+        val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        scope.launch {
+            try {
+                val updated = updateStoredCodingSession(selected.session) { latest ->
+                    val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }
+                    val busy = sessionId in codingJobs.value || ui?.running == true || ui?.interactions?.isNotEmpty() == true ||
+                        ui?.awaitingUser == true || planningChat?.drafts?.value?.get(sessionId)?.active == true
+                    latest.changeInteractionMode(mode, busy)
+                }
+                if (updated.interactionMode != CodingInteractionMode.CODE) codingRuntime?.computerUse?.disable(sessionId)
+                if (selected.session.interactionMode != updated.interactionMode) {
+                    appendCodingMessage(updated, CodingMessage(Id.new(), CodingRole.AGENT,
+                        "Режим сессии: ${updated.interactionMode.title}. " +
+                            if (updated.researchMode) "Исходники и Git защищены от записи. Сборки и тесты доступны только через защищённый запуск проверок."
+                            else "Новый режим применяется к последующим запросам.",
+                        createdAt = Id.now(), systemContext = true))
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось изменить режим") } }
         }
     }
 
@@ -1450,9 +1471,7 @@ class MagicPaperViewModel(
         codingSessionLocks.update { if (session.id in it) it else it + (session.id to Mutex()) }
         return codingSessionLocks.value.getValue(session.id).withLock {
             val repo = codingProjects ?: error("Хранилище сессий недоступно")
-            val latest = repo.sessions(session.projectId).firstOrNull { it.id == session.id } ?: error("Сессия удалена")
-            change(latest).also { saved ->
-                repo.saveSession(saved)
+            repo.updateSession(session.projectId, session.id, change).also { saved ->
                 updateCodingSession(saved.id) { it.copy(session = saved) }
             }
         }
@@ -1479,10 +1498,14 @@ class MagicPaperViewModel(
         // are being cleaned up. Its finally block releases this entry.
         if (closing || session.id in codingJobs.value) return
         val recorder = CodingRunRecorder()
-        val request = checkpoint.copy(responseId = Id.new())
+        var request = checkpoint.copy(responseId = Id.new())
         val job = scope.launch(workerDispatcher, start = CoroutineStart.LAZY) {
             try {
-                var current = updateStoredCodingSession(session) { it.namedFromPrompt(request.prompt).copy(pendingRun = request) }
+                var current = updateStoredCodingSession(session) { latest ->
+                    require(latest.interactionMode == session.interactionMode) { "Режим сессии изменился. Отправьте запрос повторно." }
+                    request = request.copy(interactionMode = request.interactionMode ?: latest.interactionMode)
+                    latest.namedFromPrompt(request.prompt).copy(pendingRun = request).forPendingRun()
+                }
                 if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
                     appendCodingMessage(session, CodingMessage(request.messageId, CodingRole.USER,
                         request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() }))
@@ -1490,13 +1513,17 @@ class MagicPaperViewModel(
                 additionalMessage?.let { appendCodingMessage(session, it) }
                 updateCodingSession(session.id) { it.copy(running = true, draft = recorder.draft(active = true)) }
                 if (recovering) runtime.reconcile(session.id)
-                val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
+                var prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                     "результаты команд и состояние файлов; учитывай уже сделанное и не повторяй завершённые действия.\n\n" + request.prompt else request.prompt
+                if (current.needsHistorySeed) {
+                    prompt = researchContextSeed(codingProjects!!.messages(project.id, session.id),
+                        codingProfileOf(current)?.advanced?.contextMessages ?: 20, request.messageId) + prompt
+                }
                 var ended = false
                 recorder.recordDrafts(runtime.run(project, current, prompt, codingProfileOf(current), request.attachments), onEvent = { event ->
                     if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                         // Save the native conversation before the first command, not at the end of the turn.
-                        current = updateStoredCodingSession(session) { it.copy(piSessionId = event.sessionId) }
+                        current = updateStoredCodingSession(session) { it.copy(piSessionId = event.sessionId, needsHistorySeed = false) }
                     }
                     if (event is CodingEvent.Finished) ended = true
                 }).collect { draft ->
@@ -1581,7 +1608,7 @@ class MagicPaperViewModel(
 
     fun enableComputerUse(sessionId: String, access: io.aequicor.magicpaper.domain.ComputerAccess) {
         val session = state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
-        if (session.running || session.session.stageId != null || session.session.planningMode) return
+        if (session.running || session.session.stageId != null || session.session.planningMode || session.session.researchMode) return
         scope.launch {
             codingRuntime?.computerUse?.let { computer ->
                 computer.enable(sessionId, access)

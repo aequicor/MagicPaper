@@ -53,6 +53,9 @@ data class CodingSession(
     val parentSessionId: String? = null,
     val stageId: String? = null,
     val planningMode: Boolean = false,
+    val researchMode: Boolean = false,
+    /** Native history was reset by a mode change; seed the next context from the saved dialogue. */
+    val needsHistorySeed: Boolean = false,
     val role: CodingSessionRole = CodingSessionRole.CHAT,
     val archived: Boolean = false,
     val nameManuallySet: Boolean = false,
@@ -77,6 +80,8 @@ data class CodingRunCheckpoint(
     val stoppedByUser: Boolean = false,
     /** Persisted with the request; copies/recovery retain the same identity. */
     val runId: String = messageId,
+    /** Null only in legacy checkpoints; resolved from the persisted session before execution. */
+    val interactionMode: CodingInteractionMode? = null,
 )
 
 /** Older logs have no checkpoint; only an unanswered or failed turn can be resumed. */
@@ -576,6 +581,11 @@ interface CodingProjectRepository {
     /** Сессии проекта в порядке создания (первая — «основная»). */
     suspend fun sessions(projectId: String): List<CodingSession>
     suspend fun saveSession(session: CodingSession)
+    /** Atomic read/modify/write in persistent implementations. */
+    suspend fun updateSession(projectId: String, sessionId: String, update: (CodingSession) -> CodingSession): CodingSession {
+        val latest = sessions(projectId).firstOrNull { it.id == sessionId } ?: error("Сессия удалена")
+        return update(latest).also { saveSession(it) }
+    }
     suspend fun deleteSession(projectId: String, sessionId: String)
 
     suspend fun messages(projectId: String, sessionId: String): List<CodingMessage>

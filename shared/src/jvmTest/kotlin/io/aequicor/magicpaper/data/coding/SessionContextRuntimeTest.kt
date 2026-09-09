@@ -32,8 +32,13 @@ class SessionContextRuntimeTest {
                 val planning = runtime.sessionContext(project, session.copy(planningMode = true), profile)
                 assertTrue(PLANNING_INSTRUCTIONS in planning)
                 assertFalse("EXACT SKILL TEXT" in planning)
+                val research = runtime.sessionContext(project, session.copy(researchMode = true), profile)
+                assertTrue(RESEARCH_INSTRUCTIONS in research)
+                assertTrue("Исследование" in research)
+                assertTrue("повышение прав и управление компьютером отключены" in research)
+                assertTrue("EXACT SKILL TEXT" in research)
             }
-            assertEquals(2, reads)
+            assertEquals(4, reads)
         } finally {
             client.close()
             root.toFile().deleteRecursively()

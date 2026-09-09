@@ -51,6 +51,8 @@ export async function planningGit(cwd, input, signal) {
 }
 
 export default function (pi) {
+  const research = process.env.MAGICPAPER_RESEARCH_MODE === '1';
+  const allowed = research ? [...planningTools, 'questionnaire', 'research_check'] : planningTools;
   pi.registerTool({
     name: 'planning_git', label: 'Просмотр изменений Git',
     description: 'Read-only Git status or diff in the project. For diff, staged=false shows working-tree changes and staged=true shows index changes. Read untracked files with read. Paginate using nextOffset; no commands or arbitrary Git options are accepted.',
@@ -64,6 +66,6 @@ export default function (pi) {
     }
   });
   // Even a fabricated call to a tool absent from the advertised schema cannot execute it.
-  pi.on('tool_call', event => planningTools.includes(event.toolName) ? undefined :
-    { block: true, reason: 'При планировании доступны только чтение, поиск и просмотр Git.' });
+  pi.on('tool_call', event => allowed.includes(event.toolName) ? undefined :
+    { block: true, reason: research ? 'При исследовании доступны чтение, поиск, опросник и защищённые проверки.' : 'При планировании доступны только чтение, поиск и просмотр Git.' });
 }

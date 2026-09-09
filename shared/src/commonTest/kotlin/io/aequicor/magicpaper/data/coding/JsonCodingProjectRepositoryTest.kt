@@ -21,6 +21,20 @@ class JsonCodingProjectRepositoryTest {
     private val store = InMemoryKeyValueStore()
     private val repo = JsonCodingProjectRepository(store, json)
 
+    @Test fun staleSaveCannotUndoModeAndAtomicUpdatesDiscardOldNativePermissions() = runTest {
+        repo.save(CodingProject("p", "Project", "/p", 1))
+        val old = CodingSession("s", "p", "Task", 1, piSessionId = "writable")
+        repo.saveSession(old)
+        val research = repo.updateSession("p", "s") { it.copy(researchMode = true) }
+        assertEquals("", research.piSessionId)
+        assertTrue(research.needsHistorySeed)
+        assertFails { repo.saveSession(old.copy(name = "Stale rename")) }
+        assertTrue(repo.sessions("p").single().researchMode)
+        repo.updateSession("p", "s") { it.copy(pendingRun = CodingRunCheckpoint("r", "Read", interactionMode = CodingInteractionMode.RESEARCH)) }
+        assertFails { repo.updateSession("p", "s") { it.copy(researchMode = false) } }
+        assertTrue(repo.sessions("p").single().researchMode)
+    }
+
     private fun user(id: String, text: String) =
         CodingMessage(id = id, role = CodingRole.USER, text = text, createdAt = 1L)
 

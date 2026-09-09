@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.RuntimeQuestionnaires
+import io.aequicor.magicpaper.domain.forPendingRun
+import io.aequicor.magicpaper.data.research.*
 import io.aequicor.magicpaper.domain.PlanningAnswer
 
 import io.aequicor.magicpaper.domain.Attachment
@@ -106,6 +108,7 @@ class PiCodingRuntime(
     private val abortedSessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     override fun abort(sessionId: String) {
+        ResearchCheckRunner.shared.abort(sessionId)
         computerUse?.disable(sessionId)
         abortedSessions.add(sessionId)
         runningProcesses.remove(sessionId)?.let { process ->
@@ -176,7 +179,7 @@ class PiCodingRuntime(
         prompt: String,
         profile: LlmProfile?,
         attachments: List<Attachment>,
-    ): Flow<CodingEvent> = runAgent(project, session, prompt, profile, attachments, planning = false)
+    ): Flow<CodingEvent> = runAgent(project, session.forPendingRun().also { require(!it.planningMode) { "Используйте защищённый маршрут планирования" } }, prompt, profile, attachments, planning = false)
 
     override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> =
         runAgent(project, session.copy(piSessionId = ""), prompt, profile, emptyList(), planning = true)
@@ -184,6 +187,8 @@ class PiCodingRuntime(
     private fun runAgent(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?,
         attachments: List<Attachment>, planning: Boolean): Flow<CodingEvent> = flow {
         val dir = File(project.path)
+        val research = !planning && session.researchMode
+        val restricted = planning || research
         if (!piCli.isFile) {
             emit(CodingEvent.Failed("Движок не установлен. Нажмите «Подготовить движок»."))
             emit(CodingEvent.Finished)
@@ -214,15 +219,15 @@ class PiCodingRuntime(
         // Кодинг-контур: модель и всё, что из неё выводится (models.json,
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = if (planning) profile.forModel() else profile.forCoding()
-        writePiConfig(codingProfile, sessionHome(session.id), imageInput = !planning && computerUse?.grant(session.id) != null)
-        if (planning) writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, true, codingProfile.advanced.systemPromptOverride))
+        writePiConfig(codingProfile, sessionHome(session.id), imageInput = !restricted && computerUse?.grant(session.id) != null)
+        if (restricted) writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
         val effectivePrompt = promptWithAttachments(prompt, attachedPaths)
         // Лечим и старые установки (до защиты кодировки) — без пересоздания движка.
         ensureFuzzySafety()
-        if (!planning && onWindows() && windowsBashProbe() == null) {
+        if (!restricted && onWindows() && windowsBashProbe() == null) {
             emit(
                 CodingEvent.Notice(
                     "Рабочего bash не найдено (в WSL нет дистрибутива) — команды агент выполняет " +
@@ -240,15 +245,17 @@ class PiCodingRuntime(
         // Инициализатор формален: тело цикла выполняется раньше проверки выхода.
         var outcome = AttemptOutcome(launchError = "агент не запущен")
         val emitEvent: suspend (CodingEvent) -> Unit = { emit(it) }
-        val computerBridge = if (planning) null else computerUse?.bridge(session.id)
+        val computerBridge = if (restricted) null else computerUse?.bridge(session.id)
+        val researchBridge = if (research) ResearchCheckBridge(session, project) else null
         val questionnaireBridge = if (planning) null else io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
         try {
+            if (research) writeAtomically(File(sessionHome(session.id), "research.mjs"), PiResearchExtension.source)
             writeAtomically(File(sessionHome(session.id), "questionnaire.mjs"), io.aequicor.magicpaper.data.questionnaire.PiQuestionnaireExtension.source)
             if (computerBridge != null) {
                 writeAtomically(File(sessionHome(session.id), "computer-use.mjs"), io.aequicor.magicpaper.data.computer.PiComputerExtension.source)
             }
             while (true) {
-                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
@@ -263,6 +270,7 @@ class PiCodingRuntime(
                 )
             }
         } finally {
+            researchBridge?.close()
             questionnaireBridge?.close()
             computerBridge?.close()
             abortedSessions.remove(session.id)
@@ -289,7 +297,10 @@ class PiCodingRuntime(
         computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null,
         questionnaireBridge: io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge? = null,
         planning: Boolean = false,
+        researchBridge: ResearchCheckBridge? = null,
     ): AttemptOutcome {
+        val research = researchBridge != null
+        val restricted = planning || research
         var tokenBroker: SubscriptionTokenBroker? = null
         val args = mutableListOf(
             node.absolutePath, piCli.absolutePath,
@@ -305,8 +316,10 @@ class PiCodingRuntime(
         // Windows ломается при сборке командной строки ProcessBuilder: аргумент
         // распадается на части, и обрывки уходят в «сообщения» — агент видит
         // мусор вместо запроса (воспроизведено: промпт превратился в «for»).
-        args += listOf(if (planning) "--system-prompt" else "--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
-        if (planning) args += listOf("--tools", "read,grep,find,ls,planning_git", "--extension", resourceScript("planning-tools.mjs").absolutePath)
+        args += listOf(if (restricted) "--system-prompt" else "--append-system-prompt", File(sessionHome(session.id), HINTS_FILE).absolutePath)
+        if (restricted) args += listOf("--tools", if (research) "read,grep,find,ls,planning_git,questionnaire,research_check" else "read,grep,find,ls,planning_git",
+            "--extension", resourceScript("planning-tools.mjs").absolutePath)
+        if (research) args += listOf("--extension", File(sessionHome(session.id), "research.mjs").absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
         if (questionnaireBridge != null) args += listOf("--extension", File(sessionHome(session.id), "questionnaire.mjs").absolutePath)
         if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)
@@ -334,6 +347,14 @@ class PiCodingRuntime(
                 .redirectError(stderrFile)
                 .apply {
                     environment().putAll(piEnv(node, sessionHome(session.id)))
+                    environment().remove("MAGICPAPER_RESEARCH_MODE")
+                    environment().remove("MAGICPAPER_RESEARCH_URL")
+                    environment().remove("MAGICPAPER_RESEARCH_TOKEN")
+                    if (researchBridge != null) {
+                        environment()["MAGICPAPER_RESEARCH_MODE"] = "1"
+                        environment()["MAGICPAPER_RESEARCH_URL"] = researchBridge.url
+                        environment()["MAGICPAPER_RESEARCH_TOKEN"] = researchBridge.token
+                    }
                     environment().remove("MAGICPAPER_COMPUTER_URL")
                     environment().remove("MAGICPAPER_COMPUTER_TOKEN")
                     if (questionnaireBridge != null) {

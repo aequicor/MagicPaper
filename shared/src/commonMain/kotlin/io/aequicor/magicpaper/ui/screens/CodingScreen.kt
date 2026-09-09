@@ -3,6 +3,8 @@ package io.aequicor.magicpaper.ui.screens
 import io.aequicor.magicpaper.ui.components.ToolbarButton
 import io.aequicor.magicpaper.ui.components.ToolbarIcon
 import androidx.compose.runtime.CompositionLocalProvider
+import io.aequicor.magicpaper.domain.CodingInteractionMode
+import io.aequicor.magicpaper.domain.interactionMode
 import io.aequicor.magicpaper.domain.UserInteractionRequest
 import io.aequicor.magicpaper.domain.QuestionnaireDraft
 import io.aequicor.magicpaper.domain.PlanningAnswer
@@ -315,7 +317,7 @@ private fun SessionArea(
         val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
             running = stageChat.running || draft.active)
         val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
-        if (ui.computerSupported && !sessionInfo.planningMode && sessionInfo.stageId == null) {
+        if (ui.computerSupported && !sessionInfo.planningMode && !sessionInfo.researchMode && sessionInfo.stageId == null) {
             io.aequicor.magicpaper.ui.components.ComputerUsePanel(
                 state = ui.computer, sessionId = sessionInfo.id, running = effective.running,
                 onEnable = { vm.enableComputerUse(sessionInfo.id, it) },
@@ -355,9 +357,10 @@ private fun SessionArea(
                 onSkills = onSkills,
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
-                onPlanning = if (service != null && sessionInfo.stageId == null) {
-                    { scope.launch { service.configure(sessionInfo, planning = true) } }
+                onInteractionMode = if (sessionInfo.stageId == null && !sessionInfo.archived) {
+                    { mode -> vm.changeCodingInteractionMode(sessionInfo.id, mode) }
                 } else null,
+                modeSwitchEnabled = !effective.running && effective.interactions.isEmpty() && !effective.awaitingUser,
                 onSearchProvider = if (service != null && sessionInfo.planningMode && sessionInfo.stageId == null) {
                     { provider -> scope.launch { service.configure(sessionInfo, search = provider) } }
                 } else null,
@@ -910,6 +913,8 @@ internal fun CodingChat(
     onOpenSession: (String) -> Unit = {},
     allowQueue: Boolean = false,
     onPlanning: (() -> Unit)? = null,
+    onInteractionMode: ((CodingInteractionMode) -> Unit)? = null,
+    modeSwitchEnabled: Boolean = true,
     approvals: List<CodingApproval> = emptyList(),
     onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
     onStopApproval: (String) -> Unit = {},
@@ -996,7 +1001,7 @@ internal fun CodingChat(
             ) {
                 item(key = "project-header", contentType = "header") {
                     Text(
-                        "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${project.path}",
+                        "Проект «${project.name}» · сессия «${if (session.session.planningMode && !session.session.name.startsWith("🔀")) "🔀 " else ""}${session.session.name}» · ${session.session.interactionMode.title} · ${project.path}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1041,6 +1046,7 @@ internal fun CodingChat(
                 .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
                 val request = interactions.firstOrNull()
                 if (request != null) key(request.id) {
+                    CodingModeLabel(session.session.planningMode, session.session.researchMode)
                     UserInteractionDock(request, questionnaireDrafts[request.id] ?: QuestionnaireDraft(request.initialAnswers),
                         { onQuestionnaireDraft(request.id, it) }, { onQuestionnaireSubmit(request.id, it) },
                         Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1052,6 +1058,9 @@ internal fun CodingChat(
                     busy = busy && !allowQueue,
                     controls = modelChip,
                     planning = session.session.planningMode,
+                    research = session.session.researchMode,
+                    onInteractionMode = onInteractionMode,
+                    modeSwitchEnabled = modeSwitchEnabled && !busy && !session.awaitingUser,
                     onPlanning = onPlanning,
                     engine = session.session.engine,
                     searchProvider = session.session.searchProvider,
@@ -1524,6 +1533,13 @@ internal fun currentThinkingSummary(thinking: String): String {
 }
 
 @Composable
+private fun CodingModeLabel(planning: Boolean, research: Boolean) {
+    Text(if (research) "Исследование · код защищён" else if (planning) "Планирование" else "Обычный режим",
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+}
+
+@Composable
 internal fun CodingComposer(
     state: CodingComposerDraft = remember { CodingComposerDraft() },
     onSkills: (() -> Unit)? = null,
@@ -1531,7 +1547,10 @@ internal fun CodingComposer(
     busy: Boolean,
     controls: (@Composable () -> Unit)? = null,
     planning: Boolean = false,
+    research: Boolean = false,
     onPlanning: (() -> Unit)? = null,
+    onInteractionMode: ((CodingInteractionMode) -> Unit)? = null,
+    modeSwitchEnabled: Boolean = true,
     engine: CodingEngine? = null,
     searchProvider: SearchProvider = SearchProvider.AUTO,
     onSearchProvider: ((SearchProvider) -> Unit)? = null,
@@ -1558,6 +1577,9 @@ internal fun CodingComposer(
             ))
             .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 4.dp, vertical = 2.dp)) {
+            if (onInteractionMode != null || planning || research) {
+                CodingModeLabel(planning, research)
+            }
             PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box {
@@ -1604,7 +1626,21 @@ internal fun CodingComposer(
                                     onPickAttachments(attachments.size) { attachments = attachments + it }
                                 },
                             )
-                            if (onPlanning != null) {
+                            if (onInteractionMode != null) {
+                                val currentMode = if (planning) CodingInteractionMode.PLANNING else if (research) CodingInteractionMode.RESEARCH else CodingInteractionMode.CODE
+                                CodingInteractionMode.entries.forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = { Text(when (mode) {
+                                            CodingInteractionMode.CODE -> "Обычный режим"
+                                            CodingInteractionMode.RESEARCH -> "Режим исследования"
+                                            CodingInteractionMode.PLANNING -> "Режим планирования"
+                                        }) },
+                                        trailingIcon = if (currentMode == mode) { { Text("✓") } } else null,
+                                        enabled = modeSwitchEnabled && !busy && (!planning || mode == CodingInteractionMode.PLANNING),
+                                        onClick = { closeMenu(); if (currentMode != mode) onInteractionMode(mode) },
+                                    )
+                                }
+                            } else if (onPlanning != null) {
                                 DropdownMenuItem(
                                     text = { Text("Режим планирования") },
                                     leadingIcon = { Text("🔀") },
@@ -1662,7 +1698,7 @@ internal fun CodingComposer(
                     maxLines = 6,
                     decorationBox = { inner ->
                         Box {
-                            if (text.isEmpty()) Text("Поручение агенту в папке проекта…",
+                            if (text.isEmpty()) Text(if (research) "Вопрос о проекте…" else "Поручение агенту в папке проекта…",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)

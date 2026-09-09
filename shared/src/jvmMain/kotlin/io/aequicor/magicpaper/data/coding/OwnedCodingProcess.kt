@@ -9,8 +9,8 @@ import java.util.concurrent.TimeUnit
 /** PID alone is insufficient: compare start instants, and never kill another live app's process. */
 internal class OwnedCodingProcess(private val directory: File) {
     private fun file(id: String) = File(directory, id.replace(Regex("[^a-zA-Z0-9_-]"), "_") + ".process")
-    fun record(id: String, process: Process) {
-        CodingProcessLifetime.attach(process)
+    fun record(id: String, process: Process, attachLifetime: Boolean = true) {
+        if (attachLifetime) CodingProcessLifetime.attach(process)
         directory.mkdirs()
         val owner = ProcessHandle.current()
         val value = listOf(process.pid(), process.info().startInstant().orElseThrow().toEpochMilli(), owner.pid(), owner.info().startInstant().orElseThrow().toEpochMilli()).joinToString("\n")

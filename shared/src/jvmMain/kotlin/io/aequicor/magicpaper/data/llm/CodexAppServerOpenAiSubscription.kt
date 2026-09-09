@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.data.llm
 
 import io.aequicor.magicpaper.domain.RuntimeQuestionnaires
 import io.aequicor.magicpaper.domain.PlanningAnswer
+import io.aequicor.magicpaper.data.research.ResearchCheckBridge
+import io.aequicor.magicpaper.domain.forPendingRun
 import io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge
 import io.aequicor.magicpaper.data.questionnaire.QuestionnaireTool
 import io.aequicor.magicpaper.domain.AttachmentKind
@@ -293,27 +295,34 @@ class CodexAppServerOpenAiSubscription(
         providerConfig: JsonObject = JsonObject(emptyMap()),
         planning: Boolean = false,
     ): Flow<CodingEvent> = channelFlow {
+        val research = !planning && session.researchMode
+        val restricted = planning || research
         var confirmedFinished = false
+        var researchBridge: ResearchCheckBridge? = null
         var computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null
         var questionnaireBridge: QuestionnaireBridge? = null
         try {
+            session.forPendingRun()
+            require(planning || !session.planningMode) { "Используйте защищённый маршрут планирования" }
             check(File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
             check(profile.configured) { "Не настроено подключение модели." }
             if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
             val codingProfile = if (planning) profile.forModel() else profile.forCoding()
-            val permissions = if (planning) null else CodexCodingPermissions(Paths.get(project.path))
+            val permissions = if (restricted) null else CodexCodingPermissions(Paths.get(project.path))
             fun JsonObjectBuilder.applyApprovals() {
                 if (permissions != null) with(permissions) { approvals() } else with(CodexPlanningPermissions) { approvals() }
             }
-            computerBridge = if (planning) null else computerUse?.bridge(session.id)
+            computerBridge = if (restricted) null else computerUse?.bridge(session.id)
             val baseConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(
-                if (planning) JsonObject(providerConfig + CodexPlanningPermissions.threadConfig()) else JsonObject(permissions!!.threadConfig() + providerConfig), computerBridge)
+                if (restricted) JsonObject(providerConfig + CodexPlanningPermissions.threadConfig()) else JsonObject(permissions!!.threadConfig() + providerConfig), computerBridge)
             questionnaireBridge = if (planning) null else QuestionnaireBridge(questionnaireRegistry, session)
-            val threadConfig = questionnaireBridge?.codexConfig(baseConfig) ?: baseConfig
+            researchBridge = if (research) ResearchCheckBridge(session, project) else null
+            val questionnaireConfig = questionnaireBridge?.codexConfig(baseConfig) ?: baseConfig
+            val threadConfig = researchBridge?.codexConfig(questionnaireConfig) ?: questionnaireConfig
             val instructions = io.aequicor.magicpaper.data.coding.codingSystemPrompt(
-                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride)
+                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research)
             val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
-                if (computerUse != null && oldId in codingThreads) {
+                if ((research || computerUse != null) && oldId in codingThreads) {
                     request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })
                     codingThreads.remove(oldId)
                 }
@@ -324,7 +333,7 @@ class CodexAppServerOpenAiSubscription(
                         put("cwd", project.path)
                         put("model", codingProfile.modelId)
                         applyApprovals()
-                        put("sandbox", "workspace-write")
+                        put("sandbox", if (restricted) "read-only" else "workspace-write")
                         put("modelProvider", modelProvider)
                         put("config", threadConfig)
                         put("developerInstructions", instructions)
@@ -338,18 +347,18 @@ class CodexAppServerOpenAiSubscription(
                     put("cwd", project.path)
                     put("model", codingProfile.modelId)
                     applyApprovals()
-                    put("sandbox", if (planning) "read-only" else "workspace-write")
+                    put("sandbox", if (restricted) "read-only" else "workspace-write")
                     put("modelProvider", modelProvider)
                     put("config", threadConfig)
-                    put("serviceName", if (planning) "MagicPaper Planning" else "MagicPaper Coding")
-                    if (planning) put("baseInstructions", io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS)
+                    put("serviceName", if (planning) "MagicPaper Planning" else if (research) "MagicPaper Research" else "MagicPaper Coding")
+                    if (restricted) put("baseInstructions", if (research) io.aequicor.magicpaper.domain.RESEARCH_INSTRUCTIONS else io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS)
                     put("developerInstructions", instructions)
                 },
             ).jsonObject["thread"]?.jsonObject?.requireString("id")
                 ?: error("Codex не вернул идентификатор coding-сессии.")
             codingThreads.add(threadId)
             send(CodingEvent.SessionStarted(threadId))
-            val accumulator = CodingAccumulator(planning)
+            val accumulator = CodingAccumulator(planning, research)
             approvalBroker.clearTurn(threadId)
             questionnaireBroker.clearTurn(threadId)
             codingRuns[threadId] = accumulator
@@ -383,6 +392,7 @@ class CodexAppServerOpenAiSubscription(
             send(CodingEvent.Failed(error.message ?: "Codex coding завершился с ошибкой."))
             send(CodingEvent.Finished)
         } finally {
+            researchBridge?.close()
             questionnaireBridge?.close()
             computerBridge?.close()
             // Keep ownership after interruption: recovery must reconcile an uncertain turn.
@@ -400,6 +410,7 @@ class CodexAppServerOpenAiSubscription(
     }
 
     fun abortCoding(sessionId: String) {
+        io.aequicor.magicpaper.data.research.ResearchCheckRunner.shared.abort(sessionId)
         computerUse?.disable(sessionId)
         val threadId = codingSessions[sessionId] ?: return
         val run = codingRuns[threadId] ?: return
@@ -621,6 +632,7 @@ class CodexAppServerOpenAiSubscription(
                     questionnaireBroker.contains(threadId, id)
             }
         }) return true
+        if (run.research) return false // No approval may grant writes during research.
         return approvalBroker.receive(id, method, params, session, run.items[params.string("itemId")]) { response ->
             send(response, expectedWriter = connection) {
                 codingRuns[threadId] === run && !run.done.isCompleted && (run.turnId == null || run.turnId == turnId) &&
@@ -810,7 +822,7 @@ class CodexAppServerOpenAiSubscription(
         val text: String get() = parts.values.joinToString("\n\n")
     }
 
-    private class CodingAccumulator(val planning: Boolean = false) {
+    private class CodingAccumulator(val planning: Boolean = false, val research: Boolean = false) {
         private class Reasoning {
             val content = IndexedText()
             val summary = IndexedText()

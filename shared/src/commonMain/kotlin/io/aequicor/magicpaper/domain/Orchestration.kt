@@ -104,7 +104,7 @@ fun CodingSession.subtitle(): String = when (effectiveRole) {
     CodingSessionRole.ORCHESTRATOR -> "Оркестратор" + (orchestratorNumber?.let { " $it" } ?: "")
     CodingSessionRole.WORKER -> "Исполнитель" + (stageNumber?.let { " · Этап $it" } ?: "") +
         (continuationOfNumber?.let { " · Доработка этапа $it" } ?: "")
-    CodingSessionRole.CHAT -> "Диалог"
+    CodingSessionRole.CHAT -> if (researchMode) "Исследование" else "Диалог"
 } + if (archived) " · В архиве" else ""
 
 fun Milestone.stageLabel(): String = (displayNumber?.let { "Этап $it · " } ?: "Этап · ") + (displayName ?: title)
