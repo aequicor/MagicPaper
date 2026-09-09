@@ -35,17 +35,23 @@ class RuntimePlanningGateway(private val runtime: CodingRuntime) : PlanningGatew
         var final = ""
         var finished = false
         var failure: String? = null
+        var sessionStarted = false
         val activeTools = mutableSetOf<String>()
         onActivity(CodingStep(CodingStepKind.INFO, "Изучение проекта ${project.name} · ${engine.title}"))
         val run = runtime.runPlanning(project, session, prompt, profile)
         val events = (toolSession?.let { run.withTools(it) } ?: run).produceIn(this)
         try {
             while (!finished) {
-                val received = if (profile.advanced.safeTimeoutSeconds == 0 || activeTools.isNotEmpty()) events.receiveCatching() else
+                // Native engines do not stream every kind of model activity (notably MCP
+                // arguments and private reasoning). Once the session is running, silence in
+                // the chat is not evidence of an idle model. The engine owns transport
+                // deadlines; this deadline only guards startup. Cancellation still aborts it.
+                val received = if (sessionStarted || profile.advanced.safeTimeoutSeconds == 0 || activeTools.isNotEmpty()) events.receiveCatching() else
                     withTimeoutOrNull(profile.advanced.safeTimeoutSeconds * 1_000L) { events.receiveCatching() }
-                        ?: error("Нет активности планировщика в течение ${profile.advanced.safeTimeoutSeconds} секунд. Повторите запрос или увеличьте таймаут модели.")
+                        ?: error("Не удалось запустить сессию планировщика за ${profile.advanced.safeTimeoutSeconds} секунд. Повторите запрос или проверьте настройки движка.")
                 if (received.isClosed) { received.exceptionOrNull()?.let { throw it }; break }
                 val event = received.getOrThrow()
+                if (event is CodingEvent.SessionStarted) sessionStarted = true
                 if (event is CodingEvent.ToolStarted) activeTools += event.callId
                 if (event is CodingEvent.ToolFinished) activeTools -= event.callId
                 if (event is CodingEvent.FinalText) final = event.text

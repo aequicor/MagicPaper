@@ -23,6 +23,7 @@ class PlanningExecutionServiceTest {
         private val commandGate: CompletableDeferred<Unit>? = null,
         private val trailingDelta: String? = null,
         private val report: String = "Verified result",
+        private val command: String = "./gradlew :shared:jvmTest",
     ) : CodingRuntime {
         val engines = mutableListOf<CodingEngine?>()
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
@@ -40,7 +41,7 @@ class PlanningExecutionServiceTest {
             emit(CodingEvent.ToolStarted("read", "Чтение проекта", "read-1"))
             emit(CodingEvent.ToolFinished("read", false, "read-1", "Файлы прочитаны"))
             if (commandGate != null) {
-                emit(CodingEvent.ToolStarted("command", "./gradlew :shared:jvmTest", "command-1", isExec = true))
+                emit(CodingEvent.ToolStarted("command", command, "command-1", isExec = true))
                 commandGate.await()
                 emit(CodingEvent.ToolFinished("command", false, "command-1", "BUILD SUCCESSFUL"))
             }
@@ -90,6 +91,12 @@ class PlanningExecutionServiceTest {
         assertFalse(research.sessionId in runtime.aborted)
         val paused = store.planFor(project.id)!!.milestones.first { it.id == "design" }.attempts.single()
         assertEquals("Saved progress", paused.report)
+        assertTrue(paused.interrupted)
+        val pausedPlan = store.planFor(project.id)!!
+        assertFalse(pausedPlan.isStageWorking(pausedPlan.milestones.first { it.id == "design" }))
+        assertTrue(pausedPlan.isStageWorking(pausedPlan.milestones.first { it.id == "research" }))
+        assertTrue(paused.chatTurns.all { it.completedAt != 0L })
+        assertTrue(json.decodeFromString<Plan>(json.encodeToString(Plan.serializer(), pausedPlan)).milestones.first { it.id == "design" }.attempts.single().interrupted)
         assertNull(paused.error)
         assertEquals(before.transportRetries, paused.transportRetries)
         val calls = runtime.calls.size
@@ -105,6 +112,57 @@ class PlanningExecutionServiceTest {
         val resumed = store.planFor(project.id)!!.milestones.first { it.id == "design" }.attempts.single()
         assertEquals(before.id, resumed.id)
         assertEquals(paused.engineSessionId, resumed.engineSessionId)
+        assertFalse(resumed.interrupted)
+        assertTrue(store.planFor(project.id)!!.isStageWorking(store.planFor(project.id)!!.milestones.first { it.id == "design" }))
+        service.shutdown()
+    }
+
+    @Test fun selectivePauseClosesToolCardsAndRetainsUncertainEffectsBeforeResume() = runTest {
+        val runtime = Runtime(commandGate = CompletableDeferred(), command = "publish-release")
+        val (store, service) = fixture(runtime)
+        var blocked = emptySet<String>()
+        service.chatHooks = object : PlanningExecutionHooks {
+            override suspend fun blockedStages(plan: Plan) = blocked
+            override suspend fun prepareSessions(plan: Plan) = Unit
+            override suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt) = ""
+            override suspend fun finished(plan: Plan, stage: Milestone, attempt: StageAttempt) = StageTurnDecision(StageTurnAction.VERIFY, attempt.report)
+        }
+        store.save(plan(stage("a"))); service.start(project.id); runCurrent()
+        blocked = setOf("a")
+        service.interruptStages("plan", blocked); runCurrent()
+        val paused = store.planFor("plan")!!.milestones.single().attempts.single()
+        val command = paused.steps.single { it.callId == "command-1" }
+        assertFalse(command.running)
+        assertEquals(io.aequicor.magicpaper.domain.tools.ToolPhase.CANCELLED, command.toolPhase)
+        assertEquals("publish-release", paused.pendingTool)
+        assertTrue(paused.pendingToolExternal)
+        assertTrue(paused.interrupted)
+        blocked = emptySet()
+        advanceTimeBy(200); runCurrent(); service.start(project.id); runCurrent()
+        assertEquals(1, runtime.calls.size, "An interrupted external effect must not run again automatically")
+        assertEquals(IssueKind.UNCERTAIN, store.planFor("plan")!!.issue?.kind)
+        service.shutdown()
+    }
+
+    @Test fun interruptionDuringVerificationPreservesTheCheckpointAndDoesNotRepeatWorkerChanges() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val verifier = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                gate.await(); return Verdict(true, "Checked")
+            }
+        }
+        val (store, service, runtime) = fixture(verifier = verifier)
+        store.save(plan(stage("a"))); service.start(project.id); runCurrent()
+        assertEquals(AttemptPhase.VERIFYING, store.planFor("plan")!!.milestones.single().attempts.single().phase)
+        service.stopAndJoin("plan")
+        val interrupted = store.planFor("plan")!!.milestones.single().attempts.single()
+        assertEquals(AttemptPhase.VERIFYING, interrupted.phase)
+        assertTrue(interrupted.interrupted)
+        gate.complete(Unit); service.start(project.id); advanceTimeBy(500); runCurrent()
+        assertEquals(1, runtime.calls.count { it == interrupted.sessionId })
+        val completed = store.planFor("plan")!!.milestones.single().attempts.single()
+        assertEquals(AttemptPhase.COMPLETE, completed.phase)
+        assertFalse(completed.interrupted)
         service.shutdown()
     }
 

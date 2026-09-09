@@ -56,6 +56,43 @@ class PlanningGatewayTest {
         assertEquals(2, runtime.aborted.distinct().size)
     }
 
+    @Test fun nativeSessionMayGenerateAPlanWithoutVisibleEventsPastTheChatDeadline() = runTest {
+        for (engine in CodingEngine.entries) {
+            val runtime = Runtime(flow {
+                emit(CodingEvent.SessionStarted("native"))
+                emit(CodingEvent.TextDelta("Готовлю предложение"))
+                delay(125_000) // Native tool arguments/private reasoning are not chat deltas.
+                emit(CodingEvent.ToolStarted("magicpaper_plan_propose", "Plan", "proposal"))
+                emit(CodingEvent.ToolFinished("magicpaper_plan_propose", false, "proposal", "Saved"))
+                emit(CodingEvent.FinalText("Предложение готово"))
+                emit(CodingEvent.Finished)
+            })
+            val result = RuntimePlanningGateway(runtime).completeWithActivity(project, engine, "long-plan",
+                profile.copy(advanced = profile.advanced.copy(timeoutSeconds = 120)), messages) {}
+            assertEquals("Предложение готово", result)
+            assertTrue(runtime.aborted.isEmpty())
+        }
+    }
+
+    @Test fun silentNativeSessionStillPropagatesEngineFailureAndUserCancellation() = runTest {
+        val runtime = Runtime(flow {
+            emit(CodingEvent.SessionStarted("native"))
+            delay(2000)
+            emit(CodingEvent.Failed("Connection lost"))
+            emit(CodingEvent.Finished)
+        })
+        val failure = assertFailsWith<IllegalStateException> {
+            RuntimePlanningGateway(runtime).completeWithActivity(project, CodingEngine.CODEX, "failed", profile, messages) {}
+        }
+        assertEquals("Connection lost", failure.message)
+        val silent = Runtime(flow { emit(CodingEvent.SessionStarted("native")); awaitCancellation() })
+        val request = launch { RuntimePlanningGateway(silent).completeWithActivity(project, CodingEngine.CODEX, "cancel", profile, messages) {} }
+        runCurrent(); advanceTimeBy(2000); runCurrent()
+        assertTrue(request.isActive)
+        request.cancelAndJoin()
+        assertEquals(listOf(silent.calls.single().second.id), silent.aborted)
+    }
+
     @Test fun missingRuntimeAndFailedOrIncompleteTurnsNeverBecomePlans() = runTest {
         assertFailsWith<IllegalStateException> { RuntimePlanningGateway(NoopCodingRuntime).completeWithActivity(project, CodingEngine.PI, "r", profile, messages) {} }
         for (events in listOf(flowOf(CodingEvent.FinalText("partial")), flowOf(CodingEvent.Failed("Папка недоступна"), CodingEvent.Finished))) {

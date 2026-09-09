@@ -561,6 +561,11 @@ class PlanningExecutionService(
                 block(id, PlanningIssue(IssueKind.UNCERTAIN, "Нет подтверждения результата команды: ${attempt.pendingTool}. Проверьте её последствия перед повтором.", requiresUser = true))
                 return
             }
+            if (attempt.interrupted) {
+                attempt = attempt.copy(interrupted = false)
+                saveAttempt(id, stageId, attempt)
+                currentAttempt = attempt
+            }
             while (attempt.phase in listOf(AttemptPhase.PREPARED, AttemptPhase.EXECUTING, AttemptPhase.FAILED)) {
                 if (!canRunStage(id, stageId)) return
                 val plan = store.planFor(id)!!
@@ -834,17 +839,28 @@ class PlanningExecutionService(
             }
         } catch (e: CancellationException) {
             currentAttempt?.let { snapshot ->
-                runtime.abort(snapshot.sessionId); runtime.abort("${snapshot.sessionId}-merge")
                 withContext(NonCancellable) {
+                    runtime.abort(snapshot.sessionId); runtime.abort("${snapshot.sessionId}-merge")
                     // Keep streamed context and engine identity, without charging a retry.
                     val plan = store.planFor(id)
                     val saved = plan?.milestones?.firstOrNull { it.id == stageId }?.attempts?.lastOrNull()
-                    if (saved?.id == snapshot.id && saved.phase == AttemptPhase.EXECUTING) {
+                    if (saved?.id == snapshot.id && saved.phase != AttemptPhase.COMPLETE) {
                         val waiting = stageId in chatHooks?.blockedStages(plan!!).orEmpty()
-                        saveAttempt(id, stageId, if (waiting) snapshot.copy(
-                            activity = "Ожидание ответа пользователя" + snapshot.pendingTool.takeIf { it.isNotBlank() }
-                                ?.let { ". Прервана команда: $it. Перед продолжением проверь её фактические последствия." }.orEmpty(),
-                            pendingTool = "", pendingToolExternal = false) else snapshot)
+                        // Keep the newest phase/acceptance checkpoint, plus unsaved streamed
+                        // output. Do not erase uncertain external effects when pausing a stage.
+                        val latest = if (saved.phase == AttemptPhase.EXECUTING && !saved.awaitingPlanner &&
+                            saved.turnIndex == snapshot.turnIndex && saved.chatTurns == snapshot.chatTurns) saved.copy(
+                                report = snapshot.report, steps = snapshot.steps, engineSessionId = snapshot.engineSessionId,
+                                pendingTool = snapshot.pendingTool, pendingToolExternal = snapshot.pendingToolExternal) else saved
+                        saveAttempt(id, stageId, latest.copy(interrupted = true,
+                            activity = (if (waiting) "Этап приостановлен" else "Выполнение остановлено") +
+                                latest.pendingTool.takeIf { it.isNotBlank() }
+                                    ?.let { ". Прервана команда: $it. Перед продолжением проверь её фактические последствия." }.orEmpty(),
+                            steps = latest.steps.map { step -> if (!step.running) step else step.copy(running = false,
+                                ok = if (step.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) false else step.ok,
+                                toolPhase = if (step.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) io.aequicor.magicpaper.domain.tools.ToolPhase.CANCELLED else step.toolPhase,
+                                systemEvent = step.systemEvent?.copy(phase = CompactionPhase.CANCELLED)) },
+                            chatTurns = latest.chatTurns.map { if (it.completedAt == 0L) it.copy(completedAt = Id.now()) else it }))
                     }
                 }
             }
