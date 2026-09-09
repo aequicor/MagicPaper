@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class StageReply(val kind: StageReplyKind, val text: String, val targetStageId: String = "", val changedFiles: List<String> = emptyList(), val waitFor: MessageTrigger? = null, val resumeMessage: String = "")
 @Serializable enum class CoordinatorResultAction { VERIFY, CONTINUE }
 @Serializable data class CoordinatorReply(val reply: String, val actions: List<CoordinatorAction> = emptyList(), val askUser: Boolean = false, val replan: Boolean = false, val questions: List<PlanningQuestion> = emptyList(), val questionStageIds: List<String>? = null, val sessionActions: List<CoordinatorSessionAction> = emptyList(), val schedules: List<ScheduleCommand> = emptyList(),
-    val resultAction: CoordinatorResultAction? = null, val continuationReason: String = "")
+    val resultAction: CoordinatorResultAction? = null, val continuationReason: String = "", val toolsApplied: Boolean = false)
 @Serializable data class CoordinatorSessionAction(val kind: SessionCommandKind, val stageId: String, val name: String = "")
 @Serializable data class CoordinatorAction(val stageId: String, val message: String)
 
@@ -42,7 +42,7 @@ interface PlanningExecutionHooks {
 @Serializable data class CoordinationRecord(val id: String, val stageId: String, val reply: StageReply, val decision: CoordinatorReply? = null, val activity: List<CodingStep> = emptyList(),
     val runId: String = "", val attemptId: String = "", val sourceSessionId: String = "", val turnIndex: Int = 0, val createdAt: Long = 0,
     val status: HandoffStatus = HandoffStatus.QUEUED, val nextStep: String = "", val verification: StageVerification? = null,
-    val actionRevision: Int = 0)
+    val actionRevision: Int = 0, val toolCallId: String? = null)
 @Serializable data class StageVerification(val passed: Boolean, val note: String)
 
 /** A RESULT hands control to verification. Sending it back requires an explicit unfinished task. */
@@ -106,7 +106,7 @@ internal fun List<CoordinationRecord>.evidenceText(): String = joinToString("\n\
 
 internal fun Plan.stageVerificationReport(stageId: String, attempt: StageAttempt): String {
     val records = stageRecords(stageId, attempt)
-    if (records.size <= 1) return attempt.report
+    if (records.size <= 1) return if (records.singleOrNull()?.toolCallId != null) records.evidenceText() else attempt.report
     return "История отчётов текущей попытки по порядку (прежние проверки не означают принятие нового результата):\n" +
         records.evidenceText() + "\n\nПоследний отчёт исполнителя:\n${attempt.report}"
 }

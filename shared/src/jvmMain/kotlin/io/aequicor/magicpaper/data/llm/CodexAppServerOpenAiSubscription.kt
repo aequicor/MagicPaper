@@ -4,6 +4,8 @@ import io.aequicor.magicpaper.domain.RuntimeQuestionnaires
 import io.aequicor.magicpaper.domain.PlanningAnswer
 import io.aequicor.magicpaper.data.research.ResearchCheckBridge
 import io.aequicor.magicpaper.domain.forPendingRun
+import io.aequicor.magicpaper.domain.tools.*
+import io.aequicor.magicpaper.data.tools.AgentToolBridge
 import io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge
 import io.aequicor.magicpaper.data.questionnaire.QuestionnaireTool
 import io.aequicor.magicpaper.domain.AttachmentKind
@@ -301,6 +303,7 @@ class CodexAppServerOpenAiSubscription(
         var researchBridge: ResearchCheckBridge? = null
         var computerBridge: io.aequicor.magicpaper.data.computer.ComputerUseBridge? = null
         var questionnaireBridge: QuestionnaireBridge? = null
+        var agentBridge: AgentToolBridge? = null
         try {
             session.forPendingRun()
             require(planning || !session.planningMode) { "Используйте защищённый маршрут планирования" }
@@ -315,10 +318,13 @@ class CodexAppServerOpenAiSubscription(
             computerBridge = if (restricted) null else computerUse?.bridge(session.id)
             val baseConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(
                 if (restricted) JsonObject(providerConfig + CodexPlanningPermissions.threadConfig()) else JsonObject(permissions!!.threadConfig() + providerConfig), computerBridge)
-            questionnaireBridge = if (planning) null else QuestionnaireBridge(questionnaireRegistry, session)
+            val agentTools = kotlinx.coroutines.currentCoroutineContext()[ToolSession]
+            agentBridge = agentTools?.let { AgentToolBridge(it) }
+            questionnaireBridge = if (planning || agentTools != null) null else QuestionnaireBridge(questionnaireRegistry, session)
             researchBridge = if (research) ResearchCheckBridge(session, project) else null
             val questionnaireConfig = questionnaireBridge?.codexConfig(baseConfig) ?: baseConfig
-            val threadConfig = researchBridge?.codexConfig(questionnaireConfig) ?: questionnaireConfig
+            val researchConfig = researchBridge?.codexConfig(questionnaireConfig) ?: questionnaireConfig
+            val threadConfig = agentBridge?.codexConfig(researchConfig) ?: researchConfig
             val instructions = io.aequicor.magicpaper.data.coding.codingSystemPrompt(
                 io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research)
             val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
@@ -393,6 +399,7 @@ class CodexAppServerOpenAiSubscription(
             send(CodingEvent.Finished)
         } finally {
             researchBridge?.close()
+            agentBridge?.close()
             questionnaireBridge?.close()
             computerBridge?.close()
             // Keep ownership after interruption: recovery must reconcile an uncertain turn.
@@ -720,6 +727,7 @@ class CodexAppServerOpenAiSubscription(
                     resultPreview = params.string("delta").orEmpty(),
                 ),
             )
+            "item/mcpToolCall/progress" -> codingRuns[params.string("threadId")]?.mcpProgress(params)
             "turn/started" -> {
                 val threadId = params.string("threadId") ?: return
                 val run = codingRuns[threadId] ?: return
@@ -889,11 +897,23 @@ class CodexAppServerOpenAiSubscription(
                     CodingEvent.ToolStarted("command", item.string("command").orEmpty(), id, isExec = true),
                 )
                 "fileChange" -> emit(CodingEvent.ToolStarted("edit", fileSummary(item), id))
-                "mcpToolCall" -> if (item.string("server") == "magicpaper_computer") {
-                    emit(CodingEvent.ToolStarted("computer", io.aequicor.magicpaper.data.computer.ComputerTool.label(
-                        (item["arguments"] as? JsonObject)?.string("action").orEmpty()), id))
+                "webSearch" -> emit(CodingEvent.ToolStarted("web_search", item["action"]?.toString().orEmpty(), id, category = ToolCategory.SEARCH))
+                "mcpToolCall" -> {
+                    val server = item.string("server").orEmpty()
+                    val tool = item.string("tool").orEmpty()
+                    val name = if (server == "magicpaper_computer") "computer" else "$server:$tool"
+                    val summary = if (server == "magicpaper_computer") io.aequicor.magicpaper.data.computer.ComputerTool.label(
+                        (item["arguments"] as? JsonObject)?.string("action").orEmpty()) else "$tool · ${item["arguments"] ?: ""}".take(1500)
+                    emit(CodingEvent.ToolStarted(name, summary, id))
                 }
             }
+        }
+
+        fun mcpProgress(params: JsonObject) {
+            val id = params.string("itemId").orEmpty()
+            val item = items[id]?.takeIf { it.string("type") == "mcpToolCall" } ?: return
+            val name = if (item.string("server") == "magicpaper_computer") "computer" else "${item.string("server")}:${item.string("tool")}"
+            emit(CodingEvent.ToolProgress(name, id, params.string("message").orEmpty()))
         }
 
         fun completeItem(item: JsonObject) {
@@ -902,6 +922,7 @@ class CodexAppServerOpenAiSubscription(
             when (item.string("type")) {
                 "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.COMPLETED))) }
                 "webSearch" -> {
+                    emit(CodingEvent.ToolFinished("web_search", false, id, item["action"]?.toString().orEmpty()))
                     val action = item["action"] as? JsonObject
                     val content = action?.string("type") == "openPage"
                     if (action?.string("type") != "findInPage") emit(CodingEvent.SearchObserved(id,
@@ -909,14 +930,14 @@ class CodexAppServerOpenAiSubscription(
                         requests = (action?.get("queries") as? JsonArray)?.size?.toLong()?.coerceAtLeast(1) ?: 1))
                 }
                 "agentMessage" -> item.string("text")?.takeIf { it.isNotBlank() }?.let { emit(CodingEvent.FinalText(it, id)) }
-                "mcpToolCall" -> if (item.string("server") == "magicpaper_computer") {
+                "mcpToolCall" -> {
                     val result = item["result"] as? JsonObject
-                    emit(CodingEvent.ToolFinished("computer",
+                    emit(CodingEvent.ToolFinished(if (item.string("server") == "magicpaper_computer") "computer" else "${item.string("server")}:${item.string("tool")}",
                         isError = item.string("status") in listOf("failed", "declined") || result?.get("isError") == JsonPrimitive(true),
                         callId = id,
                         resultPreview = (result?.get("content") as? JsonArray).orEmpty().mapNotNull { block ->
                             (block as? JsonObject)?.takeIf { it.string("type") == "text" }?.string("text")
-                        }.joinToString("\n").take(2000),
+                        }.joinToString("\n").ifBlank { (item["error"] as? JsonObject)?.string("message").orEmpty() }.take(2000),
                     ))
                 }
                 "reasoning" -> {

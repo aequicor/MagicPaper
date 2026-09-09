@@ -87,7 +87,7 @@ class ModelLibraryTest {
     @Test fun selectionsCatalogsVariantsAndDescriptionsRoundTrip() {
         val profile = source.copy(variants = listOf(custom))
         val bundle = ProfileBundle(exportedAt = 0, settings = AppSettings(defaultModel = ModelSelection("p", custom.id)),
-            plugins = emptyList(), sessions = emptyList(), llmProfiles = listOf(profile),
+            plugins = emptyList(), sessions = emptyList(), llmProfiles = listOf(profile), usage = UsageArchive(startedAt = 0),
             modelDescriptions = listOf(ModelDossier("d", "p", "m", strengths = "Coding", limitations = "Unknown price", rating = 4)))
         assertEquals(bundle, Json.decodeFromString<ProfileBundle>(Json.encodeToString(ProfileBundle.serializer(), bundle)))
     }

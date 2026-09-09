@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.produceIn
@@ -25,8 +26,9 @@ class RuntimePlanningGateway(private val runtime: CodingRuntime) : PlanningGatew
         check(runtime.supported) { "Чтение проекта при планировании недоступно на этой платформе. Откройте проект в desktop-приложении." }
         requirePlanningRequestSize(messages)
         // Internal engine contexts never reuse the editable session's history or appear in the sidebar.
-        val session = CodingSession("planning-$requestId-${Id.new()}", project.id, "Изучение проекта", Id.now(),
-            engine = engine, planningMode = true)
+        val toolSession = currentCoroutineContext()[ToolSession]
+        val session = CodingSession(toolSession?.context?.sessionId ?: "planning-$requestId-${Id.new()}", project.id, "Изучение проекта", Id.now(),
+            engine = engine, planningMode = true, parentSessionId = toolSession?.context?.ownerSessionId)
         val prompt = messages.joinToString("\n\n") { "[${it.role}]\n${it.content}" }
         val recorder = CodingRunRecorder()
         val published = mutableMapOf<String, CodingStep>()
@@ -35,7 +37,8 @@ class RuntimePlanningGateway(private val runtime: CodingRuntime) : PlanningGatew
         var failure: String? = null
         val activeTools = mutableSetOf<String>()
         onActivity(CodingStep(CodingStepKind.INFO, "Изучение проекта ${project.name} · ${engine.title}"))
-        val events = runtime.runPlanning(project, session, prompt, profile).produceIn(this)
+        val run = runtime.runPlanning(project, session, prompt, profile)
+        val events = (toolSession?.let { run.withTools(it) } ?: run).produceIn(this)
         try {
             while (!finished) {
                 val received = if (profile.advanced.safeTimeoutSeconds == 0 || activeTools.isNotEmpty()) events.receiveCatching() else
@@ -54,7 +57,7 @@ class RuntimePlanningGateway(private val runtime: CodingRuntime) : PlanningGatew
                 }
             }
             failure?.let { error(it) }
-            check(finished && final.isNotBlank()) { "Планировщик завершился без ответа. Сохранённый план не изменён." }
+            check(finished && (final.isNotBlank() || toolSession?.results?.value?.isNotEmpty() == true)) { "Планировщик завершился без ответа. Сохранённый план не изменён." }
             final
         } finally {
             if (!finished) {

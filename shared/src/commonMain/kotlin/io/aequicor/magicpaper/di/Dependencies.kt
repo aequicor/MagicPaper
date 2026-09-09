@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.domain.OrchestrationService
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.BackgroundCodingProjectRepository
@@ -79,7 +80,8 @@ internal fun buildDependencies(
 ): MagicPaperDependencies {
     val json = appJson
     val usageLedger = io.aequicor.magicpaper.domain.UsageLedger(io.aequicor.magicpaper.data.storage.JsonUsageRepository(store, json))
-    val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(it, usageLedger) }
+    val toolHost = ToolHost(StoredToolReceipts(store))
+    val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(ToolEnabledCodingRuntime(it, toolHost), usageLedger) }
     val client = HttpClient()
     val settingsRepo = JsonSettingsRepository(store, json)
     val chatRepo = JsonChatRepository(store, json)
@@ -136,7 +138,7 @@ internal fun buildDependencies(
     val acceptanceChecks = io.aequicor.magicpaper.domain.AcceptanceChecks()
     val planComposer = PlanComposer(gateway, json, search,
         io.aequicor.magicpaper.domain.RuntimePlanningGateway(runtime ?: NoopCodingRuntime),
-        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks)
+        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks, toolHost = toolHost)
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, runtime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
         LlmMilestoneVerifier(gateway, json), planningWorkspace, acceptanceChecks = acceptanceChecks,
@@ -159,7 +161,17 @@ internal fun buildDependencies(
         .apply { experiencePlugin?.let { register(it(gateway, profileRepo)) } }
         .register(planner)
     platformPlugins.forEach(registry::register)
-    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway) }
+    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway, toolHost = toolHost) }
+    toolHost.search = { context, query ->
+        val saved = settingsRepo.load()
+        val plan = context.planId?.let { planningStore.planFor(it) }
+        val results = search.search(query, if (plan == null) saved else saved.copy(searchProvider = plan.searchProvider), 5)
+        kotlinx.serialization.json.buildJsonArray { results.forEach { result -> add(kotlinx.serialization.json.buildJsonObject {
+            put("title", kotlinx.serialization.json.JsonPrimitive(result.title))
+            put("snippet", kotlinx.serialization.json.JsonPrimitive(result.snippet))
+            put("url", kotlinx.serialization.json.JsonPrimitive(result.url))
+        }) } }
+    }
     val viewModel = MagicPaperViewModel(
         agent = agent,
         chats = chatRepo,

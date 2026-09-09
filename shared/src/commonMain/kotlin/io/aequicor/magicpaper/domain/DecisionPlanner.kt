@@ -3,7 +3,7 @@ package io.aequicor.magicpaper.domain
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 
 /** Structured refinement: only validated proposals can replace the current tree. */
 class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true },
@@ -79,40 +79,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 val start = raw.indexOf('{'); val end = raw.lastIndexOf('}')
                 require(start >= 0 && end > start) { "Ожидается JSON объект" }
                 val proposal = json.decodeFromString<Proposal>(raw.substring(start, end + 1))
-                require(proposal.questions.size <= 3 && proposal.questions.map { it.id }.distinct().size == proposal.questions.size) { "Допустимо до трёх вопросов с разными id" }
-                require(proposal.questions.all { q -> q.id.isNotBlank() && q.title.isNotBlank() && (q.kind == QuestionKind.TEXT || q.options.size >= 2) && q.options.all { it.id.isNotBlank() && it.label.isNotBlank() } && q.options.map { it.id }.distinct().size == q.options.size }) { "Некорректные варианты уточняющих вопросов" }
-                require(proposal.questionStageIds.all { id -> (plan.milestones + proposal.milestones).any { it.id == id } }) { "Неизвестный этап уточнения" }
-                require(proposal.reply.isNotBlank()) { "Нет вопросов или объяснения оркестратора" }
-                val dialogue = (if (plan.dialogue.lastOrNull()?.let { it.role == "user" && it.text == message } == true) plan.dialogue
-                    else plan.dialogue + PlanningMessage(Id.new(), "user", message)) + PlanningMessage(Id.new(), "assistant", proposal.reply, questions = proposal.questions, questionStageIds = proposal.questionStageIds)
-                if (proposal.tree.isEmpty()) return plan.copy(dialogue = dialogue, wizardStep = PlanningStep.CLARIFY, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace)
-                val existing = plan.milestones.associateBy { it.id }
-                val bound = proposal.milestones.map { stage ->
-                    val old = existing[stage.id]
-                    if (old != null && (old.attempts.isNotEmpty() || old.status != MilestoneStatus.PENDING)) old
-                    else stage.copy(status = MilestoneStatus.PENDING, report = "", checkNote = "", attempts = emptyList(),
-                        complexityPoints = stage.complexityPoints ?: old?.complexityPoints,
-                        isFinalization = stage.isFinalization || old?.isFinalization == true,
-                        displayNumber = old?.displayNumber, displayName = old?.displayName, continuationOf = stage.continuationOf ?: old?.continuationOf,
-                        assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities))
-                }
-                val nodes = proposal.tree.map { n ->
-                    plan.tree.firstOrNull { it.id == n.id && it.manualSelection }?.let { old ->
-                        n.copy(selectedOptionId = old.selectedOptionId, manualSelection = true)
-                    } ?: n.copy(manualSelection = false)
-                }
-                val updated = recommendChoices(plan.copy(tree = nodes, milestones = bound, dialogue = dialogue, wizardStep = PlanningStep.REVIEW, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace))
-                DecisionCompiler.validateEdit(plan, updated)
-                require(updated.milestones.all { it.title.isNotBlank() && it.acceptance.isNotBlank() }) { "Каждому этапу нужны название и критерии проверки" }
-                val unavailable = updated.milestones.flatMap { stage -> stage.acceptanceCriteria.filter { criterion ->
-                    criterion.required && !acceptanceChecks.supports(criterion) &&
-                        criterion !in existing[stage.id]?.acceptanceCriteria.orEmpty()
-                } }
-                require(unavailable.isEmpty()) {
-                    "Предложены недоступные обязательные проверки: ${unavailable.joinToString { it.description }}. " +
-                        "Для обычной задачи задай оценку результата по отчёту (REVIEW); если пользователь явно требует отдельную среду, объясни ограничение и задай вопрос без нового дерева. Не ослабляй его требования."
-                }
-                return updated.allocateTaskIdentifiers(plan)
+                return proposalResult(plan, proposal, message, roster, dossiers)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 lastError = e.message.orEmpty()
@@ -127,6 +94,47 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
         }
         error("План не изменён: $lastError")
     }
+    internal fun validateToolProposal(plan: Plan, args: JsonObject) {
+        proposalResult(plan, json.decodeFromJsonElement<Proposal>(args), "", emptyList(), emptyList())
+    }
+
+    private fun proposalResult(plan: Plan, proposal: Proposal, message: String, roster: List<LlmProfile>, dossiers: List<ModelDossier>): Plan {
+        require(proposal.questions.size <= 3 && proposal.questions.map { it.id }.distinct().size == proposal.questions.size) { "Допустимо до трёх вопросов с разными id" }
+        require(proposal.questions.all { q -> q.id.isNotBlank() && q.title.isNotBlank() && (q.kind == QuestionKind.TEXT || q.options.size >= 2) && q.options.all { it.id.isNotBlank() && it.label.isNotBlank() } && q.options.map { it.id }.distinct().size == q.options.size }) { "Некорректные варианты уточняющих вопросов" }
+        require(proposal.questionStageIds.all { id -> (plan.milestones + proposal.milestones).any { it.id == id } }) { "Неизвестный этап уточнения" }
+        require(proposal.reply.isNotBlank()) { "Нет вопросов или объяснения оркестратора" }
+        val dialogue = (if (plan.dialogue.lastOrNull()?.let { it.role == "user" && it.text == message } == true) plan.dialogue
+            else plan.dialogue + PlanningMessage(Id.new(), "user", message)) + PlanningMessage(Id.new(), "assistant", proposal.reply, questions = proposal.questions, questionStageIds = proposal.questionStageIds)
+        if (proposal.tree.isEmpty()) return plan.copy(dialogue = dialogue, wizardStep = PlanningStep.CLARIFY, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace)
+        val existing = plan.milestones.associateBy { it.id }
+        val bound = proposal.milestones.map { stage ->
+            val old = existing[stage.id]
+            if (old != null && (old.attempts.isNotEmpty() || old.status != MilestoneStatus.PENDING)) old
+            else stage.copy(status = MilestoneStatus.PENDING, report = "", checkNote = "", attempts = emptyList(),
+                complexityPoints = stage.complexityPoints ?: old?.complexityPoints,
+                isFinalization = stage.isFinalization || old?.isFinalization == true,
+                displayNumber = old?.displayNumber, displayName = old?.displayName, continuationOf = stage.continuationOf ?: old?.continuationOf,
+                assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities))
+        }
+        val nodes = proposal.tree.map { n ->
+            plan.tree.firstOrNull { it.id == n.id && it.manualSelection }?.let { old ->
+                n.copy(selectedOptionId = old.selectedOptionId, manualSelection = true)
+            } ?: n.copy(manualSelection = false)
+        }
+        val updated = recommendChoices(plan.copy(tree = nodes, milestones = bound, dialogue = dialogue, wizardStep = PlanningStep.REVIEW, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace))
+        DecisionCompiler.validateEdit(plan, updated)
+        require(updated.milestones.all { it.title.isNotBlank() && it.acceptance.isNotBlank() }) { "Каждому этапу нужны название и критерии проверки" }
+        val unavailable = updated.milestones.flatMap { stage -> stage.acceptanceCriteria.filter { criterion ->
+            criterion.required && !acceptanceChecks.supports(criterion) &&
+                criterion !in existing[stage.id]?.acceptanceCriteria.orEmpty()
+        } }
+        require(unavailable.isEmpty()) {
+            "Предложены недоступные обязательные проверки: ${unavailable.joinToString { it.description }}. " +
+                "Для обычной задачи задай оценку результата по отчёту (REVIEW); если пользователь явно требует отдельную среду, объясни ограничение и задай вопрос без нового дерева. Не ослабляй его требования."
+        }
+        return updated.allocateTaskIdentifiers(plan)
+    }
+
     fun recommendChoices(plan: Plan): Plan = plan.copy(tree = plan.tree.map { n ->
         if (n.kind != DecisionKind.CHOICE || n.manualSelection) n else {
             val candidates = plan.tree.filter { it.id in n.children }

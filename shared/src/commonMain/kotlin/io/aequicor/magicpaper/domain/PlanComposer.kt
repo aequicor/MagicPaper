@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.domain.tools.*
+import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
+import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.util.TextSimilarity
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -25,6 +29,7 @@ class PlanComposer(
     private val planningGateway: PlanningGateway = UnavailablePlanningGateway,
     private val projectLookup: suspend (String) -> CodingProject? = { null },
     acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
+    val toolHost: ToolHost? = null,
 ) {
     private val decisions = DecisionPlanner(json, ::completePlanning, acceptanceChecks)
 
@@ -33,8 +38,33 @@ class PlanComposer(
         require(project.id == plan.projectId) { "План принадлежит другому проекту." }
         // Null is the legacy migration marker; explicit saved engines always win over provider type.
         val engine = plan.engine ?: legacyCodingEngine(profile)
-        return kotlinx.coroutines.withContext(UsageOwner(UsageScope(plan.parentSessionId?.let { "coding:$it" }, projectId = plan.projectId, planId = plan.id))) {
-            planningGateway.completeWithActivity(project, engine, plan.requestId.ifBlank { plan.id }, profile, messages, onActivity)
+        return withContext(UsageOwner(UsageScope(plan.parentSessionId.takeIf { it.isNotBlank() }?.let { "coding:$it" }, projectId = plan.projectId, planId = plan.id))) {
+            if (toolHost == null) return@withContext planningGateway.completeWithActivity(project, engine, plan.requestId.ifBlank { plan.id }, profile, messages, onActivity)
+            val owner = plan.parentSessionId.ifBlank { plan.sessionId.ifBlank { "plan-${plan.id}" } }
+            val context = ToolExecutionContext(plan.projectId, owner, owner, plan.requestId.ifBlank { Id.new() },
+                ToolRole.PLANNER, CodingInteractionMode.PLANNING, plan.id, plan.runId)
+            val tools = toolHost.session(context, mapOf("plan.propose" to { _, _, arguments ->
+                decisions.validateToolProposal(plan, arguments)
+                arguments
+            }))
+            val toolMessages = messages + LlmMessage(LlmChatRole.SYSTEM,
+                "Структуру ответа передай вызовом magicpaper_plan_propose, а не JSON в последнем сообщении. " +
+                    "Если нужны уточнения, используй magicpaper_questionnaire. После ответов продолжи планирование. " +
+                    "Параметры plan.propose соответствуют описанной структуре проекта плана. Окончательный текст — краткое пояснение пользователю.")
+            withContext(tools) { planningGateway.completeWithActivity(project, engine, context.requestId, profile, toolMessages, onActivity) }
+            tools.results.value["plan.propose"]?.toString() ?: error("Планировщик не передал предложение через plan.propose. План не изменён.")
+        }
+    }
+
+    suspend fun completeToolTurn(plan: Plan, profile: LlmProfile, messages: List<LlmMessage>, tools: ToolSession,
+        onActivity: (CodingStep) -> Unit): String {
+        val project = projectLookup(plan.projectId) ?: error("Папка проекта недоступна")
+        return withContext(tools + UsageOwner(UsageScope("coding:${tools.context.ownerSessionId}", projectId = plan.projectId, planId = plan.id))) {
+            planningGateway.completeWithActivity(project, plan.engine ?: legacyCodingEngine(profile), tools.context.requestId, profile,
+                messages + LlmMessage(LlmChatRole.SYSTEM, "Действия выполняй только через инструменты magicpaper_. " +
+                    "Не возвращай JSON команд в тексте. Итоговый ответ — понятное объяснение выполненного. " +
+                    "Для уточнений используй magicpaper_questionnaire; после ответов продолжи работу. " +
+                    "Не подтверждай и не возобновляй план без явного действия пользователя."), onActivity)
         }
     }
 

@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.domain.tools.toolDisplayName
+import io.aequicor.magicpaper.domain.tools.ToolCategory
+import io.aequicor.magicpaper.domain.tools.ToolPhase
+
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
@@ -263,29 +267,33 @@ class CodingRunRecorder {
                 awaiting = false
                 // Перед действием фиксируем текст: лента остаётся хронологичной.
                 flushMessage()
-                steps += CodingStep(
+                val existing = steps.indexOfLast { event.callId.isNotBlank() && it.callId == event.callId && it.tool == event.tool }
+                val step = CodingStep(
                     kind = if (event.isExec) CodingStepKind.EXEC else CodingStepKind.TOOL,
-                    title = "⚒ ${event.tool}" + if (event.summary.isNotEmpty()) " · ${event.summary}" else "",
+                    title = "⚒ ${toolDisplayName(event.tool)}" + if (event.summary.isNotEmpty()) " · ${event.summary}" else "",
                     tool = event.tool,
                     callId = event.callId,
                     running = true,
-                    id = nextStepId(),
+                    toolCategory = event.category,
+                    toolPhase = ToolPhase.STARTED,
+                    id = if (existing >= 0) steps[existing].id else nextStepId(),
                 )
+                if (existing >= 0) steps[existing] = step else steps += step
             }
             is CodingEvent.ToolProgress -> {
                 val index = steps.indexOfLast {
-                    it.running && it.tool == event.tool &&
+                    (it.running || event.callId.isNotBlank()) && it.tool == event.tool &&
                         (event.callId.isBlank() || it.callId == event.callId)
                 }
-                if (index >= 0 && event.resultPreview.isNotBlank()) {
-                    steps[index] = steps[index].copy(result = event.resultPreview)
+                if (index >= 0 && steps[index].running) {
+                    steps[index] = steps[index].copy(result = event.resultPreview.ifBlank { steps[index].result }, toolPhase = event.phase ?: ToolPhase.PROGRESS)
                 }
             }
             is CodingEvent.ToolFinished -> {
                 // После действия агент снова ждёт ответа модели.
                 awaiting = true
                 val index = steps.indexOfLast {
-                    it.running && it.tool == event.tool &&
+                    (it.running || event.callId.isNotBlank()) && it.tool == event.tool &&
                         (event.callId.isBlank() || it.callId == event.callId)
                 }
                 if (index >= 0) {
@@ -293,6 +301,7 @@ class CodingRunRecorder {
                         running = false,
                         ok = !event.isError,
                         result = event.resultPreview,
+                        toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                     )
                 } else if (event.isError) {
                     steps += CodingStep(
@@ -325,6 +334,7 @@ class CodingRunRecorder {
                 flushMessage()
             }
             is CodingEvent.Finished -> {
+                steps.replaceAllToolsInterrupted()
                 for (i in steps.indices) if (steps[i].kind == CodingStepKind.SYSTEM && steps[i].running)
                     steps[i] = steps[i].copy(running = false, title = "Сжатие контекста прервано", systemEvent = steps[i].systemEvent?.copy(phase = CompactionPhase.CANCELLED))
                 return true
@@ -415,6 +425,13 @@ class CodingRunRecorder {
         )
     }
 
+    private fun MutableList<CodingStep>.replaceAllToolsInterrupted() {
+        indices.forEach { index -> val step = this[index]
+            if (step.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC) && step.running)
+                this[index] = step.copy(running = false, ok = false, toolPhase = ToolPhase.CANCELLED)
+        }
+    }
+
     private fun MutableList<CodingStep>.replaceAllSystemsInterrupted() {
         indices.forEach { index ->
             val step = this[index]
@@ -425,6 +442,7 @@ class CodingRunRecorder {
 
     fun message(id: String, createdAt: Long): CodingMessage {
         steps.replaceAllSystemsInterrupted()
+        steps.replaceAllToolsInterrupted()
         flushThinking()
         flushText()
         val answerText = steps.filter { it.kind == CodingStepKind.ANSWER }
@@ -488,6 +506,7 @@ sealed interface CodingEvent {
         val callId: String = "",
         /** Инструмент выполняет shell-команду (её вывод интересен пользователю целиком). */
         val isExec: Boolean = false,
+        val category: ToolCategory? = null,
     ) : CodingEvent
 
     /**
@@ -498,6 +517,7 @@ sealed interface CodingEvent {
         val isError: Boolean,
         val callId: String = "",
         val resultPreview: String = "",
+        val phase: ToolPhase? = null,
     ) : CodingEvent
 
     /**
@@ -508,6 +528,7 @@ sealed interface CodingEvent {
         val tool: String,
         val callId: String = "",
         val resultPreview: String = "",
+        val phase: ToolPhase? = null,
     ) : CodingEvent
 
     /**
@@ -574,6 +595,8 @@ data class CodingStep(
     /** Stable across streaming, final reconciliation and persistence; empty in old logs. */
     val id: String = "",
     val systemEvent: CompactionStatus? = null,
+    val toolCategory: ToolCategory? = null,
+    val toolPhase: ToolPhase? = null,
 )
 
 /** Роли в журнале проекта. */

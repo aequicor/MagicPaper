@@ -23,6 +23,7 @@ import kotlinx.serialization.Serializable
     val refinePlan: Boolean? = null,
     /** Selected by the orchestrator; empty means no affected work. */
     val pauseStageIds: List<String> = emptyList(),
+    val toolsApplied: Boolean = false,
 )
 
 @Serializable data class OrchestrationInput(
