@@ -657,6 +657,60 @@ class PlanningExecutionServiceTest {
         assertEquals(CheckStatus.SKIPPED, saved.finalAttempt.acceptanceRecord!!.findings.single { it.criterionId == "a/manual" }.status)
     }
 
+    @Test fun skipCoversPreviouslyPassedCriteriaAndDoesNotReadSnapshotAgain() = runTest {
+        var skippedByUser = false
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun verificationSnapshot(path: String): String {
+                check(!skippedByUser) { "Files are changing; skipped verification must not read them again" }
+                return "before"
+            }
+        }
+        val (store, service, runtime) = fixture(workspace = workspace)
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("source", "Old button row removed"),
+            AcceptanceCriterion("layout", "New button precedes menu", environment = EvidenceEnvironment.MANUAL)))))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val blocked = store.planFor(project.id)!!
+        assertEquals(listOf(CheckStatus.PASS, CheckStatus.NOT_RUN), blocked.milestones.single().attempts.single().acceptanceRecord!!.findings.map { it.status })
+        skippedByUser = true
+        service.continueWithoutVerification(blocked.id, blocked.blockingIssues(emptyList()).map { it.messageId }.toSet())
+        advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(1, runtime.calls.size)
+        assertEquals(2, saved.acceptanceWaivers.size)
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, saved.finalAttempt!!.acceptanceRecord!!.status)
+        assertTrue(saved.finalAttempt.acceptanceRecord!!.findings.all { it.status == CheckStatus.SKIPPED })
+    }
+
+    @Test fun bootstrapRestoresLegacySkipBlockedByStaleSnapshot() = runTest {
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun verificationSnapshot(path: String): String = error("Skipped verification must not fingerprint the project")
+        }
+        val (store, service, runtime) = fixture(workspace = workspace)
+        val stage = stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("source", "Old row removed"),
+            AcceptanceCriterion("layout", "Button position", environment = EvidenceEnvironment.MANUAL)))
+        val criteria = stage.criteria()
+        val waiver = AcceptanceWaiver("run", criteria.last(), "attempt", "old-snapshot", 1)
+        val record = AcceptanceRecord("run", "attempt", "changed-snapshot", criteria,
+            criteria.map { AcceptanceFinding(it.id, CheckStatus.STALE, it.description, "Files changed") },
+            status = AcceptanceStatus.STALE, waivers = listOf(waiver))
+        val issue = PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true)
+        val attempt = StageAttempt("attempt", "worker", StageAssignment("agent", "m"), phase = AttemptPhase.VERIFYING,
+            path = "/fake", report = "Button relocated", error = issue, acceptanceRecord = record)
+        val blocked = plan(stage.copy(attempts = listOf(attempt))).copy(runId = "run", intent = ExecutionIntent.RUN,
+            phase = ExecutionPhase.WAITING, status = PlanStatus.FAILED, issue = issue, acceptanceWaivers = listOf(waiver),
+            journal = listOf(PlanJournalEntry("skip", 1, operation = "user-skip-verification")))
+        store.save(json.decodeFromString<Plan>(json.encodeToString(Plan.serializer(), blocked)))
+        service.bootstrap(); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(criteria.toSet(), saved.acceptanceWaivers.map { it.criterion }.toSet())
+        assertTrue(runtime.calls.isEmpty(), "The already completed worker turn must not execute again")
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, saved.finalAttempt!!.acceptanceRecord!!.status)
+    }
+
     @Test fun pauseDuringFinalReviewCannotApplyOrCompletePlan() = runTest {
         lateinit var store: PlanningStore
         var applied = false

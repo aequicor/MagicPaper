@@ -650,15 +650,19 @@ class PlanningChatServiceTest {
             assertNull(resumed.finalAttempt)
             assertEquals(blocked.finalAttempt, resumed.finalAttemptHistory.single())
             assertEquals(blocked.milestones.single(), resumed.milestones.first())
-            assertNotEquals("followup", resumed.milestones.last().id)
-            assertEquals("plan-${blocked.id}-stage-${resumed.milestones.last().id}", f.runtime.calls.single().first.id)
+            val repair = resumed.milestones.single { it.title == "Coding integration" }
+            val commit = resumed.milestones.single { it.isFinalization }
+            assertNotEquals("followup", repair.id)
+            assertEquals("plan-${blocked.id}-stage-${repair.id}", f.runtime.calls.single().first.id)
+            assertEquals(MilestoneStatus.PENDING, commit.status)
             assertContains(f.gateway.lastMessages.last().content, "Нужны каталог и ссылка на репозиторий")
             if (useRetry) assertContains(f.gateway.lastMessages.last().content, "Coding integration is missing")
             assertFalse(f.projects.messages(project.id, parent.id).any { it.text == "Итоговая проверка уже начата" })
             f.gateway.overrideReply = null
             f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
             assertEquals(PlanStatus.DONE, f.store.planFor(blocked.id)!!.status)
-            assertEquals(2, f.runtime.calls.size)
+            assertEquals(3, f.runtime.calls.size)
+            assertEquals("plan-${blocked.id}-stage-${commit.id}", f.runtime.calls[1].first.id)
             assertEquals("run-final-2-session", f.runtime.calls.last().first.id)
         }
     }
@@ -1473,11 +1477,23 @@ class PlanningChatServiceTest {
         assertEquals(1, pending.milestones.size)
         assertTrue(f.runtime.calls.isEmpty())
         f.gateway.overrideReply = null
+        val commitGate = CompletableDeferred<Unit>()
+        f.runtime.turnGates += listOf(CompletableDeferred(Unit), commitGate)
         f.runtime.gate.complete(Unit)
         f.service.confirm("p", proposal.id); advanceTimeBy(1000); runCurrent()
+        val committing = f.store.planFor("p")!!
+        assertEquals(MilestoneStatus.DONE, committing.milestones.single { it.title == "Обработка ошибок" }.status)
+        assertEquals(MilestoneStatus.ACTIVE, committing.milestones.single { it.isFinalization }.status)
+        assertNotEquals(PlanStatus.DONE, committing.status)
+        assertNull(committing.finalAttempt)
+        commitGate.complete(Unit); advanceTimeBy(1000); runCurrent()
         val done = f.store.planFor("p")!!
         assertEquals(ExecutionPhase.COMPLETE, done.phase)
-        assertEquals(2, done.milestones.size)
+        assertEquals(3, done.milestones.size)
+        val endpoint = done.milestones.single { it.isFinalization }
+        assertEquals(MilestoneStatus.DONE, endpoint.status)
+        assertEquals(listOf("plan-p-stage-${done.milestones.single { it.title == "Обработка ошибок" }.id}",
+            "plan-p-stage-${endpoint.id}", done.finalAttempt!!.sessionId), f.runtime.calls.map { it.first.id })
         assertEquals("Old result", done.milestones.first { it.id == "stage" }.report)
         assertEquals("first-run", done.runHistory.single().runId)
         assertNotEquals("first-run", done.runId)
@@ -1492,6 +1508,32 @@ class PlanningChatServiceTest {
         assertEquals("Обработка ошибок", continuation.name)
         assertEquals(1, continuation.continuationOfNumber)
         assertEquals(2, continuation.stageNumber)
+    }
+
+    @Test fun directFollowupToACompletedWorkerKeepsCommitAfterTheNewWork() = runTest {
+        for (commitCompleted in listOf(false, true)) {
+            val f = Fixture(this); f.initialize(); runCurrent()
+            val parent = f.session("parent")
+            val base = f.readyPlan("p", parent).copy(wizardStep = PlanningStep.REVIEW).withFinalization { "commit" }
+            val plan = base.copy(wizardStep = PlanningStep.STATUS, confirmedRevision = 1, runId = "run", phase = ExecutionPhase.EXECUTING, intent = ExecutionIntent.RUN,
+                milestones = base.milestones.map { if (!it.isFinalization || commitCompleted) it.copy(status = MilestoneStatus.DONE,
+                    report = "Old result", checkNote = "Проверка пропущена по решению пользователя") else it })
+            f.store.save(plan); f.service.prepareSessions(plan)
+            val before = f.store.planFor("p")!!
+            val worker = f.projects.sessions(project.id).single { it.stageId == "stage" }
+            f.service.send(worker, "Добавь обработку ошибки"); runCurrent()
+            val updated = f.store.planFor("p")!!
+            val followup = updated.milestones.single { it.continuationOf == "stage" }
+            val endpoint = updated.milestones.single { it.isFinalization && it.status == MilestoneStatus.PENDING }
+            assertEquals("plan-p-stage-${followup.id}", f.runtime.calls.single().first.id)
+            assertTrue(followup.id in DecisionCompiler.compile(updated).dependencies.getValue(endpoint.id))
+            assertContains(f.runtime.calls.single().second, "Приёмка этапа: Проверка пропущена по решению пользователя")
+            if (commitCompleted) assertEquals(before.milestones.last(), updated.milestones.single { it.id == "commit" })
+            else assertEquals("commit", endpoint.id)
+            f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+            assertEquals(PlanStatus.DONE, f.store.planFor("p")!!.status)
+            assertEquals("plan-p-stage-${endpoint.id}", f.runtime.calls[1].first.id)
+        }
     }
 
     @Test fun preparingAPromptDoesNotClaimDeliveryBeforeTheRuntimeStarts() = runTest {

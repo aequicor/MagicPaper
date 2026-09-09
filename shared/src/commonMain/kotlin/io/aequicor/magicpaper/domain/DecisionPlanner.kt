@@ -35,9 +35,14 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 "stageId":"id этапа или null", "assessment":{"quality":0,"speed":0,"economy":0,"safety":0,"complexity":0,"explanation":"почему"}}.
                 Одна GOAL; CHOICE содержит OPTION; STAGE ссылается на milestone. Общие этапы не дублируй.
                 Milestone: {"id":"id", "title":"имя", "description":"что сделать", "acceptance":"проверяемые критерии",
-                "complexityPoints":null, "agentProfileId":"id источника", "agentModelId":"ключ модели",
+                "complexityPoints":null, "isFinalization":false, "agentProfileId":"id источника", "agentModelId":"ключ модели",
                 "assignment":{"profileId":"id источника","modelId":"ключ модели","effort":"default|low|medium|high и т.д.","explanation":"почему эта модель и этот effort оптимальны для этапа"}, "dependsOn":["id этапа"], "assessment":{...}}.
                 complexityPoints — относительная сложность в условных единицах (например 1, 2, 3, 5, 8, 13). Оцени каждый этап, включая альтернативные; это не часы. Сохраняй заданные пользователем оценки.
+                Завершай план явным этапом «Коммит и итог» с isFinalization=true, зависящим от всех выбранных работ и проверок. Промежуточные коммиты допускаются отдельными этапами; они не заменяют общий итог.
+                Размещай конечный STAGE непосредственно под GOAL; в dependsOn его узла укажи остальные дочерние узлы GOAL. Зависимость от CHOICE следует выбранному варианту, поэтому не перечисляй этапы неактивных ветвей.
+                Конечный результат: коммит(ы) изменений этой задачи, их хеши и сообщения, сводка выполненного, результаты проверок и ограничения. Сохраняй чужие изменения; не включай их в коммит и не выполняй push или переписывание истории без отдельного запроса.
+                Если пользователь запретил коммиты, нет Git или всё уже закоммичено, конечный этап завершает работу отчётом с конкретным подтверждением причины, без пустого коммита и git init. Это должно быть явно видно в задании и критериях финального этапа.
+                При доработке после завершённого финального этапа добавляй новый «Коммит и итог» после новых работ; старые коммиты и завершённые этапы сохраняй.
                 Для каждого этапа укажи acceptanceCriteria=[{id:"стабильный ID",description:"точное требование",required:true,
                 environment:"REVIEW|LOCAL_TEST|HERMETIC|REAL_BACKEND|MANUAL",checkId:"ID зарегистрированной проверки приложения либо пусто"}].
                 Для обычных изменений кода и вёрстки используй REVIEW: проверяющий оценивает результат по отчёту исполнителя, ссылкам на код и результатам соразмерных задаче проверок.
@@ -87,6 +92,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                     if (old != null && (old.attempts.isNotEmpty() || old.status != MilestoneStatus.PENDING)) old
                     else stage.copy(status = MilestoneStatus.PENDING, report = "", checkNote = "", attempts = emptyList(),
                         complexityPoints = stage.complexityPoints ?: old?.complexityPoints,
+                        isFinalization = stage.isFinalization || old?.isFinalization == true,
                         displayNumber = old?.displayNumber, displayName = old?.displayName, continuationOf = stage.continuationOf ?: old?.continuationOf,
                         assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities))
                 }

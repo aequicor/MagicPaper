@@ -1147,6 +1147,7 @@ class OrchestrationService(
                     finalAttempt = null, finalAttemptHistory = current.finalAttemptHistory + listOfNotNull(current.finalAttempt),
                     workspace = current.workspace?.copy(applied = false),
                     tree = current.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + nextId) else it } + DecisionNode(nextId, next.title, DecisionKind.STAGE, stageId = nextId))
+                    .let { if (current.milestones.any { it.isFinalization }) it.withFinalization() else it }
             }
             if (updated.deliveries != plan.deliveries) { prepareSessions(updated); return }
         }
@@ -1212,6 +1213,7 @@ class OrchestrationService(
                     if (it.error?.kind == IssueKind.VERIFICATION) it.retryAfterUserAction().copy(waitingForEvent = null) else it.copy(error = null, waitingForUser = null, waitingForEvent = null)
                 }) } + if (complete) listOf(followup) else emptyList(),
                 tree = if (complete) p.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + followupId) else it } + DecisionNode(followupId, followup.title, DecisionKind.STAGE, stageId = followupId) else p.tree)
+                .let { if (complete && p.milestones.any { it.isFinalization }) it.withFinalization() else it }
         }
         prepareSessions(updated)
         val numbered = store.planFor(id)!!

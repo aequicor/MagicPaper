@@ -54,7 +54,11 @@ class PlanComposer(
             searchEngine.search(plan.goal, effective, 5).joinToString("\n\n") { "${it.title}\n${it.snippet}\n${it.url}" }
         } else ""
         onProgress(if (settings != null && context.isBlank()) "Источники не найдены. Оркестратор готовит ответ…" else "Оркестратор анализирует цель и готовит ответ…")
-        return decisions.refine(plan, message, profile, candidates, dossiers, context, onActivity)
+        val refined = decisions.refine(plan, message, profile, candidates, dossiers, context, onActivity)
+        if (refined.wizardStep != PlanningStep.REVIEW) return refined
+        val result = refined.withFinalization()
+        DecisionCompiler.validateEdit(plan, result)
+        return result
     }
 
     suspend fun generateAlternatives(plan: Plan, profile: LlmProfile?, candidates: List<LlmProfile>, dossiers: List<ModelDossier>) =
@@ -68,10 +72,20 @@ class PlanComposer(
         visit(nodeId)
         val stageIds = plan.tree.filter { it.id in affected && it.kind == DecisionKind.STAGE }.map { it.stageId ?: it.id }.toSet()
         val proposal = refine(plan, "Пересчитай участок «${nodes.getValue(nodeId).title}», сохрани остальные решения.", profile, candidates, dossiers, settings, onActivity, onProgress)
-        val updated = proposal.copy(tree = plan.tree.filterNot { it.id in affected } + proposal.tree.filter { it.id in affected || it.id !in nodes },
-            milestones = plan.milestones.filterNot { it.id in stageIds } + proposal.milestones.filter { it.id in stageIds || plan.milestones.none { old -> old.id == it.id } })
-        DecisionCompiler.validateEdit(plan, updated)
-        return updated
+        if (proposal.wizardStep != PlanningStep.REVIEW) return proposal
+        // Import only this subtree. A new endpoint outside it is attached after the splice,
+        // otherwise its node would be orphaned under the unchanged root and duplicated.
+        val proposedNodes = proposal.tree.associateBy { it.id }
+        val replacement = mutableSetOf<String>()
+        fun visitReplacement(id: String) { if (replacement.add(id)) proposedNodes[id]?.children?.forEach(::visitReplacement) }
+        visitReplacement(nodeId)
+        val replacementNodes = proposal.tree.filter { it.id in replacement && (it.id in affected || it.id !in nodes) }
+        val replacementStages = replacementNodes.filter { it.kind == DecisionKind.STAGE }.map { it.stageId ?: it.id }.toSet()
+        val updated = proposal.copy(tree = plan.tree.filterNot { it.id in affected } + replacementNodes,
+            milestones = plan.milestones.filterNot { it.id in stageIds } + proposal.milestones.filter { it.id in replacementStages })
+        val finalized = updated.withFinalization()
+        DecisionCompiler.validateEdit(plan, finalized)
+        return finalized
     }
 
     fun recommendChoices(plan: Plan) = decisions.recommendChoices(plan)

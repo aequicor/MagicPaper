@@ -57,6 +57,8 @@ data class Milestone(
     val displayName: String? = null,
     val continuationOf: String? = null,
     val acceptanceCriteria: List<AcceptanceCriterion> = emptyList(),
+    /** Visible terminal task that records the result in Git and reports the handoff. */
+    val isFinalization: Boolean = false,
 ) {
     /** Завершён ли мэилстоун (выполнен или осознанно пропущен). */
     val completed: Boolean get() = status == MilestoneStatus.DONE || status == MilestoneStatus.SKIPPED

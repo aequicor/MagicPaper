@@ -68,5 +68,9 @@ class UserInteractionStatusTest {
         assertFalse(request.details.contains("NOT_RUN"))
         assertEquals(listOf("Проверить автоматически", "Продолжить без проверки", "Оставить остановленной"),
             request.questions.single().options.map { it.label })
+        val staleRecord = record.copy(status = AcceptanceStatus.STALE, findings = record.findings.map { it.copy(status = CheckStatus.STALE) })
+        val stale = blocked.copy(milestones = listOf(stage.copy(attempts = stage.attempts.map { it.copy(acceptanceRecord = staleRecord) })))
+        val staleRequest = interactionCandidates(ui, listOf(stale), emptyMap(), emptyMap()).single()
+        assertEquals(request.questions.single().options, staleRequest.questions.single().options)
     }
 }

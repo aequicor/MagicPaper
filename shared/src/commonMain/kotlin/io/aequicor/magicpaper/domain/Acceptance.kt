@@ -61,10 +61,16 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
     val waivers: List<AcceptanceWaiver> = emptyList(),
 ) {
     internal val permitsProgress: Boolean get() = status in setOf(AcceptanceStatus.ACCEPTED, AcceptanceStatus.ACCEPTED_WITH_SKIPS)
-    internal val canSkipByUser: Boolean get() = status in setOf(AcceptanceStatus.PARTIAL, AcceptanceStatus.BLOCKED) &&
-        snapshotId.isNotBlank() && criteria.any { it.required } && criteria.filter { it.required }.all { criterion ->
+    internal fun wasSkippedByUser(criterion: AcceptanceCriterion): Boolean =
+        waivers.any { it.runId == runId && it.criterion == criterion } &&
+            findings.singleOrNull { it.criterionId == criterion.id }?.status == CheckStatus.SKIPPED
+
+    /** A skipped check makes no assertion about file contents or snapshot freshness. */
+    internal val allChecksSkippedByUser: Boolean get() = criteria.isNotEmpty() && criteria.all(::wasSkippedByUser)
+    internal val canSkipByUser: Boolean get() = status in setOf(AcceptanceStatus.PARTIAL, AcceptanceStatus.BLOCKED, AcceptanceStatus.STALE) &&
+        criteria.any { it.required } && criteria.filter { it.required }.all { criterion ->
             findings.singleOrNull { it.criterionId == criterion.id }?.status in
-                setOf(CheckStatus.PASS, CheckStatus.NOT_RUN, CheckStatus.SKIPPED, CheckStatus.BLOCKED)
+                setOf(CheckStatus.PASS, CheckStatus.NOT_RUN, CheckStatus.SKIPPED, CheckStatus.BLOCKED, CheckStatus.STALE)
         }
     fun summary(): String = "Приёмка: $status. " + findings.filter { it.status != CheckStatus.PASS }
         .joinToString("; ") { "${it.criterionId}: ${it.status} — ${it.observed}" }
@@ -86,7 +92,7 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
             AcceptanceStatus.ACCEPTED -> "Результат подтверждён."
             AcceptanceStatus.ACCEPTED_WITH_SKIPS -> "Продолжено без проверки по решению пользователя."
             AcceptanceStatus.FAILED -> "Проверка обнаружила несоответствие требованиям."
-            AcceptanceStatus.STALE -> "Файлы изменились после проверки. Нужно проверить актуальный результат."
+            AcceptanceStatus.STALE -> "Состояние файлов после проверки изменилось или недоступно. Можно проверить актуальный результат или продолжить без проверки."
             else -> "Результат пока не подтверждён: не все обязательные проверки выполнены."
         })
         criteria.filter { it.required }.forEach { criterion ->
@@ -96,7 +102,7 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
             val unavailable = criterion.environment != EvidenceEnvironment.REVIEW &&
                 (proof == null || proof.status == CheckStatus.NOT_RUN && proof.artifacts.isEmpty())
             append("\n\n• ${criterion.description}\n")
-            if (finding?.status == CheckStatus.SKIPPED && waivers.any { it.runId == runId && it.criterion == criterion })
+            if (finding?.status in setOf(CheckStatus.SKIPPED, CheckStatus.STALE) && waivers.any { it.runId == runId && it.criterion == criterion })
                 append("Проверка пропущена по решению пользователя.")
             else if (unavailable) append("${criterion.environment.label().replaceFirstChar { it.uppercaseChar() }}: в приложении не подключён способ подтверждения. Можно повторить автоматическую проверку или продолжить без неё.")
             else append(finding?.observed ?: "Исполнитель должен предоставить подтверждение этого результата.")
@@ -133,12 +139,15 @@ internal fun Plan.acceptanceCriteria(): List<AcceptanceCriterion> = selectedMile
 /** Authoritative aggregation: no model-supplied overall passed flag participates here. */
 object AcceptanceGate {
     fun evaluate(record: AcceptanceRecord, criteria: List<AcceptanceCriterion>, snapshotId: String?): AcceptanceRecord {
-        if (snapshotId.isNullOrBlank() || record.snapshotId.isBlank() || snapshotId != record.snapshotId || record.criteria != criteria)
+        require(criteria.isNotEmpty() && criteria.map { it.id }.distinct().size == criteria.size) { "Нет однозначных критериев приёмки" }
+        val sameCriteria = record.criteria == criteria
+        if (sameCriteria && record.allChecksSkippedByUser) return record.copy(status = AcceptanceStatus.ACCEPTED_WITH_SKIPS)
+        if (snapshotId.isNullOrBlank() || record.snapshotId.isBlank() || snapshotId != record.snapshotId || !sameCriteria)
             return record.copy(status = AcceptanceStatus.STALE, findings = criteria.map {
-                AcceptanceFinding(it.id, CheckStatus.STALE, it.description,
+                if (sameCriteria && record.wasSkippedByUser(it)) record.findings.single { finding -> finding.criterionId == it.id }
+                else AcceptanceFinding(it.id, CheckStatus.STALE, it.description,
                     "Снимок файлов или критерии изменились либо недоступны; требуется новая проверка")
             })
-        require(criteria.isNotEmpty() && criteria.map { it.id }.distinct().size == criteria.size) { "Нет однозначных критериев приёмки" }
         val findings = criteria.map { criterion ->
             val reviews = record.findings.filter { it.criterionId == criterion.id }
             val review = reviews.singleOrNull() ?: AcceptanceFinding(criterion.id, CheckStatus.NOT_RUN,

@@ -56,9 +56,11 @@ class PlanningExecutionService(
                         jobsLock.withLock { jobs.values.toList() }.joinAll()
                         store.recover()
                     }
-                    store.plans().filter { it.intent == ExecutionIntent.RUN && it.phase != ExecutionPhase.COMPLETE && (it.issue?.requiresUser != true || it.issue?.kind == IssueKind.CONFIGURATION) }
-                        .forEach { plan ->
-                            if ((plan.issue?.retryAt ?: 0) <= Id.now()) launchProject(plan.id)
+                    store.plans().filter { it.intent == ExecutionIntent.RUN && it.phase != ExecutionPhase.COMPLETE }
+                        .forEach { saved ->
+                            val plan = if (saved.restoreSkippedVerification() != saved) store.update(saved.id) { it.restoreSkippedVerification() } else saved
+                            if ((plan.issue?.requiresUser != true || plan.issue?.kind == IssueKind.CONFIGURATION) &&
+                                (plan.issue?.retryAt ?: 0) <= Id.now()) launchProject(plan.id)
                         }
                     if (store.failure.value == null) errorState.value = null
                 } catch (e: CancellationException) { throw e }
@@ -146,8 +148,7 @@ class PlanningExecutionService(
                 val record = blocker.attempt!!.acceptanceRecord!!
                 val criteria = blocker.stage?.criteria() ?: plan.acceptanceCriteria()
                 require(record.runId == plan.runId && record.criteria == criteria) { "План изменился; проверьте актуальные условия." }
-                record.criteria.filter { c -> c.required && record.findings.single { it.criterionId == c.id }.status != CheckStatus.PASS }
-                    .map { AcceptanceWaiver(plan.runId, it, record.attemptId, record.snapshotId, Id.now()) }
+                record.criteria.map { AcceptanceWaiver(plan.runId, it, record.attemptId, record.snapshotId, Id.now()) }
             }
             val attempts = blockers.map { it.attempt!!.id }.toSet()
             fun resume(attempt: StageAttempt) = if (attempt.id in attempts) attempt.copy(error = null, verificationSnapshot = null) else attempt
@@ -187,6 +188,7 @@ class PlanningExecutionService(
             acquiredProject = project
             chatHooks?.awaitReady()
             var plan = store.planFor(id) ?: return
+            if (plan.restoreSkippedVerification() != plan) plan = store.update(id) { it.restoreSkippedVerification() }
             plan = chatHooks?.recoverAssignments(plan) ?: plan
             if (plan.intent != ExecutionIntent.RUN) return
             val graph = DecisionCompiler.compile(plan)
@@ -394,8 +396,7 @@ class PlanningExecutionService(
             plan.acceptanceWaivers.none { it.runId == plan.runId && it.criterion == criterion }
         }
         if (pendingCriteria.isEmpty() && attempt.phase == AttemptPhase.PREPARED && attempt.pendingTool.isBlank() && !attempt.pendingToolExternal) {
-            attempt = attempt.copy(phase = AttemptPhase.VERIFYING, report = "Проверки пропущены по решению пользователя",
-                verificationSnapshot = workspaces.verificationSnapshot(workspace.integrationPath))
+            attempt = attempt.copy(phase = AttemptPhase.VERIFYING, report = "Проверки пропущены по решению пользователя")
             persist()
         }
         if (attempt.phase != AttemptPhase.VERIFYING) {
@@ -460,9 +461,10 @@ class PlanningExecutionService(
 
     private suspend fun reviewAcceptance(plan: Plan, stage: Milestone, attempt: StageAttempt, path: String,
         criteria: List<AcceptanceCriterion>, report: String, judge: LlmProfile): Pair<AcceptanceRecord, Verdict> {
-        val snapshot = attempt.verificationSnapshot ?: workspaces.verificationSnapshot(path)
         val waivers = plan.acceptanceWaivers.filter { it.runId == plan.runId && it.criterion in criteria }
         val pending = criteria.filter { criterion -> waivers.none { it.criterion == criterion } }
+        val snapshot = if (pending.isEmpty()) attempt.verificationSnapshot ?: waivers.firstOrNull()?.snapshotId
+            else attempt.verificationSnapshot ?: workspaces.verificationSnapshot(path)
         val evidence = if (snapshot.isNullOrBlank()) emptyList() else acceptanceChecks.collect(pending, path, snapshot)
         val reviewed = if (pending.isEmpty()) AcceptanceReview(emptyList()) else verifier.review(stage, pending, plan.goal, report + "\nПроверки приложения:\n" +
             evidence.joinToString("\n") { "${it.criterionId}: ${it.environment}: ${it.status}: ${it.detail}" }, judge)
@@ -470,7 +472,7 @@ class PlanningExecutionService(
         val findings = reviewed.findings.map { if (it.criterionId in skipped) it.copy(status = CheckStatus.SKIPPED, observed = "Этап пропущен; проверка не выполнялась") else it } +
             waivers.map { AcceptanceFinding(it.criterion.id, CheckStatus.SKIPPED, it.criterion.description, "Проверка пропущена по решению пользователя") }
         val record = AcceptanceGate.evaluate(AcceptanceRecord(plan.runId, attempt.id, snapshot.orEmpty(), criteria, findings, evidence, waivers = waivers),
-            criteria, workspaces.verificationSnapshot(path))
+            criteria, if (pending.isEmpty()) snapshot else workspaces.verificationSnapshot(path))
         val issue = reviewed.issue ?: if (!record.permitsProgress && !record.canRetryWithWorker)
             PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true) else null
         return record to Verdict(record.permitsProgress && issue == null,
@@ -482,7 +484,7 @@ class PlanningExecutionService(
         if (plan.intent != ExecutionIntent.RUN || plan.issue != null) return false
         val attempt = plan.finalAttempt ?: return false
         val record = attempt.acceptanceRecord ?: return false
-        val snapshot = workspaces.verificationSnapshot(path)
+        val snapshot = if (record.allChecksSkippedByUser) record.snapshotId else workspaces.verificationSnapshot(path)
         val saved = store.update(id) { current ->
             val check = AcceptanceGate.evaluate(record, current.acceptanceCriteria(), snapshot)
             if (current.runId != record.runId || current.finalAttempt?.id != record.attemptId ||
@@ -563,7 +565,7 @@ class PlanningExecutionService(
                 }
                 val frozen = attempt.assignment.executionProfile(profiles.load())
                 val context = DecisionCompiler.compile(plan).dependencies[stageId].orEmpty().joinToString("\n") { dep ->
-                    plan.milestones.first { it.id == dep }.let { "${it.title}: ${it.report}" }
+                    plan.milestones.first { it.id == dep }.let { "${it.title}: ${it.report}\nПриёмка этапа: ${it.checkNote}" }
                 }
                 val extraInstructions = chatHooks?.instructions(plan, stage, attempt).orEmpty()
                 val prompt = """

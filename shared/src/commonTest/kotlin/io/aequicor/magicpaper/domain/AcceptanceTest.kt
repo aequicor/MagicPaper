@@ -76,11 +76,24 @@ class AcceptanceTest {
         assertContains(result.userSummary(), "по решению пользователя")
         assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(original, listOf(live), "snapshot").status)
         assertFalse(AcceptanceGate.evaluate(waived.copy(runId = "next-run"), listOf(live), "snapshot").permitsProgress)
-        assertEquals(AcceptanceStatus.STALE, AcceptanceGate.evaluate(waived, listOf(live), "changed").status)
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, AcceptanceGate.evaluate(waived, listOf(live), "changed").status)
+        assertEquals(AcceptanceStatus.ACCEPTED_WITH_SKIPS, AcceptanceGate.evaluate(waived, listOf(live), null).status)
         assertFalse(AcceptanceGate.evaluate(waived.copy(criteria = listOf(live.copy(description = "New requirement"))),
             listOf(live.copy(description = "New requirement")), "snapshot").permitsProgress)
         val failed = waived.copy(findings = listOf(waived.findings.single().copy(status = CheckStatus.FAIL)))
         assertEquals(AcceptanceStatus.FAILED, AcceptanceGate.evaluate(failed, listOf(live), "snapshot").status)
+    }
+
+    @Test fun staleSnapshotKeepsSkippedChecksAndInvalidatesOnlyChecksThatStillNeedEvidence() {
+        val original = record(listOf(review, live)).copy(
+            findings = listOf(AcceptanceFinding(review.id, CheckStatus.PASS, review.description, "Reviewed"),
+                AcceptanceFinding(live.id, CheckStatus.SKIPPED, live.description, "User skipped")),
+            waivers = listOf(AcceptanceWaiver("run", live, "attempt", "snapshot", 1)))
+        val result = AcceptanceGate.evaluate(original, original.criteria, "changed")
+        assertEquals(AcceptanceStatus.STALE, result.status)
+        assertEquals(listOf(CheckStatus.STALE, CheckStatus.SKIPPED), result.findings.map { it.status })
+        assertTrue(result.canSkipByUser)
+        assertContains(result.userSummary(), "Проверка пропущена по решению пользователя")
     }
 
     @Test fun overallPassedFlagCannotOverrideStructuredBlocker() = runTest {

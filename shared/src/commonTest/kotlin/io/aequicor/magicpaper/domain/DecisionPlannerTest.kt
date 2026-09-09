@@ -65,7 +65,7 @@ class DecisionPlannerTest {
         val result = textPlanComposer(gateway).refine(original, "Move the new session button", profile, listOf(profile), emptyList())
         assertEquals(2, gateway.calls)
         assertContains(gateway.requests.last().last().content, "недоступные обязательные проверки")
-        assertTrue(result.milestones.all { it.acceptanceCriteria.single().environment == EvidenceEnvironment.REVIEW })
+        assertTrue(result.milestones.all { it.criteria().single().environment == EvidenceEnvironment.REVIEW })
     }
 
     @Test fun explicitUnavailableAcceptanceCanAskAQuestionWithoutChangingRequirements() = runTest {
@@ -97,7 +97,7 @@ class DecisionPlannerTest {
         val original = plan().let { p -> p.copy(milestones = p.milestones.map { it.copy(acceptanceCriteria = listOf(
             AcceptanceCriterion("live", "Require a live receipt", environment = EvidenceEnvironment.REAL_BACKEND))) }) }
         val result = textPlanComposer(Gateway(response(original))).refine(original, "Keep current requirements", profile, listOf(profile), emptyList())
-        assertEquals(original.milestones.map { it.acceptanceCriteria }, result.milestones.map { it.acceptanceCriteria })
+        assertEquals(original.milestones.map { it.acceptanceCriteria }, result.milestones.filterNot { it.isFinalization }.map { it.acceptanceCriteria })
     }
 
     @Test fun refinementDoesNotSendNestedExecutionArchivesOrModifySavedHistory() = runTest {
@@ -150,7 +150,8 @@ class DecisionPlannerTest {
     @Test fun refinementKeepsDurationsWhenTheResponseOmitsThem() = runTest {
         val original = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(complexityPoints = 2.5) }) }
         val result = textPlanComposer(Gateway(response(plan()))).refine(original, "Refine", profile, listOf(profile), emptyList())
-        assertTrue(result.milestones.all { it.complexityPoints == 2.5 })
+        assertTrue(result.milestones.filterNot { it.isFinalization }.all { it.complexityPoints == 2.5 })
+        assertNotNull(result.milestones.single { it.isFinalization }.complexityPoints)
         val restored = Json.decodeFromString(Plan.serializer(), Json.encodeToString(Plan.serializer(), result))
         assertEquals(result, restored)
         assertNull(Json.decodeFromString(Milestone.serializer(), """{"id":"old","title":"Old"}""").complexityPoints)
@@ -164,6 +165,17 @@ class DecisionPlannerTest {
         assertEquals(original.tree.first { it.id == "b" }, result.tree.first { it.id == "b" })
         assertEquals(original.milestones.first { it.id == "b" }, result.milestones.first { it.id == "b" })
         assertEquals("proposed change", result.milestones.first { it.id == "a" }.description)
+        val endpoint = result.milestones.single { it.isFinalization }
+        assertEquals(setOf("a"), DecisionCompiler.compile(result).dependencies[endpoint.id])
+        assertTrue(result.tree.single { it.kind == DecisionKind.GOAL }.children.contains(endpoint.id))
+    }
+
+    @Test fun refinementPreservesTheEndpointWhenTheModelOmitsItsMarker() = runTest {
+        val original = plan().copy(wizardStep = PlanningStep.REVIEW).withFinalization { "commit" }
+        val proposal = original.copy(milestones = original.milestones.map { it.copy(isFinalization = false) })
+        val result = textPlanComposer(Gateway(response(proposal))).refine(original, "Keep the current plan", profile, listOf(profile), emptyList())
+        assertEquals("commit", result.milestones.single { it.isFinalization }.id)
+        assertEquals(original.tree, result.tree)
     }
 
     @Test fun verifierRequiresVerdictSchemaAndNeverAcceptsEmptyReport() = runTest {
