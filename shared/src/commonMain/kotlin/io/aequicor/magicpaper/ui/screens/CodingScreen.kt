@@ -1,4 +1,12 @@
 package io.aequicor.magicpaper.ui.screens
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import io.aequicor.magicpaper.ui.components.InlineMessageParts
+import io.aequicor.magicpaper.ui.components.MessageExpansion
+import io.aequicor.magicpaper.ui.components.LocalMessageExpansion
+import io.aequicor.magicpaper.ui.components.rememberInlineMessageParts
+import io.aequicor.magicpaper.ui.components.PreserveInlineExpansion
+import io.aequicor.magicpaper.ui.components.CollapseMessage
+
 
 import io.aequicor.magicpaper.ui.components.ToolbarButton
 import io.aequicor.magicpaper.ui.components.ToolbarIcon
@@ -939,9 +947,6 @@ internal fun CodingChat(
     val hideSystemSteps = LocalHideSystemSteps.current
     val rows = remember(messages, hideSystemSteps) { codingChatRows(messages, hideSystemSteps) }
     val history = remember(rows) { codingHistoryItems(rows) }
-    val pinIndices = remember(history) {
-        buildMap { history.forEachIndexed { index, item -> if (item.first) put(item.row.message.id, index + 1) } }
-    }
     val pinKeys = remember(history) {
         history.filter { it.first }.associate { it.row.message.id to it.key }
     }
@@ -951,6 +956,27 @@ internal fun CodingChat(
     }
     val draftHistory = remember(draftRow) { codingHistoryItems(listOfNotNull(draftRow)) }
     val timeline = remember(history, draftHistory) { history + draftHistory }
+    var expandedMessages by rememberSaveable(session.session.id) { mutableStateOf(emptyList<String>()) }
+    val expandedParts = buildMap<String, InlineMessageParts> {
+        timeline.filter { it.key in expandedMessages }.forEach { item ->
+            key(item.key) {
+                rememberInlineMessageParts(item.expandableText(), item.step?.kind == CodingStepKind.ANSWER)
+                    ?.let { put(item.key, it) }
+            }
+        }
+    }
+    val fragments = remember(timeline, expandedParts) {
+        timeline.flatMap { item ->
+            val parts = expandedParts[item.key]
+            if (parts == null || parts.size == 0) listOf(CodingMessageFragment(item))
+            else (0 until parts.size).map { CodingMessageFragment(item, parts, it) }
+        }
+    }
+    val pinIndices = remember(fragments) {
+        buildMap { fragments.forEachIndexed { index, fragment ->
+            if (fragment.item.first && fragment.index == 0) put(fragment.item.row.message.id, index + 1)
+        } }
+    }
     // Remember arrivals at the list level: lazy reuse and reopening saved history
     // must not replay the entrance animation or reset a command's disclosure.
     val seenTimelineKeys = remember(session.session.id) { timeline.map { it.key }.toMutableSet() }
@@ -967,6 +993,7 @@ internal fun CodingChat(
     // Живая лента держит конец: новый шаг прогона или доросший ответ видны сразу,
     // а не «с начала сообщения». Открутил журнал вверх — не мешаем читать.
     val scroll = stickToBottom(listState, session.session.id)
+    PreserveInlineExpansion(expandedParts, scroll)
     val pinNumbers = remember(pins, pinIndices) { requestPinNumbers(pins, pinIndices.keys) }
     var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     val density = LocalDensity.current
@@ -1008,7 +1035,8 @@ internal fun CodingChat(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                items(timeline, key = { it.key }, contentType = { it.step?.kind ?: it.row.message.role }) { item ->
+                items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
+                    val item = fragment.item
                     val row = item.row
                     val message = row.message
                     val isDraft = message.id == draftRow?.message?.id
@@ -1016,7 +1044,7 @@ internal fun CodingChat(
                         (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
                     var hasAppeared by rememberSaveable(item.key) { mutableStateOf(false) }
                     val appearance = remember(item.key) {
-                        val animate = !hasAppeared && isDraft && draft.active && item.key in arrivingKeys &&
+                        val animate = fragment.parts == null && !hasAppeared && isDraft && draft.active && item.key in arrivingKeys &&
                             item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)
                         MutableTransitionState(!animate).apply { targetState = true }
                     }
@@ -1028,7 +1056,12 @@ internal fun CodingChat(
                         SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
                             pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
                             live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
-                            continued = isDraft && busy)
+                            continued = isDraft && busy, fragment = fragment,
+                            onExpand = { expandedMessages = expandedMessages + item.key },
+                            onCollapse = {
+                                listState.requestScrollToItem(fragments.indexOfFirst { it.item.key == item.key } + 1)
+                                expandedMessages = expandedMessages - item.key
+                            })
                     }
                 }
                 if (busy && (hasDraft || statusMessageId == null)) {
@@ -1080,6 +1113,26 @@ internal fun CodingChat(
     }
 }
 
+private data class CodingMessageFragment(
+    val item: io.aequicor.magicpaper.ui.components.CodingHistoryItem,
+    val parts: InlineMessageParts? = null,
+    val index: Int = 0,
+) {
+    val key: String get() = if (index == 0) item.key else "${item.key}:text:$index"
+    val first: Boolean get() = index == 0
+    val last: Boolean get() = parts == null || index == parts.size - 1
+}
+
+private fun io.aequicor.magicpaper.ui.components.CodingHistoryItem.expandableText(): String = when (step?.kind) {
+    CodingStepKind.ANSWER -> step!!.title
+    CodingStepKind.ERROR -> "✕ ${step!!.title}"
+    CodingStepKind.INFO -> "◷ ${step!!.title}"
+    CodingStepKind.TOOL, CodingStepKind.EXEC -> step!!.let { tool ->
+        if (tool.title.length > 6000) tool.title + "\n\n" + tool.result else tool.result
+    }
+    else -> row.message.text
+}
+
 /** Saved and streaming steps share the same composition, including disclosure state. */
 @Composable
 private fun SavedCodingHistoryItem(
@@ -1094,30 +1147,61 @@ private fun SavedCodingHistoryItem(
     onShowPins: () -> Unit,
     live: Boolean = false,
     continued: Boolean = false,
+    fragment: CodingMessageFragment = CodingMessageFragment(item),
+    onExpand: () -> Unit = {},
+    onCollapse: () -> Unit = {},
 ) {
     val row = item.row
     val message = row.message
-    ChatScrollItem(scroll, item.key) {
-        CodingMessageBubble(message, step = item.step, first = item.first, last = item.last && !continued, live = live,
-            pinNumber = pinNumber, onShowPins = onShowPins,
-            header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
-            status?.invoke()
-            if (planningService != null && message.planning != null) {
-                Spacer(Modifier.height(6.dp))
-                PlanningChatMessage(message, session, messages, planningService, onOpenSession)
-            }
-            row.planCard?.let { card ->
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Spacer(Modifier.height(12.dp))
-                ChatMarkdown(card.text)
-                if (planningService != null) {
+    ChatScrollItem(scroll, fragment.key) {
+        CompositionLocalProvider(LocalMessageExpansion provides if (fragment.parts == null) MessageExpansion(item.expandableText(), onExpand) else null) {
+            CodingMessageBubble(message, step = item.step, first = item.first && fragment.first,
+                last = item.last && fragment.last && !continued, live = live,
+                body = fragment.parts?.let { parts -> {
+                    val step = item.step
+                    if (step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) {
+                        ToolStepContent(step!!.title, "", step.running, step.ok, live,
+                            step.kind == CodingStepKind.EXEC, expanded = true, onToggle = onCollapse,
+                            showHeader = fragment.first, body = {
+                                parts.Content(fragment.index,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
+                                    color = if (step.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+                            })
+                    } else parts.Content(fragment.index,
+                        style = when (step?.kind) {
+                            CodingStepKind.INFO -> MaterialTheme.typography.bodySmall
+                            CodingStepKind.ERROR -> MaterialTheme.typography.bodyMedium
+                            else -> MaterialTheme.typography.bodyLarge
+                        },
+                        color = when {
+                            step?.kind == CodingStepKind.ERROR || message.failed -> MaterialTheme.colorScheme.error
+                            step?.kind == CodingStepKind.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> MaterialTheme.colorScheme.onSurface
+                        })
+                    if (fragment.last) CollapseMessage(onCollapse)
+                } },
+                forceWidth = fragment.parts != null,
+                showFooter = item.last && fragment.last,
+                pinNumber = pinNumber, onShowPins = onShowPins,
+                header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
+                status?.invoke()
+                if (planningService != null && message.planning != null) {
                     Spacer(Modifier.height(6.dp))
-                    PlanningChatMessage(card, session, messages, planningService, onOpenSession)
+                    PlanningChatMessage(message, session, messages, planningService, onOpenSession)
                 }
+                row.planCard?.let { card ->
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(12.dp))
+                    ChatMarkdown(card.text)
+                    if (planningService != null) {
+                        Spacer(Modifier.height(6.dp))
+                        PlanningChatMessage(card, session, messages, planningService, onOpenSession)
+                    }
+                }
+                OrchestrationMessageInputStatus(message, session.id, planningService)
+                if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
             }
-            OrchestrationMessageInputStatus(message, session.id, planningService)
-            if (message.pendingDelivery) Text("Ожидает передачи после текущего хода", style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -1133,12 +1217,16 @@ private fun CodingMessageBubble(
     pinNumber: Int? = null,
     onShowPins: () -> Unit = {},
     header: (@Composable () -> Unit)? = null,
+    body: (@Composable () -> Unit)? = null,
+    forceWidth: Boolean = false,
+    showFooter: Boolean = last,
     footer: (@Composable () -> Unit)? = null,
 ) {
     if (message.systemContext) {
         io.aequicor.magicpaper.ui.components.SessionContextMessage(message.id, message.text)
         return
     }
+    val previewState = rememberSaveableStateHolder()
     val isUser = message.role == CodingRole.USER
     val bubbleColor = if (message.systemNotice) {
         MaterialTheme.colorScheme.surfaceContainerLow
@@ -1156,7 +1244,7 @@ private fun CodingMessageBubble(
             onClick = onShowPins,
             modifier = Modifier
                 .widthIn(max = 680.dp)
-                .then(if (step != null) Modifier.fillMaxWidth() else Modifier)
+                .then(if (step != null || forceWidth) Modifier.fillMaxWidth() else Modifier)
                 .clip(
                     androidx.compose.foundation.shape.RoundedCornerShape(
                         topStart = if (!first) 0.dp else if (isUser) 20.dp else 6.dp,
@@ -1171,40 +1259,53 @@ private fun CodingMessageBubble(
             if (first && message.systemNotice) Text("Системное сообщение", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (first) header?.invoke()
-            if (isUser) {
-                ChatPlainText(message.text)
-            } else if (step != null) {
-                CodingStepRow(step, live = live)
-            } else {
-                // Совместимость со старыми журналами без ленты.
-                SelectionContainer {
-                    Column {
-                        ChatPlainText(
-                            message.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (message.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                        )
-                        if (message.activity.isNotEmpty()) {
-                            Spacer(Modifier.height(6.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                "Действия агента:",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (body != null) {
+                body()
+            } else previewState.SaveableStateProvider("preview") {
+                if (isUser) {
+                    ChatPlainText(message.text)
+                } else if (step != null) {
+                    CodingStepRow(step, live = live)
+                } else {
+                    // Совместимость со старыми журналами без ленты.
+                    SelectionContainer {
+                        Column {
+                            ChatPlainText(
+                                message.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (message.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                             )
-                            message.activity.forEach { line ->
+                            if (message.activity.isNotEmpty()) {
+                                Spacer(Modifier.height(6.dp))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                Spacer(Modifier.height(6.dp))
                                 Text(
-                                    text = line,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    "Действия агента:",
+                                    style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                message.activity.forEach { line ->
+                                    Text(
+                                        text = line,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
-            if (last) {
+            if (body != null && showFooter && step == null && !isUser && message.activity.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text("Действия агента:", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                message.activity.forEach { line ->
+                    Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (showFooter) {
                 CodingAttachments(message.attachments)
                 footer?.invoke()
             }
@@ -1318,6 +1419,8 @@ private fun ToolStepContent(
     isExec: Boolean,
     expanded: Boolean,
     onToggle: () -> Unit,
+    showHeader: Boolean = true,
+    body: (@Composable () -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val status = when { running -> ToolStepStatus.RUNNING; ok -> ToolStepStatus.SUCCEEDED; else -> ToolStepStatus.FAILED }
@@ -1334,7 +1437,7 @@ private fun ToolStepContent(
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
             .indication(interaction, LocalIndication.current),
     ) {
-        Row(
+        if (showHeader) Row(
             Modifier.fillMaxWidth().chatDisclosure(interaction, onToggle)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1375,9 +1478,10 @@ private fun ToolStepContent(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            if (expanded) ChatPlainText(title, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+            if (expanded && body == null) ChatPlainText(if (title.length > 6000) title + "\n\n" + result else title,
+                Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else Text(title, style = MaterialTheme.typography.bodySmall,
+            else Text(title.take(6000), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Text(
@@ -1386,7 +1490,7 @@ private fun ToolStepContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        AnimatedVisibility(running && live,
+        AnimatedVisibility(showHeader && running && live,
             enter = fadeIn(tween(160)) + expandVertically(tween(200), expandFrom = Alignment.Top),
             exit = fadeOut(tween(120)) + shrinkVertically(tween(200), shrinkTowards = Alignment.Top),
         ) {
@@ -1397,7 +1501,8 @@ private fun ToolStepContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (expanded && result.isNotBlank()) {
+        if (body != null) Box(Modifier.padding(horizontal = 10.dp)) { body() }
+        if (body == null && expanded && result.isNotBlank() && title.length <= 6000) {
             ChatPlainText(result, Modifier.padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = MagicFonts.code),
                 color = if (ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)

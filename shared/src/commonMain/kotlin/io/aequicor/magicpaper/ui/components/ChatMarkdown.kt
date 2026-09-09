@@ -58,7 +58,7 @@ fun ChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean =
     } else {
         MessagePreview(text, text.length > MESSAGE_PREVIEW_CHARS || document.preview.size < document.blocks.size, modifier, preview = {
             MarkdownDocumentBody(document, document.preview, Modifier, compact)
-        }, reader = { readerModifier -> MarkdownDocumentBody(document, document.blocks, readerModifier, compact, lazy = true) })
+        }, reader = { readerModifier -> MarkdownDocumentBody(document, document.blocks, readerModifier, compact) })
     }
 }
 
