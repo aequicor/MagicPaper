@@ -68,7 +68,12 @@ internal class ResearchCheckBridge(private val session: CodingSession, private v
                         require(params["name"] == JsonPrimitive("research_check")) { "Неизвестный инструмент" }
                         val args = params["arguments"] as? JsonObject ?: error("Нет аргументов")
                         require(args.keys.all { it in setOf("command", "cwd") }) { "Права и каталоги записи задаёт приложение" }
-                        val command = (args["command"] as? JsonArray)?.map { it.jsonPrimitive.content } ?: error("Нужен массив command")
+                        val command = (args["command"] as? JsonArray)?.map {
+                            val value = it as? JsonPrimitive
+                            require(value?.isString == true) { "Аргументы command должны быть строками" }
+                            value.content
+                        } ?: error("Нужен массив command")
+                        require(args["cwd"] == null || (args["cwd"] as? JsonPrimitive)?.isString == true) { "cwd должен быть строкой" }
                         val result = runner.run(java.nio.file.Paths.get(project.path), session.id, command, args["cwd"]?.jsonPrimitive?.content ?: ".")
                         ResearchCheckTool.result(result)
                     }

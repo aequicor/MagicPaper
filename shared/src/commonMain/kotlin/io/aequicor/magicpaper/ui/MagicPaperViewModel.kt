@@ -1402,7 +1402,14 @@ class MagicPaperViewModel(
                         "Режим сессии: ${updated.interactionMode.title}. " +
                             if (updated.researchMode) "Исходники и Git защищены от записи. Сборки и тесты доступны только через защищённый запуск проверок."
                             else "Новый режим применяется к последующим запросам.",
-                        createdAt = Id.now(), systemContext = true))
+                        createdAt = Id.now(), systemNotice = true))
+                    val project = _state.value.coding.projects.firstOrNull { it.id == updated.projectId }
+                    if (project != null && codingRuntime != null) {
+                        val context = codingRuntime.sessionContext(project, updated, codingProfileOf(updated))
+                        appendCodingMessage(updated, CodingMessage(Id.new(), CodingRole.AGENT,
+                            "Контекст после смены режима на «${updated.interactionMode.title}»\n\n$context",
+                            createdAt = Id.now(), systemContext = true))
+                    }
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось изменить режим") } }

@@ -33,7 +33,7 @@ fun CodingSession.changeInteractionMode(mode: CodingInteractionMode, busy: Boole
 
 /** Public dialogue only; system receipts and tool output cannot become a new user instruction. */
 fun researchContextSeed(messages: List<CodingMessage>, contextMessages: Int, currentMessageId: String): String {
-    val history = messages.filter { it.id != currentMessageId && !it.systemContext }
+    val history = messages.filter { it.id != currentMessageId && !it.systemContext && !it.systemNotice }
         .takeLast(contextMessages.coerceIn(1, 200)).joinToString("\n\n") {
             "[${if (it.role == CodingRole.USER) "пользователь" else "ассистент"}]\n${it.text.take(12_000)}"
         }.takeLast(60_000)

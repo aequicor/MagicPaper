@@ -37,12 +37,14 @@ class CodingInteractionModeTest {
     }
     @Test fun modeHistorySeedExcludesSystemReceiptsAndCurrentRequestAndIsBounded() {
         val history = listOf(CodingMessage("context", CodingRole.AGENT, "secret instructions", createdAt = 1, systemContext = true),
+            CodingMessage("notice", CodingRole.AGENT, "mode receipt", createdAt = 1, systemNotice = true),
             CodingMessage("first", CodingRole.USER, "explain source.kt", createdAt = 2),
             CodingMessage("reply", CodingRole.AGENT, "observations", createdAt = 3),
             CodingMessage("current", CodingRole.USER, "current request", createdAt = 4))
         val seed = researchContextSeed(history, 10, "current")
         assertContains(seed, "explain source.kt"); assertContains(seed, "observations")
         assertFalse(seed.contains("secret instructions")); assertFalse(seed.contains("current request"))
+        assertFalse(seed.contains("mode receipt"))
         assertTrue(researchContextSeed(List(200) { CodingMessage("$it", CodingRole.USER, "a".repeat(20_000), createdAt = 1) }, 200, "new").length < 61_000)
     }
 }

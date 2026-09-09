@@ -25,6 +25,7 @@ internal object PiResearchExtension {
                 if (!response.ok) throw new Error('Research check connection failed: ' + response.status);
                 const message = await response.json();
                 if (message.error) throw new Error(message.error.message);
+                if (message.result.isError) throw new Error(message.result.content.map(part => part.text || '').join('\n'));
                 return {content:message.result.content,details:{}};
               } catch (error) { cancel(); throw error; }
               finally { signal?.removeEventListener('abort',cancel); }

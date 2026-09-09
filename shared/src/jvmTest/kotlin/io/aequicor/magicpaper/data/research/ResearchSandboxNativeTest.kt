@@ -26,7 +26,7 @@ class ResearchSandboxNativeTest {
             val runner = ResearchCheckRunner(root.resolve("runtime"))
             val result = runner.run(project, "s", shell(
                 "cat source.kt; printf forbidden > source.kt; rm source.kt; mv source.kt moved.kt; printf no > created.kt; printf no > .git/HEAD; sh -c 'printf child > source.kt'; ln source.kt build/hard.txt; printf no > build/hard.txt; ln -s ../source.kt build/link.txt; printf no > build/link.txt; mkdir -p build; printf artifact > build/ok.txt; printf CHECK_DONE",
-                "\$ErrorActionPreference='SilentlyContinue'; Get-Content source.kt; Set-Content source.kt forbidden; Remove-Item source.kt; Rename-Item source.kt moved.kt; Set-Content created.kt no; Set-Content .git/HEAD no; New-Item -ItemType Directory -Force build; Set-Content build/ok.txt artifact; Write-Output CHECK_DONE"))
+                "\$ErrorActionPreference='SilentlyContinue'; Get-Content source.kt; Set-Content source.kt forbidden; Remove-Item source.kt; Rename-Item source.kt moved.kt; Set-Content created.kt no; Set-Content .git/HEAD no; powershell.exe -NoProfile -Command 'Set-Content source.kt child'; New-Item -ItemType HardLink -Path build/hard.txt -Target source.kt; Set-Content build/hard.txt no; New-Item -ItemType SymbolicLink -Path build/link.txt -Target ../source.kt; Set-Content build/link.txt no; New-Item -ItemType Directory -Force build; Set-Content build/ok.txt artifact; Write-Output CHECK_DONE"))
             assertNull(result.blockedReason, result.toString())
             assertEquals(0, result.exitCode, result.toString())
             assertContains(result.output, "CURRENT"); assertContains(result.output, "CHECK_DONE")
@@ -137,7 +137,8 @@ class ResearchSandboxNativeTest {
                   printf("ATTEMPTED:%d\\n", result); fflush(stdout); usleep(200000); return 0;
                 }
             """.trimIndent())
-            val binary = root.resolve("probe")
+            // Linux hides the host /tmp, so the fixture executable belongs to the visible read-only project.
+            val binary = project.resolve("fixture-probe")
             val compiler = ProcessBuilder("cc", source.toString(), "-o", binary.toString()).redirectErrorStream(true).start()
             val log = compiler.inputStream.readAllBytes().decodeToString(); assertEquals(0, compiler.waitFor(), log)
             val result = ResearchCheckRunner(root.resolve("runtime")).run(project, "s", listOf(binary.toString()))
@@ -147,5 +148,47 @@ class ResearchSandboxNativeTest {
             assertFalse(Files.exists(project.resolve("build/detached.txt")))
             assertFalse(Files.exists(project.resolve("build/spawned.txt")))
         } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun applicationCrashTerminatesCheckAndRecoveryRemovesItsTemporaryFiles() = runBlocking {
+        if (!enabled) return@runBlocking
+        val root = Files.createTempDirectory("research-crash-")
+        try {
+            val project = Files.createDirectory(root.resolve("project"))
+            Files.writeString(project.resolve("build.gradle"), "// fixture")
+            val discovered = generateSequence(ResearchSandboxNativeTest::class.java.classLoader) { it.parent }.filterIsInstance<java.net.URLClassLoader>()
+                .flatMap { it.urLs.asSequence() }.filter { it.protocol == "file" }.map { Paths.get(it.toURI()).toString() }
+            val classpath = (discovered + System.getProperty("java.class.path").split(java.io.File.pathSeparator).asSequence())
+                .filter { it.isNotBlank() }.distinct().joinToString(java.io.File.pathSeparator)
+            check(classpath.isNotEmpty()) { "Нужен classpath нативной тестовой JVM" }
+            val javaExecutable = Paths.get(System.getProperty("java.home"), "bin", if (windows) "java.exe" else "java").toString()
+            val output = root.resolve("host.log").toFile()
+            val child = ProcessBuilder(javaExecutable, "-cp", classpath, ResearchCrashFixture::class.java.name, root.toString())
+                .redirectErrorStream(true).redirectOutput(output).start()
+            try {
+                assertTrue(child.waitFor(30, java.util.concurrent.TimeUnit.SECONDS), output.readText())
+                assertEquals(0, child.exitValue(), output.readText())
+                assertTrue(Files.exists(root.resolve("started")), output.readText())
+                delay(2500)
+                assertFalse(Files.exists(project.resolve("build/late.txt")))
+                ResearchCheckRunner(root.resolve("runtime")).reconcile("crash")
+                Files.list(root.resolve("runtime")).use { paths -> assertFalse(paths.anyMatch { it.fileName.toString().startsWith("run-") }) }
+            } finally { child.destroyForcibly() }
+        } finally { root.toFile().deleteRecursively() }
+    }
+}
+
+/** Separate JVM deliberately halts without shutdown hooks; native ownership must survive it. */
+internal object ResearchCrashFixture {
+    @JvmStatic fun main(args: Array<String>) = runBlocking {
+        val root = Paths.get(args.single())
+        val runner = ResearchCheckRunner(root.resolve("runtime"))
+        val command = if (System.getProperty("os.name").startsWith("Windows"))
+            listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Write-Output STARTED; Start-Sleep 2; Set-Content build/late.txt late")
+        else listOf("/bin/sh", "-c", "printf STARTED; sleep 2; printf late > build/late.txt")
+        launch { val result = runner.run(root.resolve("project"), "crash", command); error(result.toString()) }
+        withTimeout(20_000) { runner.progress.first { "STARTED" in it.output } }
+        Files.writeString(root.resolve("started"), "yes")
+        Runtime.getRuntime().halt(0)
     }
 }

@@ -61,8 +61,13 @@ class ProjectsPanelStickyTest {
                 it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == value } == true &&
                     it.boundsInRoot.height > 0
         }
-        fun disclosure() = nodes().single {
-            it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Свернуть этапы") == true
+        fun disclosure(sessionTitle: String): SemanticsNode {
+            val title = text(sessionTitle).boundsInRoot
+            // Multiple expanded groups can be visible while the first one is pinned.
+            return nodes().single {
+                it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Свернуть этапы") == true &&
+                    it.boundsInRoot.center.y in title.top..title.bottom
+            }
         }
         fun click(point: Offset) {
             scene.sendPointerEvent(PointerEventType.Press, point)
@@ -150,7 +155,7 @@ class ProjectsPanelStickyTest {
         assertNotEquals(before, p.list.firstVisibleItemIndex to p.list.firstVisibleItemScrollOffset,
             "The overlay must forward scrolling to the list")
         p.hover(p.text("Plan 0").boundsInRoot.center)
-        p.click(p.disclosure().boundsInRoot.center)
+        p.click(p.disclosure("Plan 0").boundsInRoot.center)
         assertTrue(p.list.layoutInfo.visibleItemsInfo.none { it.key.toString().startsWith("session-child-0-") })
         assertEquals(0, p.projectInfo().offset)
         p.snapshot("pinned-session-collapsed")
