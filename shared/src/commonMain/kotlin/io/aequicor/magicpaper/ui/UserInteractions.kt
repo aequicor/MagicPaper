@@ -103,6 +103,8 @@ internal fun interactionCandidates(
     }
     ui.sessions.filter { !it.session.archived && !it.running && it.plan == null && !it.session.planningMode && it.session.stageId == null }.forEach { item ->
         val checkpoint = item.session.pendingRun
+        // History can arrive before checkpoint cleanup, including after a restart.
+        if (checkpoint?.hasSuccessfulResponse(item.messages) == true) return@forEach
         val interrupted = item.messages.interruptedCodingRequest()
         if (checkpoint?.stoppedByUser == true || checkpoint?.intent == ExecutionIntent.PAUSE || checkpoint == null && interrupted == null) return@forEach
         val source = checkpoint?.responseId?.ifBlank { checkpoint.messageId } ?: interrupted!!.id

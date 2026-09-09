@@ -51,6 +51,29 @@ class UserInteractionStatusTest {
         assertTrue(interactionCandidates(CodingUi(sessions = listOf(item.copy(session = plain.copy(pendingRun = checkpoint.copy(stoppedByUser = true))))), emptyList(), emptyMap(), emptyMap()).isEmpty())
     }
 
+    @Test fun successfulResponseClosesRecoveryEvenWithAStaleCheckpoint() {
+        val response = CodingMessage("a", CodingRole.AGENT, "Готово", createdAt = 2)
+        for (intent in listOf(ExecutionIntent.RUN, ExecutionIntent.STOP)) {
+            val item = CodingSessionUi(plain.copy(pendingRun = CodingRunCheckpoint("u", "Task", responseId = "a", intent = intent)),
+                listOf(CodingMessage("u", CodingRole.USER, "Task", createdAt = 1), response))
+            val pending = interactionCandidates(CodingUi(sessions = listOf(item)), emptyList(), emptyMap(), emptyMap())
+            assertTrue(pending.isEmpty())
+            assertFalse(item.canResume)
+            assertEquals(CodingSessionStatus.IDLE, item.status)
+        }
+    }
+
+    @Test fun previousResponseDoesNotHideAnInterruptedNewRun() {
+        val previous = CodingMessage("previous", CodingRole.AGENT, "Готово", createdAt = 2)
+        for (responseId in listOf("next", "")) {
+            val item = CodingSessionUi(plain.copy(pendingRun = CodingRunCheckpoint("u", "New task", responseId = responseId)),
+                listOf(previous, CodingMessage("u", CodingRole.USER, "New task", createdAt = 3)))
+            val pending = interactionCandidates(CodingUi(sessions = listOf(item)), emptyList(), emptyMap(), emptyMap())
+            assertEquals(InteractionKind.RECOVER_RUN, pending.single().kind)
+            assertTrue(item.canResume)
+        }
+    }
+
     @Test fun missingHostVerificationExplainsThePlanProblemInsteadOfAskingForCodeRepair() {
         val criterion = AcceptanceCriterion("opaque-id/layout", "Кнопка находится слева от меню", environment = EvidenceEnvironment.MANUAL)
         val record = AcceptanceRecord("run", "attempt", "snapshot", listOf(criterion), listOf(

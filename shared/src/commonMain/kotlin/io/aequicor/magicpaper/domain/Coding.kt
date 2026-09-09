@@ -79,6 +79,10 @@ data class CodingRunCheckpoint(
     val runId: String = messageId,
 )
 
+/** A persisted successful reply is authoritative even while checkpoint cleanup is pending. */
+fun CodingRunCheckpoint.hasSuccessfulResponse(messages: List<CodingMessage>): Boolean =
+    responseId.isNotBlank() && messages.any { it.id == responseId && it.role == CodingRole.AGENT && !it.failed }
+
 /** Older logs have no checkpoint; only an unanswered or failed turn can be resumed. */
 fun List<CodingMessage>.interruptedCodingRequest(): CodingMessage? =
     if (lastOrNull()?.let { it.role == CodingRole.USER || it.failed } == true)
