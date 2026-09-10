@@ -34,6 +34,7 @@ actual fun createMagicPaperDependencies(): MagicPaperDependencies {
         filePicker = DesktopFilePicker(),
         openAiSubscription = subscription,
         planningWorkspace = io.aequicor.magicpaper.data.planning.GitPlanningWorkspace(),
+        integrationChecks = io.aequicor.magicpaper.data.research.ResearchSessionIntegrationChecks(),
         platformPlugins = listOf(skillPackages),
         packageInstructions = skillPackages.instructionSource,
         experiencePlugin = { gateway, profiles ->

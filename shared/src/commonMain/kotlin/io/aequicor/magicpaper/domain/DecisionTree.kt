@@ -72,6 +72,8 @@ import kotlinx.serialization.Serializable
     val mergeVerificationSnapshot: String? = null,
     /** Execution stopped; phase remains the recovery checkpoint, not a liveness signal. */
     val interrupted: Boolean = false,
+    /** Captured authority for this scheduler turn; never filled from a later runtime callback. */
+    val sessionGeneration: Long = 0,
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",

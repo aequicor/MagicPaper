@@ -164,9 +164,9 @@ class PlanningSessionStatusTest {
         assertEquals(1, failed.blockingIssues(emptyList()).size)
     }
 
-    @Test fun handedOffWorkerIsGreenUntilExecutionResumes() {
+    @Test fun handedOffWorkerIsQueuedUntilExecutionResumes() {
         val handedOff = plan.copy(milestones = listOf(stage.copy(attempts = listOf(attempt.copy(awaitingPlanner = true)))))
-        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(worker, running = true, plan = handedOff).attentionStatus)
+        assertEquals(CodingSessionStatus.QUEUED, CodingSessionUi(worker, running = true, plan = handedOff).attentionStatus)
         assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(worker, plan = plan).attentionStatus)
         val planner = CodingSessionUi(parent, listOf(question), draft = CodingDraft(active = true), running = true, plan = handedOff)
         assertEquals(CodingSessionStatus.WAITING, planner.attentionStatus)

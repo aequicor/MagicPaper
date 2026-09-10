@@ -92,7 +92,8 @@ class AgentToolsTest {
         tools.events.observe { phases += it.phase }
         val job = launch { tools.call("interrupted", "stage.send", args) }
         runCurrent(); job.cancelAndJoin()
-        assertEquals(listOf(ToolPhase.STARTED, ToolPhase.CANCELLED), phases)
+        assertEquals(listOf(ToolPhase.STARTED, ToolPhase.UNKNOWN), phases)
+        assertEquals(ToolPhase.UNKNOWN, receipts.forRequest("p/s/request").single().phase)
         val restored = session(receipts) { _, _, _ -> effects++; JsonNull }
         assertFailsWith<IllegalStateException> { restored.call("interrupted", "stage.send", args) }
         assertEquals(1, effects)

@@ -1,0 +1,82 @@
+{
+  "date": "2026-09-10",
+  "scope": "Focused durable receipt, authority, organism, planning, runtime and Git verification after generic reconciliation; before subsequent managed-plan projection changes",
+  "seconds": 43,
+  "tests": 181,
+  "failures": 0,
+  "skipped": 0,
+  "classes": [
+    {
+      "name": "io.aequicor.magicpaper.data.coding.SessionOrganismExtensionsTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.coding.SessionOrganismStoreTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.data.planning.GitPlanningWorkspaceTest",
+      "tests": 14,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.PlanningExecutionServiceTest",
+      "tests": 55,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionAuthorityToolTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionCodingWorkspaceTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionOrganismServiceTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionReceiptRecoveryTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionTreeRuntimeTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.tools.AgentToolsTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.tools.OrchestrationToolsTest",
+      "tests": 23,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.tools.ToolReceiptIntegrityTest",
+      "tests": 19,
+      "failures": 0,
+      "skipped": 0
+    }
+  ]
+}

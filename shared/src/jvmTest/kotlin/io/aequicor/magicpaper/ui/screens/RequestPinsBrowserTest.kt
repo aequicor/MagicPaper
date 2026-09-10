@@ -136,11 +136,16 @@ class RequestPinsBrowserTest {
             val next = chat.nodes().single { text(it) == body(5) }.boundsInRoot
             assertTrue(chat.nodes().filter(::isIndicator).none { it.boundsInRoot.top in source.top..next.top },
                 "An unpinned user message must not show a marker")
-            chat.tailCount.intValue = 12
+            // Compact coding rows need enough trailing content to move the whole pinned
+            // source off screen; twelve rows can leave its last pixels at the top edge.
+            chat.tailCount.intValue = 40
             chat.render()
-            chat.scrollTo(21)
+            chat.scrollTo(chat.messageCount + chat.tailCount.intValue - 1)
             assertTrue(chat.hasText("Сводка m8"), "The sticky clarification remains visible")
-            assertTrue(chat.nodes().none(::isIndicator), "No button may remain on the sticky panel or outside the list")
+            chat.snapshot("markers-scrolled-away")
+            assertFalse(chat.hasText(body(8)), "The pinned source must be outside the lazy viewport before checking its marker")
+            assertTrue(chat.nodes().none(::isIndicator), "No button may remain on the sticky panel or outside the list: coding=$coding " +
+                chat.nodes().filter(::isIndicator).map { description(it) to it.boundsInRoot })
             chat.clickText("Сводка m8")
             assertNotNull(chat.indicator(4), "Navigating back restores the marker on the source")
         }
@@ -188,19 +193,26 @@ class RequestPinsBrowserTest {
         assertTrue(requestPinEntries(groups, emptySet()).isEmpty())
     }
 
-    @Test fun pinsNeverChangeMessageSizeTextWrappingOrSpacing() {
+    @Test fun pinsReserveTextSpaceWithoutAddingAButtonRowAndRestoreTheSameLayout() {
         for (coding in listOf(false, true)) for (fontScale in listOf(1f, 1.4f)) Chat(coding, 360, fontScale).use { chat ->
             fun messageBounds() = (8..9).map { index -> chat.nodes().single { text(it) == body(index) }.boundsInRoot }
             val withPin = messageBounds()
+            assertTrue(chat.indicator(4).boundsInRoot.left >= withPin[0].right,
+                "The pin's hit area must not overlap the message text")
             val position = chat.position()
             val pins = chat.groups.value
             chat.groups.value = emptyList()
             chat.render()
-            assertEquals(withPin, messageBounds(), "Removing the icon must not move or reflow either message")
-            assertEquals(position, chat.position(), "The list's measured position stays unchanged")
+            val withoutPin = messageBounds()
+            assertTrue(withoutPin[0].width >= withPin[0].width,
+                "Removing the pin releases its trailing gutter for text")
+            assertTrue(withoutPin[0].height <= withPin[0].height,
+                "The pin reserves text width and may wrap text, but must not add a footer row")
+            assertEquals(withPin[1].size, withoutPin[1].size, "An unrelated answer keeps its text layout")
             chat.groups.value = pins
             chat.render()
-            assertEquals(withPin, messageBounds(), "Restoring pins must not add a footer or increase spacing")
+            assertEquals(withPin, messageBounds(), "Restoring the same pins restores the same text wrapping and positions")
+            assertEquals(position, chat.position(), "Restoring pins preserves the list's measured position")
         }
     }
 }

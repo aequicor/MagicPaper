@@ -127,9 +127,14 @@ data class Plan(
     val dialogue: List<PlanningMessage> = emptyList(),
     val priorities: PlanningPriorities = PlanningPriorities(),
     val intent: ExecutionIntent = ExecutionIntent.STOP,
+    /** Requested STOP has not yet been confirmed by runtime reconciliation. */
+    val stopping: Boolean = false,
+    /** Accepted Plan checkpoints awaiting their separate organism projection. */
+    val pendingSessionProjections: Set<String> = emptySet(),
     val phase: ExecutionPhase = ExecutionPhase.IDLE,
     val parallelism: Int = 2,
     val runId: String = "",
+    val planningRulesSnapshot: PlanningRulesSnapshot? = null,
     val workspace: PlanWorkspace? = null,
     val finalAttempt: StageAttempt? = null,
     /** Previous checks retained when a rejected result is extended with more work. */

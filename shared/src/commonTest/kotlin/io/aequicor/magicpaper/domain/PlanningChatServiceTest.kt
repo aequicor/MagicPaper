@@ -83,7 +83,9 @@ class PlanningChatServiceTest {
             emit(CodingEvent.Finished)
         }
     }
-    private inner class Fixture(scope: TestScope, val kv: KeyValueStore = InMemoryKeyValueStore()) {
+    private inner class Fixture(scope: TestScope, val kv: KeyValueStore = InMemoryKeyValueStore(),
+        private val isolatedWorkspaces: Boolean = false,
+    ) {
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val projects = JsonCodingProjectRepository(kv, json)
         val profiles = JsonLlmProfileRepository(kv, json)
@@ -102,12 +104,19 @@ class PlanningChatServiceTest {
         var verdict = Verdict(true, "Checked")
         val verificationReports = mutableListOf<Pair<String, String>>()
         var verifyReport: ((Milestone, String) -> Verdict)? = null
+        private val localWorkspace = LocalPlanningWorkspace()
         val execution = PlanningExecutionService(store, runtime, projects, profiles, settings, object : MilestoneVerifier {
             override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
                 verificationReports += milestone.id to report
                 return verifyReport?.invoke(milestone, report) ?: verdict
             }
-        }, workspaces = object : PlanningWorkspace by LocalPlanningWorkspace() {
+        }, workspaces = object : PlanningWorkspace by localWorkspace {
+            override suspend fun prepare(project: CodingProject, runId: String) = if (isolatedWorkspaces)
+                PlanWorkspace(project.path, "${project.path}/.test-worktrees/integration-$runId", git = true)
+            else localWorkspace.prepare(project, runId)
+            override suspend fun stage(project: CodingProject, workspace: PlanWorkspace, attempt: StageAttempt) = if (isolatedWorkspaces)
+                attempt.copy(path = "${project.path}/.test-worktrees/${attempt.id}")
+            else localWorkspace.stage(project, workspace, attempt)
             override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
         }, scope = scope.backgroundScope)
         val service = PlanningChatService(store, execution, projects, profiles, settings, composer, gateway, scope.backgroundScope,
@@ -118,7 +127,7 @@ class PlanningChatServiceTest {
         }
         suspend fun session(id: String, engine: CodingEngine? = null): CodingSession = CodingSession(id, project.id, id, 1, planningMode = true,
             modelSelection = ModelSelection(profile.id, "m"), engine = engine).also { projects.saveSession(it) }
-        suspend fun readyPlan(id: String, parent: CodingSession) = Plan(id, project.id, "Goal $id", parentSessionId = parent.id, sharedWorkspace = true,
+        suspend fun readyPlan(id: String, parent: CodingSession) = Plan(id, project.id, "Goal $id", parentSessionId = parent.id, sharedWorkspace = !isolatedWorkspaces,
             plannerSelection = parent.modelSelection, milestones = listOf(Milestone("stage", "Stage", description = "Change files", acceptance = "Checks pass", assignment = StageAssignment(profile.id, "m"))),
             tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("stage")), DecisionNode("stage", "Stage", DecisionKind.STAGE, stageId = "stage"))).also { store.save(it) }
     }
@@ -746,18 +755,18 @@ class PlanningChatServiceTest {
             assertEquals(blocked.finalAttempt, resumed.finalAttemptHistory.single())
             assertEquals(blocked.milestones.single(), resumed.milestones.first())
             val repair = resumed.milestones.single { it.title == "Coding integration" }
-            val commit = resumed.milestones.single { it.isFinalization }
+            assertTrue(resumed.milestones.none { it.isFinalization })
             assertNotEquals("followup", repair.id)
             assertEquals("plan-${blocked.id}-stage-${repair.id}", f.runtime.calls.single().first.id)
-            assertEquals(MilestoneStatus.PENDING, commit.status)
+            assertEquals(MilestoneStatus.ACTIVE, repair.status)
             assertContains(f.gateway.lastMessages.last().content, "Нужны каталог и ссылка на репозиторий")
             if (useRetry) assertContains(f.gateway.lastMessages.last().content, "Coding integration is missing")
             assertFalse(f.projects.messages(project.id, parent.id).any { it.text == "Итоговая проверка уже начата" })
             f.gateway.overrideReply = null
             f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
             assertEquals(PlanStatus.DONE, f.store.planFor(blocked.id)!!.status)
-            assertEquals(3, f.runtime.calls.size)
-            assertEquals("plan-${blocked.id}-stage-${commit.id}", f.runtime.calls[1].first.id)
+            assertEquals(2, f.runtime.calls.size)
+            assertTrue(f.runtime.calls.none { it.first.stageId == "stage" })
             assertEquals("run-final-2-session", f.runtime.calls.last().first.id)
         }
     }
@@ -851,7 +860,7 @@ class PlanningChatServiceTest {
     }
 
     @Test fun concurrentCoordinatorTurnsKeepRemainingActivityVisible() = runTest {
-        val f = Fixture(this); f.initialize(); runCurrent()
+        val f = Fixture(this, isolatedWorkspaces = true); f.initialize(); runCurrent()
         val parent = f.session("parent")
         val base = f.readyPlan("p", parent)
         val other = base.milestones.single().copy(id = "other", title = "Другой этап")
@@ -863,6 +872,7 @@ class PlanningChatServiceTest {
         f.runtime.gate.complete(Unit)
         f.service.confirm(base.id); runCurrent()
         assertEquals(2, f.gateway.coordinatorCallbacks.size)
+        assertEquals(2, f.runtime.paths.distinct().size, "Parallel stages need distinct writable workspaces")
         assertEquals(2, f.service.drafts.value[parent.id]!!.steps.count { it.kind == CodingStepKind.THINKING })
         f.gateway.coordinatorCallbacks.forEach { it(CodingStep(CodingStepKind.ANSWER, """{"reply":"Результат принят"}""", callId = "answer")) }
         runCurrent()
@@ -1220,12 +1230,24 @@ class PlanningChatServiceTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val one = f.readyPlan("one", f.session("s1")); val two = f.readyPlan("two", f.session("s2"))
         f.service.confirm(one.id); f.service.confirm(one.id); f.service.confirm(two.id); runCurrent()
-        assertEquals(2, f.runtime.calls.size)
-        assertEquals(listOf("/shared", "/shared"), f.runtime.paths)
+        assertEquals(1, f.runtime.calls.size, "The same working folder has one active writer")
+        assertEquals(one.id, f.runtime.calls.single().first.planId)
+        assertEquals(listOf("/shared"), f.runtime.paths)
         assertEquals(2, f.projects.sessions(project.id).count { it.stageId != null })
         assertEquals(2, f.store.plans.value.size)
         assertNotNull(f.store.planFor(one.id)?.confirmedRevision)
+        assertNotNull(f.store.planFor(two.id)?.confirmedRevision)
         assertFailsWith<IllegalArgumentException> { f.store.planFor(project.id) }
+        f.runtime.gate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(one.id)!!.status)
+        // The fixture does not run the periodic execution watcher; resume after the lease is released.
+        f.service.control(two.id, "resume"); advanceTimeBy(1000); runCurrent()
+        assertEquals(listOf(one.id, two.id), f.runtime.calls.filter { it.first.stageId == "stage" }.map { it.first.planId })
+        assertEquals(listOf(one.id, two.id), f.runtime.calls.filter { it.first.stageId == null }.map { it.first.planId },
+            "Each accepted plan also runs its final verification once")
+        assertTrue(f.runtime.paths.all { it == "/shared" })
+        assertEquals(PlanStatus.DONE, f.store.planFor(two.id)!!.status)
+        assertEquals(2, f.projects.sessions(project.id).count { it.stageId != null })
     }
     @Test fun userMessageIsQueuedAndConsumedAfterCurrentTurn() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
@@ -1532,13 +1554,14 @@ class PlanningChatServiceTest {
     }
 
     @Test fun designClarificationPausesDesignWhileResearchContinuesAndDeliversBeforeResume() = runTest {
-        val f = Fixture(this); f.initialize(); runCurrent()
+        val f = Fixture(this, isolatedWorkspaces = true); f.initialize(); runCurrent()
         val parent = f.session("parent")
         val base = f.readyPlan("p", parent)
         f.store.save(base.copy(tree = emptyList(), parallelism = 2, milestones = base.milestones +
             base.milestones.single().copy(id = "research", title = "Research")))
         f.service.confirm("p"); advanceTimeBy(200); runCurrent()
         assertEquals(2, f.runtime.calls.size)
+        assertEquals(2, f.runtime.paths.distinct().size, "Design and research run in independent workspaces")
         f.gateway.userDecision = """{"intent":"CLARIFY","reply":"Уточним дизайн","pauseStageIds":["stage"],"questions":[{"id":"color","title":"Цвет?"},{"id":"size","title":"Размер?"}]}"""
         f.service.send(parent, "Мне не нравится дизайн, хочу по-другому"); runCurrent()
         val question = f.projects.orchestration(parent.id)!!.openQuestions().single()
@@ -1832,23 +1855,24 @@ class PlanningChatServiceTest {
         assertEquals(1, pending.milestones.size)
         assertTrue(f.runtime.calls.isEmpty())
         f.gateway.overrideReply = null
-        val commitGate = CompletableDeferred<Unit>()
-        f.runtime.turnGates += listOf(CompletableDeferred(Unit), commitGate)
+        val finalVerificationGate = CompletableDeferred<Unit>()
+        f.runtime.turnGates += listOf(CompletableDeferred(Unit), finalVerificationGate)
         f.runtime.gate.complete(Unit)
         f.service.confirm("p", proposal.id); advanceTimeBy(1000); runCurrent()
-        val committing = f.store.planFor("p")!!
-        assertEquals(MilestoneStatus.DONE, committing.milestones.single { it.title == "Обработка ошибок" }.status)
-        assertEquals(MilestoneStatus.ACTIVE, committing.milestones.single { it.isFinalization }.status)
-        assertNotEquals(PlanStatus.DONE, committing.status)
-        assertNull(committing.finalAttempt)
-        commitGate.complete(Unit); advanceTimeBy(1000); runCurrent()
+        val verifying = f.store.planFor("p")!!
+        assertEquals(MilestoneStatus.DONE, verifying.milestones.single { it.title == "Обработка ошибок" }.status)
+        assertTrue(verifying.milestones.none { it.isFinalization })
+        assertNotEquals(PlanStatus.DONE, verifying.status)
+        assertEquals(ExecutionPhase.VERIFYING, verifying.phase)
+        assertNotNull(verifying.finalAttempt)
+        finalVerificationGate.complete(Unit); advanceTimeBy(1000); runCurrent()
         val done = f.store.planFor("p")!!
         assertEquals(ExecutionPhase.COMPLETE, done.phase)
-        assertEquals(3, done.milestones.size)
-        val endpoint = done.milestones.single { it.isFinalization }
-        assertEquals(MilestoneStatus.DONE, endpoint.status)
+        assertEquals(2, done.milestones.size)
+        assertTrue(done.milestones.none { it.isFinalization })
+        assertNotNull(done.finalAttempt?.acceptanceRecord)
         assertEquals(listOf("plan-p-stage-${done.milestones.single { it.title == "Обработка ошибок" }.id}",
-            "plan-p-stage-${endpoint.id}", done.finalAttempt!!.sessionId), f.runtime.calls.map { it.first.id })
+            done.finalAttempt!!.sessionId), f.runtime.calls.map { it.first.id })
         assertEquals("Old result", done.milestones.first { it.id == "stage" }.report)
         assertEquals("first-run", done.runHistory.single().runId)
         assertNotEquals("first-run", done.runId)

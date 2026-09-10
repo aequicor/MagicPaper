@@ -54,6 +54,7 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
     private val closed = AtomicBoolean()
     private val jobs = ConcurrentHashMap<JsonElement, Job>()
     private val results = ConcurrentHashMap<JsonElement, CompletableDeferred<JsonObject>>()
+    private val signatures = ConcurrentHashMap<JsonElement, Pair<String?, JsonObject>>()
     val token = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
     val url = "http://127.0.0.1:${server.address.port}/mcp"
     init {
@@ -82,6 +83,12 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
             reply(exchange, 202); return
         }
         if (id !is JsonPrimitive || id == JsonNull) { reply(exchange, 400); return }
+        val signature = method to params
+        val original = signatures.putIfAbsent(id, signature)
+        if (original != null && original != signature) {
+            reply(exchange, 409, buildJsonObject { put("error", "Идентификатор запроса уже использован с другими аргументами") })
+            return
+        }
         respondJson(exchange, heartbeat = method == "tools/call") {
             val response = CompletableDeferred<JsonObject>()
             val previous = results.putIfAbsent(id, response)
@@ -102,8 +109,8 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
                         val questions = QuestionnaireTool.decode(params["arguments"]!!.jsonObject)
                         val requestId = "runtime:$epoch:$id"
                         val requestView = UserInteractionRequest(requestId, session.projectId, session.id, InteractionKind.RUNTIME, questions,
-                            ownerSessionId = session.parentSessionId ?: session.id, context = session.name,
-                            createdAt = System.currentTimeMillis())
+                            context = session.name, createdAt = System.currentTimeMillis(),
+                            runtimeGeneration = session.runtimeGeneration, runId = session.pendingRun?.runId.orEmpty())
                         QuestionnaireTool.result(registry.ask(requestView))
                     }
                     else -> error("Неизвестный метод")
@@ -120,9 +127,13 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        jobs.values.forEach { it.cancel() }
+        val active = jobs.values.toList()
+        active.forEach { it.cancel() }
         server.stop(0)
-        executor.shutdownNow()
+        try {
+            // Endpoint work lives on HTTP threads; join it before the owning runtime can finish.
+            runBlocking { withTimeout(10_000) { active.joinAll() } }
+        } finally { executor.shutdownNow() }
     }
     private fun reply(exchange: HttpExchange, status: Int, body: JsonObject? = null) {
         exchange.responseHeaders.set("Cache-Control", "no-store")

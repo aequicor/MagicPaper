@@ -6,6 +6,17 @@ import kotlinx.serialization.json.Json
 import kotlin.test.*
 
 class DecisionPlannerTest {
+    @Test fun refinementFreezesNewCustomRulesButMigratesAnAlreadyRunningPlanToLegacyRules() = runTest {
+        val settings = AppSettings(planningRules = PlanningRulesSettings().edited("Use one verified milestone"))
+        val composer = textPlanComposer(Gateway(response(plan())))
+        val fresh = composer.refine(plan(), "Refine", profile, listOf(profile), emptyList(), settings)
+        assertEquals(settings.planningRules.snapshot(), fresh.planningRulesSnapshot)
+        assertTrue(fresh.milestones.none { it.isFinalization })
+        val existing = composer.refine(plan().copy(runId = "already-running"), "Refine", profile, listOf(profile), emptyList(), settings)
+        assertEquals(PlanningRulesSource.LEGACY, existing.planningRulesSnapshot?.source)
+        assertEquals(DEFAULT_PLANNING_RULES, existing.planningRulesSnapshot?.text)
+    }
+
     private val profile = LlmProfile("agent", "Agent", baseUrl = "http://test/v1", modelId = "gpt-5.4")
     private class Gateway(private vararg val replies: String) : LlmGateway {
         var calls = 0
@@ -151,7 +162,7 @@ class DecisionPlannerTest {
         val original = plan().let { it.copy(milestones = it.milestones.map { stage -> stage.copy(complexityPoints = 2.5) }) }
         val result = textPlanComposer(Gateway(response(plan()))).refine(original, "Refine", profile, listOf(profile), emptyList())
         assertTrue(result.milestones.filterNot { it.isFinalization }.all { it.complexityPoints == 2.5 })
-        assertNotNull(result.milestones.single { it.isFinalization }.complexityPoints)
+        assertTrue(result.milestones.none { it.isFinalization })
         val restored = Json.decodeFromString(Plan.serializer(), Json.encodeToString(Plan.serializer(), result))
         assertEquals(result, restored)
         assertNull(Json.decodeFromString(Milestone.serializer(), """{"id":"old","title":"Old"}""").complexityPoints)
@@ -165,9 +176,9 @@ class DecisionPlannerTest {
         assertEquals(original.tree.first { it.id == "b" }, result.tree.first { it.id == "b" })
         assertEquals(original.milestones.first { it.id == "b" }, result.milestones.first { it.id == "b" })
         assertEquals("proposed change", result.milestones.first { it.id == "a" }.description)
-        val endpoint = result.milestones.single { it.isFinalization }
-        assertEquals(setOf("a"), DecisionCompiler.compile(result).dependencies[endpoint.id])
-        assertTrue(result.tree.single { it.kind == DecisionKind.GOAL }.children.contains(endpoint.id))
+        assertTrue(result.milestones.none { it.isFinalization })
+        assertEquals(original.tree.single { it.kind == DecisionKind.GOAL }.children,
+            result.tree.single { it.kind == DecisionKind.GOAL }.children)
     }
 
     @Test fun refinementPreservesTheEndpointWhenTheModelOmitsItsMarker() = runTest {

@@ -51,7 +51,7 @@ class PlanningChatRenderTest {
                 "Исполнитель завершил проверку и передал результат планировщику.", createdAt = 1)), draft = draft, running = true, plan = plan)
             val worker = CodingSessionUi(child, plan = plan)
             assertEquals(CodingSessionStatus.WORKING, planner.status)
-            assertEquals(CodingSessionStatus.IDLE, worker.status)
+            assertEquals(CodingSessionStatus.QUEUED, worker.status)
             val ui = CodingUi(projects = listOf(project), current = project, sessions = listOf(planner, worker), currentSessionId = parent.id)
             ImageComposeScene(1100, 680) {
                 MagicPaperTheme { Surface { Row {

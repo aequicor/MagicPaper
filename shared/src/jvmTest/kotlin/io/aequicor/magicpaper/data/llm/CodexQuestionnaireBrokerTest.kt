@@ -58,4 +58,16 @@ class CodexQuestionnaireBrokerTest {
         broker.receive(JsonPrimitive(1), "item/tool/requestUserInput", params, session) { sent++ }
         runCurrent(); assertTrue(registry.requests.value.isEmpty()); assertEquals(1, sent)
     }
+
+    @Test fun reusedWireIdWithChangedQuestionsFailsWithoutReplacingTheOriginalCall() = runTest {
+        val registry = RuntimeQuestionnaires(); val failures = mutableListOf<Throwable>()
+        val broker = CodexQuestionnaireBroker(backgroundScope, registry, { _, _ -> }, { _, e -> failures += e })
+        broker.receive(JsonPrimitive(1), "item/tool/requestUserInput", params, session) { }
+        runCurrent()
+        broker.receive(JsonPrimitive(1), "item/tool/requestUserInput", params,
+            session.copy(runtimeGeneration = session.runtimeGeneration + 1)) { }
+        assertEquals(1, failures.size)
+        assertEquals(session.runtimeGeneration, registry.requests.value.single().runtimeGeneration)
+        broker.clear(); runCurrent()
+    }
 }

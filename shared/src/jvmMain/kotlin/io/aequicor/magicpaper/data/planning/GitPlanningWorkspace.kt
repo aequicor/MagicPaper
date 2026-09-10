@@ -7,8 +7,11 @@ import java.nio.channels.FileLock
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -17,14 +20,22 @@ class GitPlanningWorkspace(
     private val dataRoot: File = File(System.getProperty("user.home"), ".MagicPaper/planning"),
     private val checkpoint: (String) -> Unit = {},
 ) : PlanningWorkspace {
+    companion object {
+        private val mutationLocks = ConcurrentHashMap<String, Mutex>()
+    }
     override suspend fun verificationSnapshot(path: String): String = io.aequicor.magicpaper.data.planning.verificationSnapshot(path)
-    private val locks = mutableMapOf<String, Pair<RandomAccessFile, FileLock>>()
+    private data class ProjectLock(val path: String, val resources: Pair<RandomAccessFile, FileLock>)
+    private val locks = mutableMapOf<String, ProjectLock>()
     private var storeOwner: Pair<RandomAccessFile, FileLock>? = null
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private fun root(project: CodingProject) = File(dataRoot, hash(File(project.path).canonicalPath.toByteArray()).take(24))
     override suspend fun acquire(project: CodingProject): Boolean = withContext(Dispatchers.IO) {
         synchronized(locks) {
-            if (project.id in locks) return@synchronized false
+            val path = File(project.path).canonicalPath
+            if (project.id in locks || locks.values.any { it.path == path }) return@synchronized false
+            // A failed close after releasing the storage lock must be reconciled before
+            // this adapter can admit work under an invalid storage-owner handle.
+            if (storeOwner?.second?.isValid == false) return@synchronized false
             if (storeOwner == null) {
                 dataRoot.mkdirs()
                 val ownerFile = RandomAccessFile(File(dataRoot, "storage-owner.lock"), "rw")
@@ -37,17 +48,39 @@ class GitPlanningWorkspace(
             val lock = try { file.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
             if (lock == null) {
                 file.close()
-                if (locks.isEmpty()) { storeOwner?.let { (f, l) -> l.release(); f.close() }; storeOwner = null }
+                if (locks.isEmpty()) releaseStoreOwner()
                 false
-            } else { locks[project.id] = file to lock; true }
+            } else { locks[project.id] = ProjectLock(path, file to lock); true }
         }
     }
     override suspend fun release(project: CodingProject) = withContext(Dispatchers.IO) {
         synchronized(locks) {
-            locks.remove(project.id)?.let { (file, lock) -> lock.release(); file.close() }
-            if (locks.isEmpty()) { storeOwner?.let { (file, lock) -> lock.release(); file.close() }; storeOwner = null }
+            val owned = locks[project.id]
+            if (owned != null) {
+                require(owned.path == File(project.path).canonicalPath) { "Рабочая папка не совпадает с владельцем блокировки" }
+                releaseResources(owned.resources, "project-lock")
+            }
+            if (locks.size == if (owned == null) 0 else 1) releaseStoreOwner()
+            // Keep both identity and resources on any failure, including a storage close
+            // after the project lock was released. Retrying skips already released locks.
+            if (owned != null) locks.remove(project.id)
         }
         Unit
+    }
+
+    private fun releaseStoreOwner() {
+        storeOwner?.let { releaseResources(it, "store-lock") }
+        storeOwner = null
+    }
+
+    private fun releaseResources(resources: Pair<RandomAccessFile, FileLock>, boundary: String) {
+        val (file, lock) = resources
+        if (lock.isValid) {
+            checkpoint("$boundary-releasing")
+            lock.release()
+        }
+        checkpoint("$boundary-released")
+        file.close()
     }
 
     override suspend fun prepare(project: CodingProject, runId: String): PlanWorkspace = withContext(Dispatchers.IO) {
@@ -68,7 +101,7 @@ class GitPlanningWorkspace(
             (if (integration.exists()) git(integration, "rev-parse", "HEAD").trim() else snapshot(source, dir))
                 .also { write(baseFile, it) }
         checkpoint("initial-base-saved")
-        if (!integration.exists()) git(source, "worktree", "add", "--detach", integration.path, base)
+        if (!integration.exists()) addBranchWorktree(source, integration, base, "integration")
         checkpoint("integration-created")
         PlanWorkspace(dir.path, integration.path, base, git = true).also { write(saved, json.encodeToString(PlanWorkspace.serializer(), it)) }
     }
@@ -76,35 +109,51 @@ class GitPlanningWorkspace(
     override suspend fun stage(project: CodingProject, workspace: PlanWorkspace, attempt: StageAttempt): StageAttempt = withContext(Dispatchers.IO) {
         if (!workspace.git) return@withContext attempt.copy(path = project.path)
         val dir = File(workspace.root, "stage-${safe(attempt.id)}")
-        if (!dir.exists()) git(File(project.path), "worktree", "add", "--detach", dir.path,
-            git(File(workspace.integrationPath), "rev-parse", "HEAD").trim())
+        if (!dir.exists()) addBranchWorktree(File(project.path), dir,
+            git(File(workspace.integrationPath), "rev-parse", "HEAD").trim(), "stage")
         attempt.copy(path = dir.path, baseCommit = git(dir, "rev-parse", "HEAD").trim())
     }
 
-    override suspend fun capture(attempt: StageAttempt): String = withContext(Dispatchers.IO) {
-        if (attempt.baseCommit.isBlank()) return@withContext ""
-        val dir = File(attempt.path)
+    override suspend fun capture(attempt: StageAttempt): String = serializedMutation(attempt.path) {
+        if (attempt.baseCommit.isBlank()) return@serializedMutation ""
+        val dir = managedDirectory(attempt.path)
         val ref = "refs/magicpaper/${safe(attempt.id)}"
+        val tree = workingTree(dir, File(attempt.path).parentFile)
         val existing = runCatching { git(dir, "rev-parse", "--verify", ref).trim() }.getOrNull()
-        if (existing != null) return@withContext existing
-        git(dir, "add", "-A")
-        val tree = git(dir, "write-tree").trim()
-        val commit = git(dir, "commit-tree", tree, "-p", attempt.baseCommit, "-m", "MagicPaper stage ${attempt.id}").trim()
-        git(dir, "update-ref", ref, commit)
+        if (existing != null) {
+            require(git(dir, "rev-parse", "$existing^{tree}").trim() == tree) {
+                "После фиксации этапа рабочая копия изменилась; сохранённый результат не перезаписан"
+            }
+            return@serializedMutation existing
+        }
+        val subject = attempt.report.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(120)
+            ?: "Результат этапа ${attempt.id}"
+        val head = git(dir, "rev-parse", "HEAD").trim()
+        require(runCatching { git(dir, "merge-base", "--is-ancestor", attempt.baseCommit, head) }.isSuccess) {
+            "История рабочей копии больше не продолжает базу этапа; результат требует проверки"
+        }
+        // The baseline snapshot is a checkpoint, not a milestone. An unchanged milestone
+        // references it without fabricating a commit or an acceptance decision.
+        val commit = if (tree == git(dir, "rev-parse", "${attempt.baseCommit}^{tree}").trim()) attempt.baseCommit else
+            // Reuse a completed agent commit; don't flatten or duplicate its recorded work.
+            if (tree == git(dir, "rev-parse", "$head^{tree}").trim()) head else
+                git(dir, "commit-tree", tree, "-p", head, "-m", subject, "-m", "MagicPaper attempt: ${attempt.id}").trim()
+        // Compare-and-swap rejects competing captures instead of silently changing a receipt.
+        git(dir, "update-ref", ref, commit, "")
         checkpoint("captured")
         commit
     }
 
-    override suspend fun integrate(workspace: PlanWorkspace, attempt: StageAttempt): Boolean = withContext(Dispatchers.IO) {
-        if (!workspace.git || attempt.resultCommit.isBlank()) return@withContext true
-        val dir = File(workspace.integrationPath)
-        if (runCatching { git(dir, "merge-base", "--is-ancestor", attempt.resultCommit, "HEAD") }.isSuccess) return@withContext true
-        if (runCatching { git(dir, "rev-parse", "--verify", "MERGE_HEAD") }.isSuccess) return@withContext false
+    override suspend fun integrate(workspace: PlanWorkspace, attempt: StageAttempt): Boolean = serializedMutation(workspace.integrationPath) {
+        if (!workspace.git || attempt.resultCommit.isBlank()) return@serializedMutation true
+        val dir = managedDirectory(workspace.integrationPath)
+        if (runCatching { git(dir, "merge-base", "--is-ancestor", attempt.resultCommit, "HEAD") }.isSuccess) return@serializedMutation true
+        if (runCatching { git(dir, "rev-parse", "--verify", "MERGE_HEAD") }.isSuccess) return@serializedMutation false
         runCatching { git(dir, "merge", "--no-edit", "--no-ff", attempt.resultCommit) }.isSuccess
     }
-    override suspend fun finishConflict(workspace: PlanWorkspace, attempt: StageAttempt): Boolean = withContext(Dispatchers.IO) {
-        val dir = File(workspace.integrationPath)
-        if (git(dir, "diff", "--name-only", "--diff-filter=U").isNotBlank()) return@withContext false
+    override suspend fun finishConflict(workspace: PlanWorkspace, attempt: StageAttempt): Boolean = serializedMutation(workspace.integrationPath) {
+        val dir = managedDirectory(workspace.integrationPath)
+        if (git(dir, "diff", "--name-only", "--diff-filter=U").isNotBlank()) return@serializedMutation false
         if (runCatching { git(dir, "rev-parse", "--verify", "MERGE_HEAD") }.isSuccess) {
             git(dir, "add", "-A"); git(dir, "commit", "--no-edit")
         } else if (git(dir, "status", "--porcelain").isNotBlank()) {
@@ -116,10 +165,10 @@ class GitPlanningWorkspace(
     @Serializable private data class FileChange(val path: String, val before: String?, val after: String?, val blob: String?, val executable: Boolean = false)
     @Serializable private data class Transfer(val commit: String, val files: List<FileChange>)
 
-    override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace = withContext(Dispatchers.IO) {
-        if (!workspace.git) return@withContext workspace.copy(applied = true)
+    override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace = serializedMutation(workspace.integrationPath) {
+        if (!workspace.git) return@serializedMutation workspace.copy(applied = true)
         val source = File(project.path).canonicalFile
-        val integration = File(workspace.integrationPath)
+        val integration = managedDirectory(workspace.integrationPath)
         val manifest = File(workspace.root, "transfer.json")
         val transfer = if (manifest.exists()) json.decodeFromString<Transfer>(manifest.readText()) else {
             val baseFile = File(workspace.root, "delivery-base")
@@ -180,9 +229,9 @@ class GitPlanningWorkspace(
             "Итоговая проверка изменила отслеживаемые файлы; просмотрите рабочую копию интеграции"
         }
     }
-    override suspend fun finishDeliveryConflict(path: String): Boolean = withContext(Dispatchers.IO) {
-        val dir = File(path)
-        if (git(dir, "diff", "--name-only", "--diff-filter=U").isNotBlank()) return@withContext false
+    override suspend fun finishDeliveryConflict(path: String): Boolean = serializedMutation(path) {
+        val dir = managedDirectory(path)
+        if (git(dir, "diff", "--name-only", "--diff-filter=U").isNotBlank()) return@serializedMutation false
         if (runCatching { git(dir, "rev-parse", "--verify", "MERGE_HEAD") }.isSuccess) {
             git(dir, "add", "-A"); git(dir, "commit", "--no-edit")
         } else if (git(dir, "status", "--porcelain").isNotBlank()) {
@@ -192,16 +241,46 @@ class GitPlanningWorkspace(
     }
 
     private fun snapshot(source: File, dir: File): String {
+        val head = runCatching { git(source, "rev-parse", "HEAD").trim() }.getOrNull()
+        val tree = workingTree(source, dir)
+        if (head != null && tree == git(source, "rev-parse", "$head^{tree}").trim()) return head
+        val args = listOf("commit-tree", tree) + (head?.let { listOf("-p", it) } ?: emptyList()) +
+            listOf("-m", "MagicPaper checkpoint: existing working copy (not an accepted milestone)")
+        return gitBytes(source, args).toString(Charsets.UTF_8).trim()
+    }
+
+    private suspend fun <T> serializedMutation(path: String, action: () -> T): T = withContext(Dispatchers.IO) {
+        mutationLocks.getOrPut(File(path).canonicalPath) { Mutex() }.withLock { action() }
+    }
+
+    private fun workingTree(source: File, dir: File): String {
         val index = File.createTempFile("index", ".tmp", dir).also { it.delete() }
         val env = mapOf("GIT_INDEX_FILE" to index.path)
         return try {
             val head = runCatching { git(source, "rev-parse", "HEAD").trim() }.getOrNull()
             gitBytes(source, listOf("read-tree", head ?: "--empty"), env)
             gitBytes(source, listOf("add", "-A"), env)
-            val tree = gitBytes(source, listOf("write-tree"), env).toString(Charsets.UTF_8).trim()
-            val args = listOf("commit-tree", tree) + (head?.let { listOf("-p", it) } ?: emptyList()) + listOf("-m", "MagicPaper snapshot")
-            gitBytes(source, args).toString(Charsets.UTF_8).trim()
+            gitBytes(source, listOf("write-tree"), env).toString(Charsets.UTF_8).trim()
         } finally { index.delete() }
+    }
+
+    private fun managedDirectory(path: String): File = File(path).canonicalFile.also {
+        require(it.toPath().startsWith(dataRoot.canonicalFile.toPath()) && it != dataRoot.canonicalFile && it.isDirectory) {
+            "Рабочая копия не принадлежит хранилищу планирования"
+        }
+    }
+
+    /** Keep the existing worktree/ref mechanism; name only newly created worktrees.
+     * Legacy detached worktrees are reopened unchanged. Git refuses a second checkout
+     * of the same branch. The path hash avoids collisions between runs and project aliases. */
+    private fun addBranchWorktree(source: File, destination: File, base: String, purpose: String) {
+        val branch = "codex/magicpaper/$purpose-${hash(destination.canonicalPath.toByteArray()).take(24)}"
+        val existing = runCatching { git(source, "rev-parse", "--verify", "refs/heads/$branch").trim() }.getOrNull()
+        if (existing == null) git(source, "worktree", "add", "-b", branch, destination.path, base)
+        else {
+            require(existing == base) { "Ветка рабочей копии изменилась; требуется восстановление" }
+            git(source, "worktree", "add", destination.path, branch)
+        }
     }
     private fun checked(root: File, path: String): File {
         val raw = File(root, path).absoluteFile.toPath().normalize()

@@ -103,6 +103,26 @@ class ProjectsPanelCollapseTest {
         override fun close() = scene.close()
     }
 
+    @Test fun nestedSessionsCollapseIndependentlyWhileImmunityRemainsVisible() = Panel().use { p ->
+        p.ui.value = p.ui.value.copy(sessions = p.ui.value.sessions + listOf(
+            CodingSessionUi(CodingSession("grandchild", "a", "Nested research", 1, parentSessionId = "child")),
+            CodingSessionUi(CodingSession("immunity", "a", "Иммунитет", 1, sessionKind = io.aequicor.magicpaper.domain.SessionKind.IMMUNITY)),
+        ))
+        p.render()
+        assertTrue("session-grandchild" in p.keys())
+        assertTrue("session-immunity" in p.keys())
+        p.click("session-child"); p.click("session-child")
+        assertFalse("session-grandchild" in p.keys())
+        assertTrue("session-immunity" in p.keys())
+        p.click("session-parent"); p.click("session-parent")
+        assertFalse("session-child" in p.keys())
+        assertTrue("session-immunity" in p.keys())
+        p.click("session-parent")
+        assertTrue("session-child" in p.keys())
+        assertFalse("session-grandchild" in p.keys())
+        p.snapshot("nested-sessions-and-immunity")
+    }
+
     @Test fun childCollapseSurvivesUpdatesSelectionAndProjectRoundTrip() = Panel().use { p ->
         assertTrue("session-child" in p.keys())
         p.click("session-parent")

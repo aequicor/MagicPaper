@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.domain.tools
 
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
+import io.aequicor.magicpaper.data.coding.SessionOrganismStore
 import io.aequicor.magicpaper.data.planning.*
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.*
@@ -13,14 +14,15 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class OrchestrationToolsTest {
-    private class Fixture(val scope: TestScope) {
+    private class Fixture(val scope: TestScope, receipts: ToolReceiptStore = MemoryToolReceiptStore(), managed: Boolean = false) {
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
         val kv = InMemoryKeyValueStore()
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val projects = JsonCodingProjectRepository(kv, json)
         val profiles = JsonLlmProfileRepository(kv, json)
         val settings = JsonSettingsRepository(kv, json)
-        val host = ToolHost(MemoryToolReceiptStore())
+        val host = ToolHost(receipts)
+        val organisms = if (managed) SessionOrganismService(SessionOrganismStore(kv), projects, settings) else null
         val profile = LlmProfile("model", "Planner", baseUrl = "http://test/v1", modelId = "m", favoriteModels = listOf("m"), modelLibraryVersion = 1)
         val project = CodingProject("p", "Project", "/project", 0)
         val planningPrompts = mutableListOf<String>()
@@ -69,7 +71,7 @@ class OrchestrationToolsTest {
             },
             scope = scope.backgroundScope)
         val service = OrchestrationService(store, execution, projects, profiles, settings, composer, gateway, scope.backgroundScope,
-            workerDispatcher = StandardTestDispatcher(scope.testScheduler), toolHost = host)
+            workerDispatcher = StandardTestDispatcher(scope.testScheduler), toolHost = host, organisms = organisms)
         suspend fun init() {
             projects.save(project); profiles.save(profile); settings.save(AppSettings(activeLlmProfileId = profile.id))
             projects.saveSession(parent); projects.saveSession(worker)
@@ -77,6 +79,7 @@ class OrchestrationToolsTest {
                 confirmedRevision = 0, runId = "run", sharedWorkspace = true, plannerSelection = parent.modelSelection,
                 tree = listOf(DecisionNode("root", "Goal", DecisionKind.GOAL, listOf("node")), DecisionNode("node", "Stage", DecisionKind.STAGE, stageId = "stage")),
                 milestones = listOf(Milestone("stage", "Stage", description = "Task", acceptance = "Verified", assignment = assignment, attempts = listOf(attempt)))))
+            organisms?.ensure(parent)
         }
         fun orchestrator(request: String = "request", source: OrchestrationInput? = null) = host.session(ToolExecutionContext("p", "parent", "parent", request,
             ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, "plan", "run", sourceInput = source))
@@ -183,6 +186,182 @@ class OrchestrationToolsTest {
         val saved = f.projects.orchestration("parent")!!
         assertEquals(setOf("stage", "dependent"), saved.pausedStages(f.store.planFor("plan")!!))
         assertEquals(listOf("stage"), saved.workPauses["request"]!!.stageIds)
+    }
+
+    @Test fun legacyTargetsCannotReuseAStageWhoseSessionBelongsToAnotherParent() = runTest {
+        val f = Fixture(this); f.init()
+        f.projects.saveSession(f.worker.copy(parentSessionId = "other-parent"))
+        val tools = f.orchestrator()
+        assertFailsWith<ToolArgumentRejection> { tools.call("send", "stage.send", f.args("""{"stageId":"stage","message":"Cross branch"}""")) }
+        assertFailsWith<ToolArgumentRejection> { tools.call("manage", "session.manage", f.args("""{"kind":"RENAME","stageId":"stage","name":"Taken over"}""")) }
+        assertFailsWith<ToolArgumentRejection> { tools.call("pause", "stage.pause", f.args("""{"stageIds":["stage"],"reason":"Cross branch"}""")) }
+        assertFailsWith<ToolArgumentRejection> { tools.call("schedule", "schedule.manage", f.args("""{"commands":[{"targetTaskId":"stage","text":"Cross branch","trigger":{"kind":"AT_TIME","at":1000}}]}""")) }
+        assertTrue(f.store.planFor("plan")!!.deliveries.isEmpty())
+        assertTrue(f.store.planFor("plan")!!.scheduledMessages.isEmpty())
+        assertEquals("Worker", f.projects.sessions("p").first { it.id == "worker" }.name)
+        assertTrue(f.host.receipts.forRequest("p/parent/request").all { it.phase == ToolPhase.FAILED })
+    }
+
+    @Test fun workerCannotGainSiblingControlByUsingTheLegacyCoordinatorAdapter() = runTest {
+        val f = Fixture(this); f.init()
+        val tools = f.host.session(ToolExecutionContext("p", "worker", "worker", "forged-coordinator",
+            ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, "plan", "run"))
+        assertFailsWith<ToolArgumentRejection> { tools.call("send", "stage.send", f.args("""{"stageId":"stage","message":"Cross branch"}""")) }
+        assertFailsWith<ToolArgumentRejection> { tools.call("control", "plan.control", f.args("""{"action":"pause","revision":0}""")) }
+        assertTrue(f.store.planFor("plan")!!.deliveries.isEmpty())
+    }
+
+    @Test fun mergeRuntimeKeepsHistoryOwnershipWithoutAcquiringNormalSessionControl() = runTest {
+        val f = Fixture(this); f.init()
+        val context = f.host.prepareWorker(f.worker.copy(id = "worker-merge"))
+        assertEquals("worker", context.ownerSessionId)
+        assertTrue(context.auxiliaryExecution)
+        assertEquals(ToolRole.CHAT, context.role)
+        val tools = f.host.session(context)
+        tools.call("context", "context.get", JsonObject(emptyMap()))
+        assertFailsWith<IllegalArgumentException> {
+            tools.call("create", "session.create", f.args("""{"name":"Sibling","task":"No","acceptance":"No","tokens":1000}"""))
+        }
+        assertFalse(f.host.prepareWorker(f.worker).auxiliaryExecution)
+    }
+
+    @Test fun managedGenerationIsCheckedAfterEffectAndBeforeNativeCompletionPersistence() = runTest {
+        val f = Fixture(this, managed = true); f.init()
+        val organisms = f.organisms!!
+        val aggregate = organisms.ensure(f.parent)
+        val context = f.orchestrator().context.copy(organismId = aggregate.id)
+        val tools = f.host.session(context, mapOf("stage.send" to { _, _, _ ->
+            organisms.store.beginRun(aggregate.id, "parent")
+            JsonPrimitive("late external result")
+        }))
+        val event = ToolEvent("p", "parent", "request", "p/parent/request/native/native-call", "file.read",
+            ToolCategory.READ, ToolPhase.STARTED, "source.kt")
+        tools.executor.recordNative(context, event)
+        assertFailsWith<IllegalArgumentException> { tools.call("late", "stage.send", f.args("""{"stageId":"stage","message":"Late effect"}""")) }
+        assertTrue(tools.calls.value.isEmpty())
+        val late = f.host.receipts.forRequest("p/parent/request").single { it.toolId == "stage.send" }
+        assertEquals(ToolPhase.UNKNOWN, late.phase)
+        assertFailsWith<IllegalArgumentException> { tools.executor.recordNative(context, event.copy(phase = ToolPhase.SUCCEEDED, result = "late content")) }
+        assertEquals(ToolPhase.STARTED, f.host.receipts.get(event.callId)?.phase)
+    }
+
+    @Test fun managedLegacyMutationsRetainAnExplicitRejectedIntentWithoutChangingTheAggregate() = runTest {
+        val f = Fixture(this, managed = true); f.init()
+        val before = f.organisms!!.ensure(f.parent)
+        val tools = f.orchestrator()
+        for (kind in listOf("RENAME", "ARCHIVE", "RESTORE")) {
+            val error = assertFailsWith<ToolArgumentRejection> {
+                tools.call(kind, "session.manage", f.args("""{"kind":"$kind","stageId":"stage","name":"Changed"}"""))
+            }
+            assertTrue(error.message.orEmpty().contains("session.control"))
+        }
+        assertEquals(before, f.organisms.store.get(before.id))
+        val worker = f.projects.sessions("p").first { it.id == "worker" }
+        assertEquals("Worker", worker.name)
+        assertFalse(worker.archived)
+        val recorded = f.projects.orchestration("parent")!!.sessionCommands
+        assertEquals(3, recorded.size)
+        assertTrue(recorded.all { !it.applied && it.error.contains("session.control") })
+        assertEquals(3, f.projects.messages("p", "parent").count { it.id.endsWith("-rejected") && it.origin == MessageOrigin.TOOL })
+        assertTrue(f.host.receipts.forRequest("p/parent/request").all { it.phase == ToolPhase.FAILED })
+    }
+
+    @Test fun savedManagedLegacyCommandCannotMintCurrentGenerationAuthorityOnReplay() = runTest {
+        val f = Fixture(this, managed = true); f.init()
+        val before = f.organisms!!.ensure(f.parent)
+        val oldTools = f.orchestrator()
+        val generation = f.organisms.store.beginRun(before.id, "parent").generation
+        assertFailsWith<IllegalArgumentException> { oldTools.call("stale", "session.manage", f.args("""{"kind":"RENAME","stageId":"stage","name":"Stale"}""")) }
+        f.projects.saveOrchestration(OrchestrationState("parent", "p", activePlanId = "plan",
+            sessionCommands = listOf(SessionCommand("persisted", SessionCommandKind.RESTORE, "worker", "plan", "stage"))))
+        f.service.bootstrap(); runCurrent()
+        val failed = f.projects.orchestration("parent")!!.sessionCommands.single()
+        assertEquals("persisted", failed.id)
+        assertFalse(failed.applied)
+        assertTrue(failed.error.contains("session.control"))
+        assertEquals(generation, f.organisms.store.get(before.id).sessions.getValue("parent").generation)
+        assertEquals(before.sessions.getValue("worker").generation, f.organisms.store.get(before.id).sessions.getValue("worker").generation)
+        assertEquals(1, f.projects.messages("p", "parent").count { it.id == "persisted-rejected" })
+        f.service.shutdown()
+    }
+
+    @Test fun userRenameUpdatesManagedAggregateAndProjectionWithoutChangingRuntimeAuthority() = runTest {
+        val f = Fixture(this, managed = true); f.init()
+        val before = f.organisms!!.ensure(f.parent)
+        val workerBefore = before.sessions.getValue("worker")
+        f.service.renameSession("worker", "  Human name  "); runCurrent()
+        val renamed = f.organisms.store.get(before.id)
+        val node = renamed.sessions.getValue("worker")
+        assertEquals("Human name", node.name)
+        assertTrue(node.nameManuallySet)
+        assertEquals(workerBefore.generation, node.generation)
+        assertEquals(workerBefore.desired, node.desired)
+        assertEquals(workerBefore.remainingTokens, node.remainingTokens)
+        assertTrue(renamed.audit.any { it.actor == "USER" && it.action == "RENAME" && it.affected == setOf("worker") })
+        f.organisms.project(before) // A delayed projection must read the authoritative current name.
+        val projected = f.projects.sessions("p").first { it.id == "worker" }
+        assertEquals(node.name, projected.name)
+        assertTrue(projected.nameManuallySet)
+        assertEquals("Human name", f.store.planFor("plan")!!.milestones.single().displayName)
+    }
+
+    @Test fun workerContextCannotReadSiblingMutableReportOutsideTheParentRoute() = runTest {
+        val f = Fixture(this); f.init()
+        f.store.update("plan") { plan -> plan.copy(milestones = plan.milestones +
+            Milestone("sibling", "Sibling", description = "Unrouted description", report = "Unrouted live draft"),
+            tree = plan.tree.map { if (it.id == "root") it.copy(children = it.children + "sibling-node") else it } +
+                DecisionNode("sibling-node", "Sibling", DecisionKind.STAGE, stageId = "sibling")) }
+        val workerTools = f.host.session(f.host.prepareWorker(f.worker))
+        val worker = workerTools.call("context", "context.get", JsonObject(emptyMap())).jsonObject
+        assertEquals(listOf("stage"), worker.getValue("stages").jsonArray.map { it.jsonObject.getValue("id").jsonPrimitive.content })
+        assertFalse(worker.toString().contains("Unrouted description"))
+        assertFalse(worker.toString().contains("Unrouted live draft"))
+        val mergeTools = f.host.session(f.host.prepareWorker(f.worker.copy(id = "worker-merge")))
+        val merge = mergeTools.call("context", "context.get", JsonObject(emptyMap()))
+        assertFalse(merge.toString().contains("Unrouted live draft"))
+        val parent = f.orchestrator().call("context", "context.get", JsonObject(emptyMap()))
+        assertTrue(parent.toString().contains("Unrouted live draft"))
+    }
+
+    @Test fun resultReferencesSurviveCancelledDeliveryAndStayBoundedToOwnedResults() = runTest {
+        val f = Fixture(this, managed = true); f.init()
+        val organisms = f.organisms!!
+        val initial = organisms.ensure(f.parent)
+        val parentTools = f.orchestrator()
+        val authority = organisms.authority(parentTools.context, initial)
+        for (id in listOf("a", "b")) organisms.store.command(authority, id, OrganismCommand(OrganismAction.CREATE,
+            name = "Child $id", tokens = 1_000, task = SessionTask("Investigate", "parent", "Verified findings")))
+        for (index in 0 until 30) organisms.store.recordResult(initial.id,
+            SessionResult("bulk-$index", "session-a", 1, "parent", "Private result body $index", sourceVersion = "source", commitSha = "sha"))
+        organisms.store.recordResult(initial.id, SessionResult("cancelled-result", "session-a", 1, "parent",
+            "Private accepted body", evidence = listOf("Private checks"), sourceVersion = "source", commitSha = "sha"))
+        organisms.store.recordResult(initial.id, SessionResult("sibling-result", "session-b", 1, "parent",
+            "Private sibling body", sourceVersion = "source-b", commitSha = "sha-b"))
+        organisms.store.observe(initial.id, "session-a", 1, SessionObservedState.COMPLETED)
+        organisms.store.command(authority, "accept", OrganismCommand(OrganismAction.REVIEW_RESULT, "session-a",
+            reason = "Verified", resultId = "cancelled-result", accepted = true, sourceVersion = "source", checks = listOf("Passed")))
+        organisms.project(organisms.store.quarantine(initial.id, "session-a", 1, "unknown", "Reconcile unrelated native effect"))
+        val saved = organisms.store.get(initial.id)
+        assertEquals(SessionDeliveryState.CANCELLED, saved.outbox.single { it.packet.resultIds == listOf("cancelled-result") }.state)
+        assertEquals(SessionDeliveryState.ACCEPTED, saved.outbox.single { it.packet.resultIds == listOf("sibling-result") }.state)
+        assertTrue(f.projects.messages("p", "parent").isEmpty())
+        val parent = parentTools.call("references", "context.get", JsonObject(emptyMap())).jsonObject
+        val references = parent.getValue("resultReferences").jsonArray
+        assertEquals(30, references.size)
+        assertEquals(JsonPrimitive(2), parent["resultReferencesOmitted"])
+        val accepted = references.single { it.jsonObject["id"] == JsonPrimitive("cancelled-result") }.jsonObject
+        assertEquals(setOf("id", "sourceSessionId", "generation", "accepted", "sourceVersion", "commitSha"), accepted.keys)
+        assertEquals(JsonPrimitive(true), accepted["accepted"])
+        assertTrue(references.any { it.jsonObject["id"] == JsonPrimitive("sibling-result") })
+        assertFalse(parent.toString().contains("Private"))
+        val child = f.projects.sessions("p").first { it.id == "session-a" }
+        val childContext = f.host.session(ToolExecutionContext.worker(child)).call("references", "context.get", JsonObject(emptyMap())).jsonObject
+        assertEquals(JsonPrimitive(1), childContext["resultReferencesOmitted"])
+        assertTrue(childContext.getValue("resultReferences").jsonArray.any { it.jsonObject["id"] == JsonPrimitive("cancelled-result") })
+        assertFalse(childContext.toString().contains("sibling-result"))
+        val immunity = f.projects.sessions("p").first { it.id == initial.immunityId }
+        val supervisory = f.host.session(ToolExecutionContext.worker(immunity)).call("references", "context.get", JsonObject(emptyMap())).jsonObject
+        assertEquals(references, supervisory["resultReferences"])
     }
 
     @Test fun savedLegacyDecisionUsesCommandRecoveryAndHistoricalMessagesAreNotExecuted() = runTest {
@@ -405,11 +584,23 @@ class OrchestrationToolsTest {
         assertEquals(MilestoneStatus.PENDING, f.store.planFor("plan")!!.milestones.single().status)
     }
     @Test fun committedDeliveryIsRecoveredWhenTheFinalToolReceiptWasNotSaved() = runTest {
-        val f = Fixture(this); f.init()
+        val backing = MemoryToolReceiptStore()
+        var failCompletion = true
+        val receipts = object : ToolReceiptStore by backing {
+            override suspend fun save(receipt: ToolReceipt) {
+                if (receipt.phase == ToolPhase.SUCCEEDED && failCompletion) {
+                    failCompletion = false
+                    error("Injected final receipt persistence failure")
+                }
+                backing.save(receipt)
+            }
+        }
+        val f = Fixture(this, receipts); f.init()
         val args = f.args("""{"stageId":"stage","message":"Once"}""")
-        val expected = f.orchestrator().call("send", "stage.send", args)
+        assertFailsWith<IllegalStateException> { f.orchestrator().call("send", "stage.send", args) }
         val receipt = f.host.receipts.forRequest("p/parent/request").single()
-        f.host.receipts.save(receipt.copy(phase = ToolPhase.STARTED, result = JsonNull))
+        assertEquals(ToolPhase.UNKNOWN, receipt.phase)
+        val expected = buildJsonObject { put("status", "queued"); put("deliveryId", f.store.planFor("plan")!!.deliveries.single().id) }
         assertEquals(expected, f.orchestrator().call("send", "stage.send", args))
         assertEquals(1, f.store.planFor("plan")!!.deliveries.size)
         assertEquals(ToolPhase.SUCCEEDED, f.host.receipts.get(receipt.id)!!.phase)

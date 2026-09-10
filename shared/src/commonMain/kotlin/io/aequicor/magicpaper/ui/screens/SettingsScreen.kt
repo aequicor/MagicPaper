@@ -131,6 +131,9 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }
         NavEntry("⚙", "Движки", "pi, Codex и движок новых сессий") { vm.openEnginesSettings() }
 
+        Spacer(Modifier.height(12.dp))
+        PlanningRulesSettingsSection(draft.planningRules) { draft = draft.copy(planningRules = it) }
+
         if (state.coding.computerSupported) {
             Spacer(Modifier.height(12.dp))
             Section("Доступ к экрану")
@@ -178,6 +181,30 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
             PaperAction(onClick = { vm.importProfile() }) { PaperText("Импорт профиля") }
             PaperAction(onClick = { vm.wipeAll() }) { PaperText("Стереть всё") }
         }
+    }
+}
+
+@Composable
+internal fun PlanningRulesSettingsSection(rules: PlanningRulesSettings, onChange: (PlanningRulesSettings) -> Unit) {
+    var showEffective by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    Section("Правила планирования")
+    PaperText("После сохранения — для новых запусков во всех проектах. Дочерние сессии наследуют редакцию запуска.",
+        role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
+    PaperText(if (rules.customPrompt == null) "По умолчанию · ${rules.snapshot().version}" else "Своя редакция · ${rules.snapshot().version}",
+        role = PaperTextRole.LABEL)
+    if (editing) PaperField(
+        value = rules.customPrompt ?: DEFAULT_PLANNING_RULES,
+        onValueChange = { onChange(rules.edited(it)) },
+        label = "Методика", singleLine = false, modifier = Modifier.fillMaxWidth(),
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PaperAction(onClick = { editing = !editing }) { PaperText(if (editing) "Скрыть редактор" else "Редактировать") }
+        PaperAction(onClick = { onChange(rules.reset()) }, enabled = rules.customPrompt != null) { PaperText("Вернуть стандартные") }
+        PaperAction(onClick = { showEffective = !showEffective }) { PaperText(if (showEffective) "Скрыть эффективные правила" else "Эффективные правила") }
+    }
+    if (showEffective) PaperPanel(Modifier.fillMaxWidth()) {
+        PaperText(rules.snapshot().effectivePrompt())
     }
 }
 

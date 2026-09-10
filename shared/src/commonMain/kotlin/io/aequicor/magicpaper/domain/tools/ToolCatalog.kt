@@ -80,7 +80,7 @@ object ToolCatalog {
         app<ToolSessionManage>("session.manage", "Создать, переименовать, архивировать или восстановить сессию этапа", coordinator, true, true),
         app<ToolScheduleManage>("schedule.manage", "Создать, изменить или отменить отложенные сообщения", coordinator, true, true),
         app<StageReply>("stage.handoff", "Передать результат RESULT, вопрос QUESTION, блокировку BLOCKED или запрос ожидания WAIT. После успеха завершить ответ; статус этапа определяет приложение", setOf(ToolRole.WORKER), true, true),
-    )
+    ) + SessionToolCatalog.definitions
     fun get(id: String) = definitions.first { it.id == id }
     fun nativeId(name: String, isExec: Boolean = false): String = when (name.lowercase()) {
         "read", "read_file" -> "file.read"

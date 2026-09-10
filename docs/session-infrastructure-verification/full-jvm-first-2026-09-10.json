@@ -1,0 +1,1257 @@
+{
+  "date": "2026-09-10",
+  "baseCommit": "b18e951",
+  "scope": "Working-tree session infrastructure changes; first complete JVM run before follow-up regression fixes",
+  "command": "./gradlew :shared:jvmTest --offline --console=plain",
+  "tests": 1098,
+  "failures": 16,
+  "skipped": 2,
+  "failedTests": [
+    {
+      "class": "io.aequicor.magicpaper.data.coding.JsonCodingProjectRepositoryTest",
+      "test": "corruptedDataFallsBackToEmpty[jvm]",
+      "message": "kotlinx.serialization.json.JsonDecodingException: Unexpected JSON token at offset 0: Expected start of the array '[', but had '{' instead at path: $\nJSON input: {broken"
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.DesktopUiSkillIntegrationTest",
+      "test": "packageUsesImportReviewAndMagicPaperBindingWithoutReplacingOtherDecisions[jvm]",
+      "message": "java.lang.IllegalArgumentException: Corrupt file: SKILL.md"
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.ProjectSkillsTest",
+      "test": "adapterStartAndResumeRefuseBeforeTransportWithExactReceipt[jvm]",
+      "message": "java.lang.AssertionError: Expected value to be false."
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.ProjectSkillsTest",
+      "test": "trustedConsentRestartAuditAndPreflightFailure[jvm]",
+      "message": "java.lang.AssertionError: Expected value to be false."
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.ProjectSkillsTest",
+      "test": "crossProjectStartAndResumeRejectBeforeSnapshotOrTransport[jvm]",
+      "message": "java.lang.AssertionError: Expected value to be false."
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillRunCompletionTest",
+      "test": "desktopRuntimeUsesCheckpointIdentityAcrossCallsAndRecordsCancellationBeforeTransport[jvm]",
+      "message": "java.lang.AssertionError: Expected value to be false."
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningChatServiceTest",
+      "test": "concurrentCoordinatorTurnsKeepRemainingActivityVisible[jvm]",
+      "message": "java.lang.AssertionError: expected:<2> but was:<1>"
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningChatServiceTest",
+      "test": "activePlanProposalHoldsWorkerUntilApprovedRequirementsAreDurable[jvm]",
+      "message": "java.lang.AssertionError: Expected value to be true."
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningChatServiceTest",
+      "test": "completedPlanCanBeDiscussedAndExtendedOnlyAfterConfirmingTheProposal[jvm]",
+      "message": "java.util.NoSuchElementException: Collection contains no element matching the predicate."
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningChatServiceTest",
+      "test": "failedFinalAcceptsUserContinuationOrRepairButtonAndResumesInSameSession[jvm]",
+      "message": "java.util.NoSuchElementException: Collection contains no element matching the predicate."
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningChatServiceTest",
+      "test": "designClarificationPausesDesignWhileResearchContinuesAndDeliversBeforeResume[jvm]",
+      "message": "java.lang.AssertionError: expected:<2> but was:<1>"
+    },
+    {
+      "class": "io.aequicor.magicpaper.plugins.PlanningChatRenderTest",
+      "test": "plannerActivityRendersAfterWorkerHandoff[jvm]",
+      "message": "java.lang.AssertionError: expected:<IDLE> but was:<QUEUED>"
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingChatCommitTest",
+      "test": "newCommandAppearsGraduallyAndStaysVisibleThroughCompletion[jvm]",
+      "message": "java.lang.AssertionError: New commands must expand over several frames: [58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58]"
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest",
+      "test": "childCollapseSurvivesUpdatesSelectionAndProjectRoundTrip[jvm]",
+      "message": "java.lang.AssertionError: Expected value to be true."
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.RequestPinsBrowserTest",
+      "test": "pinsNeverChangeMessageSizeTextWrappingOrSpacing[jvm]",
+      "message": "java.lang.AssertionError: Removing the icon must not move or reflow either message expected:<[Rect.fromLTRB(40.0, 536.0, 306.0, 578.0), Rect.fromLTRB(30.0, 610.0, 146.0, 631.0)]> but was:<[Rect.fromLTRB(64.0, 536.0, 330.0, 578.0), Rect.fromLTRB(30.0, 610.0, 146.0, 631.0)]>"
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.RequestPinsBrowserTest",
+      "test": "markersScrollAwayWithMessagesAndUnpinnedMessagesHaveNoButton[jvm]",
+      "message": "java.lang.AssertionError: No button may remain on the sticky panel or outside the list"
+    }
+  ],
+  "classes": [
+    {
+      "class": "io.aequicor.magicpaper.data.coding.BackgroundCodingProjectRepositoryTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.CodingClientComputerUseTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.CodingEnginePersistenceTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.CodingProcessLifetimeTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.CodingRuntimeOwnershipTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.CodingSystemPromptsTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.CodingWakeGuardTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.JsonCodingProjectRepositoryTest",
+      "tests": 15,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.MeteredRuntimeUsageTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.PiBundleFuzzySafetyTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.PiCodingRuntimeIntegrationTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.PiEventParserTest",
+      "tests": 22,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.PiModelsConfigTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.PlanningRuntimeIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.ResearchRuntimeIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.SessionContextRuntimeTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.SessionOrganismStoreTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.SubscriptionTokenBrokerTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.UsageEventsTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.computer.ComputerUseBridgeTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.computer.ComputerUseCodexIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.computer.ComputerUsePiIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.computer.DesktopComputerUseTest",
+      "tests": 12,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.docs.EmbeddedDocRepositoryTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscriptionIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexApprovalBrokerTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexApprovalRoutingTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexCodingPermissionsTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexCodingRecoveryTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexCommandActionsTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexCommandResolutionTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexLiveMessageTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexQuestionnaireBrokerTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexReasoningEventsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexToolEventsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexUsageEventsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.CodexWebPresentationTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.GatewayRoutingIntegrationTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.LlmPayloadsTest",
+      "tests": 27,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.ModelDescriptionLiveIntegrationTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.ModelDirectoryReasoningTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.PlanningResponseTimeoutTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.ProviderModelMetadataTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.llm.UsageParsingTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.planning.GitPlanningWorkspaceTest",
+      "tests": 12,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.planning.JsonPlanningRepositoryTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.planning.PlanningStoreCacheTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.planning.VerificationSnapshotTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridgeTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.questionnaire.QuestionnaireEngineIntegrationTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.research.ResearchSandboxNativeTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.research.ResearchWorkspacePolicyTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.search.HttpSearchConnectionCheckerTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.search.QueritSearchEngineTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.search.SearchUsageTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.DesktopUiSkillIntegrationTest",
+      "tests": 1,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.ExperienceSuggestionsTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.GithubSkillCatalogLiveTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 1
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.GithubSkillCatalogTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.JsonSkillRepositoryTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.LocalExperiencePanelTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.LocalSkillExperienceTest",
+      "tests": 23,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.LocalSkillRepositoryTest",
+      "tests": 18,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.LocalSkillsPanelTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.ProjectSkillRollbackUiTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.ProjectSkillsTest",
+      "tests": 13,
+      "failures": 3,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillAdapterWireIntegrationTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillCatalogLiveUiTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 1
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillCatalogPanelTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillCatalogUpdateEvidenceTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillDownloadPrivacyTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillImportContractTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillInstallerTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillPackageContractTest",
+      "tests": 18,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillRunCompletionTest",
+      "tests": 10,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillRuntimeIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillSelectorTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillStoreTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.skills.SkillsAcceptanceTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.storage.ClipboardAttachmentsTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.storage.FileKeyValueStoreTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.storage.JsonLlmProfileRepositoryTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.storage.JsonRepositoriesTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.storage.OnboardingCompatTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.tools.AgentToolBridgeTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.tools.AgentToolEngineIntegrationTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.tools.JsonResponseHeartbeatTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.AcceptanceTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.AgentMatcherTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.AttachmentTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CodingDraftUpdatesTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CodingInteractionModeTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CodingRunRecorderTest",
+      "tests": 19,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CodingSessionNamingTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CodingSessionStatusTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CodingTimelineIdentityTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.CriticalPathTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.DecisionPlannerTest",
+      "tests": 17,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.DecisionTreeTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.DeclaredReasoningTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.LlmProfileCodingModelTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.MessageSchedulerTest",
+      "tests": 20,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.ModelDefaultsTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.ModelDescriptionsTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.ModelLibraryTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.OrchestrationRecoveryTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanComposerTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanFinalizationTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanGraphTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanRunnerTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningBranchLabelsTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningChatServiceTest",
+      "tests": 101,
+      "failures": 5,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningConversationTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningDiagnosticsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningExecutionServiceTest",
+      "tests": 51,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningGatewayTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningNetworkLayoutTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningOptionSelectionTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningReplyPreviewTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningRetryPolicyTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.PlanningRulesTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.ProfileResolverTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.ProviderCatalogTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.RequestPinServiceTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionContextTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionOrganismServiceTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionTreeRuntimeTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SkillEducatorTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SkillInstructionRuntimeTest",
+      "tests": 10,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.StageResultEvidenceTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.TaskIdentifiersTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.UsageLedgerTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.UserInteractionTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.VerificationRecoveryTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.WorkerModelSelectionTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.tools.AgentToolsTest",
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.tools.OrchestrationToolsTest",
+      "tests": 19,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.tools.ToolReceiptIntegrityTest",
+      "tests": 19,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.plugins.MessageSchedulerRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.plugins.OrchestrationRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.plugins.PlanningChatRenderTest",
+      "tests": 5,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.plugins.PlanningWizardRenderTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.plugins.builtin.CalcPluginTest",
+      "tests": 5,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.AgentUiThreadTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.CodingApprovalStatusTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.CodingResearchModeTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.CodingResumeTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.CodingSessionStatusTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.ModelSettingsViewModelTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.PlanningSessionStatusTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.QuestionnaireViewModelTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.RequestPinViewModelTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.ShellSettingsViewModelTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.StageChatStateTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.UserInteractionStatusTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.CodingChatRowsTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.CodingHistoryItemsTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.CodingToolPreviewTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.ComputerUsePanelTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.DecisionGraphRenderTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.LongMessageRenderTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.MarkdownBlocksTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.OrchestrationFailureRenderTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.PaperAnimationPolicyTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.PaperShaderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.PlanningBlockerDockTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.PlanningProposalRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.PlanningQuestionWizardTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.RequestPinSelectionTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.StreamingTextBufferTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.components.StreamingTextRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ActiveCodingChatRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.AgentMessageStatusTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ChatScrollToBottomTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingApprovalRenderTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingChatCommitTest",
+      "tests": 12,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingChatScrollTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingComposerRenderTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingMessageVisibilityRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingToolPreviewRenderTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.CodingWorkspaceRenderTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.EngineChipHoverRenderTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.EnginesSettingsRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.LargeCodingChatRenderTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ModelsSettingsRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ProjectsPanelCollapseTest",
+      "tests": 6,
+      "failures": 1,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ProjectsPanelStickyTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.QueuedMessageCancellationRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.RequestPinsBrowserTest",
+      "tests": 6,
+      "failures": 2,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.RequestPinsRenderTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ResearchModeRenderTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.SearchSettingsRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.UsageUiTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.WorkerModelRenderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    }
+  ]
+}

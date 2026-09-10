@@ -46,7 +46,7 @@ import io.aequicor.magicpaper.designsystem.*
                     display.milestones.firstOrNull { it.id == id }?.title ?: id
                 }, role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
                 stage.assignment?.let { assignment ->
-                    PaperText("Исполнитель: ${assignment.displayName.ifBlank { assignment.modelId }} · ${assignment.effort.shortLabel}",
+                    PaperText("Модель: ${assignment.displayName.ifBlank { assignment.modelId }} · ${assignment.effort.shortLabel}",
                         role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
                 }
             }

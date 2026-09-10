@@ -62,6 +62,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class SessionCommand(
     val id: String, val kind: SessionCommandKind, val sessionId: String,
     val planId: String, val stageId: String = "", val name: String = "", val applied: Boolean = false,
+    val error: String = "",
 )
 
 /** Keep answers separate from the diagnostic wrapper to avoid recursively echoing it. */
@@ -117,7 +118,10 @@ internal fun OrchestrationState.finishWorkPause(plan: Plan, requestId: String): 
 
 /** Execution has settled enough to review a follow-up; open questions are checked separately. */
 internal val Plan.proposalReadyForConfirmation: Boolean
-    get() = proposal != null && (phase == ExecutionPhase.COMPLETE || canExtendAfterFinalVerification || finalAttempt == null)
+    get() = proposal != null && !stopping && (phase == ExecutionPhase.COMPLETE || canExtendAfterFinalVerification ||
+        (finalAttempt == null && phase !in setOf(ExecutionPhase.RECOVERING, ExecutionPhase.VERIFYING, ExecutionPhase.INTEGRATING, ExecutionPhase.APPLYING) &&
+            (selectedMilestones.any { it.attempts.lastOrNull()?.interrupted == true } ||
+                (phase == ExecutionPhase.WAITING && selectedMilestones.all { it.completed }))))
 
 @Serializable data class PlanRunSnapshot(
     val runId: String, val tree: List<DecisionNode>, val milestones: List<Milestone>,
@@ -133,6 +137,8 @@ internal val Plan.proposalReadyForConfirmation: Boolean
     val source: SessionAddress, val target: SessionAddress,
     val via: SessionAddress? = null, val kind: String = "Сообщение",
     val stageLabel: String = "", val deliveryId: String? = null,
+    val hops: List<SessionAddress> = emptyList(),
+    val sessionDeliveryState: SessionDeliveryState? = null,
 )
 
 val CodingSession.effectiveRole: CodingSessionRole get() = when {
@@ -141,11 +147,12 @@ val CodingSession.effectiveRole: CodingSessionRole get() = when {
     else -> role
 }
 
-fun CodingSession.subtitle(): String = when (effectiveRole) {
-    CodingSessionRole.ORCHESTRATOR -> "Оркестратор" + (orchestratorNumber?.let { " $it" } ?: "")
-    CodingSessionRole.WORKER -> "Исполнитель" + (stageNumber?.let { " · Этап $it" } ?: "") +
+fun CodingSession.subtitle(): String = when {
+    sessionKind == SessionKind.IMMUNITY -> "Иммунитет"
+    sessionKind == SessionKind.ZYGOTE || (planningMode && parentSessionId == null) -> "Зигота"
+    parentSessionId != null || effectiveRole == CodingSessionRole.WORKER -> "Сессия" + (stageNumber?.let { " · Этап $it" } ?: "") +
         (continuationOfNumber?.let { " · Доработка этапа $it" } ?: "")
-    CodingSessionRole.CHAT -> if (researchMode) "Исследование" else "Диалог"
+    else -> if (researchMode) "Исследование" else "Диалог"
 } + if (archived) " · В архиве" else ""
 
 fun Milestone.stageLabel(): String = (displayNumber?.let { "Этап $it · " } ?: "Этап · ") + (displayName ?: title)

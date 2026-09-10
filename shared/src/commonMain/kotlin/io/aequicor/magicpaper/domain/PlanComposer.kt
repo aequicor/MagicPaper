@@ -40,11 +40,11 @@ class PlanComposer(
         require(project.id == plan.projectId) { "План принадлежит другому проекту." }
         // Null is the legacy migration marker; explicit saved engines always win over provider type.
         val engine = plan.engine ?: legacyCodingEngine(profile)
-        return withContext(UsageOwner(UsageScope(plan.parentSessionId.takeIf { it.isNotBlank() }?.let { "coding:$it" }, projectId = plan.projectId, planId = plan.id))) {
+        return withContext(UsageOwner(UsageScope(plan.parentSessionId.takeIf { it.isNotBlank() }?.let { "coding:$it" }, projectId = plan.projectId, planId = plan.id)) + PlanningRulesContext(plan.planningRulesSnapshot)) {
             if (toolHost == null) return@withContext planningGateway.completeWithActivity(project, engine, plan.requestId.ifBlank { plan.id }, profile, messages, onActivity)
             val owner = plan.parentSessionId.ifBlank { plan.sessionId.ifBlank { "plan-${plan.id}" } }
             val context = ToolExecutionContext(plan.projectId, owner, owner, plan.requestId.ifBlank { Id.new() },
-                ToolRole.PLANNER, CodingInteractionMode.PLANNING, plan.id, plan.runId)
+                ToolRole.PLANNER, CodingInteractionMode.PLANNING, plan.id, plan.runId, planningRulesSnapshot = plan.planningRulesSnapshot)
             supervisorScope {
                 // A model can finish its turn while exec still reports a running cell. Keep
                 // the human interaction owned by this planning request, not that MCP call.
@@ -70,8 +70,9 @@ class PlanComposer(
                             }
                         },
                         "plan.propose" to { _, _, arguments ->
-                            check(pending.value.all { it.second.isCompleted && !it.second.isCancelled }) { "Сначала дождитесь ответов пользователя" }
-                            decisions.validateToolProposal(plan, arguments)
+                            checkTool(pending.value.all { it.second.isCompleted && !it.second.isCancelled }) { "Сначала дождитесь ответов пользователя" }
+                            try { decisions.validateToolProposal(plan, arguments) }
+                            catch (error: IllegalArgumentException) { throw ToolArgumentRejection(error.message ?: "Некорректное предложение") }
                             arguments
                         },
                     ))
@@ -99,7 +100,7 @@ class PlanComposer(
     suspend fun completeToolTurn(plan: Plan, profile: LlmProfile, messages: List<LlmMessage>, tools: ToolSession,
         onActivity: (CodingStep) -> Unit): String {
         val project = projectLookup(plan.projectId) ?: error("Папка проекта недоступна")
-        return withContext(tools + UsageOwner(UsageScope("coding:${tools.context.ownerSessionId}", projectId = plan.projectId, planId = plan.id))) {
+        return withContext(tools + UsageOwner(UsageScope("coding:${tools.context.ownerSessionId}", projectId = plan.projectId, planId = plan.id)) + PlanningRulesContext(plan.planningRulesSnapshot)) {
             planningGateway.completeWithActivity(project, plan.engine ?: legacyCodingEngine(profile), tools.context.requestId, profile,
                 messages + LlmMessage(LlmChatRole.SYSTEM, "Действия выполняй только через инструменты magicpaper_. " +
                     "Не возвращай JSON команд в тексте. Итоговый ответ — понятное объяснение выполненного. " +
@@ -126,9 +127,16 @@ class PlanComposer(
             searchEngine.search(plan.goal, effective, 5).joinToString("\n\n") { "${it.title}\n${it.snippet}\n${it.url}" }
         } else ""
         onProgress(if (settings != null && context.isBlank()) "Источники не найдены. Оркестратор готовит ответ…" else "Оркестратор анализирует цель и готовит ответ…")
-        val refined = decisions.refine(plan, message, profile, candidates, dossiers, context, onActivity)
+        val scoped = plan.copy(planningRulesSnapshot = plan.planningRulesSnapshot ?: when {
+            plan.runId.isNotBlank() || plan.milestones.any { it.attempts.isNotEmpty() } ->
+                PlanningRulesSettings().snapshot().copy(source = PlanningRulesSource.LEGACY)
+            else -> settings?.planningRules?.snapshot() ?: PlanningRulesSettings().snapshot()
+        })
+        val refined = decisions.refine(scoped, message, profile, candidates, dossiers, context, onActivity)
         if (refined.wizardStep != PlanningStep.REVIEW) return refined
-        val result = refined.withFinalization()
+        // Preserve the dependency contract of existing endpoints without prescribing
+        // a terminal commit task to every new plan. Methodology lives in the saved prompt.
+        val result = if (plan.milestones.any { it.isFinalization }) refined.withFinalization() else refined
         DecisionCompiler.validateEdit(plan, result)
         return result
     }
@@ -155,7 +163,7 @@ class PlanComposer(
         val replacementStages = replacementNodes.filter { it.kind == DecisionKind.STAGE }.map { it.stageId ?: it.id }.toSet()
         val updated = proposal.copy(tree = plan.tree.filterNot { it.id in affected } + replacementNodes,
             milestones = plan.milestones.filterNot { it.id in stageIds } + proposal.milestones.filter { it.id in replacementStages })
-        val finalized = updated.withFinalization()
+        val finalized = if (plan.milestones.any { it.isFinalization }) updated.withFinalization() else updated
         DecisionCompiler.validateEdit(plan, finalized)
         return finalized
     }
@@ -184,6 +192,7 @@ class PlanComposer(
         profile: LlmProfile?,
         dossiers: List<ModelDossier>,
         candidates: List<LlmProfile>,
+        rules: PlanningRulesSnapshot = PlanningRulesSettings().snapshot(),
     ): PlanDraft {
         if (goal.isBlank()) return heuristicDraft(goal)
         // Порядок оркестраторов: разрешённый judge, затем остальные настроенные —
@@ -196,7 +205,7 @@ class PlanComposer(
         if (planners.isEmpty()) return heuristicDraft(goal, "ни один источник не настроен")
         var lastError: String? = null
         for (planner in planners) {
-            val draft = runCatching { modelDraft(goal, planner, dossiers, candidates) }
+            val draft = runCatching { modelDraft(goal, planner, dossiers, candidates, rules) }
             draft.getOrNull()?.let { return it }
             lastError = draft.exceptionOrNull()?.message
         }
@@ -208,6 +217,7 @@ class PlanComposer(
         profile: LlmProfile,
         dossiers: List<ModelDossier>,
         candidates: List<LlmProfile>,
+        rules: PlanningRulesSnapshot,
     ): PlanDraft {
         val roster = buildString {
             appendLine("Доступные агенты (профили) и их сильные стороны;")
@@ -225,7 +235,7 @@ class PlanComposer(
             }
         }
         val messages = listOf(
-            LlmMessage(LlmChatRole.SYSTEM, COMPOSE_PROMPT),
+            LlmMessage(LlmChatRole.SYSTEM, rules.effectivePrompt() + "\n\n" + COMPOSE_PROMPT),
             LlmMessage(LlmChatRole.SYSTEM, roster),
             LlmMessage(LlmChatRole.USER, "Цель задачи: $goal"),
         )
@@ -324,15 +334,9 @@ class PlanComposer(
         val DEFAULT_JSON = Json { ignoreUnknownKeys = true }
 
         val COMPOSE_PROMPT = """
-            Ты — оркестратор инженерной задачи. Разбей цель на ГРАФИК из 2–6
-            мэилстоунов: каждый — проверяемый результат (файл, работающая функция,
-            тест). Никогда не отдавай весь план одним шагом, кроме тривиально
-            коротких целей.
-            Шаги, которые можно выполнять независимо, не связывай — они образуют
-            параллельные ветви; зависимый шаг перечисляет номера предшественников
-            в поле depends (нумерация шагов с 1).
-            Для каждого шага выбери оптимальных агента и модель из списка
-            доступных: того, чьи сильные стороны лучше всего подходят шагу.
+            Ты рабочая сессия инженерной задачи. Представь план в заданной схеме.
+            Зависимый шаг перечисляет номера предшественников в поле depends (нумерация с 1).
+            Значения agent и model берутся из списка доступных подключений и моделей.
             Ответь строго одним JSON-массивом без пояснений:
             [{"title": "короткое имя шага", "description": "что сделать и как
             проверить результат", "agent": "имя агента из списка или пустая

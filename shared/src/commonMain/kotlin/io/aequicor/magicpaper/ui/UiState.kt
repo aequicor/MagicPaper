@@ -43,6 +43,7 @@ data class CodingSessionUi(
     val interruptedRequest: Boolean = false,
     val failedRequest: Boolean = false,
     val interactions: List<UserInteractionRequest> = emptyList(),
+    val immunityProposalPending: Boolean = false,
 ) {
     val canResume: Boolean
         get() {
@@ -50,6 +51,7 @@ data class CodingSessionUi(
             if (interruptedRequest || failedRequest) return messages.pendingPlanningQuestion() == null
             val current = plan
             if (current != null) {
+                if (current.stopping) return false
                 if (current.confirmedRevision == null || current.phase == ExecutionPhase.COMPLETE || current.proposalReadyForConfirmation ||
                     messages.pendingPlanningQuestion(setOf(current.id)) != null ||
                     current.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForUser != null }) return false
@@ -69,7 +71,13 @@ data class CodingSessionUi(
 
     private fun computeStatus(): CodingSessionStatus {
         if (session.archived) return CodingSessionStatus.IDLE
-        if (interactions.isNotEmpty() || awaitingUser || draft.awaitingApproval) return CodingSessionStatus.WAITING
+        if (immunityProposalPending) return CodingSessionStatus.WAITING
+        if (session.observedState == io.aequicor.magicpaper.domain.SessionObservedState.UNKNOWN ||
+            session.desiredState == io.aequicor.magicpaper.domain.SessionDesiredState.QUARANTINE) return CodingSessionStatus.BLOCKED
+        if (session.observedState == io.aequicor.magicpaper.domain.SessionObservedState.STOPPING) return CodingSessionStatus.WORKING
+        if (plan?.stopping == true) return if (plan.issue != null) CodingSessionStatus.BLOCKED else CodingSessionStatus.WORKING
+        if (interactions.isNotEmpty() || (running || draft.active) && (awaitingUser || draft.awaitingApproval))
+            return CodingSessionStatus.WAITING
         if (draft.failedMessage != null || (failedRequest && !running && !draft.active)) return CodingSessionStatus.BLOCKED
         val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
         if (stage != null) return when {
@@ -102,6 +110,7 @@ data class CodingSessionUi(
 
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
+    val organisms: Map<String, io.aequicor.magicpaper.domain.SessionOrganism> = emptyMap(),
     val computerSupported: Boolean = false,
     val computer: io.aequicor.magicpaper.domain.ComputerUseState = io.aequicor.magicpaper.domain.ComputerUseState(),
     val approvals: List<io.aequicor.magicpaper.domain.CodingApproval> = emptyList(),
@@ -126,6 +135,9 @@ data class CodingUi(
 
     fun statusOf(projectId: String, fallback: CodingSessionStatus = CodingSessionStatus.IDLE): CodingSessionStatus {
         if (interactions.any { it.projectId == projectId }) return CodingSessionStatus.WAITING
+        if (organisms.values.any { it.projectId == projectId && it.deletedAt == null &&
+                it.interventions.any { proposal -> proposal.state == io.aequicor.magicpaper.domain.ImmunityInterventionState.PROPOSED } })
+            return CodingSessionStatus.WAITING
         val own = sessions.filter { it.session.projectId == projectId }
         return if (own.isNotEmpty()) {
             aggregateCodingStatus(own.map { it.status })
@@ -138,7 +150,10 @@ data class CodingUi(
     fun sessionsOf(projectId: String): List<CodingSessionUi> =
         sessions.filter { it.session.projectId == projectId }.sortedByDescending { it.session.createdAt }.map { item ->
             val pending = interactions.filter { it.affects(item.session) }
-            if (item.interactions == pending) item else item.copy(interactions = pending)
+            val immunityPending = organisms[item.session.organismId]?.let { organism -> organism.immunityId == item.session.id &&
+                organism.deletedAt == null && organism.interventions.any { it.state == io.aequicor.magicpaper.domain.ImmunityInterventionState.PROPOSED } } == true
+            if (item.interactions == pending && item.immunityProposalPending == immunityPending) item
+            else item.copy(interactions = pending, immunityProposalPending = immunityPending)
         }
 
     /**

@@ -82,6 +82,7 @@ class CodexAppServerOpenAiSubscription(
     private val commandOverride: String? = System.getenv("MAGICPAPER_CODEX_PATH"),
     val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
     private val ownsComputerUse: Boolean = true,
+    private val sharedQuestionnaires: RuntimeQuestionnaires? = null,
 ) : OpenAiSubscriptionService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startMutex = Mutex()
@@ -98,7 +99,8 @@ class CodexAppServerOpenAiSubscription(
         codingRuns[threadId]?.emit(CodingEvent.Notice(message))
     }
     val codingApprovals = approvalBroker.requests
-    private val questionnaireRegistry = RuntimeQuestionnaires()
+    private val questionnaireRegistry = sharedQuestionnaires ?: RuntimeQuestionnaires(
+        io.aequicor.magicpaper.data.coding.FileRuntimeQuestionnaireStore(appHome.resolve("questionnaires").toFile()))
     val codingQuestionnaires = questionnaireRegistry.requests
     suspend fun respondCodingQuestionnaire(id: String, answers: List<PlanningAnswer>) { questionnaireRegistry.respond(id, answers) }
     private val questionnaireBroker = CodexQuestionnaireBroker(scope, questionnaireRegistry,
@@ -135,7 +137,8 @@ class CodexAppServerOpenAiSubscription(
     @Volatile private var process: Process? = null
     @Volatile private var writer: BufferedWriter? = null
 
-    internal fun newCodingClient() = CodexAppServerOpenAiSubscription(json, appHome, commandOverride, computerUse, ownsComputerUse = false)
+    internal fun newCodingClient() = CodexAppServerOpenAiSubscription(json, appHome, commandOverride, computerUse,
+        ownsComputerUse = false, sharedQuestionnaires = questionnaireRegistry)
 
     private val tokenMutex = Mutex()
     /** Refresh ownership remains with app-server; pi receives only the current access token. */
@@ -326,7 +329,7 @@ class CodexAppServerOpenAiSubscription(
             val researchConfig = researchBridge?.codexConfig(questionnaireConfig) ?: questionnaireConfig
             val threadConfig = agentBridge?.codexConfig(researchConfig) ?: researchConfig
             val instructions = io.aequicor.magicpaper.data.coding.codingSystemPrompt(
-                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research)
+                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research, session.planningRulesSnapshot)
             val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
                 if ((research || computerUse != null) && oldId in codingThreads) {
                     request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })

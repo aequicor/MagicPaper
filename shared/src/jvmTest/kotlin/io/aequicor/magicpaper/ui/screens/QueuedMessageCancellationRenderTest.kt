@@ -89,7 +89,7 @@ class QueuedMessageCancellationRenderTest {
                     render()
                     assertTrue(nodes().none { text(it) == "Отменить отправку" })
                     assertTrue(nodes().any { text(it) == "Отправка отменена" })
-                    assertTrue(nodes().any { text(it) == "Оркестратор обрабатывает сообщение" })
+                    assertTrue(nodes().any { text(it) == "Сообщение обрабатывается" })
                     assertEquals(OrchestrationInputStatus.WITHDRAWN, projects.orchestration(parent.id)!!.inputs.last().status)
                     assertEquals(OrchestrationInputStatus.PROCESSING, projects.orchestration(parent.id)!!.inputs.first().status)
                     snapshot("cancelled")

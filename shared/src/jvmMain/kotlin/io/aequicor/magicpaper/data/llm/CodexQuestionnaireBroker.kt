@@ -15,7 +15,9 @@ internal class CodexQuestionnaireBroker(
     private data class Key(val threadId: String, val wireId: JsonPrimitive)
     private data class Pending(val turnId: String, val itemId: String, val job: Job)
     private val pending = ConcurrentHashMap<Key, Pending>()
-    private val received = ConcurrentHashMap.newKeySet<Key>()
+    private data class Signature(val turnId: String, val itemId: String, val sessionId: String, val generation: Long,
+        val questions: List<PlanningQuestion>)
+    private val received = ConcurrentHashMap<Key, Signature>()
 
     fun receive(id: JsonPrimitive, method: String, params: JsonObject, session: CodingSession,
         reply: suspend (JsonObject) -> Unit): Boolean {
@@ -37,12 +39,18 @@ internal class CodexQuestionnaireBroker(
             }.also { list -> require(list.isNotEmpty() && list.all { it.id.isNotBlank() && it.title.isNotBlank() } && list.distinctBy { it.id }.size == list.size) }
         }.getOrNull() ?: return false
         val key = Key(threadId, id)
-        if (!received.add(key)) return true
-        val requestId = "runtime:codex:$threadId:$turnId:$itemId:$id"
+        val signature = Signature(turnId, itemId, session.id, session.runtimeGeneration, questions)
+        val original = received.putIfAbsent(key, signature)
+        if (original != null) {
+            if (original != signature) failed(threadId, IllegalArgumentException("Идентификатор вопроса использован с другими аргументами"))
+            return true
+        }
+        val requestId = "runtime:codex:${session.runtimeGeneration}:$threadId:$turnId:$itemId:$id"
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val request = UserInteractionRequest(requestId, session.projectId, session.id, InteractionKind.RUNTIME, questions,
-                    ownerSessionId = session.parentSessionId ?: session.id, context = session.name, createdAt = System.currentTimeMillis())
+                    context = session.name, createdAt = System.currentTimeMillis(), runtimeGeneration = session.runtimeGeneration,
+                    runId = session.pendingRun?.runId.orEmpty())
                 val answers = registry.ask(request)
                 notice(threadId, "Ответы пользователя:\n" + interactionAnswerText(questions, answers, redactSecrets = true))
                 reply(buildJsonObject { put("id", id); put("result", buildJsonObject {
@@ -52,6 +60,7 @@ internal class CodexQuestionnaireBroker(
                         }) })
                     } })
                 }) })
+                registry.acknowledgeDelivery(requestId)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { failed(threadId, e) }
             finally { pending.remove(key) }

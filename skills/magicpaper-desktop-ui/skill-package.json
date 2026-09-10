@@ -13,8 +13,8 @@
     },
     {
       "path": "SKILL.md",
-      "sha256": "1c328f261437180f3eafed4083cdf3448f7a78af15ff8de73a4e02109aecdfc0",
-      "size": 5623
+      "sha256": "be89510b5b826f047062240de952469ae9d43d4869fc83b7bee1155f99c20880",
+      "size": 5811
     },
     {
       "path": "agents/openai.yaml",

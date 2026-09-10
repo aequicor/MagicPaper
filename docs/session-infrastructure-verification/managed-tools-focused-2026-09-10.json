@@ -1,0 +1,64 @@
+{
+  "date": "2026-09-10",
+  "scope": "Managed legacy adapter, app rename, context boundaries, secret masking and current runtime planning integration; excludes SessionHistoryDeletionTest filter and later root cleanup change",
+  "seconds": 38,
+  "tests": 155,
+  "failures": 0,
+  "skipped": 0,
+  "classes": [
+    {
+      "name": "io.aequicor.magicpaper.data.coding.SessionOrganismExtensionsTest",
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.PlanningExecutionServiceTest",
+      "tests": 56,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionAuthorityToolTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionCodingWorkspaceTest",
+      "tests": 10,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionPlanBridgeTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionReceiptRecoveryTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.SessionTreeRuntimeTest",
+      "tests": 14,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.tools.OrchestrationToolsTest",
+      "tests": 27,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "name": "io.aequicor.magicpaper.domain.tools.ToolReceiptIntegrityTest",
+      "tests": 20,
+      "failures": 0,
+      "skipped": 0
+    }
+  ]
+}

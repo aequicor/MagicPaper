@@ -27,7 +27,7 @@ internal fun ScheduledMessages(plan: Plan, onCancel: (String) -> Unit, onEdit: (
         PaperPanel(Modifier.fillMaxWidth(), kind = PaperSurfaceKind.PANEL) {
             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 PaperText(rule.trigger.describe(plan))
-                PaperText("Кому: " + (rule.targetTaskId?.let { id -> plan.milestones.firstOrNull { it.id == id }?.stageLabel() } ?: "Оркестратор"), role = PaperTextRole.LABEL)
+                PaperText("Кому: " + (rule.targetTaskId?.let { id -> plan.milestones.firstOrNull { it.id == id }?.stageLabel() } ?: "Родительская сессия"), role = PaperTextRole.LABEL)
                 PaperText(rule.text, role = PaperTextRole.LABEL)
                 PaperText(rule.status.label() + (if (rule.status == ScheduledMessageStatus.READY && plan.intent != ExecutionIntent.RUN) " · доставка после продолжения" else ""), role = PaperTextRole.LABEL)
                 if (rule.reason.isNotBlank()) PaperText(rule.reason, role = PaperTextRole.LABEL)
@@ -54,10 +54,10 @@ internal fun ScheduledMessages(plan: Plan, onCancel: (String) -> Unit, onEdit: (
 internal fun HandoffDetails(info: HandoffInfo) {
     var expanded by rememberSaveable(info.eventId) { mutableStateOf(false) }
     PaperText(when (info.status) {
-        HandoffStatus.QUEUED -> "Ожидает обработки оркестратором"
-        HandoffStatus.PROCESSING -> "Оркестратор обрабатывает"
+        HandoffStatus.QUEUED -> "Ожидает обработки родителем"
+        HandoffStatus.PROCESSING -> "Родитель обрабатывает"
         HandoffStatus.RESOLVED -> "Обращение обработано"
-        HandoffStatus.FAILED -> "Ошибка обработки оркестратором"
+        HandoffStatus.FAILED -> "Ошибка обработки родителем"
     }, role = PaperTextRole.LABEL,
         color = if (info.status == HandoffStatus.FAILED) LocalPaperColors.current.error else LocalPaperColors.current.secondaryText)
     if (info.nextStep.isNotBlank()) PaperText(info.nextStep, role = PaperTextRole.LABEL)

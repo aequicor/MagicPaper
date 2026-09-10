@@ -2,11 +2,112 @@ package io.aequicor.magicpaper.data.planning
 
 import io.aequicor.magicpaper.domain.*
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class GitPlanningWorkspaceTest {
+    @Test fun failedLeaseReleaseRetainsItsIdentityAndCanBeRetriedAtEveryBoundary() = runTest {
+        for (boundary in listOf("project-lock-releasing", "project-lock-released", "store-lock-releasing", "store-lock-released")) {
+            val source = Files.createTempDirectory("planning-release-source-").toFile()
+            val data = Files.createTempDirectory("planning-release-data-").toFile()
+            val project = CodingProject("owner", "Source", source.path, 1)
+            val alias = project.copy(id = "alias", path = File(source, ".").path)
+            var interrupted = false
+            val port = GitPlanningWorkspace(data) { event ->
+                if (event == boundary && !interrupted) { interrupted = true; throw IOException("injected $boundary failure") }
+            }
+            assertTrue(port.acquire(project))
+            assertFailsWith<IOException> { port.release(project) }
+            assertTrue(interrupted)
+            assertFalse(port.acquire(project), "A failed release keeps the original identity: $boundary")
+            assertFalse(port.acquire(alias), "A path alias cannot bypass pending release: $boundary")
+            port.release(project)
+            port.release(project)
+            val next = GitPlanningWorkspace(data)
+            assertTrue(next.acquire(alias), "Confirmed release frees both OS locks: $boundary")
+            next.release(alias)
+            assertFalse(File(source, ".git").exists(), "Ownership does not initialize the source repository")
+        }
+    }
+
+    @Test fun sourceAndExecutionLeasesRequireTheirOwnPathAndReleaseIndependently() = runTest {
+        val source = Files.createTempDirectory("planning-lease-source-").toFile()
+        val execution = Files.createTempDirectory("planning-lease-execution-").toFile()
+        val data = Files.createTempDirectory("planning-lease-store-").toFile()
+        val sourceOwner = CodingProject("source", "Source", source.path, 1)
+        val executionOwner = sourceOwner.copy(id = "execution", path = execution.path)
+        val port = GitPlanningWorkspace(data)
+        val another = GitPlanningWorkspace(data)
+        assertTrue(port.acquire(sourceOwner))
+        assertTrue(port.acquire(executionOwner))
+        assertFailsWith<IllegalArgumentException> { port.release(sourceOwner.copy(path = execution.path)) }
+        assertFalse(port.acquire(sourceOwner.copy(id = "source-alias")))
+        port.release(sourceOwner)
+        assertFalse(another.acquire(sourceOwner), "The active execution still owns the storage lease")
+        assertFalse(port.acquire(executionOwner.copy(id = "execution-alias")), "Releasing source must not release execution")
+        port.release(executionOwner)
+        assertTrue(another.acquire(sourceOwner))
+        another.release(sourceOwner)
+    }
+
+    @Test fun captureReusesAnExistingAgentCommitWithoutFlatteningItsHistory() = runTest {
+        val source = repository(); val project = CodingProject("p", "P", source.path, 1)
+        val port = GitPlanningWorkspace(Files.createTempDirectory("planning-existing-commit-").toFile())
+        val workspace = port.prepare(project, "run")
+        val attempt = port.stage(project, workspace, attempt("committed"))
+        File(attempt.path, "result.txt").writeText("checked result")
+        git(File(attempt.path), "add", "result.txt")
+        git(File(attempt.path), "commit", "-m", "Add verified result")
+        val existing = git(File(attempt.path), "rev-parse", "HEAD")
+        assertEquals(existing, port.capture(attempt))
+        assertTrue(port.integrate(workspace, attempt.copy(resultCommit = existing)))
+        assertTrue(git(File(workspace.integrationPath), "log", "--format=%s").contains("Add verified result"))
+    }
+
+    @Test fun unchangedMilestoneDoesNotInventCommitAndNewWorktreesUseFeatureBranches() = runTest {
+        val source = repository(); val project = CodingProject("p", "P", source.path, 1)
+        val originalHead = git(source, "rev-parse", "HEAD")
+        val port = GitPlanningWorkspace(Files.createTempDirectory("planning-empty-").toFile())
+        val workspace = port.prepare(project, "run")
+        val a = port.stage(project, workspace, attempt("empty"))
+        assertEquals(originalHead, workspace.baseCommit)
+        assertEquals(a.baseCommit, port.capture(a))
+        assertTrue(git(File(workspace.integrationPath), "symbolic-ref", "--short", "HEAD").startsWith("codex/magicpaper/"))
+        assertTrue(git(File(a.path), "symbolic-ref", "--short", "HEAD").startsWith("codex/magicpaper/"))
+        assertEquals(originalHead, git(source, "rev-parse", "HEAD"))
+    }
+
+    @Test fun capturePreservesIndexAndRejectsChangedReplay() = runTest {
+        val source = repository(); val project = CodingProject("p", "P", source.path, 1)
+        val port = GitPlanningWorkspace(Files.createTempDirectory("planning-private-index-").toFile())
+        val workspace = port.prepare(project, "run")
+        val a = port.stage(project, workspace, attempt("result")).copy(report = "Add a useful result\nValidation passed")
+        File(a.path, "result.txt").writeText("staged")
+        git(File(a.path), "add", "result.txt")
+        File(a.path, "result.txt").writeText("final content")
+        val before = git(File(a.path), "diff", "--cached")
+        val captured = port.capture(a)
+        assertEquals("Add a useful result", git(source, "show", "-s", "--format=%s", captured))
+        assertEquals(before, git(File(a.path), "diff", "--cached"))
+        assertEquals("final content", git(source, "show", "$captured:result.txt"))
+        File(a.path, "result.txt").writeText("later user edit")
+        assertFailsWith<IllegalArgumentException> { port.capture(a) }
+        assertEquals("later user edit", File(a.path, "result.txt").readText())
+    }
+
+    @Test fun captureRefusesUserWorkingCopyAndDoesNotInitializeNonGitFolder() = runTest {
+        val source = repository(); val project = CodingProject("p", "P", source.path, 1)
+        val port = GitPlanningWorkspace(Files.createTempDirectory("planning-protected-").toFile())
+        val head = git(source, "rev-parse", "HEAD")
+        assertFailsWith<IllegalArgumentException> { port.capture(attempt("unsafe").copy(path = source.path, baseCommit = head)) }
+        val plain = Files.createTempDirectory("planning-no-git-").toFile()
+        val workspace = port.prepare(project.copy(path = plain.path), "plain")
+        assertFalse(workspace.git)
+        assertFalse(File(plain, ".git").exists())
+    }
+
     private fun repository(): File {
         val dir = Files.createTempDirectory("magicpaper-planning-test-").toFile()
         git(dir, "init")

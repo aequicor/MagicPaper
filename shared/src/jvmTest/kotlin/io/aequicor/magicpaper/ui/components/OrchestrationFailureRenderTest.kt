@@ -129,7 +129,7 @@ class OrchestrationFailureRenderTest {
                     visible("Повторить обработку")
                     visible("Сейчас:")
                     visible("Подробнее")
-                    assertTrue(nodes.none { text(it) == "Оркестратор обрабатывает сообщение" })
+                    assertTrue(nodes.none { text(it) == "Сообщение обрабатывается" })
                     val retry = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }
                         .first { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.option.retry" }
                     assertNotNull(retry.config.getOrNull(SemanticsActions.OnClick))

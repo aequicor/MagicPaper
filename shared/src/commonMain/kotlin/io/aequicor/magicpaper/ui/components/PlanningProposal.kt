@@ -59,7 +59,7 @@ internal fun PlanningProposalDetails(plan: Plan, awaitingAnswers: Boolean, onCon
             PaperText("${if (criterion.required) "Обязательно" else "Необязательно"}: ${criterion.description} · ${criterion.environment.label()}")
         }
         stage.assignment?.let { assignment ->
-            PaperText("Исполнитель: ${assignment.displayName.ifBlank { assignment.modelId }} · ${assignment.effort.shortLabel}")
+            PaperText("Модель: ${assignment.displayName.ifBlank { assignment.modelId }} · ${assignment.effort.shortLabel}")
         }
     }
     PaperText(proposalConfirmationHint(plan, awaitingAnswers))

@@ -71,7 +71,13 @@ data class CodingSession(
     val engine: CodingEngine? = null,
     /** Durable request, retained until completion; STOP is an explicit user action. */
     val pendingRun: CodingRunCheckpoint? = null,
-
+    /** Execution authority is separate from legacy presentation roles and native thread IDs. */
+    val organismId: String? = null,
+    val runtimeGeneration: Long = 0,
+    val planningRulesSnapshot: PlanningRulesSnapshot? = null,
+    val sessionKind: SessionKind? = null,
+    val observedState: SessionObservedState? = null,
+    val desiredState: SessionDesiredState? = null,
 )
 
 @Serializable
@@ -634,6 +640,9 @@ data class CodingMessage(
     val systemContext: Boolean = false,
     /** Уведомление приложения для пользователя; не входит в историю для модели. */
     val systemNotice: Boolean = false,
+    /** Visual USER alignment does not grant a session-origin packet human authority. */
+    val origin: MessageOrigin = if (role == CodingRole.USER && route == null) MessageOrigin.USER else if (route != null) MessageOrigin.SESSION else MessageOrigin.TOOL,
+    val contextPacket: SessionContextPacket? = null,
 
 )
 

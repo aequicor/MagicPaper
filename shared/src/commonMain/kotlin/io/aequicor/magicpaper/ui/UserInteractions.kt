@@ -31,8 +31,8 @@ internal fun interactionCandidates(
     val sessions = ui.sessions.map { it.session }
     addAll(runtime.map { request ->
         val source = sessions.firstOrNull { request.sessionId in setOf(it.id, "${it.id}-merge", "${it.id}-delivery") }
-        if (source == null) request else request.copy(sessionId = source.id, ownerSessionId = source.parentSessionId ?: source.id,
-            affectedSessionIds = setOfNotNull(source.id, source.parentSessionId))
+        if (source == null) request else request.copy(sessionId = source.id, ownerSessionId = source.id,
+            affectedSessionIds = setOf(source.id))
     }.filter { request -> sessions.none { it.id == request.sessionId && it.archived } })
     addAll(ui.approvals.map { approvalInteraction(it, sessions) })
     states.values.forEach { state ->

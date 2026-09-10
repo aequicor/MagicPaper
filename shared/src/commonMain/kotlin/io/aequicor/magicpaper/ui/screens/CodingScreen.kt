@@ -3,10 +3,12 @@ import io.aequicor.magicpaper.designsystem.PaperWorkspaceHeading
 import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
 import io.aequicor.magicpaper.designsystem.PaperPromptField
 import io.aequicor.magicpaper.designsystem.PaperWorkSurface
+import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.domain.tools.ToolPhase
 
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.SideEffect
 import io.aequicor.magicpaper.ui.components.InlineMessageParts
 import io.aequicor.magicpaper.ui.components.MessageExpansion
 import io.aequicor.magicpaper.ui.components.LocalMessageExpansion
@@ -319,6 +321,13 @@ private fun SessionArea(
         val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
             running = stageChat.running || draft.active)
         val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
+        ui.organisms[sessionInfo.organismId]?.takeIf { it.immunityId == sessionInfo.id }?.let { organism ->
+            val actions by vm.immunityActions.collectAsState()
+            io.aequicor.magicpaper.ui.components.ImmunityInterventions(organism,
+                busyProposalIds = organism.interventions.filter { "${organism.id}:${it.id}" in actions }.map { it.id }.toSet(),
+                onApprove = { proposal, action, confirmed -> vm.approveImmunityIntervention(organism.id, proposal.id, action, confirmed) },
+                onDismiss = { vm.dismissImmunityIntervention(organism.id, it) })
+        }
             CodingChat(
                 project = project,
                 session = effective,
@@ -415,7 +424,7 @@ private val CodingSessionStatus.label: String
         CodingSessionStatus.WAITING -> "Ждём вашего ответа"
         CodingSessionStatus.CONFIRMATION -> "ждёт подтверждения доработки"
         CodingSessionStatus.BLOCKED -> "выполнение остановлено"
-        CodingSessionStatus.QUEUED -> "ждёт оркестратора"
+        CodingSessionStatus.QUEUED -> "ждёт родителя"
         CodingSessionStatus.SCHEDULED -> "ждёт события или времени"
         CodingSessionStatus.IDLE -> "ждёт запроса"
     }
@@ -472,8 +481,11 @@ internal fun ProjectsPanel(
             var index = projectIndex + 1
             if (!projectCollapsed) ownSessions.filter { it.session.parentSessionId !in sessionIds }.forEach { parent ->
                 // Read the orchestrator's work in creation order, from top to bottom.
-                val children = ownSessions.filter { it.session.parentSessionId == parent.session.id }
-                    .sortedBy { it.session.createdAt }
+                fun descendants(id: String, seen: Set<String> = emptySet()): List<CodingSessionUi> =
+                    if (id in seen || collapsed[id] == true) emptyList() else ownSessions
+                        .filter { it.session.parentSessionId == id }.sortedBy { it.session.createdAt }
+                        .flatMap { listOf(it) + descendants(it.session.id, seen + id) }
+                val children = descendants(parent.session.id)
                 val expanded = collapsed[parent.session.id] != true
                 val start = index++
                 if (expanded) index += children.size
@@ -486,7 +498,7 @@ internal fun ProjectsPanel(
                 { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
                 { onAbortSession(session.session.id) },
                 onArchive = { onArchiveSession(session.session.id) },
-                childCount = group.children.size, expanded = group.expanded,
+                childCount = ownSessions.count { it.session.parentSessionId == session.session.id }, expanded = group.expanded,
                 onToggleChildren = {
                     if (group.expanded) {
                         val visible = listState.layoutInfo.visibleItemsInfo
@@ -528,7 +540,13 @@ internal fun ProjectsPanel(
                                     SessionRow(child, child.session.id == activeId,
                                         { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
                                         { onAbortSession(child.session.id) },
-                                        onArchive = { onArchiveSession(child.session.id) }, nested = true)
+                                        onArchive = { onArchiveSession(child.session.id) }, nested = true,
+                                        nestedDepth = generateSequence(child.session.parentSessionId) { parentId ->
+                                            own.firstOrNull { it.session.id == parentId }?.session?.parentSessionId
+                                        }.take(64).count(),
+                                        childCount = own.count { it.session.parentSessionId == child.session.id },
+                                        expanded = collapsed[child.session.id] != true,
+                                        onToggleChildren = { collapsed[child.session.id] = collapsed[child.session.id] != true })
                                 }
                             }
                         }
@@ -688,6 +706,7 @@ private fun SessionRow(
     onAbort: () -> Unit,
     onArchive: () -> Unit,
     nested: Boolean = false,
+    nestedDepth: Int = if (nested) 1 else 0,
     childCount: Int = 0,
     expanded: Boolean = false,
     onToggleChildren: () -> Unit = {},
@@ -700,7 +719,7 @@ private fun SessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = if (nested) 42.dp else 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
+            .padding(start = if (nested) 42.dp + 12.dp * (nestedDepth - 1).coerceAtLeast(0) else 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)
             .clip(RoundedCornerShape(6.dp))
             .hoverable(hoverInteraction)
             .background(
@@ -908,6 +927,10 @@ internal fun CodingChat(
             if (fragment.item.first && fragment.index == 0) put(fragment.item.row.message.id, index + 1)
         } }
     }
+    // Only arrivals during this open session animate; lazy reuse and saved history do not.
+    val seenTimelineKeys = remember(session.session.id) { timeline.map { it.key }.toMutableSet() }
+    val arrivingKeys = remember(timeline, seenTimelineKeys) { timeline.map { it.key }.filterNot { it in seenTimelineKeys }.toSet() }
+    SideEffect { seenTimelineKeys.addAll(arrivingKeys) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
     val hasDraft = draftHistory.isNotEmpty()
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
@@ -952,16 +975,18 @@ internal fun CodingChat(
                     val isDraft = message.id == draftRow?.message?.id
                     val rowStatus = status.takeIf { busy && statusMessageId != null &&
                         (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
-                    // Insert the complete bubble at once so its background stays joined to the status.
-                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
-                        pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
-                        live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
-                        continued = isDraft && busy, fragment = fragment,
-                        onExpand = { expandedMessages = expandedMessages + item.key },
-                        onCollapse = {
-                            scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
-                            expandedMessages = expandedMessages - item.key
-                        })
+                    PaperContentEntrance(animate = fragment.parts == null && isDraft && draft.active &&
+                        item.key in arrivingKeys && item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) {
+                        SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
+                            pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
+                            live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
+                            continued = isDraft && busy, fragment = fragment,
+                            onExpand = { expandedMessages = expandedMessages + item.key },
+                            onCollapse = {
+                                scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
+                                expandedMessages = expandedMessages - item.key
+                            })
+                    }
                 }
                 if (busy && (hasDraft || statusMessageId == null)) {
                     val statusKey = "draft-status:${draft.timelineId ?: session.session.id}"
@@ -1306,7 +1331,7 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
     )
 }
 
-private enum class ToolStepStatus { RUNNING, WAITING, SUCCEEDED, FAILED, CANCELLED }
+private enum class ToolStepStatus { RUNNING, WAITING, SUCCEEDED, FAILED, CANCELLED, UNKNOWN }
 
 @Composable
 private fun ToolStepContent(
@@ -1324,11 +1349,12 @@ private fun ToolStepContent(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val status = when { toolPhase == ToolPhase.WAITING && running -> ToolStepStatus.WAITING
+        toolPhase == ToolPhase.UNKNOWN -> ToolStepStatus.UNKNOWN
         toolPhase == ToolPhase.CANCELLED -> ToolStepStatus.CANCELLED
         running -> ToolStepStatus.RUNNING; ok -> ToolStepStatus.SUCCEEDED; else -> ToolStepStatus.FAILED }
     val statusColor by animateColorAsState(when (status) {
         ToolStepStatus.RUNNING, ToolStepStatus.WAITING -> LocalPaperColors.current.action
-        ToolStepStatus.FAILED -> LocalPaperColors.current.error
+        ToolStepStatus.FAILED, ToolStepStatus.UNKNOWN -> LocalPaperColors.current.error
         ToolStepStatus.SUCCEEDED, ToolStepStatus.CANCELLED -> LocalPaperColors.current.secondaryText
     }, animationSpec = tween(180), label = "Tool status color")
     PaperWorkSurface(Modifier.padding(vertical = 2.dp), expanded = expanded) {
@@ -1348,6 +1374,7 @@ private fun ToolStepContent(
                         ToolStepStatus.CANCELLED -> "Вызов отменён"
                         ToolStepStatus.FAILED -> "Ошибка выполнения"
                         ToolStepStatus.SUCCEEDED -> "Выполнено"
+                        ToolStepStatus.UNKNOWN -> "Исход неизвестен; требуется сверка"
                     }
                 },
             ) { iconStatus ->
@@ -1355,7 +1382,7 @@ private fun ToolStepContent(
                     val stroke = 1.4.dp.toPx()
                     // Draw every status inside the icon bounds, independent of text line height.
                     when (iconStatus) {
-                        ToolStepStatus.RUNNING, ToolStepStatus.WAITING -> {
+                        ToolStepStatus.RUNNING, ToolStepStatus.WAITING, ToolStepStatus.UNKNOWN -> {
                             drawCircle(statusColor, radius = size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
                             drawLine(statusColor, center, Offset(center.x, size.height * 0.25f), stroke, StrokeCap.Round)
                             drawLine(statusColor, center, Offset(size.width * 0.72f, center.y), stroke, StrokeCap.Round)
@@ -1378,7 +1405,7 @@ private fun ToolStepContent(
             if (expanded && body == null) ChatPlainText(if (title.length > 6000) title + "\n\n" + result else title,
                 Modifier.weight(1f), style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.secondaryText)
-            else PaperText(title.take(6000), style = LocalPaperTypography.current.chrome,
+            else PaperText((if (status == ToolStepStatus.UNKNOWN) "Исход неизвестен · " else "") + title.take(6000), style = LocalPaperTypography.current.chrome,
                 color = LocalPaperColors.current.secondaryText, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             PaperText(

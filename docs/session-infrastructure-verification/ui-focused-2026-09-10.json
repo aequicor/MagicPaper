@@ -1,0 +1,116 @@
+{
+  "date": "2026-09-10",
+  "scope": "UI regression repairs and coordinated focused runtime/tool verification; before Git release fault fix",
+  "overallBuild": "FAIL: one nested CODE workspace regression; UI and listed compilation targets passed",
+  "tests": 91,
+  "failures": 1,
+  "skipped": 0,
+  "classes": [
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.domain.SessionAuthorityToolTest",
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:05:01.451Z",
+      "failedTests": []
+    },
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.domain.SessionCodingWorkspaceTest",
+      "tests": 6,
+      "failures": 1,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:05:01.493Z",
+      "failedTests": [
+        {
+          "test": "nestedCodingChildSnapshotsItsParentsWorkspaceAndOwnsAnotherWriterLease[jvm]",
+          "message": "java.util.NoSuchElementException: Key session-nested is missing in the map."
+        }
+      ]
+    },
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.domain.SessionTreeRuntimeTest",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:04:38.809Z",
+      "failedTests": []
+    },
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.domain.tools.OrchestrationToolsTest",
+      "tests": 23,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:05:04.588Z",
+      "failedTests": []
+    },
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.domain.tools.ToolReceiptIntegrityTest",
+      "tests": 19,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:05:04.885Z",
+      "failedTests": []
+    },
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.ui.screens.CodingChatCommitTest",
+      "tests": 12,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:05:04.982Z",
+      "failedTests": []
+    },
+    {
+      "module": "shared",
+      "class": "io.aequicor.magicpaper.ui.screens.RequestPinsBrowserTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:04:39.257Z",
+      "failedTests": []
+    },
+    {
+      "module": "designSystem",
+      "class": "io.aequicor.magicpaper.designsystem.PaperContentEntranceTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:04:08.078Z",
+      "failedTests": []
+    },
+    {
+      "module": "designSystem",
+      "class": "io.aequicor.magicpaper.designsystem.PaperPinnedMessageTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0,
+      "timestamp": "2026-09-10T07:04:09.495Z",
+      "failedTests": []
+    }
+  ],
+  "compileTasks": [
+    ":designSystem:compileKotlinJvm UP-TO-DATE",
+    ":designSystem:compileKotlinJs",
+    ":designSystem:compileKotlinWasmJs",
+    ":designSystem:compileAndroidMain",
+    ":shared:compileKotlinWasmJs",
+    ":shared:compileKotlinJs",
+    ":webApp:compileKotlinWasmJs",
+    ":webApp:compileKotlinJs",
+    ":shared:compileAndroidMain",
+    ":androidApp:compileDebugKotlin",
+    ":shared:compileKotlinJvm",
+    ":desktopApp:compileKotlin"
+  ],
+  "uiFindings": [
+    "CodingChatCommit progressive frames was a production regression: ed12bdd removed arrival animation; restored via designSystem PaperContentEntrance with saved lazy identity.",
+    "Request pin layout test contradicted intentional 17ebe7a trailing gutter; test now checks clear text hit area and exact restored layout.",
+    "Request pin scroll fixture retained source m8 at viewport top after only twelve compact tail rows; increased trailing content and asserted source absent before checking markers."
+  ],
+  "nativeWindows": "NOT_RUN; JVM rendering and compilation are not Windows interaction evidence"
+}

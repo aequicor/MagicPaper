@@ -19,6 +19,8 @@ class OrchestrationService(
     private val clock: () -> Long = Id::now,
     private val workerDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val toolHost: ToolHost? = null,
+    val organisms: SessionOrganismService? = null,
+    private val sessionTree: SessionTreeRuntime? = null,
 ) : PlanningExecutionHooks {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     val messageScheduler = MessageScheduler(store, this.scope, ::dispatchScheduledMessage, clock, ::synchronizeQuestionEvents, ::hasScheduledReceipt)
@@ -64,14 +66,33 @@ class OrchestrationService(
     val changes: StateFlow<Long> = _changes
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+    private var toolSecrets: Set<String> = emptySet()
+    private suspend fun toolProfiles(): List<LlmProfile> = profiles.load().also { roster ->
+        toolSecrets = roster.map { it.apiKey }.filter { it.isNotBlank() }.toSet()
+    }
     init {
+        organisms?.onProjection = ::changed
+        toolHost?.knownSecrets = { toolSecrets }
+        organisms?.store?.knownSecrets = { toolSecrets }
+        organisms?.canRecreateAfterQuarantine = { ids ->
+            val receipts = toolHost?.receipts
+            receipts != null && ids.all { owner ->
+                val organism = organisms.store.organisms.value.values.firstOrNull { owner in it.sessions }
+                val history = organism?.let { receipts.forOwner(it.projectId, owner) }
+                history != null && history.none { it.mutating && it.phase in setOf(ToolPhase.STARTED, ToolPhase.UNKNOWN, ToolPhase.WAITING, ToolPhase.PROGRESS) }
+            }
+        }
         toolHost?.checkScope = { context -> withContext(this.scope.coroutineContext.minusKey(Job)) { checkToolScope(context) } }
         toolHost?.checkReplayScope = { context -> withContext(this.scope.coroutineContext.minusKey(Job)) { checkToolScope(context, historical = true) } }
+        toolHost?.authorizeCommand = { context, definition, arguments ->
+            withContext(this.scope.coroutineContext.minusKey(Job)) { checkLegacyToolAuthority(context, definition, arguments) }
+        }
         toolHost?.reconcile = { context, receipt -> withContext(this.scope.coroutineContext.minusKey(Job)) { reconcileTool(context, receipt) } }
         toolHost?.receiver = { context, operation, tool, arguments ->
             withContext(this.scope.coroutineContext.minusKey(Job)) { executeTool(context, operation, tool, arguments) }
         }
         toolHost?.prepareWorker = { session ->
+            toolProfiles()
             val plan = session.planId?.let { store.planFor(it) }
             val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
             val attempt = stage?.attempts?.lastOrNull { it.sessionId == session.id }
@@ -79,7 +100,8 @@ class OrchestrationService(
                 plan != null && stage != null && attempt != null -> ToolExecutionContext(session.projectId, session.id, session.id, "${attempt.id}-turn-${attempt.turnIndex}",
                     ToolRole.WORKER, session.interactionMode, plan.id, plan.runId, stage.id, attempt.id, attempt.turnIndex, parentSessionId = plan.parentSessionId.takeIf { it.isNotBlank() })
                 plan != null && plan.isAuxiliarySession(session.id) -> ToolExecutionContext.worker(session).copy(
-                    role = ToolRole.CHAT, ownerSessionId = plan.auxiliaryOwner(session.id)!!, runId = plan.runId)
+                    role = ToolRole.CHAT, ownerSessionId = plan.auxiliaryOwner(session.id)!!, runId = plan.runId,
+                    auxiliaryExecution = true)
                 else -> ToolExecutionContext.worker(session).copy(role = ToolRole.CHAT, planId = null)
             }
         }
@@ -91,6 +113,58 @@ class OrchestrationService(
         return milestones.flatMap { it.attempts }.firstOrNull { id == "${it.sessionId}-merge" }?.sessionId
     }
     private fun Plan.isAuxiliarySession(id: String) = auxiliaryOwner(id) != null
+
+    /** Legacy plan tools are an adapter owned by the actual plan parent, not an alternate routing surface. */
+    private suspend fun checkLegacyToolAuthority(context: ToolExecutionContext, definition: ToolDefinition, arguments: JsonObject) {
+        if (definition.id !in setOf("plan.propose", "plan.refine", "plan.recalculate", "plan.control",
+                "stage.pause", "stage.send", "stage.resolve", "session.manage", "schedule.manage", "stage.handoff")) return
+        val plan = context.planId?.let { store.planFor(it) }
+        requireTool(plan != null && plan.projectId == context.projectId &&
+            (context.runId == null || plan.runId == context.runId)) { "План или запуск изменился" }
+        val sessions = projects.sessions(context.projectId).associateBy { it.id }
+        val organism = sessions[context.ownerSessionId]?.organismId?.let { organisms?.store?.get(it) }
+        fun requireChild(sessionId: String, parent: String) {
+            val session = sessions[sessionId] ?: return // A selected stage may not have been created yet.
+            requireTool(session.parentSessionId == parent) { "Управлять можно только непосредственным ребёнком" }
+            if (organism != null) {
+                val child = organism.sessions[sessionId]
+                // Old plan stages can exist before aggregate registration. Their persisted plan ownership
+                // and immediate origin parent are mandatory; already managed nodes cannot use this exception.
+                requireTool((session.organismId == null && child == null) ||
+                    (session.organismId == organism.id && child?.authorityParentId == parent)) { "Адресат вне полномочий сессии" }
+            }
+        }
+        fun requireStage(stageId: String) {
+            val stage = plan.milestones.firstOrNull { it.id == stageId }
+            requireTool(stage != null) { "Этап не найден" }
+            val ids = stage.attempts.map { it.sessionId }.ifEmpty { listOf(plan.taskSessionId(stageId)) }
+            ids.forEach { requireChild(it, context.ownerSessionId) }
+        }
+        if (definition.id == "stage.handoff") {
+            requireTool(context.role == ToolRole.WORKER && context.ownerSessionId == context.sessionId) { "Передать можно только свой результат" }
+            requireTool(plan.parentSessionId.isNotBlank()) { "У результата нет ответственного родителя" }
+            requireChild(context.ownerSessionId, plan.parentSessionId)
+            // targetStageId is only a request recorded for this parent; the parent's separate command routes it.
+            return
+        }
+        requireTool((plan.parentSessionId.isBlank() && context.role == ToolRole.PLANNER && definition.id == "plan.propose") ||
+            (plan.parentSessionId.isNotBlank() && context.ownerSessionId == plan.parentSessionId)) { "Планом управляет только его родительская сессия" }
+        when (definition.id) {
+            "stage.send" -> requireStage(json.decodeFromJsonElement<ToolStageSend>(arguments).stageId)
+            "stage.pause" -> json.decodeFromJsonElement<ToolStagePause>(arguments).stageIds.forEach(::requireStage)
+            "stage.resolve" -> context.stageId?.let(::requireStage)
+            "session.manage" -> requireStage(json.decodeFromJsonElement<ToolSessionManage>(arguments).stageId)
+            "schedule.manage" -> json.decodeFromJsonElement<ToolScheduleManage>(arguments).commands.forEach { command ->
+                command.targetTaskId?.let(::requireStage)
+                command.waitTaskId?.let(::requireStage)
+                val saved = plan.scheduledMessages.firstOrNull { it.id == command.ruleId }
+                saved?.targetTaskId?.let(::requireStage)
+                requireTool(saved == null || saved.targetSessionId == context.ownerSessionId ||
+                    sessions[saved.targetSessionId]?.parentSessionId == context.ownerSessionId) { "Правило адресовано чужой сессии" }
+            }
+            else -> plan.milestones.forEach { requireStage(it.id) }
+        }
+    }
 
     private suspend fun checkToolScope(context: ToolExecutionContext, historical: Boolean = false) {
         require(projects.all().any { it.id == context.projectId }) { "Проект удалён" }
@@ -108,9 +182,19 @@ class OrchestrationService(
         require(session != null || (plan != null && plan.parentSessionId.isBlank() &&
             (context.role == ToolRole.PLANNER || plan.isAuxiliarySession(context.sessionId)))) { "Сессия удалена" }
         require(session?.archived != true) { "Сессия в архиве" }
+        session?.organismId?.let { organismId ->
+            val organism = organisms?.store?.get(organismId) ?: return@let
+            val node = organism.sessions[context.ownerSessionId]
+            val auxiliaryMode = context.auxiliaryExecution && context.role == ToolRole.CHAT &&
+                context.mode == CodingInteractionMode.CODE && plan?.auxiliaryOwner(context.sessionId) == context.ownerSessionId
+            require(node != null && (context.organismId == null || context.organismId == organismId) &&
+                node.generation == context.runtimeGeneration && (node.mode == context.mode || auxiliaryMode)) { "Полномочия запуска отозваны" }
+        }
     }
 
     private suspend fun reconcileTool(context: ToolExecutionContext, receipt: ToolReceipt): JsonElement? {
+        if (receipt.toolId in setOf("session.create", "session.send", "session.control", "session.wait", "session.route",
+                "session.result.review", "session.results.integrate", "immunity.signal")) return organisms?.reconcile(context, receipt)
         val plan = context.planId?.let { store.planFor(it) } ?: return null
         val operation = receipt.operationId.takeIf { it.isNotBlank() } ?: return null
         fun success(text: String) = buildJsonObject { put("status", "applied"); put("message", text) }
@@ -139,39 +223,80 @@ class OrchestrationService(
         fun requirePlan() = plan ?: error("Не задан план")
         fun success(text: String) = buildJsonObject { put("status", "applied"); put("message", text) }
         return when (tool) {
+            "session.create", "session.send", "session.control", "session.wait", "session.route", "session.result.review", "session.result.get", "session.results.integrate", "session.integration.get", "immunity.signal" ->
+                (organisms ?: error("Организмы недоступны")).execute(context, operation, tool, arguments).also { refreshSessions() }
+            "receipt.get" -> {
+                val args = json.decodeFromJsonElement<ToolReceiptGetArgs>(arguments)
+                requireTool(args.receiptId.startsWith("${context.projectId}/${context.ownerSessionId}/")) { "Чужой журнал инструментов" }
+                requireTool(args.offset >= 0 && args.limit in 1..16_000) { "Некорректная часть результата" }
+                val receipt = toolHost?.receipts?.get(args.receiptId) ?: error("Вызов не найден")
+                val content = json.encodeToString(receipt)
+                buildJsonObject { put("receiptId", receipt.id); put("totalCharacters", content.length)
+                    put("offset", args.offset); put("content", content.drop(args.offset).take(args.limit))
+                    put("truncated", args.offset + args.limit < content.length) }
+            }
             "context.get" -> buildJsonObject {
                 put("projectId", context.projectId); put("sessionId", context.ownerSessionId)
                 val previous = toolHost?.receipts?.forRequest("${context.projectId}/${context.ownerSessionId}/${context.requestId}").orEmpty()
-                put("previousTools", buildJsonArray { previous.forEach { call -> add(buildJsonObject {
+                put("previousTools", buildJsonArray { previous.takeLast(30).forEach { call -> add(buildJsonObject {
                     put("tool", call.toolId); put("status", call.phase.name); put("operationId", call.operationId)
-                    put("arguments", call.arguments.toString().take(3000)); put("result", call.result.toString().take(6000))
+                    put("receiptId", call.id)
+                    put("arguments", call.arguments.toString().take(3000)); put("argumentsTruncated", call.arguments.toString().length > 3000)
+                    put("result", call.result.toString().take(6000)); put("resultTruncated", call.result.toString().length > 6000)
+                    put("argumentsComplete", call.argumentsComplete); put("resultComplete", call.resultComplete)
                 }) } })
+                val owner = projects.sessions(context.projectId).firstOrNull { it.id == context.ownerSessionId }
+                val organism = owner?.let { organisms?.ensure(it) }
+                if (organism != null) {
+                    put("organismId", organism.id); put("organismVersion", organism.version)
+                    put("sessionState", json.encodeToJsonElement(organism.sessions[context.ownerSessionId]))
+                    put("immunityId", organism.immunityId)
+                    val results = organism.results.filter { result ->
+                        result.sessionId == context.ownerSessionId || result.recipient == context.ownerSessionId ||
+                            context.ownerSessionId == organism.immunityId
+                    }
+                    put("resultReferences", buildJsonArray { results.takeLast(30).forEach { result -> add(buildJsonObject {
+                        put("id", result.id); put("sourceSessionId", result.sessionId); put("generation", result.generation)
+                        put("accepted", result.accepted); put("sourceVersion", result.sourceVersion); put("commitSha", result.commitSha)
+                    }) } })
+                    put("resultReferencesOmitted", (results.size - 30).coerceAtLeast(0))
+                    val integrations = organism.integrations.values.filter { it.request.actorSessionId == context.ownerSessionId || context.ownerSessionId == organism.immunityId }
+                    put("integrationReferences", buildJsonArray { integrations.takeLast(30).forEach { record -> add(buildJsonObject {
+                        put("id", record.request.id); put("phase", record.phase.name); put("commitSha", record.commitSha)
+                    }) } })
+                    put("integrationReferencesOmitted", (integrations.size - 30).coerceAtLeast(0))
+                }
+                put("previousToolsOmitted", (previous.size - 30).coerceAtLeast(0))
                 put("sessions", buildJsonArray { projects.sessions(context.projectId).filter {
                     it.id == context.ownerSessionId || it.parentSessionId == context.ownerSessionId
                 }.forEach { session -> add(buildJsonObject { put("id", session.id); put("name", session.name); put("archived", session.archived) }) } })
                 if (plan != null) {
+                    val ownsPlan = context.role != ToolRole.WORKER &&
+                        (plan.parentSessionId.isBlank() || context.ownerSessionId == plan.parentSessionId)
                     put("planId", plan.id); put("revision", plan.revision); put("runId", plan.runId)
                     put("goal", plan.goal); put("intent", plan.intent.name); put("phase", plan.phase.name)
                     put("pausedStageIds", json.encodeToJsonElement(state(plan.parentSessionId, context.projectId).pausedStages(plan)))
                     put("tree", json.encodeToJsonElement(plan.tree))
-                    put("stages", buildJsonArray { plan.selectedMilestones.forEach { stage -> add(buildJsonObject {
+                    put("stages", buildJsonArray { plan.selectedMilestones.filter {
+                        ownsPlan || it.id == context.stageId
+                    }.forEach { stage -> add(buildJsonObject {
                         put("id", stage.id); put("title", stage.title); put("status", stage.status.name)
                         put("description", stage.description); put("acceptance", stage.acceptance); put("report", stage.report.take(6000))
                     }) } })
-                    put("deliveries", json.encodeToJsonElement(plan.deliveries.filter { context.stageId == null || it.targetStageId == context.stageId }.takeLast(20)))
+                    put("deliveries", json.encodeToJsonElement(plan.deliveries.filter { ownsPlan || it.targetStageId == context.stageId }.takeLast(20)))
                 }
             }
             "plan.refine" -> {
                 val args = json.decodeFromJsonElement<ToolMessage>(arguments)
-                require(args.message.isNotBlank()) { "Добавьте поручение" }
-                require(args.revision == null || args.revision == requirePlan().revision) { "План изменился" }
+                requireTool(args.message.isNotBlank()) { "Добавьте поручение" }
+                requireTool(args.revision == null || args.revision == requirePlan().revision) { "План изменился" }
                 refine(requirePlan().id, operation, args.message, args.requiresConfirmation)
                 success("Предложение плана сохранено")
             }
             "plan.recalculate" -> {
                 val current = requirePlan()
                 val args = json.decodeFromJsonElement<ToolRecalculate>(arguments)
-                require(args.revision == current.revision && current.tree.any { it.id == args.nodeId }) { "План или узел изменился" }
+                requireTool(args.revision == current.revision && current.tree.any { it.id == args.nodeId }) { "План или узел изменился" }
                 // Use the same proposal/confirmation path as ordinary refinement.
                 refine(current.id, operation, "Пересчитай участок ${args.nodeId}", true, args.nodeId)
                 success("Предложение пересчёта сохранено")
@@ -179,21 +304,21 @@ class OrchestrationService(
             "plan.control" -> {
                 val current = requirePlan()
                 val args = json.decodeFromJsonElement<ToolPlanControl>(arguments)
-                require(current.revision == args.revision) { "План изменился; запросите актуальный контекст" }
+                requireTool(current.revision == args.revision) { "План изменился; запросите актуальный контекст" }
                 when (args.action) {
                     "pause" -> execution.pause(current.id)
                     "stop" -> execution.stop(current.id)
                     "retry" -> {
-                        require(context.sourceInput != null && context.sourceInput.scheduledRuleId == null && current.confirmedRevision != null) { "Повтор требует действия пользователя и подтверждённого плана" }
+                        requireTool(context.sourceInput != null && context.sourceInput.scheduledRuleId == null && current.confirmedRevision != null) { "Повтор требует действия пользователя и подтверждённого плана" }
                         execution.retry(current.id)
                     }
                     "resume" -> {
-                        require(context.sourceInput != null && context.sourceInput.scheduledRuleId == null) { "Возобновление требует действия пользователя" }
-                        require(current.confirmedRevision != null) { "Сначала подтвердите план" }
+                        requireTool(context.sourceInput != null && context.sourceInput.scheduledRuleId == null) { "Возобновление требует действия пользователя" }
+                        requireTool(current.confirmedRevision != null) { "Сначала подтвердите план" }
                         resumePlan(current.id)
                     }
                     "confirm" -> {
-                        require(context.sourceInput != null && context.sourceInput.scheduledRuleId == null) { "Подтверждение требует действия пользователя" }
+                        requireTool(context.sourceInput != null && context.sourceInput.scheduledRuleId == null) { "Подтверждение требует действия пользователя" }
                         confirmNow(current.id, args.proposalId, args.revision)
                     }
                     else -> error("Неизвестная команда управления")
@@ -203,7 +328,7 @@ class OrchestrationService(
             "stage.pause" -> {
                 val current = requirePlan()
                 val args = json.decodeFromJsonElement<ToolStagePause>(arguments)
-                require(args.stageIds.isNotEmpty() && args.stageIds.all { id -> current.selectedMilestones.any { it.id == id } }) { "Неизвестный этап" }
+                requireTool(args.stageIds.isNotEmpty() && args.stageIds.all { id -> current.selectedMilestones.any { it.id == id } }) { "Неизвестный этап" }
                 val key = context.sourceInput?.id ?: context.requestId
                 val saved = updateState(context.ownerSessionId, context.projectId) { old -> old.copy(workPauses = old.workPauses +
                     (key to OrchestrationPause(current.id, (old.workPauses[key]?.stageIds.orEmpty() + args.stageIds).distinct()))) }
@@ -213,18 +338,18 @@ class OrchestrationService(
             "stage.send" -> {
                 val current = requirePlan()
                 val args = json.decodeFromJsonElement<ToolStageSend>(arguments)
-                require(current.confirmedRevision != null && args.message.isNotBlank() && current.selectedMilestones.any { it.id == args.stageId }) { "Недопустимый этап или пустое задание" }
-                require(context.attemptId == null || args.stageId != context.stageId || current.coordination.firstOrNull { it.id == "${context.attemptId}-turn-${context.turnIndex}" }?.reply?.kind != StageReplyKind.RESULT) { "Для доработки текущего результата используйте stage.resolve CONTINUE" }
+                requireTool(current.confirmedRevision != null && args.message.isNotBlank() && current.selectedMilestones.any { it.id == args.stageId }) { "Недопустимый этап или пустое задание" }
+                requireTool(context.attemptId == null || args.stageId != context.stageId || current.coordination.firstOrNull { it.id == "${context.attemptId}-turn-${context.turnIndex}" }?.reply?.kind != StageReplyKind.RESULT) { "Для доработки текущего результата используйте stage.resolve CONTINUE" }
                 val id = enqueue(current.id, context.ownerSessionId, args.stageId, args.message, operation)
                 buildJsonObject { put("status", "queued"); put("deliveryId", id) }
             }
             "stage.resolve" -> {
                 val current = requirePlan()
-                require(context.attemptId != null) { "Нет текущего результата исполнителя" }
+                requireTool(context.attemptId != null) { "Нет текущего результата исполнителя" }
                 val args = json.decodeFromJsonElement<ToolStageResolve>(arguments)
                 val reply = CoordinatorReply(args.reason.ifBlank { "Результат передан на проверку" }, resultAction = args.action, continuationReason = args.reason,
                     actions = if (args.action == CoordinatorResultAction.CONTINUE) listOf(CoordinatorAction(context.stageId!!, args.reason)) else emptyList())
-                require(current.coordinatorResultProblem("${context.attemptId}-turn-${context.turnIndex}", reply) == null) { "Некорректное решение по результату; для продолжения укажите конкретную незавершённую работу" }
+                requireTool(current.coordinatorResultProblem("${context.attemptId}-turn-${context.turnIndex}", reply) == null) { "Некорректное решение по результату; для продолжения укажите конкретную незавершённую работу" }
                 if (args.action == CoordinatorResultAction.CONTINUE) enqueue(current.id, context.ownerSessionId, context.stageId!!, args.reason, operation)
                 json.encodeToJsonElement(args)
             }
@@ -239,7 +364,7 @@ class OrchestrationService(
             "schedule.manage" -> {
                 val current = requirePlan()
                 val args = json.decodeFromJsonElement<ToolScheduleManage>(arguments)
-                require(args.commands.isNotEmpty()) { "Нет операций" }
+                requireTool(args.commands.isNotEmpty()) { "Нет операций" }
                 val saved = messageScheduler.apply(current.id, args.commands, operation, context.ownerSessionId,
                     state(current.parentSessionId, current.projectId).questions.filter { it.planId == current.id }.map { it.id }.toSet(), context.stageId, expectedRunId = current.runId)
                 buildJsonObject { put("status", "applied"); put("rules", json.encodeToJsonElement(args.commands.indices.mapNotNull { saved.scheduleReceipts["$operation-schedule-$it"] })) }
@@ -248,13 +373,13 @@ class OrchestrationService(
                 val current = requirePlan()
                 val requested = json.decodeFromJsonElement<StageReply>(arguments)
                 val reply = requested.copy(waitFor = requested.waitFor?.normalized(clock()))
-                require(reply.text.isNotBlank() && (reply.targetStageId.isBlank() || current.selectedMilestones.any { it.id == reply.targetStageId })) { "Некорректный результат или адресат" }
-                require(reply.kind != StageReplyKind.WAIT || (reply.waitFor != null && reply.resumeMessage.isNotBlank())) { "Для ожидания нужны условие и сообщение продолжения" }
+                requireTool(reply.text.isNotBlank() && (reply.targetStageId.isBlank() || current.selectedMilestones.any { it.id == reply.targetStageId })) { "Некорректный результат или адресат" }
+                requireTool(reply.kind != StageReplyKind.WAIT || (reply.waitFor != null && reply.resumeMessage.isNotBlank())) { "Для ожидания нужны условие и сообщение продолжения" }
                 reply.waitFor?.validate(current, state(current.parentSessionId, current.projectId).questions.map { it.id }.toSet())
                 val id = "${context.attemptId}-turn-${context.turnIndex}"
                 store.update(current.id) { latest ->
                     val existing = latest.coordination.firstOrNull { it.id == id }
-                    require(existing == null || existing.reply == reply) { "Результат этого хода уже передан" }
+                    requireTool(existing == null || existing.reply == reply) { "Результат этого хода уже передан" }
                     if (existing != null) latest else latest.copy(coordination = latest.coordination + CoordinationRecord(id,
                         context.stageId!!, reply, runId = current.runId, attemptId = context.attemptId!!,
                         sourceSessionId = context.sessionId, turnIndex = context.turnIndex, createdAt = clock(), toolCallId = operation))
@@ -269,11 +394,9 @@ class OrchestrationService(
     private suspend inline fun <reified T> legacyTool(plan: Plan, request: String, call: String, name: String,
         args: JsonObject, noinline action: suspend () -> T): T {
         val host = toolHost ?: return action()
-        val definition = ToolCatalog.get(name)
         val context = ToolExecutionContext(plan.projectId, plan.parentSessionId, plan.parentSessionId, request,
             ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId)
-        val registry = ToolRegistry(listOf(JsonToolCommand(definition) { _, _, _ -> json.encodeToJsonElement(action()) }))
-        val tools = ToolSession(context, registry, ToolExecutor(registry, host.receipts, host.checkScope, host.checkReplayScope))
+        val tools = host.session(context, mapOf(name to { _, _, _ -> json.encodeToJsonElement(action()) }))
         val recorder = CodingRunRecorder()
         val messageId = "legacy-tool-$request-$call"
         val close = tools.events.observe { event ->
@@ -291,25 +414,43 @@ class OrchestrationService(
     private fun launch(block: suspend () -> Unit) = scope.launch {
         try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { _error.value = e.message; changed() }
     }
-    suspend fun deleteProjectSessions(projectId: String) {
-        if (!clearingProjects.add(projectId)) return
+    private val historyDeletionLock = Mutex()
+
+    suspend fun deleteProjectSessions(projectId: String) = historyDeletionLock.withLock {
+        clearingProjects.add(projectId)
+        val plans = store.plans().filter { it.projectId == projectId }
+        val planIds = plans.map { it.id }.toSet()
+        deletedPlans.addAll(planIds)
+        var sessionIds = projects.sessions(projectId).map { it.id }.toSet()
         try {
-            val plans = store.plans().filter { it.projectId == projectId }
-            deletedPlans.addAll(plans.map { it.id })
-            val sessionIds = projects.sessions(projectId).map { it.id }.toSet()
-            sessionIds.forEach { jobs.remove(it)?.cancelAndJoin() }
-            plans.forEach { execution.stopAndJoin(it.id) }
-            plans.forEach { store.deletePlan(it.id) }
-            messageLock.withLock {
-                projects.sessions(projectId).forEach { projects.deleteSession(projectId, it.id) }
+            suspend fun stopOwners(ids: Set<String>) {
+                sessionIds = sessionIds + ids
+                deletedSessions.addAll(ids)
+                val running = ids.mapNotNull { jobs.remove(it) }
+                running.forEach { it.cancel() }
+                running.joinAll()
+                val failures = plans.mapNotNull { runCatching { execution.stopAndJoin(it.id) }.exceptionOrNull() }
+                failures.firstOrNull()?.let { throw it }
             }
+            val service = organisms
+            if (service != null) sessionIds = sessionIds + service.deleteHistory(projectId, stopLegacy = ::stopOwners)
+            else stopOwners(sessionIds)
+            plans.forEach { store.deletePlan(it.id) }
+            messageLock.withLock { projects.sessions(projectId).forEach { projects.deleteSession(projectId, it.id) } }
             _drafts.update { it - sessionIds }
+            _states.update { it - sessionIds }
+            _unsavedInputs.update { it - sessionIds }
+            _persistenceErrors.update { it - sessionIds }
             changed()
+        } catch (failure: Throwable) {
+            deletedPlans.removeAll(planIds)
+            deletedSessions.removeAll(sessionIds)
+            throw failure
         } finally { clearingProjects.remove(projectId) }
     }
 
-    suspend fun deleteSessionTree(projectId: String, sessionId: String): Set<String> {
-        val ids = sessionLock.withLock {
+    suspend fun deleteSessionTree(projectId: String, sessionId: String): Set<String> = historyDeletionLock.withLock {
+        var ids = sessionLock.withLock {
             projects.sessions(projectId).sessionTreeIds(sessionId).also { deletedSessions.addAll(it) }
         }
         val remainingSessions = projects.sessions(projectId)
@@ -318,20 +459,37 @@ class OrchestrationService(
             plan.projectId == projectId && (plan.parentSessionId in ids ||
                 (plan.id in ownedPlanIds && remainingSessions.none { it.id == plan.parentSessionId }))
         }
-        deletedPlans.addAll(plans.map { it.id })
-        ids.forEach { jobs.remove(it)?.cancelAndJoin() }
-        plans.forEach { execution.stopAndJoin(it.id) }
-        plans.forEach { store.deletePlan(it.id) }
-        messageLock.withLock { ids.forEach { projects.deleteSession(projectId, it) } }
-        _drafts.update { it - ids }
-        _states.update { it - ids }
-        _unsavedInputs.update { it - ids }
-        _persistenceErrors.update { it - ids }
-        refreshSessions()
-        return ids
+        val planIds = plans.map { it.id }.toSet()
+        deletedPlans.addAll(planIds)
+        try {
+            suspend fun stopOwners(affected: Set<String>) {
+                ids = ids + affected
+                deletedSessions.addAll(affected)
+                val running = affected.mapNotNull { jobs.remove(it) }
+                running.forEach { it.cancel() }
+                running.joinAll()
+                val failures = plans.mapNotNull { runCatching { execution.stopAndJoin(it.id) }.exceptionOrNull() }
+                failures.firstOrNull()?.let { throw it }
+            }
+            val service = organisms
+            if (service != null) ids = ids + service.deleteHistory(projectId, sessionId, ::stopOwners)
+            else stopOwners(ids)
+            plans.forEach { store.deletePlan(it.id) }
+            messageLock.withLock { ids.forEach { projects.deleteSession(projectId, it) } }
+            _drafts.update { it - ids }
+            _states.update { it - ids }
+            _unsavedInputs.update { it - ids }
+            _persistenceErrors.update { it - ids }
+            refreshSessions()
+            ids
+        } catch (failure: Throwable) {
+            deletedPlans.removeAll(planIds)
+            deletedSessions.removeAll(ids)
+            throw failure
+        }
     }
 
-    suspend fun shutdown() { closing = true; scope.coroutineContext[Job]?.cancelAndJoin() }
+    suspend fun shutdown() { closing = true; organisms?.shutdown(); sessionTree?.shutdown(); scope.coroutineContext[Job]?.cancelAndJoin() }
     fun cancelRequest(sessionId: String) {
         jobs[sessionId]?.cancel()
         val coordinatingPlans = coordinatorActivity.value.values.filter { it.sessionId == sessionId }.map { it.planId }.distinct()
@@ -345,10 +503,24 @@ class OrchestrationService(
     }
     fun bootstrap() {
         execution.chatHooks = this
+        if (organisms != null) {
+            execution.prepareAttempt = organisms::preparePlanAttempt
+            execution.attemptCheckpoint = organisms::planAttemptCheckpoint
+            execution.stoppedCheckpoint = organisms::planStopped
+        }
+        sessionTree?.externalPlanStop = { rootId, caller ->
+            var confirmed = true
+            store.plans().filter { it.parentSessionId == rootId }.forEach { plan ->
+                if (!execution.stopController(plan.id, caller)) confirmed = false
+            }
+            confirmed
+        }
         launch {
             try {
+                toolProfiles()
                 refreshSessions()
                 migrate()
+                organisms?.recover()
                 refreshSessions()
                 _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }.forEach { session ->
                     try {
@@ -367,6 +539,7 @@ class OrchestrationService(
             store.plans.collect { plans ->
                 plans.filter { it.parentSessionId.isNotBlank() }.forEach { projectPlan ->
                     try {
+                        organisms?.synchronizeCompletedPlan(projectPlan)
                         publish(projectPlan)
                         if (projectPlan.intent == ExecutionIntent.RUN) _sessions.value.firstOrNull { it.id == projectPlan.parentSessionId }?.let { drainInputs(it) }
                     } catch (_: OrchestrationPersistenceException) { /* Recovery is explicit. */ }
@@ -647,6 +820,7 @@ class OrchestrationService(
         val input = OrchestrationInput(Id.new(), text.trim(), Id.now(), answers, replyTo, resumeAfter = resumeAfter)
         launch {
             if (session.id in deletedSessions) return@launch
+            organisms?.prepareUserTurn(session, input.id)
             sessionLock.withLock {
                 val latest = projects.sessions(session.projectId).firstOrNull { it.id == session.id } ?: return@launch
                 projects.saveSession(latest.namedFromPrompt(text))
@@ -838,6 +1012,11 @@ class OrchestrationService(
     }
 
     private suspend fun processInput(session: CodingSession, input: OrchestrationInput) {
+        if (sessionTree != null) sessionTree.withScope(session) { processInputBody(it, input) }
+        else processInputBody(session, input)
+    }
+
+    private suspend fun processInputBody(session: CodingSession, input: OrchestrationInput) {
         var plan = input.sourcePlanId?.let { store.planFor(it)?.takeIf { p -> p.parentSessionId == session.id } } ?: currentPlan(session)
         if (plan == null) {
             val id = "plan-${input.id}"
@@ -934,17 +1113,19 @@ class OrchestrationService(
         }
         val appliedMutation = decision.toolsApplied && toolHost?.receipts
             ?.forRequest("${session.projectId}/${session.id}/${input.id}").orEmpty()
-            .any { it.phase == ToolPhase.SUCCEEDED }
+            .any { it.phase == ToolPhase.SUCCEEDED && !it.native && ToolCatalog.definitions.any { definition -> definition.id == it.toolId && definition.mutating } }
         if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER || appliedMutation)
             store.planFor(current.id)?.takeIf { it.intent == ExecutionIntent.RUN && it.issue == null }?.let { execution.start(it.id) }
     }
 
     private suspend fun interpretToolInput(session: CodingSession, plan: Plan, input: OrchestrationInput, profile: LlmProfile): UserTurnDecision {
         val tools = toolHost!!.session(ToolExecutionContext(plan.projectId, session.id, session.id, input.id,
-            ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId, sourceInput = input))
-        val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
+            ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId, sourceInput = input,
+            organismId = session.organismId, runtimeGeneration = session.runtimeGeneration,
+            planningRulesSnapshot = session.planningRulesSnapshot ?: plan.planningRulesSnapshot))
+        val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.origin}: ${it.text}" }
         val messages = listOf(LlmMessage(LlmChatRole.SYSTEM,
-            "Ты оркестратор. Сначала получи context.get. Учитывай previousTools: не повторяй применённые действия; при неизвестном исходе требуется восстановление. Вопрос о статусе или результате требует объяснения, не изменения плана. " +
+            "Ты рабочая сессия. Сначала получи context.get. Учитывай previousTools: не повторяй применённые действия; при неизвестном исходе требуется восстановление. Вопрос о статусе или результате требует объяснения, не изменения плана. " +
                 "Для явного поручения создать или изменить план используй plan.refine; для уточнения без поручения спроси, нужна ли доработка. " +
                 "При поправках сначала приостанови только затронутые этапы через stage.pause; независимые этапы продолжаются. " +
                 "Для задания в рамках существующего этапа используй stage.send. Структуру и критерии меняй через предложение плана. " +
@@ -968,12 +1149,12 @@ class OrchestrationService(
     }
 
     private suspend fun interpretInput(session: CodingSession, plan: Plan, input: OrchestrationInput, savedDecisionProblem: String? = null): UserTurnDecision {
-        val roster = profiles.load()
+        val roster = toolProfiles()
         val profile = (session.modelSelection ?: plan.plannerSelection)?.let { ProfileResolver.selection(it, roster) }
             ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster) ?: error("Подключите модель оркестратора")
         if (toolHost != null) return interpretToolInput(session, plan, input, profile)
         var requests = state(session.id, session.projectId).openQuestions(plan.id)
-        val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.role}: ${it.text}" }
+        val history = inputHistory(session).filter { it.handoff == null }.takeLast(30).joinToString("\n") { "${it.origin}: ${it.text}" }
         fun context(current: Plan): String =
             "Актуальное состояние: runId=${current.runId}; intent=${current.intent}; phase=${current.phase}; статус=${current.status}; ошибка=${current.issue?.message.orEmpty()}\n" +
                 "Итоговая проверка: ${current.finalAttempt?.let { "фаза=${it.phase}; ошибка=${it.error?.message.orEmpty()}; отчёт=${it.report}" } ?: "нет сохранённой попытки"}\n" +
@@ -1187,7 +1368,7 @@ class OrchestrationService(
             else coordinatorActivity.update { it + (nestedActivityId to CoordinatorActivity(id, sessionId, "$requestId-reply", activity.value)) }
         }
         try {
-            val roster = profiles.load()
+            val roster = toolProfiles()
             val session = projects.sessions(pending.projectId).first { it.id == sessionId }
             val choice = session.modelSelection ?: pending.plannerSelection
             val profile = if (choice != null) ProfileResolver.selection(choice, roster) else ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
@@ -1366,7 +1547,7 @@ class OrchestrationService(
     }
 
     override suspend fun recoverAssignments(plan: Plan): Plan {
-        val roster = profiles.load()
+        val roster = toolProfiles()
         val sessions = projects.sessions(plan.projectId)
         val parent = sessions.firstOrNull { it.id == plan.parentSessionId }
         val selected = parent?.modelSelection?.let { ProfileResolver.selection(it, roster) }
@@ -1469,8 +1650,50 @@ class OrchestrationService(
     fun restoreSession(sessionId: String) = launch { changeSession(sessionId, SessionCommandKind.RESTORE) }
     fun renameSession(sessionId: String, name: String) = launch { changeSession(sessionId, SessionCommandKind.RENAME, name) }
 
+    suspend fun changeManagedInteractionMode(session: CodingSession, mode: CodingInteractionMode): CodingSession =
+        (organisms ?: error("Организмы недоступны")).changeMode(session, mode).also { refreshSessions() }
+
+    suspend fun prepareManagedUserTurn(session: CodingSession, requestId: String) = organisms?.prepareUserTurn(session, requestId)
+
+    fun stopManagedSession(sessionId: String) = launch {
+        val session = projects.all().flatMap { projects.sessions(it.id) }.firstOrNull { it.id == sessionId } ?: return@launch
+        stopManaged(session, archive = false)
+    }
+
+    private suspend fun stopManaged(session: CodingSession, archive: Boolean) {
+        val service = organisms ?: error("Организмы недоступны")
+        val organism = service.ensure(session)
+        val saved = service.store.requestUserStop(organism.id, session.id, Id.new(), archive)
+        service.project(saved); refreshSessions()
+        val ids = saved.subtree(session.id)
+        ids.forEach { jobs[it]?.cancel() }
+        store.plans().filter { it.parentSessionId in ids }.forEach { execution.stopAndJoin(it.id) }
+        service.stopSubtree(ids)
+        service.project(service.store.finishStop(saved.id, ids))
+        refreshSessions()
+    }
+
     private suspend fun changeSession(sessionId: String, kind: SessionCommandKind, name: String = "") {
         val session = projects.all().flatMap { projects.sessions(it.id) }.firstOrNull { it.id == sessionId } ?: return
+        if (session.organismId != null && kind == SessionCommandKind.ARCHIVE) {
+            stopManaged(session, archive = true)
+            return
+        }
+        if (session.organismId != null && kind == SessionCommandKind.RESTORE) {
+            (organisms ?: error("Организмы недоступны")).restoreFromArchive(session)
+            refreshSessions()
+            return
+        }
+        if (session.organismId != null && kind == SessionCommandKind.RENAME) {
+            (organisms ?: error("Организмы недоступны")).renameByUser(session, name)
+            session.planId?.let { planId -> store.planFor(planId)?.let {
+                store.update(planId) { old -> old.copy(milestones = old.milestones.map { stage ->
+                    if (stage.id == session.stageId) stage.copy(displayName = name.trim()) else stage
+                }) }
+            } }
+            refreshSessions()
+            return
+        }
         if (session.effectiveRole == CodingSessionRole.ORCHESTRATOR && kind == SessionCommandKind.RENAME) {
             require(name.isNotBlank()) { "Добавьте название" }
             projects.saveSession(session.copy(name = name.trim(), nameManuallySet = true))
@@ -1503,18 +1726,33 @@ class OrchestrationService(
 
     private suspend fun performSessionCommand(plan: Plan, command: SessionCommand, publishNotice: Boolean = true) = sessionLock.withLock {
         if (plan.id in deletedPlans || plan.parentSessionId in deletedSessions) return@withLock
-        require(plan.parentSessionId.isNotBlank()) { "Не задан оркестратор" }
+        requireTool(plan.parentSessionId.isNotBlank()) { "Не задан оркестратор" }
         val saved = updateState(plan.parentSessionId, plan.projectId) { old ->
             if (old.sessionCommands.any { it.id == command.id }) old else old.copy(sessionCommands = old.sessionCommands + command)
         }
-        if (saved.sessionCommands.first { it.id == command.id }.applied) return@withLock
+        val recorded = saved.sessionCommands.first { it.id == command.id }
+        requireTool(recorded.copy(applied = false, error = "") == command.copy(applied = false, error = "")) { "Идентификатор команды использован с другими аргументами" }
+        if (recorded.applied) return@withLock
         val session = projects.sessions(plan.projectId).firstOrNull { it.id == command.sessionId }
         val stage = plan.milestones.firstOrNull { it.id == command.stageId }
+        val rejection = recorded.error.ifBlank {
+            if (session?.organismId != null && command.kind != SessionCommandKind.CREATE)
+                "Команда session.manage не выполнена: для управляемой сессии используйте session.control с текущими полномочиями и бюджетом восстановления." else ""
+        }
+        if (rejection.isNotBlank()) {
+            updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(sessionCommands = old.sessionCommands.map {
+                if (it.id == command.id) it.copy(error = rejection) else it
+            }) }
+            // Retain the rejected intent and rebuild its diagnostic history on replay; never mint a fresh generation.
+            append(plan.projectId, plan.parentSessionId, CodingMessage("${command.id}-rejected", CodingRole.AGENT,
+                rejection, createdAt = Id.now(), origin = MessageOrigin.TOOL, systemNotice = true))
+            throw ToolArgumentRejection(rejection)
+        }
         try {
-            require(session == null || session.parentSessionId == plan.parentSessionId) { "Сессия принадлежит другому оркестратору" }
+            requireTool(session == null || session.parentSessionId == plan.parentSessionId) { "Сессия принадлежит другому оркестратору" }
             when (command.kind) {
                 SessionCommandKind.CREATE -> {
-                    require(stage != null) { "Сначала добавьте этап в план" }
+                    requireTool(stage != null) { "Сначала добавьте этап в план" }
                     if (session == null) projects.saveSession(CodingSession(command.sessionId, plan.projectId,
                         command.name.ifBlank { stage.title }, Id.now(), planId = plan.id, parentSessionId = plan.parentSessionId,
                         stageId = stage.id, role = CodingSessionRole.WORKER, stageNumber = stage.displayNumber,
@@ -1523,13 +1761,13 @@ class OrchestrationService(
                         engine = stage.attempts.firstOrNull()?.engine ?: plan.engine ?: legacyCodingEngine(profiles.load().firstOrNull { it.id == stage.assignment?.profileId })))
                 }
                 SessionCommandKind.ARCHIVE -> {
-                    require(session != null && stage != null) { "Сессия не найдена" }
+                    requireTool(session != null && stage != null) { "Сессия не найдена" }
                     val latest = store.planFor(plan.id) ?: return@withLock
                     val currentStage = latest.milestones.first { it.id == stage.id }
-                    require(currentStage.completed || (currentStage.attempts.isEmpty() && currentStage.id !in latest.selectedMilestones.map { it.id })) {
+                    requireTool(currentStage.completed || (currentStage.attempts.isEmpty() && currentStage.id !in latest.selectedMilestones.map { it.id })) {
                         "Сессию незавершённого этапа нельзя архивировать"
                     }
-                    require(latest.deliveries.none { it.targetStageId == stage.id && it.state in setOf(DeliveryState.QUEUED, DeliveryState.DELIVERED) } &&
+                    requireTool(latest.deliveries.none { it.targetStageId == stage.id && it.state in setOf(DeliveryState.QUEUED, DeliveryState.DELIVERED) } &&
                         saved.openQuestions(plan.id).filter { it.refinementRequest == null && !it.forDiscussion }
                             .none { it.sourceSessionId == session.id || it.stageIds.isEmpty() || stage.id in it.stageIds }) {
                         "У сессии есть ожидающие сообщения или вопросы"
@@ -1537,11 +1775,11 @@ class OrchestrationService(
                     projects.saveSession(session.copy(archived = true))
                 }
                 SessionCommandKind.RESTORE -> {
-                    require(session != null) { "Сессия не найдена" }
+                    requireTool(session != null) { "Сессия не найдена" }
                     projects.saveSession(session.copy(archived = false))
                 }
                 SessionCommandKind.RENAME -> {
-                    require(session != null && command.name.isNotBlank()) { "Добавьте название сессии" }
+                    requireTool(session != null && command.name.isNotBlank()) { "Добавьте название сессии" }
                     projects.saveSession(session.copy(name = command.name, nameManuallySet = true))
                     store.update(plan.id) { old -> old.copy(milestones = old.milestones.map {
                         if (it.id == stage?.id) it.copy(displayName = command.name) else it
@@ -1690,7 +1928,7 @@ class OrchestrationService(
             Если продолжение зависит от события или времени, верни kind=WAIT, waitFor={...}, resumeMessage="что выполнить после события".
             waitFor использует тот же формат MessageTrigger: ${schedulingTriggerInstructions()}
             Не вызывай сессии для проверки статуса; предложи ожидание оркестратору. Постоянные ID выдаёт приложение.
-            Для передачи информации другим этапам обратись к оркестратору через QUESTION и targetStageId. Не запускай других исполнителей самостоятельно.
+            Для передачи информации другим веткам обратись к родителю. Инструменты сессий проверяют родство, режим и выделенный бюджет на стороне приложения.
             ${if (toolHost != null) "Передай структурированный результат через magicpaper_stage_handoff; последний текст — краткое пояснение. Параметры инструмента:" else "Последнее сообщение верни строго JSON:"} {"kind":"RESULT|QUESTION|BLOCKED|WAIT","text":"результат, вопрос или причина блокировки","targetStageId":"id этапа или пустая строка","changedFiles":["относительный путь"]}.
             RESULT только после выполнения и проверки; QUESTION если нужен ответ; BLOCKED если продолжать нельзя. Не заменяй вопрос успешным результатом.
             Возврат RESULT уже передаёт работу на проверку приложения. Ты не можешь выставить статус этапа сообщением «завершён»; сохраняй в text факты, команды и результаты проверок, включая прежние актуальные доказательства и ограничения.
@@ -1802,7 +2040,7 @@ class OrchestrationService(
         // Reconsider rejected commands; receipts still protect effects that were committed.
         if (savedDecisionProblem != null) decision = null
         if (decision == null) {
-            val roster = profiles.load()
+            val roster = toolProfiles()
             val judge = plan.plannerSelection?.let { ProfileResolver.selection(it, roster) } ?: ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
                 ?: run {
                     askUser(plan, stage, "$eventId-help", "Подключите модель оркестратора или уточните, как продолжить этап «${stage.title}»: ${reply.text}")
@@ -1931,7 +2169,7 @@ class OrchestrationService(
                 ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, plan.id, plan.runId,
                 record.stageId, record.attemptId.ifBlank { eventId.substringBeforeLast("-turn-") }, record.turnIndex))
             val instructions = listOf(LlmMessage(LlmChatRole.SYSTEM,
-                "Ты оркестратор результата этапа. Используй context.get для текущего состояния. " +
+                "Ты ответственная родительская сессия результата этапа. Используй context.get для текущего состояния. " +
                     "Передавай задания через stage.send, управляй сессиями через session.manage, задавай вопросы через questionnaire. " +
                     "При RESULT вызови stage.resolve: VERIFY для проверки приложения; CONTINUE только с конкретной незавершённой работой. " +
                     "Не объявляй этап принятым: приёмку проводит приложение. Для WAIT назначь ожидание через schedule.manage. " +

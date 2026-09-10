@@ -63,7 +63,7 @@ internal fun OrchestrationStatus(
         plan.phase == ExecutionPhase.COMPLETE -> "Работа завершена · можно задать вопрос или запросить доработку"
         plan.intent == ExecutionIntent.PAUSE -> "Пауза"
         plan.intent == ExecutionIntent.STOP && plan.confirmedRevision != null -> "Остановлено"
-        drafts[session.session.id]?.active == true -> "Оркестратор обрабатывает сообщение"
+        drafts[session.session.id]?.active == true -> "Сообщение обрабатывается"
         plan.confirmedRevision == null -> if (plan.milestones.isEmpty()) "Уточнение задачи" else "План сохранён"
         plan.phase == ExecutionPhase.VERIFYING -> "Итоговая проверка"
         plan.phase == ExecutionPhase.APPLYING -> "Перенос результата в проект"
@@ -72,7 +72,7 @@ internal fun OrchestrationStatus(
         else -> "Ожидание следующего этапа"
     }
     PaperStatusPanel(modifier.fillMaxWidth().padding(horizontal = 8.dp).semantics {
-        contentDescription = "Состояние оркестратора"
+        contentDescription = "Состояние сессии"
     }, scrolled = scrolled) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             PaperText("${session.session.subtitle()} · ${session.session.name}", role = PaperTextRole.TITLE,
@@ -164,7 +164,7 @@ internal fun OrchestrationStatus(
                     blockers.isNotEmpty() -> "исправить причину блокировки"
                     plan?.phase == ExecutionPhase.COMPLETE -> "обсудить результат или описать доработку"
                     plan?.confirmedRevision == null -> "уточнить и подтвердить план"
-                    else -> "дождаться результатов исполнителей"
+                    else -> "дождаться результатов дочерних сессий"
                 }, role = PaperTextRole.LABEL)
                 if (plan != null && plan.phase != ExecutionPhase.COMPLETE && plan.confirmedRevision != null) {
                     Row {
@@ -238,11 +238,18 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
                 AddressLink(route.target, "Кому", onOpen, Modifier.weight(1f))
             }
         }
-        route.via?.takeIf { it.sessionId != route.source.sessionId }?.let {
-            PaperText("Через оркестратора: ${it.name}", role = PaperTextRole.LABEL)
+        if (route.hops.size > 2) PaperText("Маршрут: ${route.hops.joinToString(" → ") { it.name }}", role = PaperTextRole.LABEL)
+        else route.via?.takeIf { it.sessionId != route.source.sessionId }?.let {
+            PaperText("Через родителя: ${it.name}", role = PaperTextRole.LABEL)
         }
         if (route.stageLabel.isNotBlank()) PaperText(route.stageLabel, role = PaperTextRole.LABEL)
-        PaperText(route.kind + (delivery?.let { " · ${it.state.deliveryLabel()}" } ?: ""), role = PaperTextRole.LABEL)
+        val contextState = route.sessionDeliveryState?.let { state -> when (state) {
+            SessionDeliveryState.ACCEPTED -> "Принято к доставке"
+            SessionDeliveryState.DELIVERED -> "Доставлено"
+            SessionDeliveryState.PROCESSED -> "Обработано"
+            SessionDeliveryState.CANCELLED -> "Отменено"
+        } }
+        PaperText(route.kind + (contextState?.let { " · $it" } ?: delivery?.let { " · ${it.state.deliveryLabel()}" } ?: ""), role = PaperTextRole.LABEL)
         message.handoff?.let { HandoffDetails(it) }
         PaperDivider(Modifier.padding(vertical = 4.dp))
     }
@@ -288,13 +295,13 @@ internal fun OrchestrationMessageInputStatus(message: CodingMessage, sessionId: 
 
 internal fun DeliveryState.deliveryLabel(): String = when (this) {
     DeliveryState.QUEUED -> "В очереди"
-    DeliveryState.DELIVERED -> "Передано исполнителю"
+    DeliveryState.DELIVERED -> "Доставлено в сессию"
     DeliveryState.ANSWERED -> "Обработано"
     DeliveryState.CANCELLED -> "Отменено"
 }
 internal fun OrchestrationInputStatus.inputLabel(): String = when (this) {
     OrchestrationInputStatus.QUEUED -> "Сообщение в очереди"
-    OrchestrationInputStatus.PROCESSING -> "Оркестратор обрабатывает сообщение"
+    OrchestrationInputStatus.PROCESSING -> "Сообщение обрабатывается"
     OrchestrationInputStatus.DONE -> "Сообщение обработано"
     OrchestrationInputStatus.FAILED -> "Нужна повторная обработка"
     OrchestrationInputStatus.CANCELLED -> "Обработка остановлена"

@@ -56,7 +56,9 @@ class PiCodingRuntime(
     override val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
     private val subscriptionToken: (suspend () -> String)? = null,
 ) : CodingRuntime {
-    private val questionnaireRegistry = RuntimeQuestionnaires()
+    private val questionnaireRegistry = RuntimeQuestionnaires(FileRuntimeQuestionnaireStore(
+        // Uninstalling the execution engine must not delete confirmed user answers or their audit.
+        File(rootDir.absoluteFile.parentFile, "${rootDir.name}-questionnaires")))
     override val questionnaires = questionnaireRegistry.requests
     override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) { questionnaireRegistry.respond(id, answers) }
 
@@ -223,7 +225,7 @@ class PiCodingRuntime(
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = if (planning) profile.forModel() else profile.forCoding()
         writePiConfig(codingProfile, sessionHome(session.id), imageInput = !restricted && computerUse?.grant(session.id) != null)
-        if (restricted) writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research))
+        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.planningRulesSnapshot))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)

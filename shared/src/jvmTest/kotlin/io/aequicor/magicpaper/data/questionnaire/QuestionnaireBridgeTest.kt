@@ -42,6 +42,8 @@ class QuestionnaireBridgeTest {
         val response = async(Dispatchers.IO) { runCatching { call(bridge.url, bridge.token) } }
         withTimeout(5000) { registry.requests.first { it.isNotEmpty() } }
         bridge.close()
+        assertTrue(registry.requests.value.isEmpty(), "Close must join questionnaire cancellation before returning")
+        assertEquals(RuntimeQuestionnaireStatus.CANCELLED, registry.history.value.single().status)
         withTimeout(5000) { registry.requests.first { it.isEmpty() } }
         response.await()
         val questions = QuestionnaireTool.decode(Json.parseToJsonElement(args).jsonObject)

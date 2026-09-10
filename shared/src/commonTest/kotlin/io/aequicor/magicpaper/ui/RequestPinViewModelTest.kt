@@ -5,11 +5,63 @@ import io.aequicor.magicpaper.data.storage.JsonRequestPinRepository
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.*
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RequestPinViewModelTest {
+    @Test fun failedDeletionSignalsEveryOwnerAndPreservesHistoryPinsAndProject() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            for (action in listOf("project", "all", "subtree")) {
+                val f = ModelSettingsFixture()
+                val repo = JsonCodingProjectRepository(f.kv, f.json)
+                val pins = JsonRequestPinRepository(f.kv, f.json)
+                val aborted = mutableSetOf<String>()
+                val runtime = object : CodingRuntime {
+                    override val supported = true
+                    override val rootPath = "/tmp/project"
+                    override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
+                    override fun ensureReady() = flowOf(RuntimeStatus(RuntimePhase.READY))
+                    override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = emptyFlow<CodingEvent>()
+                    override fun abort(sessionId: String) {
+                        aborted += sessionId
+                        if (sessionId == "root") error("Остановка не подтверждена")
+                    }
+                    override fun abortAll() = Unit
+                    override suspend fun uninstall() = Unit
+                }
+                repo.save(CodingProject("project", "Проект", "/tmp/project", 1))
+                listOf(CodingSession("root", "project", "Корень", 1),
+                    CodingSession("child", "project", "Потомок", 2, parentSessionId = "root")).forEach { session ->
+                    repo.saveSession(session)
+                    repo.saveMessages("project", session.id, listOf(CodingMessage("input-${session.id}", CodingRole.USER, "Запрос", createdAt = 1)))
+                }
+                val model = f.prepare(codingRuntime = runtime, codingProjects = repo, requestPinRepository = pins)
+                try {
+                    model.open(Screen.CODING); advanceUntilIdle()
+                    model.selectCodingSession("root"); advanceUntilIdle()
+                    val key = PinConversation("root", "project")
+                    assertTrue(pins.load(key).isNotEmpty())
+                    when (action) {
+                        "project" -> model.deleteCodingProject("project")
+                        "all" -> model.deleteAllCodingSessions("project")
+                        else -> model.deleteCodingSession("root")
+                    }
+                    advanceUntilIdle()
+                    assertEquals(setOf("root", "child"), aborted, action)
+                    assertEquals(2, repo.sessions("project").size, action)
+                    assertTrue(repo.messages("project", "root").isNotEmpty(), action)
+                    assertTrue(pins.load(key).isNotEmpty(), action)
+                    assertTrue(repo.all().any { it.id == "project" }, action)
+                    assertEquals("Остановка не подтверждена", model.state.value.notice, action)
+                } finally { model.shutdownCoding() }
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun planningSessionPinsOnlyClassifiedRequestsAndRetainsTheirClarifications() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         var vm: MagicPaperViewModel? = null

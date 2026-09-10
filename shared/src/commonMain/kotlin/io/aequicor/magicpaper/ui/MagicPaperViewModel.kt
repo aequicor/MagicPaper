@@ -240,6 +240,11 @@ class MagicPaperViewModel(
     init {
         scope.launch { _state.collect { refreshInteractions() } }
         codingRuntime?.let { runtime -> scope.launch { runtime.questionnaires.collect { refreshInteractions() } } }
+        planningChat?.organisms?.let { service -> scope.launch {
+            service.store.organisms.collect { organisms ->
+                _state.update { it.copy(coding = it.coding.copy(organisms = organisms)) }
+            }
+        } }
         planningChat?.let { service -> scope.launch {
             combine(service.states, service.store.plans, service.persistenceErrors, service.drafts) { _, _, _, _ -> Unit }.collect {
                 _state.update { state -> state.copy(coding = state.coding.copy(sessions = state.coding.sessions.map(::withPlanningState))) }
@@ -315,7 +320,7 @@ class MagicPaperViewModel(
                 }
                 val histories = buildMap {
                     for (session in stored) {
-                        if (session.id !in old || session.stageId != null || session.planningMode ||
+                        if (session.id !in old || session.organismId != null || session.stageId != null || session.planningMode ||
                             service.store.plans.value.any { it.parentSessionId == session.id })
                             put(session.id, repo.messages(session.projectId, session.id))
                     }
@@ -1250,35 +1255,97 @@ class MagicPaperViewModel(
         }
     }
 
+    private val deletingCodingProjects = MutableStateFlow<Set<String>>(emptySet())
+    private val _immunityActions = MutableStateFlow<Set<String>>(emptySet())
+    val immunityActions: StateFlow<Set<String>> = _immunityActions.asStateFlow()
+
+    fun approveImmunityIntervention(organismId: String, proposalId: String, action: ImmunityAction, deleteConfirmed: Boolean = false) {
+        val service = planningChat?.organisms ?: return
+        if (action == ImmunityAction.DELETE_HISTORY && !deleteConfirmed) return
+        val key = "$organismId:$proposalId"
+        while (true) {
+            val pending = _immunityActions.value
+            if (key in pending) return
+            if (_immunityActions.compareAndSet(pending, pending + key)) break
+        }
+        scope.launch {
+            try {
+                service.approveImmunityIntervention(organismId, proposalId, action) { projectId, target ->
+                    val repo = codingProjects ?: error("Хранилище сессий недоступно")
+                    val ids = repo.sessions(projectId).sessionTreeIds(target).toMutableSet()
+                    val running = ids.mapNotNull { removeCodingJob(it) }
+                    running.forEach { it.cancel() }
+                    ids.forEach { runCatching { codingRuntime?.abort(it) } }
+                    running.joinAll()
+                    ids.addAll(planningChat.deleteSessionTree(projectId, target))
+                    ids.forEach { requestPins?.remove(PinConversation(it, projectId)) }
+                    _state.update { state ->
+                        val rest = state.coding.sessions.filterNot { it.session.id in ids }
+                        state.copy(coding = state.coding.copy(sessions = rest,
+                            currentSessionId = state.coding.currentSessionId?.takeUnless { it in ids }
+                                ?: rest.firstOrNull { it.session.projectId == projectId }?.session?.id))
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось выполнить действие иммунитета") } }
+            finally { _immunityActions.update { it - key } }
+        }
+    }
+
+    fun dismissImmunityIntervention(organismId: String, proposalId: String) {
+        val service = planningChat?.organisms ?: return
+        scope.launch {
+            try { service.dismissImmunityIntervention(organismId, proposalId) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось отклонить предложение") } }
+        }
+    }
+
     fun deleteCodingProject(id: String) {
         val repo = codingProjects ?: return
+        while (true) {
+            val pending = deletingCodingProjects.value
+            if (id in pending) return
+            if (deletingCodingProjects.compareAndSet(pending, pending + id)) break
+        }
         scope.launch {
-            // Прерываем прогоны всех сессий удаляемого проекта.
-            repo.sessions(id).forEach { session ->
-                requestPins?.remove(PinConversation(session.id, id))
-                codingRuntime?.abort(session.id)
-                removeCodingJob(session.id)?.cancel()
-            }
-            repo.delete(id)
-            val rest = repo.all()
-            _state.update {
-                it.copy(
-                    coding = it.coding.copy(
-                        projects = rest,
-                        // Сессии остальных проектов остаются в состоянии (живые прогоны).
-                        sessions = it.coding.sessions.filter { s -> s.session.projectId != id },
-                        currentSessionId = null,
-                        projectStatuses = it.coding.projectStatuses - id,
-                    ),
-                )
-            }
-            val current = _state.value.coding
-            if (current.current?.id == id) {
-                rest.firstOrNull()?.let { openCodingProject(it.id) }
-                    ?: _state.update {
-                        it.copy(coding = it.coding.copy(current = null, sessions = emptyList(), currentSessionId = null))
-                    }
-            }
+            try {
+                val sessions = repo.sessions(id)
+                val running = sessions.mapNotNull { removeCodingJob(it.id) }
+                running.forEach { it.cancel() }
+                val failures = sessions.mapNotNull { session -> runCatching { codingRuntime?.abort(session.id) }.exceptionOrNull() }
+                running.joinAll()
+                // The service joins plan scopes and durably tombstones their organism before
+                // the project key disappears. An uncertain stop leaves the project intact.
+                if (planningChat != null) planningChat.deleteProjectSessions(id)
+                else {
+                    failures.firstOrNull()?.let { throw it }
+                    sessions.forEach { codingRuntime?.reconcile(it.id) }
+                }
+                sessions.forEach { requestPins?.remove(PinConversation(it.id, id)) }
+                repo.delete(id)
+                val rest = repo.all()
+                _state.update {
+                    it.copy(
+                        coding = it.coding.copy(
+                            projects = rest,
+                            // Сессии остальных проектов остаются в состоянии (живые прогоны).
+                            sessions = it.coding.sessions.filter { s -> s.session.projectId != id },
+                            currentSessionId = null,
+                            projectStatuses = it.coding.projectStatuses - id,
+                        ),
+                    )
+                }
+                val current = _state.value.coding
+                if (current.current?.id == id) {
+                    rest.firstOrNull()?.let { openCodingProject(it.id) }
+                        ?: _state.update {
+                            it.copy(coding = it.coding.copy(current = null, sessions = emptyList(), currentSessionId = null))
+                        }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось удалить проект") } }
+            finally { deletingCodingProjects.update { it - id } }
         }
     }
 
@@ -1288,7 +1355,9 @@ class MagicPaperViewModel(
     fun addCodingSession(engine: CodingEngine = _state.value.settings.defaultCodingEngine) {
         val repo = codingProjects ?: return
         val project = _state.value.coding.current ?: return
+        if (project.id in deletingCodingProjects.value) return
         scope.launch {
+            if (project.id in deletingCodingProjects.value || repo.all().none { it.id == project.id }) return@launch
             val session = CodingSession(
                 id = Id.new(),
                 projectId = project.id,
@@ -1329,20 +1398,28 @@ class MagicPaperViewModel(
     fun deleteAllCodingSessions(projectId: String) {
         val repo = codingProjects ?: return
         scope.launch {
-            repo.sessions(projectId).forEach { session ->
-                requestPins?.remove(PinConversation(session.id, projectId))
-                codingRuntime?.abort(session.id)
-                removeCodingJob(session.id)?.let { job -> job.cancel(); job.join() }
-            }
-            if (planningChat != null) planningChat.deleteProjectSessions(projectId)
-            else repo.sessions(projectId).forEach { repo.deleteSession(projectId, it.id) }
-            _state.update { state ->
-                val remaining = state.coding.sessions.filterNot { it.session.projectId == projectId }
-                state.copy(coding = state.coding.copy(sessions = remaining,
-                    currentSessionId = state.coding.currentSessionId?.takeIf { id -> remaining.any { it.session.id == id } },
-                    projectStatuses = state.coding.projectStatuses - projectId))
-            }
-            refreshProjectStatus(projectId)
+            try {
+                val sessions = repo.sessions(projectId)
+                val running = sessions.mapNotNull { removeCodingJob(it.id) }
+                running.forEach { it.cancel() }
+                val failures = sessions.mapNotNull { runCatching { codingRuntime?.abort(it.id) }.exceptionOrNull() }
+                running.joinAll()
+                if (planningChat != null) planningChat.deleteProjectSessions(projectId)
+                else {
+                    failures.firstOrNull()?.let { throw it }
+                    sessions.forEach { codingRuntime?.reconcile(it.id) }
+                    sessions.forEach { repo.deleteSession(projectId, it.id) }
+                }
+                sessions.forEach { requestPins?.remove(PinConversation(it.id, projectId)) }
+                _state.update { state ->
+                    val remaining = state.coding.sessions.filterNot { it.session.projectId == projectId }
+                    state.copy(coding = state.coding.copy(sessions = remaining,
+                        currentSessionId = state.coding.currentSessionId?.takeIf { id -> remaining.any { it.session.id == id } },
+                        projectStatuses = state.coding.projectStatuses - projectId))
+                }
+                refreshProjectStatus(projectId)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось удалить сессии") } }
         }
     }
 
@@ -1350,7 +1427,7 @@ class MagicPaperViewModel(
         val repo = codingProjects ?: return
         val target = _state.value.coding.sessions.firstOrNull { it.session.id == id } ?: return
         scope.launch {
-            if (target.session.stageId != null && planningChat != null) {
+            if ((target.session.stageId != null || target.session.organismId != null) && planningChat != null) {
                 planningChat.archiveSession(id)
                 return@launch
             }
@@ -1369,29 +1446,36 @@ class MagicPaperViewModel(
         val coding = _state.value.coding
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
         scope.launch {
-            if (target.session.stageId != null && planningChat != null && planningChat.hasLiveOrchestrator(target.session)) {
-                planningChat.archiveSession(id)
-                return@launch
-            }
-            val projectId = target.session.projectId
-            val ids = repo.sessions(projectId).sessionTreeIds(id).toMutableSet()
-            ids.forEach { removedId ->
-                codingRuntime?.abort(removedId)
-                removeCodingJob(removedId)?.cancelAndJoin()
-            }
-            if (planningChat != null) ids.addAll(planningChat.deleteSessionTree(projectId, id))
-            else ids.forEach { repo.deleteSession(projectId, it) }
-            ids.forEach { requestPins?.remove(PinConversation(it, projectId)) }
-            _state.update { state ->
-                val rest = state.coding.sessions.filterNot { it.session.id in ids }
-                state.copy(coding = state.coding.copy(
-                    sessions = rest,
-                    currentSessionId = if (state.coding.currentSessionId in ids)
-                        rest.firstOrNull { it.session.projectId == projectId }?.session?.id
-                    else state.coding.currentSessionId,
-                ))
-            }
-            refreshProjectStatus(target.session.projectId)
+            try {
+                if (target.session.stageId != null && planningChat != null && planningChat.hasLiveOrchestrator(target.session)) {
+                    planningChat.archiveSession(id)
+                    return@launch
+                }
+                val projectId = target.session.projectId
+                val ids = repo.sessions(projectId).sessionTreeIds(id).toMutableSet()
+                val running = ids.mapNotNull { removeCodingJob(it) }
+                running.forEach { it.cancel() }
+                val failures = ids.mapNotNull { runCatching { codingRuntime?.abort(it) }.exceptionOrNull() }
+                running.joinAll()
+                if (planningChat != null) ids.addAll(planningChat.deleteSessionTree(projectId, id))
+                else {
+                    failures.firstOrNull()?.let { throw it }
+                    ids.forEach { codingRuntime?.reconcile(it) }
+                    ids.forEach { repo.deleteSession(projectId, it) }
+                }
+                ids.forEach { requestPins?.remove(PinConversation(it, projectId)) }
+                _state.update { state ->
+                    val rest = state.coding.sessions.filterNot { it.session.id in ids }
+                    state.copy(coding = state.coding.copy(
+                        sessions = rest,
+                        currentSessionId = if (state.coding.currentSessionId in ids)
+                            rest.firstOrNull { it.session.projectId == projectId }?.session?.id
+                        else state.coding.currentSessionId,
+                    ))
+                }
+                refreshProjectStatus(target.session.projectId)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { it.copy(notice = e.message ?: "Не удалось удалить сессию") } }
         }
     }
 
@@ -1399,12 +1483,13 @@ class MagicPaperViewModel(
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         scope.launch {
             try {
-                val updated = updateStoredCodingSession(selected.session) { latest ->
-                    val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }
-                    val busy = sessionId in codingJobs.value || ui?.running == true || ui?.interactions?.isNotEmpty() == true ||
-                        ui?.awaitingUser == true || planningChat?.drafts?.value?.get(sessionId)?.active == true
-                    latest.changeInteractionMode(mode, busy)
-                }
+                val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }
+                val busy = sessionId in codingJobs.value || ui?.running == true || ui?.interactions?.isNotEmpty() == true ||
+                    ui?.awaitingUser == true || planningChat?.drafts?.value?.get(sessionId)?.active == true
+                selected.session.changeInteractionMode(mode, busy)
+                val updated = if (selected.session.organismId != null && planningChat != null)
+                    planningChat.changeManagedInteractionMode(selected.session, mode)
+                else updateStoredCodingSession(selected.session) { latest -> latest.changeInteractionMode(mode, busy) }
                 if (updated.interactionMode != CodingInteractionMode.CODE) codingRuntime?.computerUse?.disable(sessionId)
                 if (selected.session.interactionMode != updated.interactionMode) {
                     appendCodingMessage(updated, CodingMessage(Id.new(), CodingRole.AGENT,
@@ -1479,7 +1564,7 @@ class MagicPaperViewModel(
                 val ui = CodingSessionUi(session, repo.messages(project.id, session.id))
                 _state.update { it.copy(coding = it.coding.copy(sessions = it.coding.sessions + ui)) }
             }
-            launchCodingRun(session, request, recovering = true)
+            launchCodingRun(session, request, recovering = true, userInitiated = false)
         }
     }
 
@@ -1507,16 +1592,17 @@ class MagicPaperViewModel(
         }
     }
 
-    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null) {
+    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null, userInitiated: Boolean = true) {
         val runtime = codingRuntime ?: return
         val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
         // A cancelled job still owns the session while its runtime and saved output
         // are being cleaned up. Its finally block releases this entry.
-        if (closing || session.id in codingJobs.value) return
+        if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value) return
         val recorder = CodingRunRecorder()
         var request = checkpoint.copy(responseId = Id.new())
         val job = scope.launch(workerDispatcher, start = CoroutineStart.LAZY) {
             try {
+                if (userInitiated) planningChat?.prepareManagedUserTurn(session, checkpoint.messageId)
                 var current = updateStoredCodingSession(session) { latest ->
                     require(latest.interactionMode == session.interactionMode) { "Режим сессии изменился. Отправьте запрос повторно." }
                     request = request.copy(interactionMode = request.interactionMode ?: latest.interactionMode)
@@ -1597,6 +1683,10 @@ class MagicPaperViewModel(
     fun abortCodingSession(sessionId: String) {
         codingRuntime?.computerUse?.disable(sessionId)
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (ui.session.organismId != null && planningChat != null) {
+            planningChat.stopManagedSession(sessionId)
+            return
+        }
         if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
             planningChat.cancelRequest(ui.session.parentSessionId ?: sessionId)
             ui.plan?.let { planningChat.control(it.id, "stop") }

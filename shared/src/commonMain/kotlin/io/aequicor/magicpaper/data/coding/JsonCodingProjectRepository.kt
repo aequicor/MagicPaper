@@ -56,9 +56,7 @@ class JsonCodingProjectRepository(
 
     override suspend fun all(): List<CodingProject> {
         val raw = store.read(KEY_PROJECTS) ?: return emptyList()
-        return runCatching { json.decodeFromString(projectsSerializer, raw) }
-            .getOrDefault(emptyList())
-            .sortedByDescending { it.createdAt }
+        return json.decodeFromString(projectsSerializer, raw).sortedByDescending { it.createdAt }
     }
 
     override suspend fun save(project: CodingProject) {
@@ -120,6 +118,10 @@ class JsonCodingProjectRepository(
         require(!session.researchMode || session.stageId == null) { "Исполнитель не может быть исследователем" }
         val current = allSessions()
         val previous = current.firstOrNull { it.id == session.id }
+        require(previous == null || session.runtimeGeneration >= previous.runtimeGeneration) { "Запуск сессии уже заменён" }
+        require(previous?.organismId == null || (session.organismId == previous.organismId && session.parentSessionId == previous.parentSessionId)) {
+            "Происхождение сессии изменилось; требуется проверенное переназначение"
+        }
         require(allowModeChange || previous == null || previous.interactionMode == session.interactionMode) { "Режим сессии изменился; обновите актуальную запись" }
         require(previous?.engine == null || session.engine == null || session.engine == previous.engine) { "Движок существующей сессии изменить нельзя" }
         val saved = if (session.engine != null) session else session.copy(engine = previous?.engine ?: migrateEngine(session, all().firstOrNull { it.id == session.projectId }))
@@ -149,7 +151,7 @@ class JsonCodingProjectRepository(
 
     override suspend fun messages(projectId: String, sessionId: String): List<CodingMessage> {
         val raw = store.read(logKey(projectId, sessionId)) ?: return emptyList()
-        return runCatching { json.decodeFromString(messagesSerializer, raw) }.getOrDefault(emptyList())
+        return json.decodeFromString(messagesSerializer, raw)
     }
 
     override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) {
@@ -177,7 +179,7 @@ class JsonCodingProjectRepository(
 
     private suspend fun allSessions(): List<CodingSession> {
         val raw = store.read(KEY_SESSIONS) ?: return emptyList()
-        val sessions = runCatching { json.decodeFromString(sessionsSerializer, raw) }.getOrDefault(emptyList())
+        val sessions = json.decodeFromString(sessionsSerializer, raw)
         if (sessions.none { it.engine == null }) return sessions
         val projects = all().associateBy { it.id }
         val migrated = sessions.map { if (it.engine != null) it else it.copy(engine = migrateEngine(it, projects[it.projectId])) }

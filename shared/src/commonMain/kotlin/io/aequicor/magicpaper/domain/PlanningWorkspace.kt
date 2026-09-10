@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.domain
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 /** Platform ownership and filesystem reconciliation; operations use stable run/attempt IDs. */
 interface PlanningWorkspace {
     suspend fun acquire(project: CodingProject): Boolean
@@ -20,9 +23,18 @@ interface PlanningWorkspace {
 class WorkspaceConflict(val workingPath: String, message: String) : IllegalStateException(message)
 
 class LocalPlanningWorkspace : PlanningWorkspace {
-    private val owners = mutableSetOf<String>()
-    override suspend fun acquire(project: CodingProject) = owners.add(project.id)
-    override suspend fun release(project: CodingProject) { owners.remove(project.id) }
+    private val lock = Mutex()
+    private val owners = mutableMapOf<String, String>()
+    private fun workspaceKey(project: CodingProject) = project.path.ifBlank { project.id }.trimEnd('/', '\\')
+    override suspend fun acquire(project: CodingProject) = lock.withLock {
+        val key = workspaceKey(project)
+        if (key in owners) false else { owners[key] = project.id; true }
+    }
+    override suspend fun release(project: CodingProject) = lock.withLock {
+        val key = workspaceKey(project)
+        if (owners[key] == project.id) owners.remove(key)
+        Unit
+    }
     override suspend fun prepare(project: CodingProject, runId: String) = PlanWorkspace(project.path, project.path)
     override suspend fun stage(project: CodingProject, workspace: PlanWorkspace, attempt: StageAttempt) = attempt.copy(path = project.path)
     override suspend fun capture(attempt: StageAttempt) = ""

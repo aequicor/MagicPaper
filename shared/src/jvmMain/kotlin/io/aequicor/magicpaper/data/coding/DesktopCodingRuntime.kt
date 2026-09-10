@@ -52,11 +52,12 @@ class DesktopCodingRuntime(
             }}.")
         }
         sessionContextReport(effective, environment,
-            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode), skills)
+            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode, session.planningRulesSnapshot), skills)
     }
 
     override val computerUse get() = subscription.computerUse
     private val active = ConcurrentHashMap.newKeySet<String>()
+    private val ownership = CodingRuntimeOwnership()
     private val runIds = ConcurrentHashMap<String, String>()
     private val cancelledRuns = ConcurrentHashMap.newKeySet<String>()
     private val clients = ConcurrentHashMap<String, CodexAppServerOpenAiSubscription>()
@@ -102,20 +103,27 @@ class DesktopCodingRuntime(
         check(java.io.File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }
         val engine = checkNotNull(session.engine) { "Движок планировщика не сохранён." }
         check(active.add(session.id)) { "Запрос планирования уже выполняется." }
+        val lease = try { ownership.begin(session.id, session.runtimeGeneration, currentCoroutineContext().job) }
+        catch (e: Exception) { active.remove(session.id); throw e }
         val fresh = session.copy(piSessionId = "")
         try {
             preflight(engine, profile)
+            ownership.checkCurrent(lease)
             when (engine) {
-                CodingEngine.PI -> pi.runPlanning(project, fresh, prompt, profile).collect { emit(it) }
+                CodingEngine.PI -> observeQuestionnaires(session.id, pi.questionnaires,
+                    pi.runPlanning(project, fresh, prompt, profile)).collect { emit(it) }
                 CodingEngine.CODEX -> {
                     val client = subscription.newCodingClient()
                     clients[session.id] = client
                     try {
                         if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) {
-                            client.runCoding(project, fresh, prompt, profile, emptyList(), planning = true).collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
+                            observeQuestionnaires(session.id, client.codingQuestionnaires,
+                                client.runCoding(project, fresh, prompt, profile, emptyList(), planning = true))
+                                .collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
                         } else pi.startProviderBridge(profile.forModel()).use { bridge ->
-                            client.runCoding(project, fresh, prompt, profile, emptyList(), bridge.providerId, bridge.configuration,
-                                planning = true).collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
+                            observeQuestionnaires(session.id, client.codingQuestionnaires,
+                                client.runCoding(project, fresh, prompt, profile, emptyList(), bridge.providerId, bridge.configuration,
+                                    planning = true)).collect { emit(if (it is CodingEvent.UsageObserved) it.copy(accounting = false) else it) }
                         }
                     } finally {
                         withContext(NonCancellable) {
@@ -126,8 +134,21 @@ class DesktopCodingRuntime(
                 }
             }
         } catch (e: CancellationException) { abort(session.id); throw e }
-        finally { active.remove(session.id) }
-    }.withWakeGuard(onStalled = { withContext(Dispatchers.IO) { abort(session.id) } }).flowOn(Dispatchers.IO)
+        finally { ownership.finish(lease); active.remove(session.id) }
+    }.withWakeGuard(awaitingUser = { questionnaires.value.any { it.sessionId == session.id } },
+        onStalled = { withContext(Dispatchers.IO) { abort(session.id) } }).flowOn(Dispatchers.IO)
+
+    private fun observeQuestionnaires(sessionId: String, source: StateFlow<List<UserInteractionRequest>>,
+        events: Flow<CodingEvent>): Flow<CodingEvent> = channelFlow {
+        val observer = launch { source.collect { current -> questionnaires.update { old ->
+            old.filterNot { it.sessionId == sessionId } + current.filter { it.sessionId == sessionId }
+        } } }
+        try { events.collect { send(it) } }
+        finally { withContext(NonCancellable) {
+            observer.cancelAndJoin()
+            questionnaires.update { old -> old.filterNot { it.sessionId == sessionId } }
+        } }
+    }
 
     override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> {
         val runId = session.pendingRun?.let { skillRunIdentity(session.id, it.runId) } ?: java.util.UUID.randomUUID().toString()
@@ -169,6 +190,8 @@ class DesktopCodingRuntime(
             emit(CodingEvent.Failed(if (engine == null) "Движок сессии не сохранён. Переоткройте проект." else "Выберите модель сессии.")); emit(CodingEvent.Finished); return@flow
         }
         check(active.add(session.id)) { "Сессия уже выполняется" }
+        val lease = try { ownership.begin(session.id, session.runtimeGeneration, currentCoroutineContext().job) }
+        catch (e: Exception) { active.remove(session.id); throw e }
         runIds[session.id] = runId
         val grant = if (session.researchMode) null else computerUse?.grant(session.id)
         try {
@@ -194,6 +217,7 @@ class DesktopCodingRuntime(
                 "\nПодготовлено инструкций: ${selected.size}. Новая engine-сессия: ${selection.freshSession}. " +
                 "Фактические инструменты: штатная политика $adapter, отдельной ACL пакета нет. Передача ещё не подтверждена; результат задачи не проверен."))
             preflight(engine, profile)
+            ownership.checkCurrent(lease)
             when (engine) {
                 CodingEngine.PI -> coroutineScope {
                     val questionsJob = launch { pi.questionnaires.collect { requests ->
@@ -216,7 +240,7 @@ class DesktopCodingRuntime(
                     clients[session.id] = client
                     val questionnairesJob = launch {
                         client.codingQuestionnaires.collect { requests ->
-                            questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } + requests }
+                            questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } + requests.filter { it.sessionId == session.id } }
                         }
                     }
                     val approvalsJob = launch {
@@ -251,12 +275,13 @@ class DesktopCodingRuntime(
         } catch (e: CancellationException) { abort(session.id); throw e }
         catch (e: Exception) { emit(CodingEvent.Failed(e.message ?: "Не удалось запустить движок")); emit(CodingEvent.Finished) }
         finally {
+            ownership.finish(lease)
             active.remove(session.id)
             if (grant != null) computerUse?.release(session.id, grant)
         }
     }
-    override fun abort(sessionId: String) { ResearchCheckRunner.shared.abort(sessionId); runIds[sessionId]?.let { cancelledRuns.add(it) }; computerUse?.disable(sessionId); clients[sessionId]?.abortCoding(sessionId); pi.abort(sessionId) }
-    override fun abortAll() { ResearchCheckRunner.shared.abortAll(); cancelledRuns.addAll(runIds.values); computerUse?.disable(); clients.forEach { (id, client) -> client.abortCoding(id) }; pi.abortAll() }
+    override fun abort(sessionId: String) { ownership.cancel(sessionId); ResearchCheckRunner.shared.abort(sessionId); runIds[sessionId]?.let { cancelledRuns.add(it) }; computerUse?.disable(sessionId); clients[sessionId]?.abortCoding(sessionId); pi.abort(sessionId) }
+    override fun abortAll() { ownership.cancelAll(); ResearchCheckRunner.shared.abortAll(); cancelledRuns.addAll(runIds.values); computerUse?.disable(); clients.forEach { (id, client) -> client.abortCoding(id) }; pi.abortAll() }
     override suspend fun uninstall() = uninstall(CodingEngine.PI)
     override suspend fun uninstall(engine: CodingEngine) {
         check(active.isEmpty() && !pi.hasActiveRuns) { "Сначала остановите выполняющиеся сессии" }

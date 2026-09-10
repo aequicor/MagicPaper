@@ -12,6 +12,26 @@ class UserInteractionStatusTest {
     private fun CodingUi.project(requests: List<UserInteractionRequest>) = copy(interactions = requests,
         sessions = sessions.map { item -> item.copy(interactions = requests.filter { it.affects(item.session) }) })
 
+    @Test fun childRuntimeQuestionBelongsToItsCreatorAndDoesNotSuspendParentOrSibling() {
+        val sibling = worker.copy(id = "sibling")
+        val ui = CodingUi(sessions = listOf(CodingSessionUi(parent), CodingSessionUi(worker), CodingSessionUi(sibling)))
+        val request = UserInteractionRequest("local", "project", worker.id, InteractionKind.RUNTIME, listOf(q),
+            ownerSessionId = parent.id, affectedSessionIds = setOf(parent.id, worker.id))
+        val actual = interactionCandidates(ui, emptyList(), emptyMap(), emptyMap(), listOf(request)).single()
+        assertEquals(worker.id, actual.ownerSessionId)
+        assertEquals(setOf(worker.id), actual.affectedSessionIds)
+        assertFalse(actual.affects(parent))
+        assertFalse(actual.affects(sibling))
+        assertTrue(actual.affects(worker))
+    }
+
+    @Test fun pendingStopNeverDisplaysACompletedRuntime() {
+        val stopping = plan.copy(intent = ExecutionIntent.STOP, status = PlanStatus.STOPPED, stopping = true)
+        assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(parent, plan = stopping).status)
+        assertEquals(CodingSessionStatus.BLOCKED, CodingSessionUi(parent, plan = stopping.copy(
+            issue = PlanningIssue(IssueKind.UNCERTAIN, "No termination acknowledgement", requiresUser = true))).status)
+    }
+
     @Test fun onlyVisibleQuestionnairesProduceWaitingIncludingPermissionsOfBackgroundWorkers() {
         val approval = CodingApproval("a", "worker-merge", "project", "Этап", CodingApprovalKind.FILE_CHANGE, "Причина", "Точный diff")
         val ui = CodingUi(sessions = listOf(CodingSessionUi(parent), CodingSessionUi(worker), CodingSessionUi(plain, running = true)), approvals = listOf(approval))

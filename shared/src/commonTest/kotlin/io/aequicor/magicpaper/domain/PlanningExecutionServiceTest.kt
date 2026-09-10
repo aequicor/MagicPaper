@@ -11,6 +11,26 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlanningExecutionServiceTest {
+    @Test fun sharedWorkspacePlansUseOneWriterLeaseAndReleaseItAfterStop() = runTest {
+        val workspace = Workspaces()
+        val (store, service, runtime) = fixture(Runtime(CompletableDeferred()), workspace)
+        val first = plan(stage("first")).copy(id = "first-plan", sharedWorkspace = true)
+        val second = plan(stage("second")).copy(id = "second-plan", sharedWorkspace = true)
+        store.save(first); store.save(second)
+        service.start(first.id); runCurrent()
+        val originalCall = runtime.calls.single()
+        service.start(second.id); runCurrent()
+        assertEquals(listOf(originalCall), runtime.calls)
+        assertTrue(store.planFor(second.id)!!.milestones.single().attempts.isEmpty())
+        service.stop(first.id); runCurrent()
+        assertEquals(1, workspace.released)
+        service.start(second.id); runCurrent()
+        assertEquals(2, runtime.calls.size)
+        assertNotEquals(originalCall, runtime.calls.last())
+        service.stop(second.id); runCurrent()
+        assertEquals(2, workspace.released)
+    }
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val profile = LlmProfile("agent", "Agent", baseUrl = "http://test/v1", modelId = "m", favoriteModels = listOf("m"), modelLibraryVersion = 1)
     private val project = CodingProject("project", "Project", "/fake", 1)
@@ -24,9 +44,14 @@ class PlanningExecutionServiceTest {
         private val trailingDelta: String? = null,
         private val report: String = "Verified result",
         private val command: String = "./gradlew :shared:jvmTest",
+        private val cleanupGate: CompletableDeferred<Unit>? = null,
     ) : CodingRuntime {
         val engines = mutableListOf<CodingEngine?>()
+        val sessions = mutableListOf<CodingSession>()
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
+        var onRun: suspend (CodingSession) -> Unit = {}
+        var reconciliationFailure: String? = null
+        override suspend fun reconcile(sessionId: String) { reconciliationFailure?.let { error(it) } }
         override val supported = true; override val rootPath = "/fake"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
         override fun ensureReady() = flowOf(RuntimeStatus(RuntimePhase.READY))
@@ -35,6 +60,8 @@ class PlanningExecutionServiceTest {
         override suspend fun uninstall() = Unit
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             calls += session.id
+            sessions += session
+            onRun(session)
             engines += session.engine
             emit(CodingEvent.SessionStarted("engine-${session.id}"))
             emit(CodingEvent.ThinkingDelta("Проверяю критерии"))
@@ -49,7 +76,7 @@ class PlanningExecutionServiceTest {
             gate?.await()
             if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText(report))
             emit(CodingEvent.Finished)
-        }
+        }.onCompletion { if (cleanupGate != null) withContext(NonCancellable) { cleanupGate.await() } }
     }
     private class Workspaces(private val parallel: Boolean = true, private val base: PlanningWorkspace = LocalPlanningWorkspace()) : PlanningWorkspace by base {
         override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
@@ -71,6 +98,105 @@ class PlanningExecutionServiceTest {
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
+
+    @Test fun admittedGenerationIsSavedBeforeNativeRunAndRetainedInCompletionCheckpoint() = runTest {
+        val (store, service, runtime) = fixture()
+        val checkpoints = mutableListOf<StageAttempt>()
+        service.prepareAttempt = { plan, _, attempt ->
+            assertTrue(plan.journal.any { it.operation == "agent-intent" && it.attemptId == attempt.id })
+            assertTrue(runtime.calls.isEmpty())
+            attempt.copy(sessionGeneration = 41)
+        }
+        service.attemptCheckpoint = { plan, stageId, attempt ->
+            assertEquals(attempt, store.planFor(plan.id)!!.milestones.first { it.id == stageId }.attempts.first { it.id == attempt.id })
+            checkpoints += attempt
+        }
+        store.save(plan(stage("work")))
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        val completed = checkpoints.first { it.phase == AttemptPhase.COMPLETE }
+        assertEquals(41L, completed.sessionGeneration)
+        assertEquals(41L, runtime.sessions.first { it.id == completed.sessionId }.runtimeGeneration)
+        assertEquals(41L, store.planFor(project.id)!!.milestones.single().attempts.single().sessionGeneration)
+    }
+
+    @Test fun rejectedApplicationAdmissionPreventsNativeStartup() = runTest {
+        val (store, service, runtime) = fixture()
+        service.prepareAttempt = { _, _, _ -> error("Admission refused") }
+        store.save(plan(stage("work")))
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        assertTrue(runtime.calls.isEmpty())
+        assertNotNull(store.planFor(project.id)!!.issue)
+    }
+
+    @Test fun stopProjectionWaitsForNativeCleanupAndSuccessfulReconciliation() = runTest {
+        val cleanup = CompletableDeferred<Unit>()
+        val (store, service, runtime) = fixture(Runtime(CompletableDeferred(), cleanupGate = cleanup))
+        var projected = 0
+        service.stoppedCheckpoint = { plan ->
+            assertFalse(plan.stopping)
+            assertEquals(PlanStatus.STOPPED, store.planFor(plan.id)!!.status)
+            projected++
+        }
+        store.save(plan(stage("work")))
+        service.start(project.id); runCurrent()
+        runtime.reconciliationFailure = "native still owns writer"
+        service.stop(project.id); runCurrent()
+        assertEquals(0, projected)
+        cleanup.complete(Unit); advanceTimeBy(1_000); runCurrent()
+        assertEquals(0, projected)
+        assertTrue(store.planFor(project.id)!!.stopping)
+        runtime.reconciliationFailure = null
+        service.stop(project.id); runCurrent()
+        assertEquals(1, projected)
+    }
+
+    @Test fun projectionFailureAfterAcceptedPlanCommitNeverDowngradesOrReexecutesTheStage() = runTest {
+        val (store, service, runtime) = fixture()
+        var available = false
+        service.prepareAttempt = { _, _, attempt -> attempt.copy(sessionGeneration = 7) }
+        service.attemptCheckpoint = { _, _, attempt ->
+            if (attempt.phase == AttemptPhase.COMPLETE) check(available) { "Organism projection unavailable" }
+        }
+        store.save(plan(stage("work")))
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        val committed = store.planFor(project.id)!!
+        assertEquals(AttemptPhase.COMPLETE, committed.milestones.single().attempts.single().phase)
+        assertEquals(MilestoneStatus.DONE, committed.milestones.single().status)
+        assertEquals(1, committed.pendingSessionProjections.size)
+        assertEquals(1, committed.journal.count { it.operation == "session-projection-pending" })
+        val calls = runtime.calls.toList()
+        service.synchronizeSessionProjections(committed.id)
+        assertEquals(1, store.planFor(project.id)!!.journal.count { it.operation == "session-projection-pending" })
+        available = true
+        service.synchronizeSessionProjections(committed.id)
+        val synchronized = store.planFor(project.id)!!
+        assertTrue(synchronized.pendingSessionProjections.isEmpty())
+        assertEquals(AttemptPhase.COMPLETE, synchronized.milestones.single().attempts.single().phase)
+        assertEquals(calls, runtime.calls)
+    }
+
+    @Test fun controllerCallbackRequestsStopWithoutJoiningItsOwnAncestor() = runTest {
+        val (store, service, runtime) = fixture()
+        val confirmed = CompletableDeferred<Boolean>()
+        runtime.onRun = {
+            val caller = currentCoroutineContext().job
+            withContext(NonCancellable) { confirmed.complete(service.stopController("plan", caller)) }
+        }
+        store.save(plan(stage("work")))
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        assertFalse(confirmed.await())
+        assertFalse(store.planFor(project.id)!!.stopping)
+        assertEquals(PlanStatus.STOPPED, store.planFor(project.id)!!.status)
+    }
+
+    @Test fun stoppingAnAlreadyCompletedControllerPreservesItsAcceptedPlan() = runTest {
+        val (store, service, _) = fixture()
+        val completed = plan(stage("work").copy(status = MilestoneStatus.DONE)).copy(phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE)
+        store.save(completed)
+        val saved = store.planFor(completed.id)
+        assertTrue(service.stopController(completed.id, currentCoroutineContext().job))
+        assertEquals(saved, store.planFor(completed.id))
+    }
 
     @Test fun questionInterruptsOnlyAffectedWorkerAndResumesSameAttempt() = runTest {
         val (store, service, runtime) = fixture(Runtime(CompletableDeferred(), trailingDelta = "Saved progress"))
@@ -133,7 +259,7 @@ class PlanningExecutionServiceTest {
         val paused = store.planFor("plan")!!.milestones.single().attempts.single()
         val command = paused.steps.single { it.callId == "command-1" }
         assertFalse(command.running)
-        assertEquals(io.aequicor.magicpaper.domain.tools.ToolPhase.CANCELLED, command.toolPhase)
+        assertEquals(io.aequicor.magicpaper.domain.tools.ToolPhase.UNKNOWN, command.toolPhase)
         assertEquals("publish-release", paused.pendingTool)
         assertTrue(paused.pendingToolExternal)
         assertTrue(paused.interrupted)
@@ -360,6 +486,44 @@ class PlanningExecutionServiceTest {
         assertTrue(runtime.calls.single() in runtime.aborted)
         assertEquals(1, workspace.released)
         assertEquals(ExecutionIntent.STOP, store.planFor(project.id)!!.intent)
+        assertFalse(store.planFor(project.id)!!.stopping)
+        assertEquals(PlanStatus.STOPPED, store.planFor(project.id)!!.status)
+    }
+
+    @Test fun stopDoesNotCompleteOrAllowReplacementBeforeChildCleanupConfirmsExit() = runTest {
+        val cleanup = CompletableDeferred<Unit>()
+        val runtime = Runtime(CompletableDeferred(), cleanupGate = cleanup)
+        val workspace = Workspaces()
+        val (store, service) = fixture(runtime, workspace)
+        store.save(plan(stage("a"))); service.start(project.id); runCurrent()
+        service.stop(project.id); runCurrent()
+        assertTrue(store.planFor(project.id)!!.stopping)
+        assertNotEquals(PlanStatus.STOPPED, store.planFor(project.id)!!.status)
+        assertEquals(0, workspace.released)
+        assertFailsWith<IllegalStateException> { service.start(project.id) }
+        assertEquals(1, runtime.calls.size)
+        cleanup.complete(Unit); runCurrent()
+        assertFalse(store.planFor(project.id)!!.stopping)
+        assertEquals(PlanStatus.STOPPED, store.planFor(project.id)!!.status)
+        assertEquals(1, workspace.released)
+    }
+
+    @Test fun missingRuntimeStopAcknowledgementPersistsUncertaintyAndBlocksRetry() = runTest {
+        val runtime = Runtime(CompletableDeferred())
+        val (store, service) = fixture(runtime)
+        store.save(plan(stage("a"))); service.start(project.id); runCurrent()
+        runtime.reconciliationFailure = "Injected missing termination acknowledgement"
+        service.stop(project.id); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertTrue(saved.stopping)
+        assertEquals(IssueKind.UNCERTAIN, saved.issue?.kind)
+        assertNotEquals(PlanStatus.STOPPED, saved.status)
+        assertFailsWith<IllegalStateException> { service.retry(project.id) }
+        assertEquals(1, runtime.calls.size)
+        runtime.reconciliationFailure = null
+        service.stopAndJoin(saved.id)
+        assertFalse(store.planFor(saved.id)!!.stopping)
+        assertEquals(PlanStatus.STOPPED, store.planFor(saved.id)!!.status)
     }
 
     @Test fun unknownExternalCommandWaitsBeforeStartingAnotherExecutor() = runTest {

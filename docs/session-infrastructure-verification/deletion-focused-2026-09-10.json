@@ -1,0 +1,35 @@
+{
+  "date": "2026-09-10",
+  "description": "Durable deletion, cancellation cleanup and UI confirmation safety focused checks. Separate runs; totals below are not a full-suite result.",
+  "runs": [
+    {
+      "log": "/private/tmp/magicpaper-deletion-final-retry.log",
+      "tests": 36,
+      "failures": 1,
+      "skipped": 0,
+      "passedClasses": {
+        "SessionHistoryDeletionTest": 7,
+        "SessionTreeRuntimeTest": 17,
+        "SessionOrganismExtensionsTest": 8
+      },
+      "failure": "RequestPinViewModelTest fixture expected lazy unopened root pins; fixed by opening root before assertions."
+    },
+    {
+      "log": "/private/tmp/magicpaper-deletion-ui-focused.log",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0,
+      "classes": [
+        {
+          "class": "io.aequicor.magicpaper.ui.RequestPinViewModelTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      ]
+    }
+  ],
+  "verification": "All 36 latest focused cases passed across these two runs. Prior exact26 run also passed controller2 and new result-reference case; deletion fixture was subsequently corrected to require UNKNOWN-safe retry.",
+  "platformLimitations": "JVM tests executed on macOS; Windows native UI and native processes not exercised."
+}

@@ -1,0 +1,100 @@
+{
+  "date": "2026-09-10",
+  "log": "/private/tmp/magicpaper-final-integration-immunity-focused.log",
+  "tests": 80,
+  "failures": 0,
+  "skipped": 0,
+  "durationSeconds": 51,
+  "classes": [
+    {
+      "class": "io.aequicor.magicpaper.data.coding.SessionIntegrationAuthorityTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.data.coding.SessionLegacyAdmissionTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.ImmunityInterventionTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionAuxiliaryRuntimeTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionCodingWorkspaceTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionHistoryDeletionTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionIntegrationResultsTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionIntegrationTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionPlanBridgeTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.domain.SessionTreeRuntimeTest",
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.ImmunityUiStateTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "io.aequicor.magicpaper.ui.screens.ImmunityInterventionsRenderTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "visualInspection": [
+    "shared/build/reports/immunity/delete-confirmation.png",
+    "shared/build/reports/immunity/uncertain-large-text.png"
+  ],
+  "limits": "JVM tests on macOS; Windows native UI not run. Modal controls exercised via pointer and semantic scroll at 200% text.",
+  "command": "./gradlew :shared:jvmTest --tests '*SessionIntegration*' --tests '*SessionLegacyAdmissionTest' --tests '*SessionAuxiliaryRuntimeTest' --tests '*Immunity*Test' --tests '*SessionTreeRuntimeTest' --tests '*SessionCodingWorkspaceTest' --tests '*SessionPlanBridgeTest' --tests '*SessionHistoryDeletionTest' --offline --console=plain --warning-mode=none"
+}

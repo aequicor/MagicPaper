@@ -183,13 +183,17 @@ class JsonCodingProjectRepositoryTest {
     }
 
     @Test
-    fun corruptedDataFallsBackToEmpty() = runTest {
+    fun corruptedDataIsReportedWithoutReplacingHistoryWithEmptyData() = runTest {
         store.write("coding-projects", "{broken")
-        assertTrue(repo.all().isEmpty())
+        assertFails { repo.all() }
+        assertFails { repo.save(CodingProject("new", "New", "/new", 1)) }
+        assertEquals("{broken", store.read("coding-projects"))
         store.write("coding-sessions", "{broken")
-        assertTrue(repo.sessions("anything").isEmpty())
+        assertFails { repo.sessions("anything") }
+        assertEquals("{broken", store.read("coding-sessions"))
         store.write("coding-log:q:z", "{broken")
-        assertTrue(repo.messages("q", "z").isEmpty())
+        assertFails { repo.messages("q", "z") }
+        assertEquals("{broken", store.read("coding-log:q:z"))
     }
     @Test fun orchestrationRoundTripsAndRecoversLastSnapshot() = runTest {
         val first = OrchestrationState("parent", "p", inputs = listOf(OrchestrationInput("input", "Вопрос", 1)),

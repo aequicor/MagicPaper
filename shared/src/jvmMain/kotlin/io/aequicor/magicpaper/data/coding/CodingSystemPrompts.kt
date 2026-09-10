@@ -35,9 +35,12 @@ internal val PI_CODING_INSTRUCTIONS = """
             If an edit fails to match, re-read that region and retry with the exact text.
             """.trimIndent()
 
-internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, override: String, research: Boolean = false): String =
-    (if (planning) listOf(PLANNING_INSTRUCTIONS, override, QuestionnaireTool.instructions) else if (research) listOf(override, RESEARCH_INSTRUCTIONS, QuestionnaireTool.instructions) else when (engine) {
+internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, override: String, research: Boolean = false,
+    planningRules: PlanningRulesSnapshot? = null): String {
+    val methodology = (planningRules ?: if (planning) PlanningRulesSettings().snapshot() else null)?.effectivePrompt().orEmpty()
+    return (if (planning) listOf(override, methodology, PLANNING_INSTRUCTIONS, QuestionnaireTool.instructions) else if (research) listOf(override, methodology, RESEARCH_INSTRUCTIONS, QuestionnaireTool.instructions) else when (engine) {
         CodingEngine.CODEX -> listOf(QuestionnaireTool.instructions, CodexAppServerOpenAiSubscription.CODING_INSTRUCTIONS, CODING_FILE_TOOL_INSTRUCTIONS, CODEX_FILE_TOOL_INSTRUCTIONS, override)
         CodingEngine.PI -> listOf(CODING_FILE_TOOL_INSTRUCTIONS, PI_CODING_INSTRUCTIONS, QuestionnaireTool.instructions, override)
         null -> listOf("Движок не выбран", override)
-    }).filter { it.isNotBlank() }.joinToString("\n\n")
+    }.let { if (!planning && !research) it + methodology else it }).filter { it.isNotBlank() }.joinToString("\n\n")
+}

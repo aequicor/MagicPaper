@@ -74,18 +74,70 @@ internal fun buildDependencies(
     filePicker: FilePicker = NoopFilePicker,
     openAiSubscription: OpenAiSubscriptionService? = null,
     planningWorkspace: io.aequicor.magicpaper.domain.PlanningWorkspace = io.aequicor.magicpaper.domain.LocalPlanningWorkspace(),
+    integrationChecks: io.aequicor.magicpaper.domain.SessionIntegrationCheckRunner? = null,
     platformPlugins: List<io.aequicor.magicpaper.plugins.MagicPlugin> = emptyList(),
     packageInstructions: io.aequicor.magicpaper.domain.SkillInstructionSource? = null,
     experiencePlugin: ((io.aequicor.magicpaper.domain.LlmGateway, io.aequicor.magicpaper.domain.LlmProfileRepository) -> io.aequicor.magicpaper.plugins.MagicPlugin)? = null,
 ): MagicPaperDependencies {
     val json = appJson
     val usageLedger = io.aequicor.magicpaper.domain.UsageLedger(io.aequicor.magicpaper.data.storage.JsonUsageRepository(store, json))
-    val toolHost = ToolHost(StoredToolReceipts(store))
-    val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(ToolEnabledCodingRuntime(it, toolHost), usageLedger) }
-    val client = HttpClient()
     val settingsRepo = JsonSettingsRepository(store, json)
-    val chatRepo = JsonChatRepository(store, json)
     val profileRepo = JsonLlmProfileRepository(store, json)
+    val toolHost = ToolHost(StoredToolReceipts(store), io.aequicor.magicpaper.domain.RuntimeQuestionnaires(
+        io.aequicor.magicpaper.data.coding.JsonRuntimeQuestionnaireStore(store, "tool-questionnaires")))
+    val organisms = codingProjects?.let { io.aequicor.magicpaper.domain.SessionOrganismService(
+        io.aequicor.magicpaper.data.coding.SessionOrganismStore(store), it, settingsRepo,
+        sourceSnapshot = { project -> planningWorkspace.verificationSnapshot(project.path) }) }
+    val sessionTree = organisms?.let { io.aequicor.magicpaper.domain.SessionTreeRuntime(it, codingProjects!!, profileRepo, settingsRepo, planningWorkspace = planningWorkspace) }
+    organisms?.integrationWorkspaces = integrationChecks?.let { io.aequicor.magicpaper.domain.SessionIntegrationWorkspaces(planningWorkspace, it) { toolHost.knownSecrets() } }
+    val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(ToolEnabledCodingRuntime(it, toolHost, sessionTree), usageLedger) }
+    sessionTree?.runtime = runtime
+    sessionTree?.cancelQuestions = { sessionId ->
+        try { toolHost.questions.revoke(sessionId) }
+        finally { organisms?.reconcileIntegrationsForSession(sessionId) }
+    }
+    toolHost.contextDefaults = { context ->
+        val organism = organisms?.store?.organisms?.value?.values?.firstOrNull {
+            it.projectId == context.projectId && context.ownerSessionId in it.sessions
+        }
+        val node = organism?.sessions?.get(context.ownerSessionId)
+        if (node == null) context else context.copy(organismId = organism.id, runtimeGeneration = node.generation,
+            planningRulesSnapshot = node.rules)
+    }
+    toolHost.authorizeReceipt = { context, definition ->
+        val organism = organisms?.store?.organisms?.value?.values?.firstOrNull {
+            it.projectId == context.projectId && context.ownerSessionId in it.sessions
+        }
+        if (organism != null) {
+            val node = organisms!!.store.get(organism.id).sessions.getValue(context.ownerSessionId)
+            require(node.generation == context.runtimeGeneration && definition.allowsAuthorityMode(context, node.mode)) { "Полномочия запуска отозваны" }
+        }
+    }
+    toolHost.authorizeTool = { context, definition ->
+        toolHost.authorizeReceipt(context, definition)
+        val organism = organisms?.store?.organisms?.value?.values?.firstOrNull {
+            it.projectId == context.projectId && context.ownerSessionId in it.sessions
+        }
+        // Per-command CAS belongs to dispatch; a long-lived tool session keeps only its generation fence.
+        if (organism != null && definition.mutating && definition.id != "immunity.signal")
+            organisms!!.store.check(organisms.authority(context.copy(stateVersion = null), organism))
+    }
+    toolHost.unknownOutcome = { context, receipt ->
+        try {
+            val session = codingProjects?.sessions(context.projectId)?.firstOrNull { it.id == context.ownerSessionId }
+            if (session != null && organisms != null) {
+                val organism = organisms.ensure(session)
+                organisms.project(organisms.store.quarantine(organism.id, session.id, context.runtimeGeneration,
+                    receipt.operationId.ifBlank { receipt.id }, "Неизвестный исход ${receipt.toolId}: ${receipt.error}"))
+            }
+        } finally {
+            // A native provider can execute file/shell tools without re-entering ToolExecutor.
+            // Revoke that running connection as well; its owner joins/reconciles asynchronously.
+            codingRuntime?.abort(context.sessionId)
+        }
+    }
+    val client = HttpClient()
+    val chatRepo = JsonChatRepository(store, json)
     val docs = EmbeddedDocRepository()
     val search = CompositeSearchEngine(
         listOf(
@@ -161,7 +213,8 @@ internal fun buildDependencies(
         .apply { experiencePlugin?.let { register(it(gateway, profileRepo)) } }
         .register(planner)
     platformPlugins.forEach(registry::register)
-    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway, toolHost = toolHost) }
+    val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway,
+        toolHost = toolHost, organisms = organisms, sessionTree = sessionTree) }
     toolHost.search = { context, query ->
         val saved = settingsRepo.load()
         val plan = context.planId?.let { planningStore.planFor(it) }

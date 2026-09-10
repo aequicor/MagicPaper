@@ -54,6 +54,8 @@ data class AppSettings(
     val activeLlmProfileId: String = "",
     val defaultModel: ModelSelection? = null,
     val defaultCodingEngine: CodingEngine = CodingEngine.PI,
+    /** Default methodology for new organisms; active runs keep an immutable snapshot. */
+    val planningRules: PlanningRulesSettings = PlanningRulesSettings(),
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val queritApiKey: String = "",
     val queritBaseUrl: String = "https://api.querit.ai/v1",
