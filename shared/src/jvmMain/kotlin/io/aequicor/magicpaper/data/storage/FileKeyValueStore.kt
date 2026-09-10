@@ -4,15 +4,18 @@ import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 
 /**
  * Десктопное хранилище: папка ~/.MagicPaper в домашнем каталоге пользователя.
  * Не требует прав администратора (изолированная среда пользователя);
  * удаляется вместе с папкой при деинсталляции.
  */
-class FileKeyValueStore(rootName: String = ".MagicPaper") : KeyValueStore {
+class FileKeyValueStore internal constructor(private val root: File) : KeyValueStore {
 
-    private val root: File = File(System.getProperty("user.home"), rootName).apply { mkdirs() }
+    constructor(rootName: String = ".MagicPaper") : this(File(System.getProperty("user.home"), rootName))
+
+    init { root.mkdirs() }
     private val manifest: File = File(root, "manifest.txt")
     private val keySet: MutableSet<String> = LinkedHashSet(loadManifest())
 
@@ -47,7 +50,13 @@ class FileKeyValueStore(rootName: String = ".MagicPaper") : KeyValueStore {
     private fun file(key: String): File {
         val safe = key.map { c -> if (c.isLetterOrDigit() || c == '-' || c == '.') c else '_' }
             .joinToString("")
-        return File(root, "$safe.json")
+        val legacyName = "$safe.json"
+        // Preserve existing files; filesystem component limits apply to UTF-8 bytes.
+        if (legacyName.toByteArray(Charsets.UTF_8).size <= 255) return File(root, legacyName)
+        val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        // The manifest retains the original key. Do not expose hashes as legacy JSON keys.
+        return File(root, "$digest.data")
     }
 
     private fun loadManifest(): List<String> =
@@ -58,7 +67,7 @@ class FileKeyValueStore(rootName: String = ".MagicPaper") : KeyValueStore {
     }
 
     private fun atomicWrite(target: File, value: String) {
-        val tmp = File.createTempFile(target.name, ".pending", root)
+        val tmp = File.createTempFile("write-", ".pending", root)
         try {
             FileOutputStream(tmp).use { output -> output.write(value.toByteArray(Charsets.UTF_8)); output.fd.sync() }
             try {
