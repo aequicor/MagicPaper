@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -61,10 +62,7 @@ public interface PaperMarkdownSlice : ASTNode {
 public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNode>, modifier: Modifier = Modifier,
     compact: Boolean = false, listState: LazyListState? = null) {
     val bodyStyle = if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body
-    val highlightsBuilder = remember {
-        Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
-    }
-    val components = remember(highlightsBuilder) {
+    val components = remember {
         markdownComponents(
             // M3-чекбоксы для task-листов — как в дефолте m3-модуля,
             // который затирается кастомным набором компонентов.
@@ -84,25 +82,38 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
                 })
             },
             codeFence = {
-                if ((it.node as? PaperMarkdownSlice)?.code != null) MarkdownCodePart(it, highlightsBuilder)
-                else MarkdownHighlightedCodeFence(
-                    content = it.content,
-                    node = it.node,
-                    style = it.typography.code,
-                    highlightsBuilder = highlightsBuilder,
-                    // Шапка блока: имя языка + кнопка «скопировать».
-                    showHeader = true,
-                )
+                // The renderer mutates this builder on Dispatchers.Default. Each block and
+                // source revision owns both the builder and the async result state, so old
+                // work cannot highlight another block or publish into a newer revision.
+                key(it.content, it.node) {
+                    val highlightsBuilder = remember {
+                        Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
+                    }
+                    if ((it.node as? PaperMarkdownSlice)?.code != null) MarkdownCodePart(it, highlightsBuilder)
+                    else MarkdownHighlightedCodeFence(
+                        content = it.content,
+                        node = it.node,
+                        style = it.typography.code,
+                        highlightsBuilder = highlightsBuilder,
+                        // Шапка блока: имя языка + кнопка «скопировать».
+                        showHeader = true,
+                    )
+                }
             },
             codeBlock = {
-                if ((it.node as? PaperMarkdownSlice)?.code != null) MarkdownCodePart(it, highlightsBuilder)
-                else MarkdownHighlightedCodeBlock(
-                    content = it.content,
-                    node = it.node,
-                    style = it.typography.code,
-                    highlightsBuilder = highlightsBuilder,
-                    showHeader = true,
-                )
+                key(it.content, it.node) {
+                    val highlightsBuilder = remember {
+                        Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
+                    }
+                    if ((it.node as? PaperMarkdownSlice)?.code != null) MarkdownCodePart(it, highlightsBuilder)
+                    else MarkdownHighlightedCodeBlock(
+                        content = it.content,
+                        node = it.node,
+                        style = it.typography.code,
+                        highlightsBuilder = highlightsBuilder,
+                        showHeader = true,
+                    )
+                }
             },
         )
     }
