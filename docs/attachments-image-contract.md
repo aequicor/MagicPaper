@@ -48,14 +48,24 @@ data URL, MIME или ссылку на image-result. Упоминание в и
 сохранить или адаптировать, но поля и связи обязательны):
 
 ```kotlin
+/** One submitted user turn; created before any adapter/provider item exists. */
+@Serializable
+data class CodingImageInvocation(
+    val invocationId: String,         // CodingRunCheckpoint.runId; immutable across recovery
+    val sessionId: String,
+    val inputMessageId: String,       // CodingRunCheckpoint.messageId / USER CodingMessage.id
+    val responseMessageId: String,    // CodingRunCheckpoint.responseId / AGENT CodingMessage.id
+    val responseTimelineId: String? = null, // AGENT CodingMessage.timelineId after recorder persists it
+)
+
 @Serializable
 data class CodingImageRef(
     val imageId: String,              // новый стабильный UUID, не имя и не hashCode
     val origin: CodingImageOrigin,    // USER_ATTACHMENT или TOOL_RESULT
     val sessionId: String,
-    val runId: String,                // CodingRunCheckpoint.runId; сейчас равен messageId по умолчанию
-    val messageId: String,            // USER CodingMessage.id, равен checkpoint.messageId
-    val timelineId: String? = null,   // только AGENT response CodingMessage.timelineId
+    val invocationId: String,         // == CodingImageInvocation.invocationId
+    val ownerMessageId: String,       // inputMessageId for USER, responseMessageId for TOOL_RESULT
+    val timelineId: String? = null,   // == responseTimelineId only for TOOL_RESULT
     val callId: String? = null,       // обязателен только для TOOL_RESULT
     val mimeType: String,
     val byteSize: Long,
@@ -67,24 +77,53 @@ data class CodingImageRef(
 
 Инварианты:
 
-1. `USER_ATTACHMENT` связывается с конкретным `CodingRunCheckpoint.messageId`,
-   `runId` и его USER `CodingMessage`; не с любым сообщением той же сессии.
-   У входа нет `callId`: он ещё не является результатом tool call. После ответа его
-   связывает с конкретной попыткой пара `(sessionId, runId)`, а не filename.
-2. `TOOL_RESULT` принимается только из структурированного provider/MCP image блока,
-   с тем же `sessionId`, `runId`, `timelineId`, `messageId` и `callId`, что у
-   породившего `CodingStep`. `callId` обязан совпасть с `CodingStep.callId`;
+1. При отправке создаётся один `CodingImageInvocation`: `invocationId` берётся из
+   `CodingRunCheckpoint.runId`, `inputMessageId` — из `messageId`, а
+   `responseMessageId` — из сгенерированного `responseId`. Это уже существующая
+   связь checkpoint с USER/AGENT историей: [checkpoint fields](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt#L83-L95),
+   [dispatch/persistence](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt#L1617-L1654).
+2. `USER_ATTACHMENT` обязан иметь тот же `(sessionId, invocationId)` и
+   `ownerMessageId == inputMessageId`. У входа `callId == null`: он ещё не является
+   результатом tool call. Поэтому конкретный запуск обозначается invocation, а не
+   именем, порядком вложения или будущим timeline ID.
+3. `TOOL_RESULT` принимается только из структурированного provider/MCP image блока,
+   с тем же `sessionId`, `invocationId`, `timelineId` и `ownerMessageId`, что у
+   породившего AGENT сообщения. `callId` обязан совпасть с `CodingStep.callId`;
    текст, filename, tool name и data-looking substring не создают ref.
-3. `imageId` — стабильная сущность истории; provider item ID допускается только как
+4. `imageId` — стабильная сущность истории; provider item ID допускается только как
    `callId`, а ID шага (`CodingStep.id`) — presentation ID и не заменяет image ID.
-4. Один вызов может иметь несколько refs; отсутствие ref не означает, что вызов не
+5. Один вызов может иметь несколько refs; отсутствие ref не означает, что вызов не
    работал с изображением. Наличие USER_ATTACHMENT также не доказывает обработку
    моделью.
 
-`ImageLocator` должен быть закрытым типом: либо сериализованный managed blob key,
-либо безопасный data/base64 blob, если его лимит позволяет. Абсолютный путь от
-инструмента или текстовой модели не является locator. Это устраняет подмену пути и
-сохраняет различие между входом и результатом.
+### Правила locator и чтения
+
+`ImageLocator` — закрытый сериализуемый тип, а не строка:
+
+```kotlin
+@Serializable sealed interface ImageLocator {
+    @Serializable data class ManagedBlob(val key: String) : ImageLocator
+    @Serializable data class InlineBase64(val data: String) : ImageLocator
+}
+```
+
+При чтении UI/data layer применяет правила в этом порядке:
+
+1. Принимает только `ManagedBlob.key`, созданный приложением для этого
+   `(sessionId, invocationId, imageId)`, или `InlineBase64` из уже принятого
+   structured image block. `file:`, `http(s):`, absolute path, `..`, relative path
+   и строка из model/tool text не парсятся как locator.
+2. Для managed blob проверяет namespace ровно по трём ID выше, запрещает выход из
+   managed root после canonicalization и отклоняет symlink. Для inline декодирует
+   base64 только после ограничения decoded size.
+3. До `decodeToImageBitmap` проверяет MIME+signature, 1..12 MiB и не более
+   16,000,000 pixels. Только после этого создаёт bitmap off UI thread; cache держит
+   максимум 8 bitmap. Никаких чтений project directory, Pi uploads path или
+   `AttachmentMeta.path` для history preview нет.
+4. Ошибка locator validation, read, base64, MIME/signature, size, pixels или decoder
+   возвращает `ERROR` preview без повторной попытки с другим locator; ref и история
+   остаются видимыми как error/chip. Отсутствующий blob старой истории — тот же
+   controlled error, не migration failure.
 
 ## Форматы, доступ и лимиты
 
@@ -110,19 +149,14 @@ UI обязан сохранить существующие `CodingAttachments` 
 
 ## Точные сценарии следующих этапов
 
-1. PNG/JPEG/GIF/WebP/BMP, принятый picker или clipboard, показывает thumbnail в
-   composer; SVG и подпись/MIME mismatch — error-state без decode.
-2. После отправки USER input ref сохраняет `imageId`, `sessionId`, `messageId` и
-   `timelineId`; перезапуск/восстановление checkpoint не создаёт второй ref.
-3. Две картинки с одинаковыми именами в одной сессии имеют разные `imageId`; две
-   попытки одного prompt различаются `messageId`/`timelineId`.
-4. Structured MCP image result с известным `callId` выводится только у этого шага;
-   text-only MCP result, `imagegen` в title и data URL в тексте — без thumbnail.
-5. Локальный locator вне managed storage, symlink/relative traversal, неизвестный
-   MIME, превышение byte/pixel limits и decode error не читаются и показывают
-   controlled error state.
-6. Легаси JSON с `CodingMessage.attachments` и без refs открывается без migration
-   failure и остаётся chip-only; путь не раскрывается в UI.
+| Проверка | Подготовка и действие | Обязательный результат |
+|---|---|---|
+| Raster composer | По одному валидному PNG/JPEG/GIF/WebP/BMP из picker и clipboard; отдельно SVG и PNG с неверной signature/MIME | Первые пять имеют `READY`; SVG и mismatch — `ERROR`; decoder не вызывается для error cases |
+| Вход конкретного запуска | Отправить image-only prompt, сохранить checkpoint, перезапустить приложение и выполнить recovery | Ровно один invocation с теми же `sessionId`, `invocationId`, `inputMessageId`; USER ref принадлежит этому invocation, не новому |
+| Коллизии имён | Две `same.png` в одной сессии и один повторный prompt | Все refs имеют разные `imageId`; разные запуски имеют разные `invocationId`, даже при одинаковых filename/payload |
+| Результат вызова | Fixture structured MCP image block с `callId=A`, плюс step `A` и соседний step `B` | `TOOL_RESULT` появляется только у шага A и несёт A; text-only block, title `imagegen` и data URL в text не создают ref |
+| Безопасность locator | Передать чужой namespace, absolute/relative traversal, symlink, invalid base64, >12 MiB, >16M pixels и bad signature | Ничего за managed root не читается; для каждого случая — controlled `ERROR`, без fallback на path/text |
+| Легаси история | JSON `CodingMessage.attachments` без новых invocation/ref полей и `AttachmentMeta.path` с локальным путём | История загружается; отображается прежний chip-only UI; path не читается и thumbnail не угадывается |
 
 Существующие близкие проверки: [AttachmentTest.kt](../shared/src/commonTest/kotlin/io/aequicor/magicpaper/domain/AttachmentTest.kt),
 [ClipboardAttachmentsTest.kt](../shared/src/jvmTest/kotlin/io/aequicor/magicpaper/data/storage/ClipboardAttachmentsTest.kt),
