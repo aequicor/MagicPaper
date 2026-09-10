@@ -1014,6 +1014,12 @@ internal fun CodingChat(
                 .onSizeChanged { systemHeaderHeight = with(density) { it.height.toDp() } }) {
                 if (showOrchestrationStatus)
                     OrchestrationStatus(session, planningService, onOpenSession, Modifier, scrolled = false)
+                else if (interactions.isEmpty()) session.blockingReason?.let { reason ->
+                    PaperStatusPanel(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                        PaperStatus("Выполнение остановлено. $reason", isError = true,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+                }
                 if (eventWaitLabel != null) {
                     PaperPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = LocalPaperColors.current.raisedSurface) {
                         PaperText(eventWaitLabel, Modifier.padding(10.dp), style = LocalPaperTypography.current.body)

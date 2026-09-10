@@ -173,6 +173,35 @@ class PlanningSessionStatusTest {
         assertEquals(CodingSessionStatus.WAITING, planner.copy(running = false, draft = CodingDraft()).attentionStatus)
     }
 
+    @Test fun answeredQuestionDoesNotLeaveWorkerWaitingWhileItsCheckpointCatchesUp() {
+        val waiting = plan.copy(milestones = listOf(stage.copy(attempts = listOf(
+            attempt.copy(awaitingPlanner = true, waitingForUser = question.id)))))
+        val workerUi = CodingSessionUi(worker, listOf(question), plan = waiting, awaitingUser = true)
+        assertEquals(CodingSessionStatus.WAITING, workerUi.attentionStatus)
+
+        val answer = CodingMessage("answer", CodingRole.USER, "PDF", createdAt = 2,
+            planning = PlanningChatBlock(plan.id, replyTo = question.id))
+        val answered = workerUi.copy(messages = listOf(question, answer))
+        assertEquals(CodingSessionStatus.QUEUED, answered.attentionStatus)
+        assertEquals(CodingSessionStatus.QUEUED, answered.copy(running = true,
+            draft = CodingDraft(active = true, awaitingApproval = true)).attentionStatus)
+    }
+
+    @Test fun completedWorkerDoesNotAskForAnAnswerFromStaleWaitFlags() {
+        for (saved in listOf(attempt.copy(awaitingPlanner = true, waitingForUser = "closed-question"),
+            attempt.copy(waitingForEvent = "delivered-event"))) {
+            val completed = plan.copy(phase = ExecutionPhase.COMPLETE,
+                milestones = listOf(stage.copy(status = MilestoneStatus.DONE, attempts = listOf(saved))))
+            val result = CodingMessage("result", CodingRole.AGENT, "Готово. Результат передан.", createdAt = 2)
+            val ui = CodingUi(sessions = listOf(CodingSessionUi(parent, plan = completed),
+                CodingSessionUi(worker, listOf(result), plan = completed, awaitingUser = true,
+                    draft = CodingDraft(awaitingApproval = true)))).withRequests()
+            assertTrue(ui.interactions.isEmpty())
+            assertEquals(listOf(CodingSessionStatus.IDLE, CodingSessionStatus.IDLE), ui.sessionsOf(parent.projectId).map { it.status })
+            assertEquals(CodingSessionStatus.IDLE, ui.statusOf(parent.projectId))
+        }
+    }
+
     @Test fun unansweredQuestionsRemainAvailableInOrderAcrossNewMessages() {
         val second = question.copy(id = "second", planning = question.planning!!.copy(questions = listOf(PlanningQuestion("other", "Другой вопрос"))))
         val answeredSecond = CodingMessage("answer", CodingRole.USER, "Ответ", createdAt = 3, planning = PlanningChatBlock(plan.id, replyTo = second.id))

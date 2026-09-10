@@ -69,6 +69,20 @@ data class CodingSessionUi(
     // its entire history on every layout; copy() creates a fresh cache when it changes.
     val status: CodingSessionStatus by lazy { computeStatus() }
 
+    val blockingReason: String? by lazy {
+        if (status != CodingSessionStatus.BLOCKED) null
+        else when {
+            session.observedState == io.aequicor.magicpaper.domain.SessionObservedState.UNKNOWN ->
+                "Результат запуска не подтверждён."
+            session.desiredState == io.aequicor.magicpaper.domain.SessionDesiredState.QUARANTINE ->
+                "Перед продолжением нужно проверить результат запуска."
+            else -> draft.failedMessage
+                ?: plan?.milestones?.firstOrNull { it.id == session.stageId }?.attempts?.lastOrNull()?.error?.message
+                ?: plan?.issue?.message
+                ?: "Запрос не удалось завершить."
+        }
+    }
+
     private fun computeStatus(): CodingSessionStatus {
         if (session.archived) return CodingSessionStatus.IDLE
         if (immunityProposalPending) return CodingSessionStatus.WAITING
@@ -76,17 +90,18 @@ data class CodingSessionUi(
             session.desiredState == io.aequicor.magicpaper.domain.SessionDesiredState.QUARANTINE) return CodingSessionStatus.BLOCKED
         if (session.observedState == io.aequicor.magicpaper.domain.SessionObservedState.STOPPING) return CodingSessionStatus.WORKING
         if (plan?.stopping == true) return if (plan.issue != null) CodingSessionStatus.BLOCKED else CodingSessionStatus.WORKING
-        if (interactions.isNotEmpty() || (running || draft.active) && (awaitingUser || draft.awaitingApproval))
-            return CodingSessionStatus.WAITING
+        // The composer and sidebar must use the same actionable queue. Runtime flags
+        // and saved attempts can outlive a question while its answer is being handled.
+        if (interactions.isNotEmpty()) return CodingSessionStatus.WAITING
         if (draft.failedMessage != null || (failedRequest && !running && !draft.active)) return CodingSessionStatus.BLOCKED
         val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
         if (stage != null) return when {
+            stage.completed -> if (running || draft.active) CodingSessionStatus.WORKING else CodingSessionStatus.IDLE
             stage.attempts.lastOrNull()?.waitingForEvent != null -> CodingSessionStatus.SCHEDULED
-            stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.WAITING
+            stage.attempts.lastOrNull()?.waitingForUser != null -> CodingSessionStatus.QUEUED
             stage.attempts.lastOrNull()?.let { it.awaitingPlanner && (it.error == null || it.error.isPlannerAnswerWait) } == true -> CodingSessionStatus.QUEUED
             stage.attempts.lastOrNull()?.error?.requiresUser == true -> CodingSessionStatus.BLOCKED
             running || plan.isStageWorking(stage) -> CodingSessionStatus.WORKING
-            stage.completed -> CodingSessionStatus.IDLE
             else -> CodingSessionStatus.QUEUED
         }
         if (plan != null && session.id == plan.parentSessionId) return when {
@@ -97,7 +112,7 @@ data class CodingSessionUi(
             plan.issue != null -> CodingSessionStatus.BLOCKED
             plan.intent == ExecutionIntent.RUN && plan.phase in listOf(ExecutionPhase.RECOVERING, ExecutionPhase.VERIFYING, ExecutionPhase.APPLYING) -> CodingSessionStatus.WORKING
             plan.scheduledMessages.any { it.status == io.aequicor.magicpaper.domain.ScheduledMessageStatus.WAITING } ||
-                plan.selectedMilestones.any { it.attempts.lastOrNull()?.waitingForEvent != null } -> CodingSessionStatus.SCHEDULED
+                plan.selectedMilestones.any { !it.completed && it.attempts.lastOrNull()?.waitingForEvent != null } -> CodingSessionStatus.SCHEDULED
             else -> CodingSessionStatus.IDLE
         }
         return when {

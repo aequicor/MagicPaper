@@ -1409,7 +1409,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SavedCodingHistoryItem",
-    "annotationLine": 1084,
+    "annotationLine": 1090,
     "targets": [
       "PaperChatTranscript",
       "PaperMarkdown"
@@ -1420,7 +1420,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingMessageBubble",
-    "annotationLine": 1157,
+    "annotationLine": 1163,
     "targets": [
       "PaperPanel",
       "PaperMarkdown",
@@ -1432,7 +1432,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingStepRow",
-    "annotationLine": 1263,
+    "annotationLine": 1269,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1444,7 +1444,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ThinkingStepRow",
-    "annotationLine": 1295,
+    "annotationLine": 1301,
     "targets": [
       "PaperMarkdown",
       "PaperPanel",
@@ -1457,7 +1457,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ToolStepRow",
-    "annotationLine": 1328,
+    "annotationLine": 1334,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1469,7 +1469,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ToolStepContent",
-    "annotationLine": 1349,
+    "annotationLine": 1355,
     "targets": [
       "PaperMarkdown",
       "PaperPanel",
@@ -1482,7 +1482,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "DraftFragment",
-    "annotationLine": 1451,
+    "annotationLine": 1457,
     "targets": [
       "PaperPanel",
       "PaperText"
@@ -1493,7 +1493,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "AgentMessageStatus",
-    "annotationLine": 1459,
+    "annotationLine": 1465,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1511,12 +1511,12 @@
       "PaperText"
     ],
     "stage": "6",
-    "annotationLine": 1567
+    "annotationLine": 1573
   },
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingComposer",
-    "annotationLine": 1574,
+    "annotationLine": 1580,
     "targets": [
       "PaperAttachmentRow",
       "PaperButton",
