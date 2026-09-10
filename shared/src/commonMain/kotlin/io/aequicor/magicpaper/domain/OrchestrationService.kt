@@ -708,8 +708,11 @@ class OrchestrationService(
                         }
                     }
                     controlNow(plan.id, "retry")
-                } else append(session.projectId, session.id, CodingMessage(request.id + "-left", CodingRole.USER,
-                    "Оставить работу остановленной.\n" + request.details, createdAt = clock()))
+                } else {
+                    execution.stopAndJoin(plan.id)
+                    append(session.projectId, session.id, CodingMessage(request.id + "-left", CodingRole.USER,
+                        "Оставить работу остановленной.\n" + request.details, createdAt = clock()))
+                }
             }
             InteractionKind.RECOVER_INPUT -> {
                 val input = state(session.id, session.projectId).inputs.firstOrNull { it.id == request.sourceId &&
@@ -768,7 +771,8 @@ class OrchestrationService(
                     syncInputMessage(session, input.id)
                     try {
                         processInput(session, input)
-                        if (input.resumeAfter) currentPlan(session)?.takeIf { it.confirmedRevision != null && it.proposal == null }?.let { resumePlan(it.id) }
+                        // Legacy resumeAfter was set by submitting ordinary composer text.
+                        // It is not authorization to retry work or override a later STOP.
                         setInputStatus(session, input.id, OrchestrationInputStatus.DONE)
                     } catch (e: TimeoutCancellationException) {
                         val message = "Модель не успела ответить за отведённое время. Сообщение сохранено; повторите обработку."
@@ -928,8 +932,11 @@ class OrchestrationService(
         updateState(session.id, session.projectId) { old ->
             old.finishWorkPause(store.plans.value.first { it.id == current.id }, input.id)
         }
-        if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER || decision.toolsApplied)
-            store.planFor(current.id)?.takeIf { it.intent == ExecutionIntent.RUN }?.let { execution.start(it.id) }
+        val appliedMutation = decision.toolsApplied && toolHost?.receipts
+            ?.forRequest("${session.projectId}/${session.id}/${input.id}").orEmpty()
+            .any { it.phase == ToolPhase.SUCCEEDED }
+        if (pauseIds.isNotEmpty() || decision.intent == UserTurnIntent.ANSWER || appliedMutation)
+            store.planFor(current.id)?.takeIf { it.intent == ExecutionIntent.RUN && it.issue == null }?.let { execution.start(it.id) }
     }
 
     private suspend fun interpretToolInput(session: CodingSession, plan: Plan, input: OrchestrationInput, profile: LlmProfile): UserTurnDecision {
@@ -1321,14 +1328,14 @@ class OrchestrationService(
         execution.start(id)
     }
 
-    /** Resume the existing run; text entered with Continue is processed before scheduling work. */
+    /** Only an empty Continue resumes execution; text is an independently interpreted message. */
     fun resume(session: CodingSession, text: String = "") = launch {
         val interrupted = state(session.id, session.projectId).inputs.lastOrNull()?.takeIf {
             it.status in listOf(OrchestrationInputStatus.CANCELLED, OrchestrationInputStatus.FAILED)
         }
         if (interrupted != null && session.stageId == null) {
             updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-                if (it.id == interrupted.id) it.copy(status = OrchestrationInputStatus.QUEUED, error = "", resumeAfter = true,
+                if (it.id == interrupted.id) it.copy(status = OrchestrationInputStatus.QUEUED, error = "", resumeAfter = false,
                     decision = if (text.isBlank()) it.decision else null,
                     text = it.text + if (text.isNotBlank()) "\n\nУточнение пользователя: $text" else "") else it
             }) }
@@ -1339,7 +1346,7 @@ class OrchestrationService(
         val plan = session.planId?.let { store.planFor(it) } ?: currentPlan(session) ?: return@launch
         if (text.isNotBlank()) {
             if (session.stageId != null) queueWorker(session, text)
-            else { send(session, text, resumeAfter = true); return@launch }
+            else { send(session, text); return@launch }
         }
         resumePlan(plan.id)
     }

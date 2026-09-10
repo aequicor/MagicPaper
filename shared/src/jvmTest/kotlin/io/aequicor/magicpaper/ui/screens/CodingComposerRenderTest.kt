@@ -26,6 +26,45 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingComposerRenderTest {
+    @Test fun planningQuestionIsSentWithoutResumingAndEmptyComposerCanStillContinue() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            for (width in listOf(390, 1000)) {
+                val draft = io.aequicor.magicpaper.ui.components.CodingComposerDraft().apply {
+                    text.value = "Почему результат не принят?"
+                }
+                val sent = mutableListOf<String>()
+                var resumed = 0
+                ImageComposeScene(width, 180) {
+                    MagicPaperTheme { Surface {
+                        CodingComposer(state = draft, planning = true, enabled = true, busy = false,
+                            onSend = { text, _ -> sent += text }, onResume = { _, _ -> resumed++ },
+                            onAbort = {}, onPickAttachments = { _, _ -> })
+                    } }
+                }.use { scene ->
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    fun click(label: String) {
+                        val center = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.first {
+                            it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == label }
+                        }.boundsInRoot.center
+                        scene.sendPointerEvent(PointerEventType.Press, center)
+                        scene.sendPointerEvent(PointerEventType.Release, center)
+                    }
+                    repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                    click("Отправить")
+                    repeat(6) { scene.render((it + 6) * 16_000_000L).close(); runCurrent() }
+                    assertEquals(listOf("Почему результат не принят?"), sent)
+                    assertEquals(0, resumed)
+                    assertEquals("", draft.text.value)
+                    click("Продолжить")
+                    scene.render(208_000_000L).close(); runCurrent()
+                    assertEquals(1, resumed)
+                    assertEquals(1, sent.size)
+                }
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun continueWorksWithEmptyComposerAtBothWidthsAndSendStaysDisabled() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

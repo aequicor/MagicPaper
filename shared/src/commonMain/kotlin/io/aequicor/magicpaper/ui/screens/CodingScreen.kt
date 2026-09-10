@@ -1555,9 +1555,10 @@ internal fun CodingComposer(
 ) {
     var text by state.text
     var attachments by state.attachments
+    val resumeSubmission = onResume != null && (!planning || (text.isBlank() && attachments.isEmpty()))
     fun submit() {
         if (!enabled || busy || (onResume == null && text.isBlank() && attachments.isEmpty())) return
-        (onResume ?: onSend)(text, attachments)
+        (if (resumeSubmission) onResume else onSend)(text, attachments)
         text = ""
         attachments = emptyList()
     }
@@ -1689,7 +1690,7 @@ internal fun CodingComposer(
                 if (busy) io.aequicor.magicpaper.designsystem.PaperButton("Прервать", onAbort,
                     kind = io.aequicor.magicpaper.designsystem.PaperButtonKind.SECONDARY)
                 else io.aequicor.magicpaper.designsystem.PaperButton(
-                    if (!enabled) "Движок не готов" else if (onResume != null) "Продолжить" else "Отправить",
+                    if (!enabled) "Движок не готов" else if (resumeSubmission) "Продолжить" else "Отправить",
                     onClick = ::submit,
                     enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()))
             }

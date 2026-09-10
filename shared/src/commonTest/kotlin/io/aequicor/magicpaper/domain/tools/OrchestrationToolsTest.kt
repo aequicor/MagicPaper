@@ -81,6 +81,79 @@ class OrchestrationToolsTest {
         fun orchestrator(request: String = "request", source: OrchestrationInput? = null) = host.session(ToolExecutionContext("p", "parent", "parent", request,
             ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, "plan", "run", sourceInput = source))
         fun args(text: String) = Json.parseToJsonElement(text).jsonObject
+        suspend fun blockOnStaleAcceptance(): Plan {
+            return store.update("plan") { plan ->
+                val criteria = plan.milestones.single().criteria()
+                val record = AcceptanceRecord("run", "attempt", "old-snapshot", criteria,
+                    criteria.map { AcceptanceFinding(it.id, CheckStatus.STALE, it.description, "Files changed") },
+                    status = AcceptanceStatus.STALE)
+                val issue = PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true)
+                plan.copy(intent = ExecutionIntent.RUN, phase = ExecutionPhase.WAITING, issue = issue, status = PlanStatus.FAILED,
+                    milestones = plan.milestones.map { it.copy(status = MilestoneStatus.FAILED,
+                        attempts = listOf(attempt.copy(phase = AttemptPhase.VERIFYING, error = issue,
+                            verificationSnapshot = "old-snapshot", acceptanceRecord = record))) })
+            }
+        }
+    }
+
+    @Test fun statusQuestionsIncludingLegacyResumeInputsDoNotRetryAcceptance() = runTest {
+        val f = Fixture(this); f.init()
+        val blocked = f.blockOnStaleAcceptance()
+        f.planningRun = { tools ->
+            tools.call("context", "context.get", JsonObject(emptyMap()))
+            "Результат сохранён, проверка устарела."
+        }
+        f.service.bootstrap(); runCurrent()
+        // Reproduce a persisted input from the old composer and then its current entry point.
+        f.service.send(f.parent, "Почему требуется проверка?", resumeAfter = true); runCurrent()
+        f.service.resume(f.parent, "Подготовь описание проблемы"); runCurrent()
+        advanceTimeBy(10_000); runCurrent()
+        val saved = f.store.planFor("plan")!!
+        assertEquals(blocked.issue, saved.issue)
+        assertEquals(ExecutionPhase.WAITING, saved.phase)
+        assertEquals(blocked.milestones.single().attempts, saved.milestones.single().attempts)
+        assertTrue(f.verificationReports.isEmpty())
+        assertTrue(f.workerCalls.isEmpty())
+        assertEquals(2, f.service.states.value["parent"]!!.inputs.count { it.status == OrchestrationInputStatus.DONE })
+    }
+
+    @Test fun leaveRecoveryPersistsStopBeforePublishingTheAnswer() = runTest {
+        for (skip in listOf(false, true)) {
+            val f = Fixture(this); f.init()
+            val blocked = f.blockOnStaleAcceptance()
+            val blockers = blocked.blockingIssues(emptyList())
+            val request = UserInteractionRequest("blocker:${blockers.map { it.messageId }.sorted().joinToString(":")}",
+                "p", "parent", InteractionKind.RECOVER_PLAN,
+                listOf(PlanningQuestion("decision", "Как продолжить?", QuestionKind.SINGLE,
+                    listOf(QuestionOption("leave", "Оставить остановленной")), canSkip = true)), planId = "plan")
+            f.service.submitInteraction(request, listOf(PlanningAnswer("decision", if (skip) emptyList() else listOf("leave"), skipped = skip)))
+            val persisted = JsonPlanningRepository(f.kv, f.json).plans().single()
+            assertEquals(ExecutionIntent.STOP, persisted.intent)
+            assertEquals(PlanStatus.STOPPED, persisted.status)
+            assertEquals(blocked.milestones.single().attempts, persisted.milestones.single().attempts)
+            assertTrue(f.projects.messages("p", "parent").any { it.id == request.id + "-left" })
+            f.execution.bootstrap(); advanceTimeBy(6_000); runCurrent()
+            assertTrue(f.verificationReports.isEmpty())
+            assertTrue(f.workerCalls.isEmpty())
+        }
+    }
+
+    @Test fun lateDiscussionCannotOverrideStopEvenWithLegacyResumeFlag() = runTest {
+        val f = Fixture(this); f.init(); f.blockOnStaleAcceptance()
+        val reply = CompletableDeferred<Unit>()
+        f.planningRun = { tools ->
+            tools.call("context", "context.get", JsonObject(emptyMap()))
+            reply.await()
+            "Только объяснение."
+        }
+        f.service.bootstrap(); runCurrent()
+        f.service.send(f.parent, "Объясни состояние", resumeAfter = true); runCurrent()
+        f.execution.stopAndJoin("plan")
+        reply.complete(Unit); runCurrent(); advanceTimeBy(6_000); runCurrent()
+        assertEquals(ExecutionIntent.STOP, f.store.planFor("plan")!!.intent)
+        assertEquals(PlanStatus.STOPPED, f.store.planFor("plan")!!.status)
+        assertTrue(f.verificationReports.isEmpty())
+        assertTrue(f.workerCalls.isEmpty())
     }
 
     @Test fun commandsUseExistingSessionDeliveryAndRevisionGuards() = runTest {

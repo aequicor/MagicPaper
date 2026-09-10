@@ -262,12 +262,15 @@ class PlanningChatServiceTest {
         assertTrue(f.runtime.calls.isEmpty())
     }
 
-    @Test fun textEnteredWithContinueReachesWorkerBeforeStoppedPlanResumes() = runTest {
+    @Test fun textEnteredWithContinueWaitsForExplicitResumeOfStoppedPlan() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent"); val base = f.readyPlan("p", parent)
         f.store.save(base.copy(confirmedRevision = 1, intent = ExecutionIntent.STOP, runId = "same-run"))
         f.gateway.userDecision = """{"intent":"INSTRUCT","stageId":"stage"}"""
         f.service.resume(parent, "Сохрани существующий формат"); runCurrent()
+        assertTrue(f.runtime.calls.isEmpty())
+        assertEquals(ExecutionIntent.STOP, f.store.planFor(base.id)!!.intent)
+        f.service.resume(parent); runCurrent()
         val call = f.runtime.calls.single()
         assertContains(call.second, "Сохрани существующий формат")
         assertEquals(ExecutionIntent.RUN, f.store.planFor(base.id)!!.intent)
