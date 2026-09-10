@@ -74,3 +74,11 @@ Full-log collapse no longer overwrites the pending disclosure scroll request wit
 The bottom-docked composer now has a 16 dp rounded surface, warm tonal gradient and soft shadow. Focus is shared with the whole composer; the inner rectangular focus outline is suppressed. Messages use distinct opaque lavender tones, with soft shadows on standalone bubbles and no hard outline. Contrast tests cover the new surfaces. Normal and focused renders at 1240/720/600 px are in shared/build/reports/coding-workspace/.
 
 Verification: designSystem:jvmTest passed; the selected shared UI suite passed; desktop JVM, Android, JS and Wasm compilation passed. DS boundary and surface-map checks passed. No application restart or native Windows manual verification was performed.
+
+## Группы задач в списке проектов, 2026-09-10
+
+`PaperTreeGroupHeader` объединяет зиготу, дерево её сессий и независимый иммунитет под названием задачи. Группировка использует сохранённую идентичность задачи, включая период восстановления проекций; одноимённые задачи остаются разными группами. Общий статус учитывает ожидающие решения иммунитета до завершения загрузки сессий. Сворачивание группы не меняет активный диалог, сворачивание зиготы не скрывает иммунитет. Заголовок закрепляется под проектом, а закрытие закреплённой группы сохраняет позицию. Действия с отдельными сессиями сохраняют прежние адресаты.
+
+Проверки: 30 тестов `designSystem:jvmTest` и 28 выбранных shared-тестов — PASS. Покрыты группировка/восстановление, независимое раскрытие, выбор сессий, статусы, закрепление, прежние деревья и геометрия рабочего пространства. Desktop, Android, JS и Wasm компилируются. Проверки границы Paper, карты поверхностей с отрицательными контролями и `git diff --check` — PASS. Карта синхронизирована с фактическими объявлениями, включая ранее отсутствовавшие поверхности иммунитета и правил планирования.
+
+Рендеры: `shared/build/reports/project-task-groups/` и `designSystem/build/reports/paper-task-group-header/`. На macOS проверены тестовые сцены при ширине 200/390 dp, масштабе текста до 200%, клавиатурное управление и профили плотности macOS/Windows. Нативный прогон Windows и VoiceOver/NVDA — NOT_RUN; для него нужны соответствующие интерактивные окружения. Работающее приложение не перезапускалось.

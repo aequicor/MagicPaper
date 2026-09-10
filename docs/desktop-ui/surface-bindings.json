@@ -617,6 +617,30 @@
     "kind": "surface"
   },
   {
+    "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ImmunityInterventions.kt",
+    "symbol": "ImmunityInterventions",
+    "annotationLine": 12,
+    "targets": [
+      "PaperPanel",
+      "PaperButton",
+      "PaperDialog",
+      "PaperScroll"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ImmunityInterventions.kt",
+    "symbol": "ImmunityProposalDetails",
+    "annotationLine": 79,
+    "targets": [
+      "PaperText",
+      "PaperButton"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/InlineMessage.kt",
     "symbol": "Content",
     "kind": "surface",
@@ -822,7 +846,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/OrchestrationStatus.kt",
     "symbol": "AddressLink",
-    "annotationLine": 251,
+    "annotationLine": 258,
     "targets": [
       "PaperLink"
     ],
@@ -838,12 +862,12 @@
       "PaperPanel"
     ],
     "stage": "6",
-    "annotationLine": 252
+    "annotationLine": 259
   },
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/OrchestrationStatus.kt",
     "symbol": "OrchestrationMessageInputStatus",
-    "annotationLine": 272,
+    "annotationLine": 279,
     "targets": [
       "PaperStatus",
       "PaperPanel"
@@ -986,19 +1010,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/RequestPinsBrowser.kt",
     "symbol": "MessagePinColumn",
-    "annotationLine": 48,
-    "targets": [
-      "PaperIconButton",
-      "PaperTooltip",
-      "PaperText"
-    ],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/RequestPinsBrowser.kt",
-    "symbol": "MessagePinButton",
-    "annotationLine": 62,
+    "annotationLine": 40,
     "targets": [
       "PaperIconButton",
       "PaperTooltip",
@@ -1010,7 +1022,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/RequestPinsBrowser.kt",
     "symbol": "RequestPinsDialog",
-    "annotationLine": 89,
+    "annotationLine": 46,
     "targets": [
       "PaperDialog",
       "PaperListRow",
@@ -1191,7 +1203,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingScreen",
-    "annotationLine": 198,
+    "annotationLine": 201,
     "targets": [
       "PaperPage",
       "PaperSplitPane",
@@ -1203,7 +1215,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ResizableProjectPanels",
-    "annotationLine": 263,
+    "annotationLine": 266,
     "targets": [
       "PaperSplitPane"
     ],
@@ -1213,7 +1225,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SessionArea",
-    "annotationLine": 294,
+    "annotationLine": 297,
     "targets": [
       "PaperTab",
       "PaperPluginHost",
@@ -1225,7 +1237,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SessionTab",
-    "annotationLine": 383,
+    "annotationLine": 393,
     "targets": [
       "PaperTab"
     ],
@@ -1235,7 +1247,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ActivityDot",
-    "annotationLine": 424,
+    "annotationLine": 434,
     "targets": [
       "PaperActivityIndicator"
     ],
@@ -1245,11 +1257,12 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectsPanel",
-    "annotationLine": 448,
+    "annotationLine": 458,
     "targets": [
       "PaperTreeRow",
       "PaperScroll",
-      "PaperButton"
+      "PaperButton",
+      "PaperTreeGroupHeader"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1257,11 +1270,12 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "sessionHeader",
-    "annotationLine": 483,
+    "annotationLine": 495,
     "targets": [
       "PaperTreeRow",
       "PaperIconButton",
-      "PaperMenu"
+      "PaperMenu",
+      "PaperTreeGroupHeader"
     ],
     "stage": "6",
     "kind": "local-surface"
@@ -1274,16 +1288,17 @@
       "PaperPanel"
     ],
     "stage": "6",
-    "annotationLine": 555
+    "annotationLine": 585
   },
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectPinnedSession",
-    "annotationLine": 569,
+    "annotationLine": 599,
     "targets": [
       "PaperTreeRow",
       "PaperIconButton",
-      "PaperMenu"
+      "PaperMenu",
+      "PaperTreeGroupHeader"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1291,7 +1306,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectRow",
-    "annotationLine": 603,
+    "annotationLine": 633,
     "targets": [
       "PaperTreeRow",
       "PaperIconButton",
@@ -1303,7 +1318,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SessionRow",
-    "annotationLine": 682,
+    "annotationLine": 712,
     "targets": [
       "PaperListRow",
       "PaperIconButton",
@@ -1315,7 +1330,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "HoverActions",
-    "annotationLine": 760,
+    "annotationLine": 792,
     "targets": [
       "PaperIconButton",
       "PaperTooltip"
@@ -1326,7 +1341,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "RowMenu",
-    "annotationLine": 775,
+    "annotationLine": 807,
     "targets": [
       "PaperMenu"
     ],
@@ -1336,7 +1351,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "StatusTooltip",
-    "annotationLine": 812,
+    "annotationLine": 844,
     "targets": [
       "PaperTooltip"
     ],
@@ -1346,7 +1361,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectsEmptyHint",
-    "annotationLine": 817,
+    "annotationLine": 849,
     "targets": [
       "PaperPanel",
       "PaperText"
@@ -1357,7 +1372,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingChat",
-    "annotationLine": 840,
+    "annotationLine": 872,
     "targets": [
       "PaperChatTranscript",
       "PaperComposer",
@@ -1370,7 +1385,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "status",
-    "annotationLine": 914,
+    "annotationLine": 950,
     "targets": [
       "PaperStatus",
       "PaperButton"
@@ -1381,7 +1396,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SavedCodingHistoryItem",
-    "annotationLine": 1039,
+    "annotationLine": 1084,
     "targets": [
       "PaperChatTranscript",
       "PaperMarkdown"
@@ -1392,7 +1407,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingMessageBubble",
-    "annotationLine": 1112,
+    "annotationLine": 1157,
     "targets": [
       "PaperPanel",
       "PaperMarkdown",
@@ -1404,7 +1419,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingStepRow",
-    "annotationLine": 1218,
+    "annotationLine": 1263,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1416,7 +1431,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ThinkingStepRow",
-    "annotationLine": 1250,
+    "annotationLine": 1295,
     "targets": [
       "PaperMarkdown",
       "PaperPanel",
@@ -1429,7 +1444,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ToolStepRow",
-    "annotationLine": 1283,
+    "annotationLine": 1328,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1441,7 +1456,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ToolStepContent",
-    "annotationLine": 1304,
+    "annotationLine": 1349,
     "targets": [
       "PaperMarkdown",
       "PaperPanel",
@@ -1454,7 +1469,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "DraftFragment",
-    "annotationLine": 1404,
+    "annotationLine": 1451,
     "targets": [
       "PaperPanel",
       "PaperText"
@@ -1465,7 +1480,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "AgentMessageStatus",
-    "annotationLine": 1412,
+    "annotationLine": 1459,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1483,12 +1498,12 @@
       "PaperText"
     ],
     "stage": "6",
-    "annotationLine": 1520
+    "annotationLine": 1567
   },
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingComposer",
-    "annotationLine": 1527,
+    "annotationLine": 1574,
     "targets": [
       "PaperAttachmentRow",
       "PaperButton",
@@ -1765,8 +1780,22 @@
   },
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
+    "symbol": "PlanningRulesSettingsSection",
+    "annotationLine": 187,
+    "targets": [
+      "PaperSettingsSection",
+      "PaperField",
+      "PaperButton",
+      "PaperPanel",
+      "PaperText"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "ProfileEditor",
-    "annotationLine": 188,
+    "annotationLine": 215,
     "targets": [
       "PaperSettingsSection",
       "PaperField",
@@ -1778,7 +1807,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "CatalogModelPicker",
-    "annotationLine": 327,
+    "annotationLine": 354,
     "targets": [
       "PaperListRow",
       "PaperChoice",
@@ -1790,7 +1819,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "ProviderRow",
-    "annotationLine": 352,
+    "annotationLine": 379,
     "targets": [
       "PaperListRow",
       "PaperChoice"
@@ -1801,7 +1830,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "SubscriptionAccount",
-    "annotationLine": 387,
+    "annotationLine": 414,
     "targets": [
       "PaperPanel",
       "PaperField",
@@ -1814,7 +1843,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "NavEntry",
-    "annotationLine": 451,
+    "annotationLine": 478,
     "targets": [
       "PaperNavigation",
       "PaperText"
@@ -1825,7 +1854,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "Section",
-    "annotationLine": 476,
+    "annotationLine": 503,
     "targets": [
       "PaperSettingsSection",
       "PaperText"
@@ -1836,7 +1865,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "Field",
-    "annotationLine": 486,
+    "annotationLine": 513,
     "targets": [
       "PaperField"
     ],

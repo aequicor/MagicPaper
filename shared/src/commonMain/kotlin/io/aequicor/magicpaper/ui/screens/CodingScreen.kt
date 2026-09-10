@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
 import io.aequicor.magicpaper.designsystem.PaperPromptField
 import io.aequicor.magicpaper.designsystem.PaperWorkSurface
 import io.aequicor.magicpaper.designsystem.PaperContentEntrance
+import io.aequicor.magicpaper.designsystem.PaperTreeGroupHeader
 import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.domain.tools.ToolPhase
 
@@ -471,45 +472,55 @@ internal fun ProjectsPanel(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         val collapsed = remember { mutableStateMapOf<String, Boolean>() }
+        val collapsedTasks = remember { mutableStateMapOf<String, Boolean>() }
         // Disclosure is local UI state: never reload a project or reset its active session.
         // Selecting another project opens its list; status updates preserve disclosure.
         var projectCollapsed by remember(ui.current?.id) { mutableStateOf(false) }
         val projectIndex = ui.projects.indexOfFirst { it.id == ui.current?.id }
-        val ownSessions = ui.current?.let { ui.sessionsOf(it.id) }.orEmpty().filterNot { it.session.archived }
-        val sessionIds = ownSessions.map { it.session.id }.toSet()
+        val tasks = ui.current?.let { ui.projectSessionTasks(it.id) }.orEmpty()
         val groups = buildList {
             var index = projectIndex + 1
-            if (!projectCollapsed) ownSessions.filter { it.session.parentSessionId !in sessionIds }.forEach { parent ->
-                // Read the orchestrator's work in creation order, from top to bottom.
-                fun descendants(id: String, seen: Set<String> = emptySet()): List<CodingSessionUi> =
-                    if (id in seen || collapsed[id] == true) emptyList() else ownSessions
-                        .filter { it.session.parentSessionId == id }.sortedBy { it.session.createdAt }
-                        .flatMap { listOf(it) + descendants(it.session.id, seen + id) }
-                val children = descendants(parent.session.id)
-                val expanded = collapsed[parent.session.id] != true
+            if (!projectCollapsed) tasks.forEach { task ->
+                val rows = task.visibleRows(collapsed.filterValues { it }.keys)
+                val expanded = if (task.organismId != null) collapsedTasks[task.key] != true
+                    else collapsed[task.rootId] != true
+                // An organism has a disclosure header of its own. Its zygote and immunity
+                // remain peers in the view, just as they are in the runtime.
+                val children = if (!expanded) emptyList() else if (task.organismId != null) rows else rows.drop(1)
                 val start = index++
-                if (expanded) index += children.size
-                add(ProjectSessionGroup(parent, children, expanded, start, index))
+                index += children.size
+                add(ProjectSessionGroup(task, rows.firstOrNull(), children, expanded, start, index))
             }
         }
         val sessionHeader: @Composable (ProjectSessionGroup) -> Unit = { group ->
-            val session = group.parent
-            SessionRow(session, session.session.id == ui.activeSessionIdOf(session.session.projectId),
-                { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
-                { onAbortSession(session.session.id) },
-                onArchive = { onArchiveSession(session.session.id) },
-                childCount = ownSessions.count { it.session.parentSessionId == session.session.id }, expanded = group.expanded,
-                onToggleChildren = {
-                    if (group.expanded) {
-                        val visible = listState.layoutInfo.visibleItemsInfo
-                        val project = visible.firstOrNull { it.key == "project-${session.session.projectId}" }
-                        val top = project?.let { (it.offset + it.size).coerceAtLeast(0) } ?: 0
-                        val header = visible.firstOrNull { it.key == "session-${session.session.id}" }
-                        // Keep a pinned card visible when its scrolled-away children disappear.
-                        if (header == null || header.offset < top) listState.requestScrollToItem(group.index, -top)
-                    }
-                    collapsed[session.session.id] = group.expanded
-                })
+            val task = group.task
+            val toggle = {
+                if (group.expanded) {
+                    val visible = listState.layoutInfo.visibleItemsInfo
+                    val project = visible.firstOrNull { it.key == "project-${ui.current?.id}" }
+                    val top = project?.let { (it.offset + it.size).coerceAtLeast(0) } ?: 0
+                    val header = visible.firstOrNull { it.key == task.key }
+                    // Keep the pinned group visible when its scrolled-away members disappear.
+                    if (header == null || header.offset < top) listState.requestScrollToItem(group.index, -top)
+                }
+                if (task.organismId != null) collapsedTasks[task.key] = group.expanded
+                else task.rootId?.let { collapsed[it] = group.expanded }
+                Unit
+            }
+            if (task.organismId != null) {
+                val status = task.status
+                PaperTreeGroupHeader(task.title, group.expanded, toggle,
+                    modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+                    active = task.sessions.any { it.session.id == ui.activeSessionIdOf(it.session.projectId) },
+                    leading = { StatusTooltip(status) { ActivityDot(status, size = 8) } })
+            } else group.root?.let { root ->
+                val session = root.item
+                SessionRow(session, session.session.id == ui.activeSessionIdOf(session.session.projectId),
+                    { onSelectSession(session.session.id) }, { onDeleteSession(session.session.id) },
+                    { onAbortSession(session.session.id) },
+                    onArchive = { onArchiveSession(session.session.id) },
+                    childCount = root.childCount, expanded = group.expanded, onToggleChildren = toggle)
+            }
         }
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -534,17 +545,17 @@ internal fun ProjectsPanel(
                     if (expanded) {
                         val activeId = ui.activeSessionIdOf(project.id)
                         groups.forEach { group ->
-                            item(key = "session-${group.parent.session.id}") { sessionHeader(group) }
-                            if (group.expanded) group.children.forEach { child ->
+                            item(key = group.task.key) { sessionHeader(group) }
+                            group.children.forEach { row ->
+                                val child = row.item
                                 item(key = "session-${child.session.id}") {
                                     SessionRow(child, child.session.id == activeId,
                                         { onSelectSession(child.session.id) }, { onDeleteSession(child.session.id) },
                                         { onAbortSession(child.session.id) },
                                         onArchive = { onArchiveSession(child.session.id) }, nested = true,
-                                        nestedDepth = generateSequence(child.session.parentSessionId) { parentId ->
-                                            own.firstOrNull { it.session.id == parentId }?.session?.parentSessionId
-                                        }.take(64).count(),
-                                        childCount = own.count { it.session.parentSessionId == child.session.id },
+                                        nestedDepth = row.depth + if (group.task.organismId != null) 1 else 0,
+                                        displayName = if (group.task.organismId != null && child.session.id == group.task.rootId) "Зигота" else child.session.name,
+                                        childCount = row.childCount,
                                         expanded = collapsed[child.session.id] != true,
                                         onToggleChildren = { collapsed[child.session.id] = collapsed[child.session.id] != true })
                                 }
@@ -562,8 +573,9 @@ internal fun ProjectsPanel(
 }
 
 private data class ProjectSessionGroup(
-    val parent: CodingSessionUi,
-    val children: List<CodingSessionUi>,
+    val task: ProjectSessionTask,
+    val root: ProjectSessionTreeRow?,
+    val children: List<ProjectSessionTreeRow>,
     val expanded: Boolean,
     val index: Int,
     val endIndex: Int,
@@ -596,7 +608,7 @@ private fun ProjectPinnedSession(
     val top = (project.offset + project.size).coerceAtLeast(0)
     val firstBelowProject = visible.firstOrNull { it.index > project.index && it.offset + it.size > top } ?: return
     val group = groups.firstOrNull { firstBelowProject.index in it.index until it.endIndex } ?: return
-    if (!group.parent.session.planningMode && group.children.isEmpty()) return
+    if (group.task.organismId == null && group.root?.item?.session?.planningMode != true && group.children.isEmpty()) return
     val original = visible.firstOrNull { it.index == group.index }
     if (original != null && original.offset >= top) return
     // The following root session (or add-session row) pushes this header out. Clip
@@ -607,7 +619,7 @@ private fun ProjectPinnedSession(
     val topPadding = with(LocalDensity.current) { top.toDp() }
     Box(Modifier.fillMaxSize().padding(top = topPadding).clipToBounds()) {
         Layout(modifier = Modifier.scrollable(listState, Orientation.Vertical, reverseDirection = true), content = {
-            key(group.parent.session.id) {
+            key(group.task.key) {
                 Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) { content(group) }
             }
         }) { measurables, constraints ->
@@ -705,6 +717,7 @@ private fun SessionRow(
     onDelete: () -> Unit,
     onAbort: () -> Unit,
     onArchive: () -> Unit,
+    displayName: String = item.session.name,
     nested: Boolean = false,
     nestedDepth: Int = if (nested) 1 else 0,
     childCount: Int = 0,
@@ -742,7 +755,7 @@ private fun SessionRow(
         StatusTooltip(status) { ActivityDot(status, size = 8) }
         Spacer(Modifier.width(7.dp))
         FadingSingleLineText(
-            item.session.name,
+            displayName,
             modifier = Modifier.weight(1f),
             style = LocalPaperTypography.current.chrome,
             fontWeight = FontWeight.Normal,
