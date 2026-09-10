@@ -101,6 +101,14 @@ class SessionOrganismService(
         project(store.prepareUserTurn(organism.id, session.id, requestId))
     }
 
+    suspend fun authorizePlanRetry(plan: Plan, stageId: String, attempt: StageAttempt): PlanAttemptRetryAuthorization? {
+        require(plan.projectId !in deletingProjects.value && plan.confirmedRevision != null) { "План недоступен для повтора" }
+        require(plan.selectedMilestones.firstOrNull { it.id == stageId }?.attempts?.lastOrNull() == attempt) { "Попытка этапа заменена" }
+        val parent = projects.sessions(plan.projectId).firstOrNull { it.id == plan.parentSessionId } ?: return null
+        val organism = parent.organismId ?: return null
+        return store.authorizePlanRetry(organism, attempt.sessionId, planBinding(plan, stageId, attempt))
+    }
+
     suspend fun preparePlanAttempt(plan: Plan, stageId: String, attempt: StageAttempt): StageAttempt {
         require(plan.projectId !in deletingProjects.value) { "Проект удаляется" }
         require(plan.confirmedRevision != null && plan.intent == ExecutionIntent.RUN) { "План не подтверждён для выполнения" }
@@ -115,7 +123,8 @@ class SessionOrganismService(
             modelSelection = ModelSelection(attempt.assignment.profileId, attempt.assignment.modelId, attempt.assignment.effort))
         val task = SessionTask(stage.description, parent.id, stage.acceptance.ifBlank { stage.description }, attempt.baseCommit,
             stage.dependsOn.mapNotNull { dependency -> plan.milestones.firstOrNull { it.id == dependency }?.attempts?.lastOrNull()?.sessionId }.toSet())
-        val admitted = store.admitPlanWorker(organism.id, session, task, planBinding(plan, stageId, attempt), plan.planningRulesSnapshot)
+        val admitted = store.admitPlanWorker(organism.id, session, task, planBinding(plan, stageId, attempt), plan.planningRulesSnapshot,
+            plan.selectedMilestones.filterNot { it.completed }.map { it.id }.toSet(), attempt.retryAuthorization)
         project(admitted)
         return attempt.copy(sessionGeneration = admitted.sessions.getValue(session.id).generation)
     }

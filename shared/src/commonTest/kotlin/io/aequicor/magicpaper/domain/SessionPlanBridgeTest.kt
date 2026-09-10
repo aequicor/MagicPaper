@@ -82,4 +82,77 @@ class SessionPlanBridgeTest {
         assertFailsWith<IllegalArgumentException> { f.service.preparePlanAttempt(plan, "stage", attempt) }
         assertEquals(SessionDesiredState.STOP, f.store.get(f.root.organismId!!).sessions.getValue("worker").desired)
     }
+
+    private fun Plan.withAttempt(attempt: StageAttempt) = copy(milestones = listOf(milestones.single().copy(attempts = listOf(attempt))))
+
+    private suspend fun stoppedBudgetAttempt(f: SessionOrganismTestFixture): Pair<Plan, StageAttempt> {
+        val plan = plan(f)
+        val attempt = f.service.preparePlanAttempt(plan, "stage", plan.milestones.single().attempts.single())
+        val id = f.root.organismId!!
+        val running = f.store.beginRun(id, attempt.sessionId)
+        f.store.charge(SessionAuthority(f.project.id, id, running.id, running.generation, running.mode), running.remainingTokens + 1)
+        f.store.observe(id, running.id, running.generation, SessionObservedState.STOPPED)
+        val failed = attempt.copy(phase = AttemptPhase.FAILED, error = PlanningIssue(IssueKind.UNCERTAIN, "Бюджет сессии исчерпан", requiresUser = true))
+        return plan.withAttempt(failed) to failed
+    }
+
+    @Test fun explicitBudgetRetryCreatesOneGenerationAndConsumesItsPersistedAuthorization() = runTest {
+        val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
+        val (plan, failed) = stoppedBudgetAttempt(f)
+        val authorization = assertNotNull(f.service.authorizePlanRetry(plan, "stage", failed))
+        val retry = failed.copy(retryAuthorization = authorization)
+        val retryPlan = plan.withAttempt(retry)
+        val admitted = f.service.preparePlanAttempt(retryPlan, "stage", retry)
+        val saved = f.store.get(f.root.organismId!!)
+        val worker = saved.sessions.getValue("worker")
+        assertEquals(failed.sessionGeneration + 1, admitted.sessionGeneration)
+        assertEquals(SessionDesiredState.RUN, worker.desired)
+        assertEquals(SessionObservedState.PENDING, worker.observed)
+        assertEquals(1, worker.retryCount)
+        assertTrue(worker.remainingTokens > 0)
+        assertEquals(saved.limits.tokens, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
+        assertEquals("USER", saved.audit.single { it.operationId == "plan-retry-${authorization.id}" }.actor)
+        // A crash between aggregate admission and its Plan projection reuses the grant.
+        val replay = f.service.preparePlanAttempt(retryPlan, "stage", retry)
+        assertEquals(admitted.sessionGeneration, replay.sessionGeneration)
+        assertEquals(worker.remainingTokens, f.store.get(saved.id).sessions.getValue("worker").remainingTokens)
+        assertEquals(1, f.store.get(saved.id).audit.count { it.action == "PLAN_RETRY" })
+
+        f.store.requestUserStop(saved.id, "worker", "later-stop", false)
+        f.store.observe(saved.id, "worker", admitted.sessionGeneration, SessionObservedState.STOPPED)
+        assertFailsWith<IllegalArgumentException> { f.service.preparePlanAttempt(retryPlan, "stage", retry) }
+        assertEquals(SessionDesiredState.STOP, f.store.get(saved.id).sessions.getValue("worker").desired)
+    }
+
+    @Test fun stopAfterRetryApprovalInvalidatesItAndNeedsAFreshUserAction() = runTest {
+        val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
+        val (plan, failed) = stoppedBudgetAttempt(f)
+        val stale = failed.copy(retryAuthorization = assertNotNull(f.service.authorizePlanRetry(plan, "stage", failed)))
+        f.store.requestUserStop(f.root.organismId!!, "worker", "stop-after-approval", false)
+        assertFailsWith<IllegalArgumentException> { f.service.preparePlanAttempt(plan.withAttempt(stale), "stage", stale) }
+        val fresh = failed.copy(retryAuthorization = assertNotNull(f.service.authorizePlanRetry(plan, "stage", failed)))
+        val admitted = f.service.preparePlanAttempt(plan.withAttempt(fresh), "stage", fresh)
+        assertEquals(failed.sessionGeneration + 1, admitted.sessionGeneration)
+        assertEquals(1, f.store.get(f.root.organismId!!).sessions.getValue("worker").retryCount)
+    }
+
+    @Test fun retryAuthorizationCannotBypassUnknownStoppingOrQuarantinedState() = runTest {
+        for (state in listOf("unknown", "stopping", "quarantine", "archive")) {
+            val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
+            val plan = plan(f)
+            val attempt = f.service.preparePlanAttempt(plan, "stage", plan.milestones.single().attempts.single())
+            val id = f.root.organismId!!
+            f.store.beginRun(id, "worker")
+            if (state == "quarantine") {
+                val parent = f.store.get(id).sessions.getValue(f.root.id)
+                f.store.command(SessionAuthority(f.project.id, id, parent.id, parent.generation, parent.mode), "quarantine",
+                    OrganismCommand(OrganismAction.QUARANTINE, target = "worker", reason = "Check actual effects"))
+            } else f.store.requestUserStop(id, "worker", "stop", state == "archive")
+            if (state != "stopping") f.store.observe(id, "worker", attempt.sessionGeneration,
+                if (state == "unknown") SessionObservedState.UNKNOWN else SessionObservedState.STOPPED)
+            if (state == "archive") f.store.finishStop(id, setOf("worker"))
+            assertFailsWith<IllegalArgumentException>(state) { f.service.authorizePlanRetry(plan.withAttempt(attempt), "stage", attempt) }
+            assertTrue(f.store.get(id).audit.none { it.action == "PLAN_RETRY" })
+        }
+    }
 }

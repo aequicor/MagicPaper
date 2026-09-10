@@ -32,6 +32,8 @@ class PlanningExecutionService(
     var chatHooks: PlanningExecutionHooks? = null
     /** App-owned admission, after durable intent and before native startup. */
     var prepareAttempt: suspend (Plan, String, StageAttempt) -> StageAttempt = { _, _, attempt -> attempt }
+    /** Capture one explicit retry before changing the durable plan; never called by the scheduler. */
+    var authorizeRetry: suspend (Plan, String, StageAttempt) -> PlanAttemptRetryAuthorization? = { _, _, _ -> null }
     /** A separate aggregate projection after the Plan checkpoint has committed. */
     var attemptCheckpoint: suspend (Plan, String, StageAttempt) -> Unit = { _, _, _ -> }
     var stoppedCheckpoint: suspend (Plan) -> Unit = {}
@@ -171,13 +173,24 @@ class PlanningExecutionService(
     }
     /** Explicit retry does not erase counters; the caller fixes configuration or acknowledges uncertainty. */
     suspend fun retry(projectId: String) {
-        if (store.planFor(projectId)?.phase == ExecutionPhase.COMPLETE) return
+        val before = store.planFor(projectId) ?: return
+        if (before.phase == ExecutionPhase.COMPLETE) return
+        check(!before.stopping) { "Дождитесь подтверждения остановки" }
+        val authorizations = before.selectedMilestones.mapNotNull { stage ->
+            stage.attempts.lastOrNull()?.takeIf { it.phase != AttemptPhase.COMPLETE &&
+                (it.error != null || it.interrupted || it.phase == AttemptPhase.FAILED) }?.let { attempt ->
+                authorizeRetry(before, stage.id, attempt)?.let { attempt.id to it }
+            }
+        }.toMap()
         store.update(projectId) { p ->
             check(!p.stopping) { "Дождитесь подтверждения остановки" }
+            check(p == before) { "Состояние плана изменилось; повторите действие" }
             p.copy(issue = null, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING, status = PlanStatus.RUNNING,
             finalAttempt = p.finalAttempt?.retryAfterUserAction()?.let { if (p.issue?.kind == IssueKind.UNCERTAIN) it.copy(pendingToolExternal = false, pendingTool = "") else it },
             milestones = p.milestones.map { m -> m.copy(attempts = m.attempts.map { a ->
-                val acknowledged = a.retryAfterUserAction()
+                val acknowledged = a.retryAfterUserAction().let { resumed ->
+                    authorizations[a.id]?.let { resumed.copy(retryAuthorization = it) } ?: resumed
+                }
                 if (p.issue?.kind == IssueKind.UNCERTAIN) acknowledged.copy(pendingToolExternal = false, pendingTool = "") else acknowledged
             }) }) }
         launchProject(store.planFor(projectId)!!.id)
@@ -1007,7 +1020,18 @@ class PlanningExecutionService(
                     send(CodingEvent.Notice(""))
                     continue
                 }
-                val event = received.getOrNull() ?: break
+                val event = received.getOrNull()
+                if (event == null) {
+                    // A producer can cancel itself (budget/deadline) while the scheduler
+                    // remains active. Keep its reason; a clean EOF must not hide that stop.
+                    // A real owner/user cancellation still propagates as cancellation.
+                    currentCoroutineContext().ensureActive()
+                    received.exceptionOrNull()?.let { cause ->
+                        send(CodingEvent.Failed(cause.message?.takeIf { it.isNotBlank() }
+                            ?: "Выполнение агента прервано"))
+                    }
+                    break
+                }
                 silentTicks = 0
                 send(event)
                 // Drain normal completion so runtime cleanup and independent experience checks finish.

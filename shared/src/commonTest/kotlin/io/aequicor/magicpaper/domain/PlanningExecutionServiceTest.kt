@@ -45,6 +45,7 @@ class PlanningExecutionServiceTest {
         private val report: String = "Verified result",
         private val command: String = "./gradlew :shared:jvmTest",
         private val cleanupGate: CompletableDeferred<Unit>? = null,
+        private val terminateAfterOutput: (suspend () -> Unit)? = null,
     ) : CodingRuntime {
         val engines = mutableListOf<CodingEngine?>()
         val sessions = mutableListOf<CodingSession>()
@@ -73,6 +74,7 @@ class PlanningExecutionServiceTest {
                 emit(CodingEvent.ToolFinished("command", false, "command-1", "BUILD SUCCESSFUL"))
             }
             trailingDelta?.let { emit(CodingEvent.TextDelta(it)) }
+            terminateAfterOutput?.invoke()
             gate?.await()
             if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText(report))
             emit(CodingEvent.Finished)
@@ -449,6 +451,63 @@ class PlanningExecutionServiceTest {
         assertNotEquals(PlanStatus.DONE, store.planFor(project.id)?.status)
         assertTrue(store.planFor(project.id)?.issue?.requiresUser == true)
     }
+
+    @Test fun childBudgetCancellationRetainsItsReasonAndCompletedEvidenceWithoutRetry() = runTest {
+        assertChildCancellationWaitsForUser("Бюджет сессии исчерпан") {
+            throw CancellationException("Бюджет сессии исчерпан")
+        }
+    }
+
+    @Test fun childDeadlineCancellationRetainsItsReasonAndCompletedEvidenceWithoutRetry() = runTest {
+        assertChildCancellationWaitsForUser("Timed out") {
+            withTimeout(50) { awaitCancellation() }
+        }
+    }
+
+    private suspend fun TestScope.assertChildCancellationWaitsForUser(reason: String, terminate: suspend () -> Unit) {
+        val partialReport = "Начинаю аудит: файлы прочитаны, проверка результата ещё не завершена."
+        val runtime = Runtime(trailingDelta = partialReport, terminateAfterOutput = terminate)
+        var verifications = 0
+        val verifier = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                verifications++
+                return Verdict(true, "Must not accept a cancelled worker")
+            }
+        }
+        val (store, service) = fixture(runtime, verifier = verifier)
+        store.save(plan(stage("a"), stage("b", depends = listOf("a"))))
+        service.start(project.id)
+        advanceTimeBy(1_000); runCurrent()
+
+        val saved = store.planFor(project.id)!!
+        val attempt = saved.milestones.first().attempts.single()
+        assertEquals(ExecutionPhase.WAITING, saved.phase)
+        assertEquals(PlanStatus.FAILED, saved.status)
+        assertTrue(saved.issue!!.requiresUser)
+        assertContains(saved.issue.message, reason)
+        assertEquals(saved.issue, attempt.error)
+        assertEquals(AttemptPhase.FAILED, attempt.phase)
+        assertEquals(partialReport, attempt.report)
+        val read = attempt.steps.single { it.callId == "read-1" }
+        assertEquals("Файлы прочитаны", read.result)
+        assertFalse(read.running)
+        assertTrue(read.ok)
+        assertEquals(io.aequicor.magicpaper.domain.tools.ToolPhase.SUCCEEDED, read.toolPhase)
+        assertEquals("", attempt.pendingTool)
+        assertNull(attempt.acceptanceRecord)
+        assertNull(saved.finalAttempt)
+        assertEquals(0, verifications)
+        assertEquals(0, attempt.transportRetries)
+        assertEquals(0, attempt.repairRetries)
+        assertTrue(saved.milestones.last().attempts.isEmpty())
+
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(listOf(attempt.sessionId), runtime.calls, "An internally cancelled worker must await the user's decision")
+        assertEquals(ExecutionPhase.WAITING, store.planFor(project.id)!!.phase)
+        assertEquals(attempt, store.planFor(project.id)!!.milestones.first().attempts.single())
+        assertEquals(0, verifications)
+    }
+
     @Test fun verificationUnavailableDoesNotRerunImplementation() = runTest {
         val unavailable = object : MilestoneVerifier {
             override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) =
@@ -615,6 +674,73 @@ class PlanningExecutionServiceTest {
         assertContains(attempt.prompt, "Restore permissions")
         assertEquals(2, attempt.repairRetries)
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+    }
+
+    @Test fun explicitRetryAuthorizesOnlyCurrentFailedAttemptAndPersistsPermissionBeforeAdmission() = runTest {
+        val (store, service) = fixture(Runtime(CompletableDeferred()))
+        val issue = PlanningIssue(IssueKind.UNCERTAIN, "Бюджет сессии исчерпан", requiresUser = true)
+        val assignment = StageAssignment("agent", "m")
+        val older = StageAttempt("old", "old-worker", assignment, phase = AttemptPhase.FAILED, error = issue, sessionGeneration = 2)
+        val failed = StageAttempt("current", "worker", assignment, phase = AttemptPhase.FAILED, path = "/fake/stage", error = issue, sessionGeneration = 7)
+        val completed = StageAttempt("completed", "completed-worker", assignment, phase = AttemptPhase.COMPLETE)
+        val prepared = StageAttempt("prepared", "prepared-worker", assignment, phase = AttemptPhase.PREPARED)
+        val initial = plan(
+            stage("failed").copy(status = MilestoneStatus.FAILED, attempts = listOf(older, failed)),
+            stage("completed").copy(status = MilestoneStatus.DONE, attempts = listOf(completed)),
+            stage("prepared").copy(attempts = listOf(prepared)),
+        ).copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.STOP, phase = ExecutionPhase.WAITING,
+            status = PlanStatus.STOPPED, issue = issue)
+        store.save(initial)
+        val before = store.planFor(initial.id)!!
+        val permission = PlanAttemptRetryAuthorization("explicit-retry", SessionLegacyAttempt(before.id, before.runId,
+            "failed", failed.id, failed.turnIndex, failed.sessionGeneration), 12)
+        val authorized = mutableListOf<Pair<String, String>>()
+        val admitted = mutableListOf<Pair<String, PlanAttemptRetryAuthorization?>>()
+        service.authorizeRetry = { snapshot, stageId, attempt ->
+            assertEquals(before, snapshot)
+            authorized += stageId to attempt.id
+            permission
+        }
+        service.prepareAttempt = { _, stageId, attempt ->
+            val persisted = store.planFor(before.id)!!.milestones.first { it.id == stageId }.attempts.last()
+            assertEquals(persisted.retryAuthorization, attempt.retryAuthorization)
+            admitted += stageId to attempt.retryAuthorization
+            attempt
+        }
+        service.retry(before.id); runCurrent()
+        assertEquals(listOf("failed" to failed.id), authorized)
+        assertEquals(permission, admitted.single { it.first == "failed" }.second)
+        val saved = store.planFor(before.id)!!
+        assertNull(saved.milestones.first { it.id == "failed" }.attempts.first().retryAuthorization)
+        assertNull(saved.milestones.first { it.id == "completed" }.attempts.last().retryAuthorization)
+        assertNull(saved.milestones.first { it.id == "prepared" }.attempts.last().retryAuthorization)
+        service.stop(before.id); runCurrent()
+    }
+
+    @Test fun retryRejectsNewGlobalIssueOrFinalAttemptEvenWhenRevisionAndStageSnapshotsMatch() = runTest {
+        for (changeFinal in listOf(false, true)) {
+            val (store, service, runtime) = fixture()
+            val issue = PlanningIssue(IssueKind.UNCERTAIN, "Original stopped run", requiresUser = true)
+            val assignment = StageAssignment("agent", "m")
+            val failed = StageAttempt("current", "worker", assignment, phase = AttemptPhase.FAILED, error = issue, sessionGeneration = 3)
+            val initial = plan(stage("a").copy(status = MilestoneStatus.FAILED, attempts = listOf(failed)))
+                .copy(runId = "run", confirmedRevision = 1, intent = ExecutionIntent.STOP, phase = ExecutionPhase.WAITING,
+                    status = PlanStatus.STOPPED, issue = issue)
+            store.save(initial)
+            val before = store.planFor(initial.id)!!
+            val changed = if (changeFinal) before.copy(finalAttempt = StageAttempt("new-final", "final-worker", assignment,
+                phase = AttemptPhase.FAILED, pendingTool = "publish", pendingToolExternal = true, error = issue))
+                else before.copy(issue = issue.copy(message = "New unconfirmed external operation"))
+            service.authorizeRetry = { _, _, _ ->
+                store.save(changed) // A projection can replace the snapshot without incrementing its revision.
+                PlanAttemptRetryAuthorization("retry", SessionLegacyAttempt(before.id, before.runId,
+                    "a", failed.id, failed.turnIndex, failed.sessionGeneration), 10)
+            }
+            assertFailsWith<IllegalStateException> { service.retry(before.id) }
+            runCurrent()
+            assertEquals(changed, store.planFor(before.id))
+            assertTrue(runtime.calls.isEmpty())
+        }
     }
 
     @Test fun transportLimitSurvivesExplicitContinuation() = runTest {

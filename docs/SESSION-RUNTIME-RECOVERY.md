@@ -63,6 +63,41 @@ side effects. An interrupted potentially mutating tool retains an `UNKNOWN` tool
 phase and its saved pending-effect checkpoint. Stopping or archiving a session does
 not undo an already completed command, Git operation or API request.
 
+## Plan budgets and explicit retry
+
+The September 10 early-stop failure came from a fixed 64,000-token stage grant:
+four read/search operations reported 93,956 tokens while the parent still held
+926,000. The quota cancellation then lost its cause at the scheduler's event-channel
+boundary and appeared as a stream ending without a confirmed result.
+
+Plan admission now divides available parent tokens among unfunded unfinished
+selected stages and one retained parent share for orchestration and verification.
+Funded siblings are excluded under the aggregate lock, and continuation turns keep
+their remaining grant. Explicit existing allocations and the organism limit remain
+authoritative. Normal allocation does not borrow the immunity recovery reserve.
+
+Provider usage is observed after work and can exceed a grant. Actual spend is
+preserved; excess reservations are removed from the responsible branch and its
+ancestors, then other grants, with recovery last. The same reconciliation repairs
+older excessive reservations during admission. An observed overrun beyond the
+whole organism limit leaves no spendable grants; it is not hidden by clamping the
+reported cost. Already incurred usage from another live session remains
+accountable after its grant is exhausted, without authorizing further work.
+
+A child cancellation now preserves its budget/deadline reason and partial tool
+evidence. It neither supplies a successful completion event nor triggers an
+automatic retry. Owner/user cancellation still cancels the scheduler normally.
+
+Explicit retry captures a persisted `StageAttempt.retryAuthorization` for the
+exact plan/run/stage/attempt/turn, session generation and node version. Saving it
+requires the Plan snapshot to remain unchanged. Admission atomically checks and
+consumes its ID, records user authorization, reserves available budget and advances
+the stopped worker's generation. Replaying admission before native startup reuses
+the grant. A later stop invalidates the authorization; active descendants, unknown
+outcomes, quarantine, archive, accepted results and a closed parent remain blockers.
+Old plans decode the new optional field as null. The Plan and organism remain
+separate storage transactions; retry does not alter existing worktrees or evidence.
+
 ## Generic coding child workspaces
 
 Ordinary `CODE` children use the same `PlanningWorkspace` implementation as plan
@@ -244,6 +279,17 @@ stop cleanup barriers and failed native reconciliation. Session tree tests cover
 parent joining, delayed cancellation cleanup, isolated and cancelling failure
 policies, dependency ordering, startup failures, stale results, failure during
 hydration and question cleanup, and reconciliation before terminal observation.
+
+The September 10 planner correction adds 20 regression tests for fair allocation,
+legacy overrun accounting, concurrent usage after exhaustion, cancellation causes,
+durable retry authorization and newer stop/Plan snapshots. All 1,246 shared and
+30 design-system tests passed; two existing opt-in live catalog checks were skipped.
+Desktop, Android, JS and Wasm compilation passed. Reverting only the two original
+faulty code fragments reproduced the 64k grant and both lost cancellation causes
+in three failing tests. Counts, commands and control results are stored in
+[`planner-budget-retry-2026-09-10.json`](session-infrastructure-verification/planner-budget-retry-2026-09-10.json).
+Live application records were inspected read-only; no plan was restarted and the
+running desktop application was not replaced.
 
 The combined Gradle verification is reported with the task's final execution
 results. `python3 docs/desktop-ui/verify-design-system.py --self-test` passes for the

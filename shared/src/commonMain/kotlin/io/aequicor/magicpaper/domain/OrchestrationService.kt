@@ -504,6 +504,7 @@ class OrchestrationService(
     fun bootstrap() {
         execution.chatHooks = this
         if (organisms != null) {
+            execution.authorizeRetry = organisms::authorizePlanRetry
             execution.prepareAttempt = organisms::preparePlanAttempt
             execution.attemptCheckpoint = organisms::planAttemptCheckpoint
             execution.stoppedCheckpoint = organisms::planStopped

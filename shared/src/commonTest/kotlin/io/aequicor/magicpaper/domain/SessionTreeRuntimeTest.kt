@@ -313,7 +313,7 @@ class SessionTreeRuntimeTest {
             val child = CodingSession("legacy-worker", f.project.id, "Legacy worker", 1,
                 planId = "plan", stageId = "work", parentSessionId = f.root.id, engine = CodingEngine.PI)
             val admitted = f.store.admitPlanWorker(initial.id, child, SessionTask("Work", f.root.id, "Verify"),
-                SessionLegacyAttempt("plan", "run", "work", "attempt", 0, 0), initial.sessions.getValue(f.root.id).rules)
+                SessionLegacyAttempt("plan", "run", "work", "attempt", 0, 0), initial.sessions.getValue(f.root.id).rules, setOf("work"))
             f.service.project(admitted)
             childJob = launch { tree.withScope(child.copy(organismId = initial.id, runtimeGeneration = admitted.sessions.getValue(child.id).generation)) {
                 childStarted.complete(Unit)

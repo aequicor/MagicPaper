@@ -1,0 +1,82 @@
+{
+  "date": "2026-09-10",
+  "baseCommit": "22e5df453f479e6bd9a58f76a28fe8c044bd97ef",
+  "command": "./gradlew --offline :shared:jvmTest :designSystem:jvmTest :desktopApp:compileKotlin :androidApp:compileDebugKotlin :shared:compileAndroidMain :webApp:compileKotlinJs :webApp:compileKotlinWasmJs",
+  "result": "BUILD SUCCESSFUL",
+  "modules": {
+    "shared": {
+      "tests": 1248,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 1246
+    },
+    "designSystem": {
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 30
+    }
+  },
+  "focusedSuites": {
+    "io.aequicor.magicpaper.domain.PlanningExecutionServiceTest": {
+      "tests": 62,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.SessionPlanBridgeTest": {
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.SessionPlanBudgetTest": {
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.SessionTreeRuntimeTest": {
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "skipped": [
+    "io.aequicor.magicpaper.data.skills.GithubSkillCatalogLiveTest.liveSearchAndTypedLinkImport[jvm]",
+    "io.aequicor.magicpaper.data.skills.SkillCatalogLiveUiTest.searchAndEnteredLinkThroughProjectCatalog[jvm]"
+  ],
+  "platformTasks": [
+    ":shared:compileAndroidMain UP-TO-DATE",
+    ":androidApp:compileDebugKotlin UP-TO-DATE",
+    ":webApp:compileKotlinJs UP-TO-DATE",
+    ":webApp:compileKotlinWasmJs UP-TO-DATE",
+    ":desktopApp:compileKotlin UP-TO-DATE"
+  ],
+  "negativeControl": {
+    "method": "Temporarily reverted only the fixed 64k admission grant and discarded event-channel close cause, then restored the exact source before the successful full run.",
+    "exitCode": 1,
+    "tests": [
+      {
+        "test": "confirmedFourStagePlanUsesTaskBudgetAndSurvivesRecordedReadOnlyUsage[jvm]",
+        "failed": true,
+        "message": "java.lang.AssertionError: expected:<198000> but was:<64000>"
+      },
+      {
+        "test": "childBudgetCancellationRetainsItsReasonAndCompletedEvidenceWithoutRetry[jvm]",
+        "failed": true,
+        "message": "java.lang.AssertionError: Expected the char sequence to contain the substring.\nCharSequence <Поток завершился без подтверждённого результата>, substring <Бюджет сессии исчерпан>, ignoreCase <false>."
+      },
+      {
+        "test": "childDeadlineCancellationRetainsItsReasonAndCompletedEvidenceWithoutRetry[jvm]",
+        "failed": true,
+        "message": "java.lang.AssertionError: Expected the char sequence to contain the substring.\nCharSequence <Поток завершился без подтверждённого результата>, substring <Timed out>, ignoreCase <false>."
+      }
+    ]
+  },
+  "designSystemSelfTest": "PASS: production modules use Paper API; renderer dependencies and raw clickable imports are contained",
+  "diffCheck": "PASS"
+}

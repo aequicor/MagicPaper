@@ -194,6 +194,22 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         return actor
     }
 
+    /** Recording already incurred usage cannot require admission for another unit of work.
+     * A concurrent overrun, deadline or stop can revoke that admission while native usage
+     * is still arriving. Identity and the live generation remain mandatory until it settles.
+     */
+    private fun SessionOrganism.usageActor(scope: SessionAuthority, auxiliary: Boolean = false): SessionNode {
+        requireTool(projectId == scope.projectId && id == scope.organismId) { "Другой проект или организм" }
+        requireTool(deletedAt == null && scope.sessionId !in historyDeletedIds) { "Сессия удалена пользователем" }
+        val node = sessions[scope.sessionId] ?: error("Сессия не найдена")
+        requireTool(node.generation == scope.generation && node.mode == scope.mode) { "Полномочия запуска отозваны" }
+        if (scope.expectedVersion != null && version != scope.expectedVersion) throw StaleSessionVersion()
+        requireTool(!node.archived && !node.settled && node.observed != SessionObservedState.UNKNOWN) { "Запуск уже закрыт или требует сверки" }
+        requireTool(auxiliary || node.lastStartedGeneration == scope.generation && node.observed in setOf(
+            SessionObservedState.RUNNING, SessionObservedState.WAITING_USER, SessionObservedState.STOPPING)) { "Запуск не выполняется" }
+        return node
+    }
+
     suspend fun check(scope: SessionAuthority) = lock.withLock { read(scope.organismId).actor(scope); Unit }
 
     /** A failed parent cannot leave separately scheduled legacy children admitting more work. */
@@ -213,32 +229,74 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             audit = old.audit + SessionAuditEvent(operationId, "APPLICATION", "FAILURE_STOP", affected, redact(reason), clock())))
     }
 
+    /** Host-only snapshot for a fresh user retry; saving the Plan makes this authority durable. */
+    suspend fun authorizePlanRetry(id: String, sessionId: String, binding: SessionLegacyAttempt): PlanAttemptRetryAuthorization? = lock.withLock {
+        val old = read(id)
+        val node = old.sessions[sessionId] ?: return@withLock null
+        if (node.desired == SessionDesiredState.RUN) return@withLock null
+        requirePlanRetryEligible(old, node, binding)
+        PlanAttemptRetryAuthorization(Id.new(), binding, node.version)
+    }
+
+    private fun requirePlanRetryEligible(old: SessionOrganism, node: SessionNode, binding: SessionLegacyAttempt) {
+        require(old.deletedAt == null && node.id !in old.historyDeletedIds && !old.stoppedByUser && !node.archived) { "Сессия удалена или архивирована" }
+        require(node.desired == SessionDesiredState.STOP && node.settled) { "Сначала подтвердите остановку предыдущего запуска" }
+        require(node.kind == SessionKind.SESSION && node.legacyAttempt == binding && node.generation == binding.generation) { "Попытка или поколение этапа изменились" }
+        require(old.audit.none { it.action == "QUARANTINE" && node.id in it.affected }) { "Сначала проверьте фактический исход операции" }
+        require(old.results.none { it.sessionId == node.id && it.accepted }) { "Работа уже принята" }
+        val affected = old.subtree(node.id)
+        require(affected.all { old.sessions.getValue(it).settled } && old.auxiliaryRuns.values.none { it.ownerSessionId in affected && !it.settled }) { "Рабочая область этапа ещё не остановлена" }
+        require(node.retryCount < old.limits.retries) { "Лимит восстановлений исчерпан" }
+        val parent = old.sessions.getValue(node.authorityParentId ?: error("Родитель не задан"))
+        old.actor(SessionAuthority(old.projectId, old.id, parent.id, parent.generation, parent.mode))
+    }
+
     /** Adapter entry called only for an actual persisted, human-confirmed plan attempt. */
     suspend fun admitPlanWorker(id: String, session: CodingSession, task: SessionTask,
-        binding: SessionLegacyAttempt, rules: PlanningRulesSnapshot?): SessionOrganism = lock.withLock {
-        val old = read(id)
+        binding: SessionLegacyAttempt, rules: PlanningRulesSnapshot?, unfinishedStageIds: Set<String>,
+        retryAuthorization: PlanAttemptRetryAuthorization? = null): SessionOrganism = lock.withLock {
+        val old = read(id).reconcileTokenBudget(session.parentSessionId ?: error("Родитель не задан"))
+        require(binding.stageId in unfinishedStageIds) { "Этап уже завершён или не выбран" }
         require(session.projectId == old.projectId && session.parentSessionId == task.resultRecipient) { "Другой проект или получатель" }
         val parent = old.sessions[session.parentSessionId] ?: error("Родитель не входит в организм")
         old.actor(SessionAuthority(old.projectId, id, parent.id, parent.generation, parent.mode))
         val existing = old.sessions[session.id]
         require(existing == null || (existing.originParentId == parent.id && existing.authorityParentId == parent.id)) { "Другая ветка происхождения" }
-        require(existing?.archived != true && (existing == null || existing.desired == SessionDesiredState.RUN) && existing?.observed != SessionObservedState.UNKNOWN) { "Сначала разрешите состояние старого запуска" }
+        val retry = retryAuthorization?.takeIf { existing?.desired == SessionDesiredState.STOP }?.also { authorization ->
+            requirePlanRetryEligible(old, existing!!, binding)
+            require(authorization.id.isNotBlank() && authorization.binding == binding && authorization.expectedVersion == existing.version &&
+                old.audit.none { it.operationId == "plan-retry-${authorization.id}" }) { "Разрешение повтора устарело; подтвердите повтор заново" }
+        }
+        require(existing?.archived != true && (existing == null || existing.desired == SessionDesiredState.RUN || retry != null) && existing?.observed != SessionObservedState.UNKNOWN) { "Сначала разрешите состояние старого запуска" }
         require(old.results.none { it.sessionId == session.id && it.accepted }) { "Работа уже принята" }
         require(existing?.observed !in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER, SessionObservedState.STOPPING)) { "Предыдущий запуск ещё работает" }
         val active = old.sessions.values.count { !it.settled && !it.archived && it.id != session.id } + old.auxiliaryRuns.values.count { !it.settled }
         require(active < old.limits.activeSessions && old.route(parent.id, old.zygoteId).size <= old.limits.depth) { "Лимит рабочей области исчерпан" }
         val retained = existing?.remainingTokens ?: 0
-        val allocated = if (retained > 0) 0 else minOf(64_000L, parent.remainingTokens / 2)
+        // Reserve an equal share for every unfinished stage and for the parent, whose
+        // planner/verification turns use the same task budget. Already funded siblings
+        // are removed under this lock so parallel admissions cannot dilute later shares.
+        // An existing allocation remains authoritative across continuation turns.
+        val fundedStages = old.sessions.values.mapNotNull { sibling -> sibling.legacyAttempt?.takeIf {
+            sibling.id != session.id && sibling.authorityParentId == parent.id && sibling.remainingTokens > 0 &&
+                it.planId == binding.planId && it.runId == binding.runId && it.stageId != binding.stageId
+        }?.stageId }.toSet()
+        val unfundedStages = (unfinishedStageIds - fundedStages).size
+        val allocated = if (retained > 0) 0 else parent.remainingTokens / (unfundedStages.toLong() + 1)
         require(retained + allocated > 0 && parent.remainingTokens - allocated > 0) { "Недостаточно бюджета" }
-        val generation = if (existing == null) 1 else maxOf(existing.generation, existing.lastStartedGeneration + 1).coerceAtLeast(1)
+        val generation = if (existing == null) 1 else maxOf(existing.generation + if (retry == null) 0 else 1,
+            existing.lastStartedGeneration + 1).coerceAtLeast(1)
         val node = (existing ?: SessionNode(session.id, SessionKind.SESSION, redact(session.name), parent.id)).copy(
             generation = generation, previousGeneration = existing?.generation?.takeIf { it != generation },
             version = (existing?.version ?: 0) + 1, desired = SessionDesiredState.RUN, observed = SessionObservedState.PENDING,
+            retryCount = (existing?.retryCount ?: 0) + if (retry == null) 0 else 1,
             mode = CodingInteractionMode.CODE, remainingTokens = retained + allocated, task = task.redacted(),
             rules = rules ?: parent.rules, legacyAttempt = binding.copy(generation = generation), lastObservedAt = clock())
         commit(old.copy(version = old.version + 1,
             sessions = old.sessions + (session.id to node) + (parent.id to parent.copy(remainingTokens = parent.remainingTokens - allocated, version = parent.version + 1)),
-            audit = old.audit + SessionAuditEvent("plan-attempt-${binding.attemptId}-${binding.turnIndex}-$generation", "APPLICATION", "PLAN_ATTEMPT", setOf(parent.id, session.id),
+            audit = old.audit + listOfNotNull(retry?.let { SessionAuditEvent("plan-retry-${it.id}", "USER", "PLAN_RETRY", setOf(session.id),
+                "Подтверждён повтор поколения ${it.binding.generation}; создано поколение $generation", clock()) }) +
+                SessionAuditEvent("plan-attempt-${binding.attemptId}-${binding.turnIndex}-$generation", "APPLICATION", "PLAN_ATTEMPT", setOf(parent.id, session.id),
                 "Подтверждённый этап; существующий бюджет и рабочая копия плана", clock())))
     }
 
@@ -561,13 +619,47 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         commit(old.copy(version = old.version + 1, outbox = old.outbox.map { if (it.id == deliveryId) it.copy(state = if (processed || it.state == SessionDeliveryState.PROCESSED) SessionDeliveryState.PROCESSED else SessionDeliveryState.DELIVERED) else it }))
     }
 
+    /** Usage arrives after a provider effect and can overrun a grant between observations.
+     * Keep that actual spend, but remove the excess reservation before it can fund another
+     * turn. Older aggregates may already contain this excess; admission repairs those too.
+     * Spend is borne by the responsible branch/ancestors first, recovery only as a last resort.
+     */
+    private fun SessionOrganism.reconcileTokenBudget(preferredSessionId: String): SessionOrganism {
+        val available = (limits.tokens - sessions.values.sumOf { it.spentTokens }).coerceAtLeast(0)
+        var excess = (sessions.values.sumOf { it.remainingTokens } - available).coerceAtLeast(0)
+        if (excess == 0L) return this
+        val priority = mutableListOf<String>()
+        var next: String? = preferredSessionId
+        while (next != null && next !in priority) {
+            priority += next
+            next = sessions[next]?.authorityParentId
+        }
+        priority += sessions.keys.sorted()
+        val ordered = priority.distinct().filter { it != immunityId } + immunityId
+        val nodes = sessions.toMutableMap()
+        val affected = mutableSetOf<String>()
+        for (sessionId in ordered) {
+            if (excess == 0L) break
+            val node = nodes[sessionId] ?: continue
+            val debit = minOf(node.remainingTokens, excess)
+            if (debit == 0L) continue
+            nodes[sessionId] = node.copy(remainingTokens = node.remainingTokens - debit, version = node.version + 1)
+            excess -= debit
+            affected += sessionId
+        }
+        return copy(sessions = nodes, audit = audit + SessionAuditEvent("budget-reconcile-$id-${version + 1}", "APPLICATION",
+            "BUDGET_RECONCILE", affected, "Фактический расход учтён в оставшемся бюджете задачи", clock()))
+    }
+
     suspend fun charge(scope: SessionAuthority, tokens: Long): SessionOrganism = lock.withLock {
         require(tokens >= 0)
-        val old = read(scope.organismId); val node = old.actor(scope)
+        val old = read(scope.organismId); val node = old.usageActor(scope)
         val excess = tokens > node.remainingTokens
         val updated = node.copy(remainingTokens = (node.remainingTokens - tokens).coerceAtLeast(0), spentTokens = node.spentTokens + tokens,
-            desired = if (excess) SessionDesiredState.STOP else node.desired, observed = if (excess) SessionObservedState.STOPPING else node.observed)
-        commit(old.copy(version = old.version + 1, sessions = old.sessions + (node.id to updated)))
+            desired = if (excess && node.desired == SessionDesiredState.RUN) SessionDesiredState.STOP else node.desired,
+            observed = if (excess) SessionObservedState.STOPPING else node.observed, version = node.version + 1)
+        commit(old.copy(sessions = old.sessions + (node.id to updated))
+            .reconcileTokenBudget(node.id).copy(version = old.version + 1))
     }
 
     /** Only a host-created ToolExecutionContext reaches this application admission hook. */
@@ -595,15 +687,16 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         val old = read(organismId); val run = old.auxiliaryRuns.getValue(auxiliaryId)
         require(!run.settled && run.observed != SessionObservedState.UNKNOWN) { "Вспомогательный запуск закрыт" }
         val owner = old.sessions.getValue(run.ownerSessionId)
-        old.actor(SessionAuthority(old.projectId, old.id, owner.id, run.generation, owner.mode))
+        old.usageActor(SessionAuthority(old.projectId, old.id, owner.id, run.generation, owner.mode), auxiliary = true)
         val previous = run.usage[sourceId] ?: 0
         if (totalTokens <= previous) return@withLock old
         val tokens = totalTokens - previous
         val node = owner.copy(remainingTokens = (owner.remainingTokens - tokens).coerceAtLeast(0), spentTokens = owner.spentTokens + tokens,
-            desired = if (tokens >= owner.remainingTokens) SessionDesiredState.STOP else owner.desired,
+            desired = if (tokens >= owner.remainingTokens && owner.desired == SessionDesiredState.RUN) SessionDesiredState.STOP else owner.desired,
             observed = if (tokens >= owner.remainingTokens) SessionObservedState.STOPPING else owner.observed, version = owner.version + 1)
-        commit(old.copy(version = old.version + 1, sessions = old.sessions + (owner.id to node),
-            auxiliaryRuns = old.auxiliaryRuns + (run.id to run.copy(usage = run.usage + (sourceId to totalTokens)))))
+        commit(old.copy(sessions = old.sessions + (owner.id to node),
+            auxiliaryRuns = old.auxiliaryRuns + (run.id to run.copy(usage = run.usage + (sourceId to totalTokens)))).reconcileTokenBudget(owner.id)
+            .copy(version = old.version + 1))
     }
 
     suspend fun finishAuxiliary(organismId: String, auxiliaryId: String, observed: SessionObservedState): SessionOrganism = lock.withLock {

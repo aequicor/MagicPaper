@@ -74,6 +74,8 @@ import kotlinx.serialization.Serializable
     val interrupted: Boolean = false,
     /** Captured authority for this scheduler turn; never filled from a later runtime callback. */
     val sessionGeneration: Long = 0,
+    /** A fresh user retry for one stopped native generation; consumed by organism admission. */
+    val retryAuthorization: PlanAttemptRetryAuthorization? = null,
 )
 @Serializable data class PlanWorkspace(
     val root: String, val integrationPath: String, val baseCommit: String = "",

@@ -99,6 +99,13 @@ import kotlinx.serialization.Serializable
     val turnIndex: Int, val generation: Long,
 )
 
+/** Host-issued authority captured when the user retries; a later stop invalidates its version. */
+@Serializable data class PlanAttemptRetryAuthorization(
+    val id: String,
+    val binding: SessionLegacyAttempt,
+    val expectedVersion: Long,
+)
+
 @Serializable data class ImmunityDiagnosis(
     val signalId: String, val target: String, val evidence: List<String>, val action: String,
     val affected: Set<String>, val createdAt: Long, val generation: Long? = null,
