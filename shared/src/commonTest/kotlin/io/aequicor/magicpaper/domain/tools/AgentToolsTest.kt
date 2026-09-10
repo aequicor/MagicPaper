@@ -121,6 +121,27 @@ class AgentToolsTest {
         assertEquals(saved.steps.map { it.id }, recorder.message("reply", 0).steps.map { it.id })
     }
 
+    @Test fun nativeWebTitlesSurviveNormalizationAndUpdateTheSameCard() = runTest {
+        val tools = session { _, _, _ -> JsonNull }
+        val events = flow {
+            emit(CodingEvent.ToolStarted("web_search", "", "web", category = ToolCategory.SEARCH, title = "Веб-операция"))
+            emit(CodingEvent.ToolFinished("web_search", true, "web", "Page unavailable", title = "Открытие страницы · https://example.com"))
+        }.withTools(tools).toList()
+        val recorder = CodingRunRecorder()
+        recorder.apply(events.first())
+        val id = recorder.timeline().single().id
+        recorder.apply(events.last())
+        val step = recorder.timeline().single()
+        assertEquals(id, step.id)
+        assertEquals("web.search", step.tool)
+        assertEquals("⚒ Открытие страницы · https://example.com", step.title)
+        assertEquals(ToolCategory.SEARCH, step.toolCategory)
+        assertFalse(step.running)
+        assertFalse(step.ok)
+        assertEquals(ToolPhase.FAILED, step.toolPhase)
+        assertEquals("Page unavailable", step.result)
+    }
+
     @Test fun parallelCallsAndRepeatedEventsKeepOneCardPerRequestAndCall() = runTest {
         val tools = session { _, _, _ -> JsonPrimitive("queued") }
         val recorder = CodingRunRecorder()

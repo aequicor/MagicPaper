@@ -52,11 +52,12 @@ data class ToolDefinition(
     val projectId: String, val ownerSessionId: String, val requestId: String, val callId: String,
     val toolId: String, val category: ToolCategory, val phase: ToolPhase,
     val summary: String, val result: String = "",
+    val title: String? = null,
 ) {
     fun codingEvent(): CodingEvent = when (phase) {
-        ToolPhase.STARTED -> CodingEvent.ToolStarted(toolId, summary, callId, category == ToolCategory.EXEC, category = category)
+        ToolPhase.STARTED -> CodingEvent.ToolStarted(toolId, summary, callId, category == ToolCategory.EXEC, category = category, title = title)
         ToolPhase.PROGRESS, ToolPhase.WAITING -> CodingEvent.ToolProgress(toolId, callId, result, phase)
-        else -> CodingEvent.ToolFinished(toolId, phase != ToolPhase.SUCCEEDED, callId, result, phase)
+        else -> CodingEvent.ToolFinished(toolId, phase != ToolPhase.SUCCEEDED, callId, result, phase, title = title)
     }
 }
 
@@ -234,7 +235,12 @@ private fun ToolSession.nativeEvent(event: CodingEvent): ToolEvent? {
         if (call.isNotBlank()) nativeCalls[call] = it
     } else nativeCalls[call] ?: (mappedId to mappedCategory)
     val identity = if (call.isBlank()) "" else "${context.projectId}/${context.ownerSessionId}/${context.requestId}/native/${call.replace("%", "%25").replace("/", "%2F")}"
-    return ToolEvent(context.projectId, context.ownerSessionId, context.requestId, identity, id, category, phase, summary, result)
+    val title = when (event) {
+        is CodingEvent.ToolStarted -> event.title
+        is CodingEvent.ToolFinished -> event.title
+        else -> null
+    }
+    return ToolEvent(context.projectId, context.ownerSessionId, context.requestId, identity, id, category, phase, summary, result, title)
 }
 
 /** Validate the JSON subset used by the catalog before invoking any receiver. */

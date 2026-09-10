@@ -892,7 +892,8 @@ class CodexAppServerOpenAiSubscription(
                     CodingEvent.ToolStarted(commandTool(item), item.string("command").orEmpty(), id, isExec = true),
                 )
                 "fileChange" -> emit(CodingEvent.ToolStarted("edit", fileSummary(item), id))
-                "webSearch" -> emit(CodingEvent.ToolStarted("web_search", item["action"]?.toString().orEmpty(), id, category = ToolCategory.SEARCH))
+                "webSearch" -> emit(CodingEvent.ToolStarted("web_search", "", id,
+                    category = ToolCategory.SEARCH, title = codexWebTitle(item)))
                 "mcpToolCall" -> {
                     val server = item.string("server").orEmpty()
                     val tool = item.string("tool").orEmpty()
@@ -937,10 +938,18 @@ class CodexAppServerOpenAiSubscription(
             when (item.string("type")) {
                 "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.COMPLETED))) }
                 "webSearch" -> {
-                    emit(CodingEvent.ToolFinished("web_search", false, id, item["action"]?.toString().orEmpty()))
+                    val failed = item.string("status") in listOf("failed", "declined", "cancelled") ||
+                        item["error"]?.let { it != JsonNull } == true
+                    val error = (item["error"] as? JsonObject)?.string("message")
+                        ?: (item["error"] as? JsonPrimitive)?.contentOrNull
+                    // WebSearch items expose action metadata, not the page body or search results.
+                    emit(CodingEvent.ToolFinished("web_search", failed, id,
+                        resultPreview = if (failed) error?.takeIf { it.isNotBlank() } ?: "Не удалось выполнить веб-операцию."
+                            else "Операция завершена. Результат не передан в историю.",
+                        title = codexWebTitle(item)))
                     val action = item["action"] as? JsonObject
                     val content = action?.string("type") == "openPage"
-                    if (action?.string("type") != "findInPage") emit(CodingEvent.SearchObserved(id,
+                    if (!failed && action?.string("type") in listOf("search", "openPage")) emit(CodingEvent.SearchObserved(id,
                         pages = if (content) 1 else 0, content = content,
                         requests = (action?.get("queries") as? JsonArray)?.size?.toLong()?.coerceAtLeast(1) ?: 1))
                 }

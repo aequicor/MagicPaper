@@ -270,7 +270,7 @@ class CodingRunRecorder {
                 val existing = steps.indexOfLast { event.callId.isNotBlank() && it.callId == event.callId && it.tool == event.tool }
                 val step = CodingStep(
                     kind = if (event.isExec) CodingStepKind.EXEC else CodingStepKind.TOOL,
-                    title = "⚒ ${toolDisplayName(event.tool)}" + if (event.summary.isNotEmpty()) " · ${event.summary}" else "",
+                    title = "⚒ " + (event.title ?: (toolDisplayName(event.tool) + if (event.summary.isNotEmpty()) " · ${event.summary}" else "")),
                     tool = event.tool,
                     callId = event.callId,
                     running = true,
@@ -298,18 +298,21 @@ class CodingRunRecorder {
                 }
                 if (index >= 0) {
                     steps[index] = steps[index].copy(
+                        title = event.title?.let { "⚒ $it" } ?: steps[index].title,
                         running = false,
                         ok = !event.isError,
                         result = event.resultPreview,
                         toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                     )
-                } else if (event.isError) {
+                } else if (event.isError || event.title != null) {
                     steps += CodingStep(
                         kind = CodingStepKind.TOOL,
-                        title = "⚠ ${event.tool}: ошибка",
+                        title = event.title?.let { "⚒ $it" } ?: "⚠ ${event.tool}: ошибка",
                         tool = event.tool,
+                        callId = event.callId,
                         result = event.resultPreview,
-                        ok = false,
+                        ok = !event.isError,
+                        toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                         id = nextStepId(),
                     )
                 }
@@ -507,6 +510,7 @@ sealed interface CodingEvent {
         /** Инструмент выполняет shell-команду (её вывод интересен пользователю целиком). */
         val isExec: Boolean = false,
         val category: ToolCategory? = null,
+        val title: String? = null,
     ) : CodingEvent
 
     /**
@@ -518,6 +522,7 @@ sealed interface CodingEvent {
         val callId: String = "",
         val resultPreview: String = "",
         val phase: ToolPhase? = null,
+        val title: String? = null,
     ) : CodingEvent
 
     /**
