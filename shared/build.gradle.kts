@@ -60,6 +60,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.runtimeCompose)
             implementation(libs.kotlinx.serializationJson)
             implementation(libs.kotlinx.datetime)
+            implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.ktor.clientCore)
         }
         commonTest.dependencies {

@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -248,6 +249,42 @@ public fun PaperAttachmentChip(label: String, onRemove: (() -> Unit)?, modifier:
 
 @Composable
 public fun PaperAttachmentRow(modifier: Modifier = Modifier, content: @Composable () -> Unit) = Box(modifier, content = { content() })
+
+/** Visual state supplied by a feature-owned thumbnail loader. */
+public enum class PaperAttachmentThumbnailState { LOADING, READY, ERROR }
+
+/**
+ * Compact attachment preview used by composers. Loading and byte ownership stay
+ * in the feature; this Paper API owns the common image, loading and error states.
+ */
+@Composable
+public fun PaperAttachmentThumbnail(
+    label: String,
+    description: String,
+    state: PaperAttachmentThumbnailState,
+    bitmap: ImageBitmap? = null,
+    onRemove: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val previewStatus = when (state) {
+        PaperAttachmentThumbnailState.LOADING -> "Загрузка миниатюры"
+        PaperAttachmentThumbnailState.READY -> "Миниатюра готова"
+        PaperAttachmentThumbnailState.ERROR -> "Миниатюра недоступна"
+    }
+    PaperAttachmentChip(
+        label = label,
+        onRemove = onRemove,
+        modifier = modifier.semantics { contentDescription = "$description: $previewStatus" },
+    ) {
+        when (state) {
+            PaperAttachmentThumbnailState.READY -> bitmap?.let {
+                PaperImage(it, description, Modifier.size(34.dp).clip(RoundedCornerShape(7.dp)))
+            } ?: PaperText("!", role = PaperTextRole.LABEL)
+            PaperAttachmentThumbnailState.LOADING -> PaperText("…", role = PaperTextRole.BODY)
+            PaperAttachmentThumbnailState.ERROR -> PaperText("!", role = PaperTextRole.LABEL)
+        }
+    }
+}
 
 @Composable
 public fun PaperImage(bitmap: ImageBitmap, description: String?, modifier: Modifier = Modifier, size: Dp? = null) {
