@@ -4,6 +4,23 @@ import kotlinx.serialization.json.Json
 import kotlin.test.*
 
 class StageResultEvidenceTest {
+    @Test fun shortHandoffRetainsActualToolResultsAndFinalReport() {
+        val attempt = StageAttempt("a", "worker", StageAssignment("model", "m"), report = "Fixed geometry; all tests passed", steps = listOf(
+            CodingStep(CodingStepKind.EXEC, "./gradlew test", callId = "failed", result = "FAILED: geometry", ok = false),
+            CodingStep(CodingStepKind.EXEC, "./gradlew test", callId = "passed", result = "BUILD SUCCESSFUL"),
+            CodingStep(CodingStepKind.EXEC, "pending", result = "UNFINISHED", running = true),
+        ))
+        val plan = Plan("p", "project", "Goal", coordination = listOf(
+            CoordinationRecord("a-turn-0", "stage", StageReply(StageReplyKind.RESULT, "Ready"), toolCallId = "handoff"),
+        ))
+        val report = plan.stageVerificationReport("stage", attempt)
+        assertContains(report, "FAILED: geometry")
+        assertContains(report, "BUILD SUCCESSFUL")
+        assertContains(report, "Ready")
+        assertContains(report, attempt.report)
+        assertFalse(report.contains("UNFINISHED"))
+    }
+
     @Test fun evidenceKeepsRegressionsAndFailedChecksButExcludesOtherRunsAndAttempts() {
         val attempt = StageAttempt("a", "worker", StageAssignment("model", "m"), turnIndex = 3, report = "Current test: FAILED")
         fun record(id: String, text: String) = CoordinationRecord(id, "stage", StageReply(StageReplyKind.RESULT, text))

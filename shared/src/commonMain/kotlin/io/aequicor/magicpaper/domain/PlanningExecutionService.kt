@@ -30,6 +30,7 @@ class PlanningExecutionService(
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     val supported: Boolean get() = runtime.supported
     var chatHooks: PlanningExecutionHooks? = null
+    internal fun verificationGuidance(): String = acceptanceChecks.executionGuidance()
     private val jobs = mutableMapOf<String, Job>()
     private val jobsLock = Mutex()
     private val stageJobs = MutableStateFlow<Map<Pair<String, String>, Job>>(emptyMap())
@@ -257,7 +258,8 @@ class PlanningExecutionService(
                             (m.attempts.lastOrNull()?.error?.retryAt ?: 0) <= Id.now() &&
                             compiled.dependencies[m.id].orEmpty().all { dep -> plan.milestones.first { it.id == dep }.completed }
                     }
-                    val slots = (if (workspace.git || plan.sharedWorkspace) plan.parallelism.coerceIn(1, 8) else 1) - active.size
+                    // Whole-project acceptance snapshots require exclusive writers in a shared folder.
+                    val slots = (if (workspace.git && !plan.sharedWorkspace) plan.parallelism.coerceIn(1, 8) else 1) - active.size
                     candidates.take(slots.coerceAtLeast(0)).forEach { stage ->
                         val key = id to stage.id
                         val job = launch(start = CoroutineStart.LAZY) {
@@ -444,7 +446,7 @@ class PlanningExecutionService(
                 monitoredRun(project.copy(path = workspace.integrationPath),
                     CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
                         planId = plan.id, parentSessionId = plan.parentSessionId, pendingRun = CodingRunCheckpoint("${attempt.id}-verification", "")),
-                    "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
+                    "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. ${verificationGuidance()} Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
                     attempt.assignment.executionProfile(profiles.load())).collect { event ->
                     activityRecorder.apply(event)
                     attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
@@ -472,7 +474,7 @@ class PlanningExecutionService(
         workspaces.validateIntegration(workspace)
         plan = store.planFor(id)!!
         val (acceptance, verdict) = reviewAcceptance(plan, Milestone("final", "Итоговая проверка", description = plan.goal),
-            attempt, workspace.integrationPath, plan.acceptanceCriteria(), attempt.report, judge)
+            attempt, workspace.integrationPath, plan.acceptanceCriteria(), attempt.verificationToolEvidence() + attempt.report, judge)
         attempt = attempt.copy(acceptanceRecord = acceptance)
         persist()
         if (!verdict.passed) {
@@ -490,10 +492,17 @@ class PlanningExecutionService(
         val snapshot = if (pending.isEmpty()) attempt.verificationSnapshot ?: waivers.firstOrNull()?.snapshotId
             else attempt.verificationSnapshot ?: workspaces.verificationSnapshot(path)
         val evidence = if (snapshot.isNullOrBlank()) emptyList() else acceptanceChecks.collect(pending, path, snapshot)
-        val reviewed = if (pending.isEmpty()) AcceptanceReview(emptyList()) else verifier.review(stage, pending, plan.goal, report + "\nПроверки приложения:\n" +
-            evidence.joinToString("\n") { "${it.criterionId}: ${it.environment}: ${it.status}: ${it.detail}" }, judge)
+        // Missing host collectors are a capability limitation, never a worker defect for the model to repair.
+        val reviewable = pending.filter(acceptanceChecks::supports)
+        val unavailable = pending.filterNot(acceptanceChecks::supports).map { criterion ->
+            AcceptanceFinding(criterion.id, CheckStatus.NOT_RUN, criterion.description,
+                "В приложении не подключена проверка ${criterion.checkId.ifBlank { criterion.environment.label() }}. Исполнитель не может зарегистрировать её в рантайме.")
+        }
+        val reviewed = if (reviewable.isEmpty()) AcceptanceReview(emptyList()) else verifier.review(stage, reviewable, plan.goal, report + "\nПроверки приложения:\n" +
+            evidence.filter { proof -> reviewable.any { it.id == proof.criterionId } }
+                .joinToString("\n") { "${it.criterionId}: ${it.environment}: ${it.status}: ${it.detail}" }, judge)
         val skipped = if (stage.id == "final") plan.selectedMilestones.filter { it.status == MilestoneStatus.SKIPPED }.flatMap { it.criteria() }.map { it.id }.toSet() else emptySet()
-        val findings = reviewed.findings.map { if (it.criterionId in skipped) it.copy(status = CheckStatus.SKIPPED, observed = "Этап пропущен; проверка не выполнялась") else it } +
+        val findings = (reviewed.findings + unavailable).sortedBy { finding -> criteria.indexOfFirst { it.id == finding.criterionId } }.map { if (it.criterionId in skipped) it.copy(status = CheckStatus.SKIPPED, observed = "Этап пропущен; проверка не выполнялась") else it } +
             waivers.map { AcceptanceFinding(it.criterion.id, CheckStatus.SKIPPED, it.criterion.description, "Проверка пропущена по решению пользователя") }
         val record = AcceptanceGate.evaluate(AcceptanceRecord(plan.runId, attempt.id, snapshot.orEmpty(), criteria, findings, evidence, waivers = waivers),
             criteria, if (pending.isEmpty()) snapshot else workspaces.verificationSnapshot(path))
@@ -612,6 +621,7 @@ class PlanningExecutionService(
                     После прерывания проверь последствия незавершённой команды; не повторяй её автоматически.
                     Работай только в этой рабочей папке. Не выполняй внешних публикаций.
                     Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
+                    ${verificationGuidance()}
                 """.trimIndent() + "\n" + extraInstructions
                 attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false, coordinationPending = false,
                     chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now()))

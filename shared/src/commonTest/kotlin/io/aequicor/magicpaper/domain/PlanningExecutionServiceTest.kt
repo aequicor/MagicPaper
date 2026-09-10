@@ -211,6 +211,31 @@ class PlanningExecutionServiceTest {
         assertTrue(timeline.any { it.kind == CodingStepKind.THINKING && it.title == "Проверяю критерии" })
         assertTrue(timeline.any { it.kind == CodingStepKind.TOOL && it.result == "Файлы прочитаны" })
     }
+    @Test fun sharedFolderKeepsNextWorkerOutUntilAcceptanceCompletes() = runTest {
+        val reviewing = CompletableDeferred<Unit>()
+        val runtime = Runtime()
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            // Every worker changes the shared project, including unrelated stages.
+            override suspend fun verificationSnapshot(path: String) = "files-after-${runtime.calls.count { !it.contains("-final") }}"
+        }
+        val judge = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                if (milestone.id == "a") reviewing.await()
+                return Verdict(true, "checked")
+            }
+        }
+        val (store, service) = fixture(runtime, workspace, judge)
+        store.save(plan(stage("a"), stage("b")).copy(sharedWorkspace = true, parallelism = 8))
+        service.start(project.id); advanceTimeBy(500); runCurrent()
+        assertEquals(1, runtime.calls.size, "Another writer would invalidate the acceptance snapshot")
+        reviewing.complete(Unit); advanceTimeBy(1000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(3, runtime.calls.size)
+        assertTrue(saved.milestones.all { it.attempts.single().repairRetries == 0 })
+        assertTrue(saved.milestones.all { it.attempts.single().acceptanceRecord?.status == AcceptanceStatus.ACCEPTED })
+    }
+
     @Test fun silentRunningStageDoesNotAccumulateEmptyActivity() = runTest {
         val gate = CompletableDeferred<Unit>()
         val (store, service) = fixture(Runtime(gate))
@@ -688,6 +713,25 @@ class PlanningExecutionServiceTest {
         service.retry(project.id); advanceTimeBy(1000); runCurrent()
         assertEquals(calls, runtime.calls.size, "Retrying an unavailable host check must not rerun file changes")
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
+        assertEquals(0, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
+    }
+
+    @Test fun unavailableCollectorNeverAsksModelToInventAWorkerRepair() = runTest {
+        val judge = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict =
+                error("No model review can supply an unregistered collector")
+        }
+        val (store, service, runtime) = fixture(verifier = judge)
+        store.save(plan(stage("a").copy(acceptanceCriteria = listOf(
+            AcceptanceCriterion("layout", "Check layout", environment = EvidenceEnvironment.LOCAL_TEST, checkId = "invented-tool")))))
+        service.start(project.id); advanceTimeBy(1000); runCurrent()
+        val blocked = store.planFor(project.id)!!
+        val acceptance = blocked.milestones.single().attempts.single().acceptanceRecord!!
+        assertEquals(AcceptanceStatus.PARTIAL, acceptance.status)
+        assertFalse(acceptance.canRetryWithWorker)
+        assertTrue(acceptance.canSkipByUser)
+        service.retry(project.id); advanceTimeBy(1000); runCurrent()
+        assertEquals(1, runtime.calls.size)
         assertEquals(0, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
     }
 

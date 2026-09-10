@@ -1928,7 +1928,7 @@ class OrchestrationService(
                     "Передавай задания через stage.send, управляй сессиями через session.manage, задавай вопросы через questionnaire. " +
                     "При RESULT вызови stage.resolve: VERIFY для проверки приложения; CONTINUE только с конкретной незавершённой работой. " +
                     "Не объявляй этап принятым: приёмку проводит приложение. Для WAIT назначь ожидание через schedule.manage. " +
-                    schedulingInstructions()), LlmMessage(LlmChatRole.USER, context.drop(1).joinToString("\n") { it.content }))
+                    execution.verificationGuidance() + "\n" + schedulingInstructions()), LlmMessage(LlmChatRole.USER, context.drop(1).joinToString("\n") { it.content }))
             val text = withContext(workerDispatcher) { composer.completeToolTurn(plan, judge, instructions, tools) { coordinatorEvent(activityId, it) } }
             updateState(plan.parentSessionId, plan.projectId) { saved ->
                 saved.finishWorkPause(store.plans.value.first { it.id == plan.id }, tools.context.requestId)
@@ -1954,7 +1954,7 @@ class OrchestrationService(
             "Идентификаторы планов и сессий не являются адресатами actions. Новые этапы доступны после перепланирования. " +
             "Сообщение message обязательно и не может быть пустым. Прямого вызова координаторов соседних планов нет: " +
             "используй их сохранённые состояния и отчёты из контекста. Не поручай исполнителю обращаться через отсутствующий инструмент. " +
-            "Отсутствие отчётов не доказывает отсутствие изменений файлов."
+            "Отсутствие отчётов не доказывает отсутствие изменений файлов. " + execution.verificationGuidance()
         val messages = context.mapIndexed { index, message ->
             if (index == 0) message.copy(content = "${message.content}\n$routing") else message
         }.toMutableList()

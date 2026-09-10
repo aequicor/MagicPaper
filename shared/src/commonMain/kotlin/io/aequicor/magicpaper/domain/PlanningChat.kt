@@ -106,9 +106,20 @@ internal fun List<CoordinationRecord>.evidenceText(): String = joinToString("\n\
 
 internal fun Plan.stageVerificationReport(stageId: String, attempt: StageAttempt): String {
     val records = stageRecords(stageId, attempt)
-    if (records.size <= 1) return if (records.singleOrNull()?.toolCallId != null) records.evidenceText() else attempt.report
-    return "История отчётов текущей попытки по порядку (прежние проверки не означают принятие нового результата):\n" +
+    val tools = attempt.verificationToolEvidence()
+    if (records.size <= 1) return tools + if (records.singleOrNull()?.toolCallId != null) records.evidenceText() + "\n\nПоследний отчёт исполнителя:\n${attempt.report}" else attempt.report
+    return tools + "История отчётов текущей попытки по порядку (прежние проверки не означают принятие нового результата):\n" +
         records.evidenceText() + "\n\nПоследний отчёт исполнителя:\n${attempt.report}"
+}
+
+/** Actual completed tool output supplements short handoffs; a successful call alone is not a passing test. */
+internal fun StageAttempt.verificationToolEvidence(): String {
+    val completed = steps.filter { it.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC) && !it.running && it.result.isNotBlank() }
+    if (completed.isEmpty()) return ""
+    return "Результаты вызовов инструментов (вывод может быть сокращён; успех вызова не означает успех проверки):\n" +
+        completed.takeLast(30).joinToString("\n") {
+            "${it.callId}: ${it.title.take(500)} [${if (it.ok) "OK" else "ERROR"}]\n${it.result.take(2000)}"
+        } + "\n\n"
 }
 
 /** An unanswered question stays visible even when orchestration adds newer messages. */
