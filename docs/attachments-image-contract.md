@@ -6,27 +6,27 @@
 
 ## Подтверждённая цепочка входа
 
-| Источник | Рантайм-событие / действие | Хранение | Что доступно UI сейчас |
-|---|---|---|---|
-| Выбор файла | `DesktopFilePicker.pickFiles` или `BrowserFilePicker.pickFiles` возвращает `PickedFile`; `MagicPaperViewModel.pickAttachments` создаёт `Attachment` | До отправки — состояние composer; в checkpoint — полный `Attachment` с base64 | `PendingAttachmentsRow` декодирует растровую миниатюру; после отправки `CodingAttachments` показывает только чип метаданных |
-| Вставка файла или bitmap из desktop clipboard | `clipboardFileReader`; bitmap конвертируется в PNG, затем идёт тем же путём, что и выбор файла | То же; вставка файла читает ограниченное число байтов, bitmap сначала ограничен пикселями | То же, имя bitmap — `clipboard.png` |
-| Запрос к кодинг-агенту | `sendCodingPromptTo` создаёт `CodingRunCheckpoint(messageId, prompt, attachments)`; `launchCodingRun` записывает USER `CodingMessage` | checkpoint содержит полные байты на время незавершённого прогона; история — `AttachmentMeta(name, mimeType, sizeBytes, kind, path)` | У USER-сообщения отображается имя/размер/вид; `path` при этой записи пуст |
-| Pi получает вход | `PiCodingRuntime.materializeAttachments` кладёт байты в `~/.MagicPaper/coding/uploads/<sessionId>/`; абсолютные пути добавляются в промпт | Файл вне проекта, имя уникализируется; путь не возвращается в `AttachmentMeta` | Агент может прочитать входной файл; UI не связывает созданный файл с карточкой истории |
-| Codex получает вход | `CodexAppServerOpenAiSubscription.buildCodingInput` добавляет `{type:"image", url:"data:<mime>;base64,..."}` | Только в RPC `turn/start`; отдельного файлового пути нет | Нет события, подтверждающего, что модель фактически обработала изображение |
-| Computer Use screenshot | `DesktopComputerUse` создаёт PNG `Attachment` и отправляет image content в инструмент; `ComputerUseState.preview` хранит последний preview | Транзитное состояние компьютерного инструмента, не `CodingMessage`/`CodingStep` | Отдельная панель Computer Use может показать preview; лента кодинга не имеет изображения |
+Это карта фактически доступных источников. Ссылка в последнем столбце — точка,
+где утверждение проверяется в исходниках, а не обещание нового источника.
 
-Ссылки: [Attachment.kt](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Attachment.kt),
-[MagicPaperViewModel.kt](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt),
-[DesktopFilePicker.kt](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/storage/DesktopFilePicker.kt),
-[BrowserFilePicker.kt](../shared/src/webMain/kotlin/io/aequicor/magicpaper/data/storage/BrowserFilePicker.kt),
-[PiCodingRuntime.kt](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/coding/PiCodingRuntime.kt),
-[CodexAppServerOpenAiSubscription.kt](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/llm/CodexAppServerOpenAiSubscription.kt).
+| Источник | Рантайм-событие / действие | Хранение | Что доступно UI сейчас | Доказательство |
+|---|---|---|---|---|
+| Выбор файла | `DesktopFilePicker.pickFiles` или `BrowserFilePicker.pickFiles` возвращает `PickedFile`; `MagicPaperViewModel.pickAttachments` создаёт `Attachment` | До отправки — состояние composer; в checkpoint — полный `Attachment` с base64 | `PendingAttachmentsRow` декодирует растровую миниатюру; после отправки `CodingAttachments` показывает только чип метаданных | [picker→Attachment](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt#L531-L546), [desktop read](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/storage/DesktopFilePicker.kt#L33-L51), [web read](../shared/src/webMain/kotlin/io/aequicor/magicpaper/data/storage/BrowserFilePicker.kt#L28-L74), [composer thumbnail](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt#L198-L234) |
+| Вставка файла или bitmap из desktop clipboard | `clipboardFileReader`; bitmap конвертируется в PNG, затем идёт тем же путём, что и выбор файла | То же; вставка файла читает ограниченное число байтов, bitmap сначала ограничен пикселями | То же, имя bitmap — `clipboard.png` | [paste→Attachment](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt#L550-L569), [clipboard reader](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/storage/DesktopFilePicker.kt#L56-L95) |
+| Запрос к кодинг-агенту | `sendCodingPromptTo` создаёт `CodingRunCheckpoint(messageId, prompt, attachments)`; `launchCodingRun` записывает USER `CodingMessage` | checkpoint содержит полные байты на время незавершённого прогона; история — `AttachmentMeta(name, mimeType, sizeBytes, kind, path)` | У USER-сообщения отображается имя/размер/вид; `path` при этой записи пуст | [new checkpoint](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt#L1540-L1547), [append and runtime dispatch](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/MagicPaperViewModel.kt#L1617-L1654), [stored schema](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt#L621-L647), [chip-only history UI](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt#L290-L306) |
+| Pi получает вход | `PiCodingRuntime.materializeAttachments` кладёт байты в `~/.MagicPaper/coding/uploads/<sessionId>/`; абсолютные пути добавляются в промпт | Файл вне проекта, имя уникализируется; путь не возвращается в `AttachmentMeta` | Агент может прочитать входной файл; UI не связывает созданный файл с карточкой истории | [materialize call](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/coding/PiCodingRuntime.kt#L225-L232), [managed path and prompt](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/coding/PiCodingRuntime.kt#L1069-L1102) |
+| Codex получает вход | `CodexAppServerOpenAiSubscription.buildCodingInput` добавляет `{type:"image", url:"data:<mime>;base64,..."}` | Только в RPC `turn/start`; отдельного файлового пути нет | Нет события, подтверждающего, что модель фактически обработала изображение | [input blocks](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/llm/CodexAppServerOpenAiSubscription.kt#L531-L550) |
+| Computer Use screenshot | `DesktopComputerUse` создаёт PNG `Attachment` и отправляет image content в инструмент; `ComputerUseState.preview` хранит последний preview | Транзитное состояние компьютерного инструмента, не `CodingMessage`/`CodingStep` | Отдельная панель Computer Use может показать preview; лента кодинга не имеет изображения | [screenshot attachment](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/computer/DesktopComputerUse.kt#L139-L152), [no image field in event](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt#L487-L588) |
 
 ## Подтверждённая цепочка результата агента
 
 `DesktopCodingRuntime` передаёт adapter events как `CodingEvent`; `CodingRunRecorder`
 собирает их в `CodingStep`, а `launchCodingRun` сохраняет итог в AGENT
 `CodingMessage.steps`. `CodingStepRow` отображает текст и инструментальные шаги.
+Структуры не содержат image payload: у события есть только text/tool/callId/result
+([CodingEvent](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt#L487-L588)),
+у шага — `result: String` и `callId: String`
+([CodingStep](../shared/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Coding.kt#L595-L613)).
 
 Для Codex `CodingAccumulator` сопоставляет provider item ID с `CodingStep.callId`:
 
@@ -34,7 +34,7 @@
 |---|---|---|
 | `agentMessage`, `reasoning` | `MessageStarted`, `FinalText`, `FinalThinking` | текст, `callId=item.id` |
 | `commandExecution`, `fileChange`, `webSearch`, `mcpToolCall` | `ToolStarted` / `ToolProgress` / `ToolFinished` | тип шага, title, `callId=item.id`, текстовый preview результата |
-| `mcpToolCall.result.content[]` с `type:"image"` | Нет представления в `CodingEvent` | Не сохраняется: adapter выбирает только блоки `type:"text"` |
+| `mcpToolCall.result.content[]` с `type:"image"` | Нет представления в `CodingEvent` | Не сохраняется: adapter выбирает только блоки `type:"text"` ([adapter](../shared/src/jvmMain/kotlin/io/aequicor/magicpaper/data/llm/CodexAppServerOpenAiSubscription.kt#L1001-L1010)) |
 
 Следовательно, на момент исследования **нет подтверждённого источника изображения
 результата в `CodingStep`**. Ни Pi JSON protocol, ни Codex adapter не несут bitmap,
@@ -53,8 +53,9 @@ data class CodingImageRef(
     val imageId: String,              // новый стабильный UUID, не имя и не hashCode
     val origin: CodingImageOrigin,    // USER_ATTACHMENT или TOOL_RESULT
     val sessionId: String,
-    val timelineId: String,           // CodingMessage.timelineId; для USER до ответа — runId/messageId
-    val messageId: String,            // CodingMessage.id
+    val runId: String,                // CodingRunCheckpoint.runId; сейчас равен messageId по умолчанию
+    val messageId: String,            // USER CodingMessage.id, равен checkpoint.messageId
+    val timelineId: String? = null,   // только AGENT response CodingMessage.timelineId
     val callId: String? = null,       // обязателен только для TOOL_RESULT
     val mimeType: String,
     val byteSize: Long,
@@ -66,11 +67,14 @@ data class CodingImageRef(
 
 Инварианты:
 
-1. `USER_ATTACHMENT` связывается с конкретным `CodingRunCheckpoint.messageId` и
-   его USER `CodingMessage`; не с любым сообщением той же сессии.
+1. `USER_ATTACHMENT` связывается с конкретным `CodingRunCheckpoint.messageId`,
+   `runId` и его USER `CodingMessage`; не с любым сообщением той же сессии.
+   У входа нет `callId`: он ещё не является результатом tool call. После ответа его
+   связывает с конкретной попыткой пара `(sessionId, runId)`, а не filename.
 2. `TOOL_RESULT` принимается только из структурированного provider/MCP image блока,
-   с тем же `sessionId`, `timelineId`, `messageId` и `callId`, что у породившего
-   `CodingStep`. Текст, filename, tool name и data-looking substring не создают ref.
+   с тем же `sessionId`, `runId`, `timelineId`, `messageId` и `callId`, что у
+   породившего `CodingStep`. `callId` обязан совпасть с `CodingStep.callId`;
+   текст, filename, tool name и data-looking substring не создают ref.
 3. `imageId` — стабильная сущность истории; provider item ID допускается только как
    `callId`, а ID шага (`CodingStep.id`) — presentation ID и не заменяет image ID.
 4. Один вызов может иметь несколько refs; отсутствие ref не означает, что вызов не
