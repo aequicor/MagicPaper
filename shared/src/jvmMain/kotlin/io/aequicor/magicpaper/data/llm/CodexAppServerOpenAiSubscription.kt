@@ -720,13 +720,7 @@ class CodexAppServerOpenAiSubscription(
                 if (method == "item/reasoning/summaryTextDelta") turns[params.string("threadId")]?.summary(params.string("delta").orEmpty(),
                     params.string("itemId").orEmpty(), params["summaryIndex"]?.jsonPrimitive?.intOrNull ?: 0)
             }
-            "item/commandExecution/outputDelta" -> codingRuns[params.string("threadId")]?.emit(
-                CodingEvent.ToolProgress(
-                    tool = "command",
-                    callId = params.string("itemId").orEmpty(),
-                    resultPreview = params.string("delta").orEmpty(),
-                ),
-            )
+            "item/commandExecution/outputDelta" -> codingRuns[params.string("threadId")]?.commandProgress(params)
             "item/mcpToolCall/progress" -> codingRuns[params.string("threadId")]?.mcpProgress(params)
             "turn/started" -> {
                 val threadId = params.string("threadId") ?: return
@@ -878,6 +872,7 @@ class CodexAppServerOpenAiSubscription(
         }
 
         val items = ConcurrentHashMap<String, JsonObject>()
+        private val commandOutput = mutableMapOf<String, StringBuilder>()
         val events = Channel<CodingEvent>(Channel.UNLIMITED)
         val done = CompletableDeferred<Unit>()
         @Volatile var confirmed = false
@@ -894,7 +889,7 @@ class CodexAppServerOpenAiSubscription(
                 "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.STARTED))) }
                 "agentMessage", "reasoning" -> emit(CodingEvent.MessageStarted)
                 "commandExecution" -> emit(
-                    CodingEvent.ToolStarted("command", item.string("command").orEmpty(), id, isExec = true),
+                    CodingEvent.ToolStarted(commandTool(item), item.string("command").orEmpty(), id, isExec = true),
                 )
                 "fileChange" -> emit(CodingEvent.ToolStarted("edit", fileSummary(item), id))
                 "webSearch" -> emit(CodingEvent.ToolStarted("web_search", item["action"]?.toString().orEmpty(), id, category = ToolCategory.SEARCH))
@@ -909,6 +904,25 @@ class CodexAppServerOpenAiSubscription(
             }
         }
 
+        // App-server classifications affect presentation only; approvals still use the shell command.
+        private fun commandTool(item: JsonObject): String {
+            val actions = item["commandActions"] as? JsonArray ?: return "command"
+            val types = actions.map { ((it as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull }.distinct()
+            return when (types.singleOrNull()) {
+                "read" -> "read"
+                "listFiles" -> "ls"
+                "search" -> "grep"
+                else -> "command"
+            }
+        }
+
+        fun commandProgress(params: JsonObject) {
+            val id = params.string("itemId").orEmpty()
+            val item = items[id]?.takeIf { it.string("type") == "commandExecution" } ?: return
+            val output = commandOutput.getOrPut(id) { StringBuilder() }.append(params.string("delta").orEmpty())
+            emit(CodingEvent.ToolProgress(commandTool(item), id, output.toString()))
+        }
+
         fun mcpProgress(params: JsonObject) {
             val id = params.string("itemId").orEmpty()
             val item = items[id]?.takeIf { it.string("type") == "mcpToolCall" } ?: return
@@ -918,7 +932,8 @@ class CodexAppServerOpenAiSubscription(
 
         fun completeItem(item: JsonObject) {
             val id = item.string("id").orEmpty()
-            items.remove(id)
+            val started = items.remove(id)
+            commandOutput.remove(id)
             when (item.string("type")) {
                 "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.COMPLETED))) }
                 "webSearch" -> {
@@ -951,7 +966,8 @@ class CodexAppServerOpenAiSubscription(
                 }
                 "commandExecution" -> emit(
                     CodingEvent.ToolFinished(
-                        tool = "command",
+                        // Keep the start identity even if the final item omits or revises its actions.
+                        tool = commandTool(started ?: item),
                         isError = item.string("status") in listOf("failed", "declined"),
                         callId = id,
                         resultPreview = item.string("aggregatedOutput").orEmpty(),
@@ -974,6 +990,7 @@ class CodexAppServerOpenAiSubscription(
                     if (error.isNullOrBlank()) CompactionPhase.CANCELLED else CompactionPhase.FAILED)))
             }
             items.clear()
+            commandOutput.clear()
             this.confirmed = confirmed
             if (!error.isNullOrBlank()) emit(CodingEvent.Failed(error))
             emit(CodingEvent.AgentEnd)
