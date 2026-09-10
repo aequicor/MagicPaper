@@ -1,0 +1,228 @@
+{
+  "date": "2026-09-10",
+  "baseCommit": "02546dc7c0b37391b97e14e8dc7c97b1324559b2",
+  "request": "Repeated worker resume generated peer-message spam and a recovery questionnaire whose confirmation failed.",
+  "observedEvidence": [
+    "13 queued overlap notifications were generated from historical RESULT records in archived peer plans.",
+    "The completed worker RESULT had a durable VERIFY decision, but synthetic inbox work advanced it to a new execution turn that was never admitted.",
+    "The last native Gradle check had no terminal command item or exit code in the available engine history. A model success report was not completion evidence."
+  ],
+  "verifiedBehavior": [
+    "Peer RESULT notifications update stable informational cards without creating assignments or continuations. Archived, inactive and unrelated workspace reports do not enter active peer evidence.",
+    "Only exact legacy generated queued deliveries are cancelled; delivered history and explicit assignments remain. An untouched synthetic continuation can restore its durable VERIFY checkpoint without changing generation or quarantine.",
+    "Explicit retry reconciles the owned runtime and exact tool receipts, then commits recovery and retry authorization under node-version and attempt-binding checks. Concurrent stops and changed checkpoints invalidate stale answers.",
+    "A background native command keeps its collector and process owner until a terminal result arrives. Closing a client stops owned descendants; a shared process used by another active task is protected.",
+    "Late native progress cannot reopen SUCCEEDED, FAILED or CANCELLED receipts. UNKNOWN requires actual terminal engine evidence of the same generation.",
+    "Questionnaire failures preserve answers and show the error beside confirmation. Return and Confirm wrap without truncation at 200 percent font scale. The leave option remains usable after a rejected retry.",
+    "Legacy dismissed recovery questions retain their decision only when exact historical identity and strictly ordered timestamps prove an unchanged stopped first attempt. Explicit reopening clears both old and new decision identities.",
+    "Native history reconciliation reads through the long-lived metadata connection even after the owned worker connection was disposed."
+  ],
+  "fullValidation": {
+    "command": "./gradlew --offline :shared:jvmTest :designSystem:jvmTest :desktopApp:compileKotlin :androidApp:compileDebugKotlin :shared:compileAndroidMain :webApp:compileKotlinJs :webApp:compileKotlinWasmJs",
+    "result": "BUILD SUCCESSFUL",
+    "elapsed": "3m 28s",
+    "modules": {
+      "shared": {
+        "tests": 1345,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "passed": 1343
+      },
+      "designSystem": {
+        "tests": 30,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 30
+      }
+    },
+    "focusedSuites": {
+      "io.aequicor.magicpaper.data.llm.CodexPendingCommandTest": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.tools.NativeToolLifecycleTest": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanningBlockerIdentityTest": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanningRetryCheckpointTest": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanningCheckpointReloadTest": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.data.llm.CodexBackgroundProcessRecoveryTest": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanRetryNativeRecoveryTest": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.SessionPlanRetryRecoveryTest": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanningPeerContextTest": {
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanningChatServiceTest": {
+        "tests": 103,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.ui.components.QuestionnaireFailureRenderTest": {
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "io.aequicor.magicpaper.domain.PlanningExecutionServiceTest": {
+        "tests": 68,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "skipped": [
+      "io.aequicor.magicpaper.data.skills.GithubSkillCatalogLiveTest.liveSearchAndTypedLinkImport[jvm]",
+      "io.aequicor.magicpaper.data.skills.SkillCatalogLiveUiTest.searchAndEnteredLinkThroughProjectCatalog[jvm]"
+    ]
+  },
+  "designSystemSelfTest": "PASS",
+  "surfaceMapSelfTest": {
+    "criterion": "4aa76be6-198a-4448-8af5-69bd0c97e7f2/ac-research-map",
+    "status": "PASS",
+    "explicitBindings": 191,
+    "composableDeclarations": 188,
+    "entries": 3,
+    "missingBindings": [],
+    "staleBindings": [],
+    "unknownTargets": [],
+    "unknownStages": [],
+    "byStage": {
+      "3": 14,
+      "5": 48,
+      "6": 101,
+      "7": 28
+    },
+    "negativeControlsRejected": [
+      "missing-binding",
+      "unknown-component",
+      "unknown-stage"
+    ],
+    "scope": "Source declarations → explicit DS API → valid migration task. Not a runtime UI test or compiler-resolved call graph."
+  },
+  "ui": {
+    "scope": "macOS JVM Compose rendering and semantic interactions at widths 390/1000 and font scales 1.0/2.0",
+    "inspectedArtifacts": [
+      "shared/build/reports/questionnaire-failure/retry-error-390-2.0.png",
+      "shared/build/reports/questionnaire-failure/leave-after-retry-error-390-2.0.png",
+      "shared/build/reports/questionnaire-failure/retry-error-1000-1.0.png"
+    ],
+    "windowsNative": "NOT_RUN",
+    "nativeScreenReader": "NOT_RUN"
+  },
+  "limitations": [
+    "The historical Gradle command without a terminal engine item remains UNKNOWN; process termination alone does not establish its result and cannot authorize an automatic retry.",
+    "The running desktop application and live task records were not restarted or manually modified.",
+    "Legacy decisions with missing or equal timestamps, later work, repeated generations or later turns are not automatically mapped to new question identities; their current blockers remain visible."
+  ],
+  "finalCompatibilityValidation": {
+    "command": "./gradlew --offline :shared:jvmTest --tests '*LegacyRecoveryDecisionsTest' --tests '*QuestionnaireViewModelTest' --tests '*PlanningBlockerIdentityTest' --tests '*QuestionnaireFailureRenderTest' --tests '*PlanningRetryCheckpointTest' --tests '*CodexPendingCommandTest' --tests '*CodexBackgroundProcessRecoveryTest' --tests '*PlanRetryNativeRecoveryTest' :desktopApp:compileKotlin :androidApp:compileDebugKotlin :shared:compileAndroidMain :webApp:compileKotlinJs :webApp:compileKotlinWasmJs",
+    "result": "BUILD SUCCESSFUL",
+    "elapsed": "40s",
+    "totals": {
+      "tests": 31,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "suites": [
+      {
+        "name": "io.aequicor.magicpaper.data.llm.CodexBackgroundProcessRecoveryTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.data.llm.CodexPendingCommandTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.domain.PlanRetryNativeRecoveryTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.domain.PlanningBlockerIdentityTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.domain.PlanningRetryCheckpointTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.ui.LegacyRecoveryDecisionsTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.ui.QuestionnaireViewModelTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.aequicor.magicpaper.ui.components.QuestionnaireFailureRenderTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "diffCheck": "PASS"
+}

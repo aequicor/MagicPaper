@@ -409,8 +409,18 @@
   },
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
+    "symbol": "rememberAttachmentThumbnail",
+    "annotationLine": 84,
+    "targets": [
+      "PaperImage"
+    ],
+    "stage": "6",
+    "kind": "composition-helper"
+  },
+  {
+    "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
     "symbol": "rememberAttachmentBitmap",
-    "annotationLine": 50,
+    "annotationLine": 104,
     "targets": [
       "PaperImage"
     ],
@@ -420,7 +430,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
     "symbol": "PendingAttachmentsRow",
-    "annotationLine": 64,
+    "annotationLine": 197,
     "targets": [
       "PaperAttachmentRow",
       "PaperButton"
@@ -431,7 +441,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
     "symbol": "AttachmentChip",
-    "annotationLine": 83,
+    "annotationLine": 216,
     "targets": [
       "PaperAttachmentChip",
       "PaperButton"
@@ -442,7 +452,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
     "symbol": "MessageAttachments",
-    "annotationLine": 100,
+    "annotationLine": 241,
     "targets": [
       "PaperAttachmentRow",
       "PaperButton"
@@ -453,7 +463,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
     "symbol": "ImagePreviewDialog",
-    "annotationLine": 132,
+    "annotationLine": 273,
     "targets": [
       "PaperDialog",
       "PaperImage"
@@ -464,7 +474,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
     "symbol": "CodingAttachments",
-    "annotationLine": 151,
+    "annotationLine": 292,
     "targets": [
       "PaperAttachmentRow",
       "PaperButton"
@@ -937,7 +947,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningQuestionsDock.kt",
     "symbol": "UserInteractionDock",
-    "annotationLine": 30,
+    "annotationLine": 34,
     "targets": [
       "PaperQuestionnaire",
       "PaperField",
@@ -950,7 +960,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningQuestionsDock.kt",
     "symbol": "PlanningQuestionWizard",
-    "annotationLine": 44,
+    "annotationLine": 48,
     "targets": [
       "PaperQuestionnaire",
       "PaperField",
@@ -963,7 +973,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningQuestionsDock.kt",
     "symbol": "Questionnaire",
-    "annotationLine": 57,
+    "annotationLine": 62,
     "targets": [
       "PaperQuestionnaire",
       "PaperField",

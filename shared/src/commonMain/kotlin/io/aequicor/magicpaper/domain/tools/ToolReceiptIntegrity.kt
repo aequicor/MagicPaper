@@ -67,4 +67,8 @@ internal fun ToolReceipt.validateUpdate(next: ToolReceipt) {
     require(phase != ToolPhase.SUCCEEDED || (next.phase == ToolPhase.SUCCEEDED && result == next.result)) {
         "Подтверждённый результат операции нельзя заменить"
     }
+    require(!native || phase !in setOf(ToolPhase.FAILED, ToolPhase.CANCELLED) ||
+        next.native && next.phase == phase && next.result == result && next.error == error) {
+        "Подтверждённый исход нативного вызова нельзя заменить"
+    }
 }

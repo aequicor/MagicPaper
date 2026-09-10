@@ -691,6 +691,8 @@ interface CodingRuntime {
     suspend fun uninstall(engine: CodingEngine) = uninstall()
     /** Reconcile a prior run before reusing its workspace after application restart. */
     suspend fun reconcile(sessionId: String) = Unit
+    /** Exact terminal engine items only; missing output or a model's report is not completion evidence. */
+    suspend fun nativeToolResults(session: CodingSession, callIds: Set<String>): List<CodingEvent.ToolFinished> = emptyList()
     /** Поддерживается ли бэкенд на этой платформе (веб и Android — нет). */
     val supported: Boolean
 

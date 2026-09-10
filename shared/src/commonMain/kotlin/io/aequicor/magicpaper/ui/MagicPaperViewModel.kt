@@ -143,8 +143,12 @@ class MagicPaperViewModel(
     private fun saveInteractionDecisions() = store.write("coding-interaction-decisions",
         json.encodeToString(interactionDecisions.filterNot { it.startsWith("runtime:") || it.startsWith("approval:") }.toSet()))
 
+    private fun legacyInteractionAliases() = legacyRecoveryDecisionAliases(
+        _state.value.coding, planningChat?.store?.plans?.value.orEmpty(), interactionDecisions)
+
     private fun refreshInteractions() {
-        val queued = interactionQueue.reconcile(currentInteractionCandidates(), interactionDecisions).map { request ->
+        val queued = interactionQueue.reconcile(currentInteractionCandidates(),
+            interactionDecisions.withLegacyRecoveryDecisions(legacyInteractionAliases())).map { request ->
             request.copy(submitting = request.submitting || request.id in interactionSubmitting,
                 error = interactionErrors[request.id] ?: request.error)
         }
@@ -163,7 +167,7 @@ class MagicPaperViewModel(
         if (kind == InteractionKind.RECOVER_INPUT) requestedInputRecovery.add(sourceId)
         val targets = currentInteractionCandidates().filter { it.kind == kind &&
             (it.sourceId == sourceId || it.planId == sourceId || it.ownerSessionId == sourceId) }
-        targets.forEach { interactionDecisions.remove(it.id) }
+        interactionDecisions.reopenInteractionDecisions(targets.map { it.id }, legacyInteractionAliases())
         if (targets.isNotEmpty()) {
             store.write("coding-interaction-decisions", json.encodeToString(interactionDecisions.toSet()))
             refreshInteractions()

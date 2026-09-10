@@ -92,6 +92,10 @@ internal fun buildDependencies(
     organisms?.integrationWorkspaces = integrationChecks?.let { io.aequicor.magicpaper.domain.SessionIntegrationWorkspaces(planningWorkspace, it) { toolHost.knownSecrets() } }
     val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(ToolEnabledCodingRuntime(it, toolHost, sessionTree), usageLedger) }
     sessionTree?.runtime = runtime
+    if (runtime != null && organisms != null) {
+        val recovery = io.aequicor.magicpaper.domain.PlanRetryNativeRecovery(runtime, toolHost.receipts) { toolHost.knownSecrets() }
+        organisms.reconcilePlanRetry = recovery::reconcile
+    }
     sessionTree?.cancelQuestions = { sessionId ->
         try { toolHost.questions.revoke(sessionId) }
         finally { organisms?.reconcileIntegrationsForSession(sessionId) }
@@ -128,7 +132,7 @@ internal fun buildDependencies(
             if (session != null && organisms != null) {
                 val organism = organisms.ensure(session)
                 organisms.project(organisms.store.quarantine(organism.id, session.id, context.runtimeGeneration,
-                    receipt.operationId.ifBlank { receipt.id }, "Неизвестный исход ${receipt.toolId}: ${receipt.error}"))
+                    receipt.operationId.ifBlank { receipt.id }, "Неизвестный исход ${receipt.toolId}: ${receipt.error.ifBlank { receipt.result.toString() }}"))
             }
         } finally {
             // A native provider can execute file/shell tools without re-entering ToolExecutor.

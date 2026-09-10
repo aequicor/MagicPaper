@@ -8,6 +8,21 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
+/** Host evidence for the exact runtime that the user is explicitly retrying. */
+data class PlanRetryRecoveryRequest(
+    val session: CodingSession,
+    val binding: SessionLegacyAttempt,
+    val expectedNodeVersion: Long,
+    val quarantines: List<SessionAuditEvent>,
+)
+data class PlanRetryRecoveryProof(val quarantineOperationIds: Set<String>, val evidence: List<String>)
+
+internal fun SessionOrganism.unresolvedQuarantines(sessionId: String): List<SessionAuditEvent> = audit.filter { event ->
+    event.action == "QUARANTINE" && sessionId in event.affected && audit.none { resolution ->
+        resolution.action == "RECONCILE_QUARANTINE" && resolution.operationId == "resolved-$sessionId-${event.operationId}"
+    }
+}
+
 /** Application-owned authority and projection bridge. Never treats model prose as a command. */
 class SessionOrganismService(
     val store: SessionOrganismStore,
@@ -88,6 +103,8 @@ class SessionOrganismService(
     /** A terminal coroutine alone cannot prove that a native/tool effect is known. */
     var canRecreateAfterQuarantine: suspend (Set<String>) -> Boolean = { false }
     private val immunityActions = Mutex()
+    /** Called only by an explicit plan retry. Null preserves the unresolved stop. */
+    var reconcilePlanRetry: suspend (PlanRetryRecoveryRequest) -> PlanRetryRecoveryProof? = { null }
 
     suspend fun changeMode(session: CodingSession, mode: CodingInteractionMode): CodingSession {
         val organism = ensure(session)
@@ -108,7 +125,29 @@ class SessionOrganismService(
         val parent = projects.sessions(plan.projectId).firstOrNull { it.id == plan.parentSessionId } ?: return null
         if (parent.organismId == null) return null
         val organism = ensure(parent)
-        return store.authorizePlanRetry(organism.id, attempt.sessionId, planBinding(plan, stageId, attempt))
+        val node = organism.sessions[attempt.sessionId] ?: return null
+        val requested = planBinding(plan, stageId, attempt)
+        val continuation = confirmedContinuation(plan, stageId, attempt, node.legacyAttempt)
+        val quarantines = organism.unresolvedQuarantines(node.id)
+        if (node.observed == SessionObservedState.UNKNOWN || node.desired == SessionDesiredState.QUARANTINE ||
+            node.desired == SessionDesiredState.STOP && (!node.settled || quarantines.isNotEmpty())) {
+            require(organism.deletedAt == null && !organism.stoppedByUser && !node.archived && node.id !in organism.historyDeletedIds) {
+                "Сессия удалена, архивирована или остановлена пользователем"
+            }
+            val admitted = node.legacyAttempt ?: error("Попытка этапа не сохранена")
+            require(requested == admitted || continuation) { "Попытка или поколение этапа изменились" }
+            require(node.observed !in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER)) { "Предыдущий запуск ещё работает" }
+            val session = projects.sessions(plan.projectId).firstOrNull { it.id == node.id } ?: error("Сессия удалена")
+            // The plan checkpoint owns the worker's native history; the sidebar projection may lag.
+            val request = PlanRetryRecoveryRequest(session.copy(runtimeGeneration = node.generation,
+                engine = attempt.engine ?: session.engine, piSessionId = attempt.engineSessionId), admitted,
+                node.version, quarantines)
+            val proof = requireNotNull(reconcilePlanRetry(request)) { "Не удалось подтвердить исход предыдущего запуска; повтор пока недоступен" }
+            val authorization = store.reconcileAndAuthorizePlanRetry(organism.id, request, proof, requested, continuation)
+            project(store.get(organism.id))
+            return authorization
+        }
+        return store.authorizePlanRetry(organism.id, attempt.sessionId, requested, continuation)
     }
 
     suspend fun preparePlanAttempt(plan: Plan, stageId: String, attempt: StageAttempt): StageAttempt {
@@ -126,9 +165,18 @@ class SessionOrganismService(
         val task = SessionTask(stage.description, parent.id, stage.acceptance.ifBlank { stage.description }, attempt.baseCommit,
             stage.dependsOn.mapNotNull { dependency -> plan.milestones.firstOrNull { it.id == dependency }?.attempts?.lastOrNull()?.sessionId }.toSet())
         val admitted = store.admitPlanWorker(organism.id, session, task, planBinding(plan, stageId, attempt), plan.planningRulesSnapshot,
-            plan.selectedMilestones.filterNot { it.completed }.map { it.id }.toSet(), attempt.retryAuthorization)
+            plan.selectedMilestones.filterNot { it.completed }.map { it.id }.toSet(), attempt.retryAuthorization,
+            confirmedContinuation(plan, stageId, attempt, organism.sessions[attempt.sessionId]?.legacyAttempt))
         project(admitted)
         return attempt.copy(sessionGeneration = admitted.sessions.getValue(session.id).generation)
+    }
+
+    private fun confirmedContinuation(plan: Plan, stageId: String, attempt: StageAttempt, admitted: SessionLegacyAttempt?): Boolean {
+        if (admitted == null || admitted.turnIndex == Int.MAX_VALUE ||
+            planBinding(plan, stageId, attempt) != admitted.copy(turnIndex = admitted.turnIndex + 1)) return false
+        return plan.coordination.any { record -> record.id == "${attempt.id}-turn-${admitted.turnIndex}" &&
+            record.runId == plan.runId && record.attemptId == attempt.id && record.stageId == stageId &&
+            record.sourceSessionId == attempt.sessionId && record.turnIndex == admitted.turnIndex && record.status == HandoffStatus.RESOLVED }
     }
 
     private fun planBinding(plan: Plan, stageId: String, attempt: StageAttempt) = SessionLegacyAttempt(

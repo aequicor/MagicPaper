@@ -51,12 +51,13 @@ class CodexUsageEventsTest {
             assertTrue(webStep.ok)
             assertEquals("Операция завершена. Результат не передан в историю.", webStep.result)
             for (status in listOf("failed", "declined", "cancelled")) {
-                val errorEvents = receive("item/completed", """{"item":{"type":"webSearch","id":"open","status":"$status","error":{"message":"Page unavailable"},"action":{"type":"openPage","url":"https://example.com"}}}""")
+                val errorEvents = receive("item/completed", """{"item":{"type":"webSearch","id":"open-$status","status":"$status","error":{"message":"Page unavailable"},"action":{"type":"openPage","url":"https://example.com"}}}""")
                 assertTrue(errorEvents.filterIsInstance<CodingEvent.ToolFinished>().single().isError)
                 assertTrue(errorEvents.filterIsInstance<CodingEvent.SearchObserved>().isEmpty())
                 errorEvents.forEach(webRecorder::apply)
-                assertFalse(webRecorder.timeline().single().ok)
-                assertEquals("Page unavailable", webRecorder.timeline().single().result)
+                assertFalse(webRecorder.timeline().last().ok)
+                assertEquals("Page unavailable", webRecorder.timeline().last().result)
+                assertTrue(webRecorder.timeline().first().ok, "A later call must not revise a completed call")
             }
             val find = receive("item/completed", """{"item":{"type":"webSearch","id":"find","action":{"type":"findInPage","pattern":"test","url":"https://example.com"}}}""")
             assertEquals("Поиск на странице · test · https://example.com", find.filterIsInstance<CodingEvent.ToolFinished>().single().title)

@@ -175,24 +175,35 @@ class ToolExecutor(
     private val locks = Mutex()
     private val calls = mutableMapOf<String, Mutex>()
 
-    internal suspend fun recordNative(context: ToolExecutionContext, event: ToolEvent) {
-        if (event.callId.isBlank()) return // The runtime supplied no stable identity; do not invent one.
-        checkScope(context)
-        val previous = receipts.get(event.callId)
-        require(previous == null || previous.runtimeGeneration == context.runtimeGeneration) { "Поколение вызова изменилось" }
-        if (previous?.phase == ToolPhase.SUCCEEDED) return
-        val now = Id.now()
-        val receipt = (previous ?: ToolReceipt(event.callId, event.toolId, JsonObject(emptyMap()),
-            recordedAt = now, runtimeGeneration = context.runtimeGeneration, argumentsComplete = false,
-            resultComplete = false, native = true,
-            mutating = ToolCatalog.definitions.firstOrNull { it.id == event.toolId }?.mutating ?: true)).copy(
-            phase = event.phase, updatedAt = now,
-            summary = event.summary.ifBlank { previous?.summary.orEmpty() },
-            title = event.title ?: previous?.title,
-            result = if (event.result.isNotBlank()) JsonPrimitive(event.result) else previous?.result ?: JsonNull,
-        ).forPersistence(knownSecrets())
-        receipts.save(receipt)
-        if (receipt.phase == ToolPhase.UNKNOWN && receipt.mutating) unknownOutcome(context, receipt)
+    /** False means an obsolete event must not reopen the recorder or pending native calls. */
+    internal suspend fun recordNative(context: ToolExecutionContext, event: ToolEvent): Boolean {
+        if (event.callId.isBlank()) return true // Display without inventing a durable identity.
+        val lock = locks.withLock { calls.getOrPut(event.callId) { Mutex() } }
+        return lock.withLock {
+            val previous = receipts.get(event.callId)
+            require(previous == null || previous.runtimeGeneration == context.runtimeGeneration) { "Поколение вызова изменилось" }
+            require(previous == null || previous.native && previous.toolId == event.toolId) { "Идентификатор вызова изменился" }
+            if (previous?.phase in nativeTerminalPhases) return@withLock false
+            // Progress after an uncertain finish cannot erase the uncertainty. Only a native
+            // terminal result for this exact generation can establish the historical outcome.
+            if (previous?.phase == ToolPhase.UNKNOWN) {
+                if (event.phase !in nativeTerminalPhases) return@withLock false
+                checkReplayScope(context)
+            } else checkScope(context)
+            val now = Id.now()
+            val receipt = (previous ?: ToolReceipt(event.callId, event.toolId, JsonObject(emptyMap()),
+                recordedAt = now, runtimeGeneration = context.runtimeGeneration, argumentsComplete = false,
+                resultComplete = false, native = true,
+                mutating = ToolCatalog.definitions.firstOrNull { it.id == event.toolId }?.mutating ?: true)).copy(
+                phase = event.phase, updatedAt = now,
+                summary = event.summary.ifBlank { previous?.summary.orEmpty() },
+                title = event.title ?: previous?.title,
+                result = if (event.result.isNotBlank()) JsonPrimitive(event.result) else previous?.result ?: JsonNull,
+            ).forPersistence(knownSecrets())
+            receipts.save(receipt)
+            if (receipt.phase == ToolPhase.UNKNOWN && receipt.mutating) unknownOutcome(context, receipt)
+            true
+        }
     }
     suspend fun execute(session: ToolSession, callId: String, name: String, arguments: JsonObject): JsonElement {
         require(callId.isNotBlank() && callId.length <= 512) { "Некорректный идентификатор вызова" }
@@ -335,6 +346,7 @@ class ToolSession(val context: ToolExecutionContext, val registry: ToolRegistry,
     val events = ToolEventHub(knownSecrets)
     internal val nativeCalls = mutableMapOf<String, Pair<String, ToolCategory>>()
     internal val pendingNativeEvents = mutableMapOf<String, ToolEvent>()
+    internal val nativeEventLock = Mutex()
     val results = MutableStateFlow<Map<String, JsonElement>>(emptyMap())
     val calls = MutableStateFlow<List<CompletedToolCall>>(emptyList())
     internal fun completed(id: String, tool: String, arguments: JsonObject, result: JsonElement) {
@@ -353,18 +365,9 @@ fun Flow<CodingEvent>.withTools(session: ToolSession): Flow<CodingEvent> = chann
         }
         val owned = session.definitions.any { rawName == it.wireName || rawName == "magicpaper_agent_tools:${it.wireName}" }
         if (!owned) {
-            val native = session.nativeEvent(event)
-            if (native == null) {
+            if (!session.publishNativeEvent(event)) {
                 if (event == CodingEvent.Finished) session.finishNativeEvents()
                 send(event)
-            } else {
-                session.executor.recordNative(session.context, native)
-                if (native.callId.isNotBlank()) {
-                    if (native.phase in setOf(ToolPhase.STARTED, ToolPhase.PROGRESS, ToolPhase.WAITING))
-                        session.pendingNativeEvents[native.callId] = native
-                    else session.pendingNativeEvents.remove(native.callId)
-                }
-                session.events.publish(native)
             }
         }
     } } finally {
@@ -373,11 +376,28 @@ fun Flow<CodingEvent>.withTools(session: ToolSession): Flow<CodingEvent> = chann
     }
 }
 
-private suspend fun ToolSession.finishNativeEvents() {
+private val nativeTerminalPhases = setOf(ToolPhase.SUCCEEDED, ToolPhase.FAILED, ToolPhase.CANCELLED)
+
+private suspend fun ToolSession.publishNativeEvent(event: CodingEvent): Boolean = nativeEventLock.withLock {
+    val native = nativeEvent(event) ?: return@withLock false
+    if (executor.recordNative(context, native)) {
+        if (native.callId.isNotBlank()) {
+            if (native.phase in setOf(ToolPhase.STARTED, ToolPhase.PROGRESS, ToolPhase.WAITING))
+                pendingNativeEvents[native.callId] = native
+            else pendingNativeEvents.remove(native.callId)
+        }
+        events.publish(native)
+    } else pendingNativeEvents.remove(native.callId)
+    true
+}
+
+private suspend fun ToolSession.finishNativeEvents() = nativeEventLock.withLock {
     pendingNativeEvents.values.toList().forEach { pending ->
         val uncertain = pending.copy(phase = ToolPhase.UNKNOWN, result = "Выполнение завершилось без подтверждённого результата инструмента")
-        runCatching { executor.recordNative(context, uncertain) }
-        runCatching { events.publish(uncertain) }
+        // A persistence failure remains uncertain, but a known terminal receipt wins over
+        // this fallback even when completion arrived through a separate reconciliation path.
+        val accepted = runCatching { executor.recordNative(context, uncertain) }.getOrDefault(true)
+        if (accepted) runCatching { events.publish(uncertain) }
     }
     pendingNativeEvents.clear()
 }
@@ -395,9 +415,8 @@ private fun ToolSession.nativeEvent(event: CodingEvent): ToolEvent? {
     val mappedId = ToolCatalog.nativeId(name, exec)
     val mappedCategory = (event as? CodingEvent.ToolStarted)?.category
         ?: ToolCatalog.definitions.firstOrNull { it.id == mappedId }?.category ?: ToolCategory.ACTION
-    val (id, category) = if (event is CodingEvent.ToolStarted || call.isBlank()) (mappedId to mappedCategory).also {
-        if (call.isNotBlank()) nativeCalls[call] = it
-    } else nativeCalls[call] ?: (mappedId to mappedCategory)
+    val (id, category) = if (call.isBlank()) mappedId to mappedCategory
+        else nativeCalls.getOrPut(call) { mappedId to mappedCategory }
     val identity = if (call.isBlank()) "" else "${context.projectId}/${context.ownerSessionId}/${context.requestId}/native/${call.replace("%", "%25").replace("/", "%2F")}"
     val title = when (event) {
         is CodingEvent.ToolStarted -> event.title

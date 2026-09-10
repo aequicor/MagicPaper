@@ -10,6 +10,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +58,7 @@ internal fun PlanningQuestionWizard(
     Questionnaire(questions, draft, { draft = it }, onSubmit, modifier, busy)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Questionnaire(
     questions: List<PlanningQuestion>, draft: QuestionnaireDraft, onDraft: (QuestionnaireDraft) -> Unit,
@@ -118,10 +123,16 @@ private fun Questionnaire(
                             modifier = Modifier.fillMaxWidth().testTag("questionnaire.custom"), maxLines = 4,
                             visualTransformation = if (question.secret) PasswordVisualTransformation() else VisualTransformation.None)
                     }
-                    if (error != null) PaperText(error, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL)
                 }
             }
-            if (draft.reviewing) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            // A rejected confirmation must remain visible while long request details scroll.
+            if (error != null) PaperText(error,
+                modifier = Modifier.fillMaxWidth().testTag("questionnaire.error").semantics {
+                    this.error(error)
+                    liveRegion = LiveRegionMode.Polite
+                }, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL)
+            if (draft.reviewing) FlowRow(Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     PaperAction({ onDraft(draft.copy(index = 0, reviewing = false)) }, enabled = !busy,
                         modifier = Modifier.testTag("questionnaire.return")) { PaperText("Вернуться", role = PaperTextRole.LABEL) }
                     PaperButton(if (busy) "Отправляем…" else "Подтвердить", { onSubmit(answers) }, enabled = !busy && questions.all { q -> answers.first { it.questionId == q.id }.isComplete(q) },

@@ -268,19 +268,70 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     }
 
     /** Host-only snapshot for a fresh user retry; saving the Plan makes this authority durable. */
-    suspend fun authorizePlanRetry(id: String, sessionId: String, binding: SessionLegacyAttempt): PlanAttemptRetryAuthorization? = lock.withLock {
+    suspend fun authorizePlanRetry(id: String, sessionId: String, binding: SessionLegacyAttempt,
+        continuationConfirmed: Boolean = false): PlanAttemptRetryAuthorization? = lock.withLock {
         val old = read(id)
         val node = old.sessions[sessionId] ?: return@withLock null
         if (node.desired == SessionDesiredState.RUN) return@withLock null
-        requirePlanRetryEligible(old, node, binding)
-        PlanAttemptRetryAuthorization(Id.new(), binding, node.version)
+        val admitted = node.legacyAttempt ?: error("Попытка этапа не сохранена")
+        requireRetryTurn(admitted, binding, continuationConfirmed)
+        requirePlanRetryEligible(old, node, admitted)
+        PlanAttemptRetryAuthorization(Id.new(), admitted, node.version, binding)
+    }
+
+    private fun requireRetryTurn(admitted: SessionLegacyAttempt, requested: SessionLegacyAttempt, continuationConfirmed: Boolean) {
+        require(requested == admitted || continuationConfirmed && admitted.turnIndex != Int.MAX_VALUE &&
+            requested == admitted.copy(turnIndex = admitted.turnIndex + 1)) { "Попытка или поколение этапа изменились" }
+    }
+
+    /** Native termination and exact operation outcomes are proved by the host, never by model prose.
+     * Reconciliation and retry capture share a commit boundary so a newer stop invalidates both. */
+    suspend fun reconcileAndAuthorizePlanRetry(id: String, request: PlanRetryRecoveryRequest, proof: PlanRetryRecoveryProof,
+        requestedBinding: SessionLegacyAttempt, continuationConfirmed: Boolean = false): PlanAttemptRetryAuthorization = lock.withLock {
+        val old = read(id)
+        val node = old.sessions.getValue(request.session.id)
+        require(old.projectId == request.session.projectId && old.deletedAt == null && node.id !in old.historyDeletedIds &&
+            !old.stoppedByUser && !node.archived) { "Сессия удалена, архивирована или остановлена пользователем" }
+        require(node.version == request.expectedNodeVersion && node.generation == request.binding.generation &&
+            node.legacyAttempt == request.binding) { "Состояние изменилось во время проверки; повторите действие" }
+        requireRetryTurn(request.binding, requestedBinding, continuationConfirmed)
+        val quarantines = old.unresolvedQuarantines(node.id)
+        val quarantinedStop = node.desired in setOf(SessionDesiredState.STOP, SessionDesiredState.QUARANTINE) && node.settled && quarantines.isNotEmpty()
+        require(node.observed == SessionObservedState.UNKNOWN || quarantinedStop || node.desired == SessionDesiredState.STOP &&
+            node.observed in setOf(SessionObservedState.PENDING, SessionObservedState.STOPPING)) { "Сначала подтвердите остановку предыдущего запуска" }
+        val affected = old.subtree(node.id)
+        require((affected - node.id).all { old.sessions.getValue(it).settled && old.unresolvedQuarantines(it).isEmpty() } &&
+            old.auxiliaryRuns.values.none { it.ownerSessionId in affected && !it.settled }) { "Дочерние или вспомогательные запуски ещё не остановлены" }
+        require(old.audit.none { it.action == "ARCHIVE" && node.id in it.affected &&
+            old.operations[it.operationId]?.state == SessionOperationState.ACCEPTED }) { "Сессия архивируется" }
+        require(old.integrations.values.none { it.request.actorSessionId in affected && it.phase in setOf(SessionIntegrationPhase.INTENT,
+            SessionIntegrationPhase.PREPARING, SessionIntegrationPhase.MERGING, SessionIntegrationPhase.VERIFYING, SessionIntegrationPhase.UNKNOWN) }) {
+            "Сначала подтвердите исход интеграции" }
+        require(old.operations.values.none { operation -> operation.target in affected &&
+            (operation.state == SessionOperationState.UNKNOWN || operation.state == SessionOperationState.ACCEPTED &&
+                old.audit.firstOrNull { it.operationId == operation.id }?.action !in setOf("STOP", "PAUSE", "ARCHIVE", "QUARANTINE", "FAILURE_STOP")) }) {
+            "Сначала подтвердите исход других операций" }
+        require(quarantines == request.quarantines && proof.quarantineOperationIds == quarantines.map { it.operationId }.toSet() &&
+            proof.evidence.isNotEmpty() && proof.evidence.all { it.isNotBlank() }) { "Нет подтверждения исхода всех операций карантина" }
+        val parent = old.sessions.getValue(node.authorityParentId ?: error("Родитель не задан"))
+        val stopped = node.copy(desired = SessionDesiredState.STOP, observed = SessionObservedState.STOPPED,
+            remainingTokens = 0, version = node.version + 1, lastObservedAt = clock())
+        val resolved = old.copy(version = old.version + 1, sessions = old.sessions + (node.id to stopped) +
+            (parent.id to parent.copy(remainingTokens = parent.remainingTokens + node.remainingTokens, version = parent.version + 1)),
+            audit = old.audit + quarantines.map { event -> SessionAuditEvent("resolved-${node.id}-${event.operationId}", "APPLICATION",
+                "RECONCILE_QUARANTINE", setOf(node.id), proof.evidence.joinToString("\n") { redact(it) }, clock()) } +
+                SessionAuditEvent("plan-reconciled-${node.id}-${stopped.version}", "APPLICATION", "PLAN_RETRY_RECONCILED", setOf(node.id),
+                    proof.evidence.joinToString("\n") { redact(it) }, clock()))
+        requirePlanRetryEligible(resolved, stopped, request.binding)
+        val saved = commit(resolved)
+        PlanAttemptRetryAuthorization(Id.new(), request.binding, saved.sessions.getValue(node.id).version, requestedBinding)
     }
 
     private fun requirePlanRetryEligible(old: SessionOrganism, node: SessionNode, binding: SessionLegacyAttempt) {
         require(old.deletedAt == null && node.id !in old.historyDeletedIds && !old.stoppedByUser && !node.archived) { "Сессия удалена или архивирована" }
         require(node.desired == SessionDesiredState.STOP && node.settled) { "Сначала подтвердите остановку предыдущего запуска" }
         require(node.kind == SessionKind.SESSION && node.legacyAttempt == binding && node.generation == binding.generation) { "Попытка или поколение этапа изменились" }
-        require(old.audit.none { it.action == "QUARANTINE" && node.id in it.affected }) { "Сначала проверьте фактический исход операции" }
+        require(old.unresolvedQuarantines(node.id).isEmpty()) { "Сначала проверьте фактический исход операции" }
         require(old.results.none { it.sessionId == node.id && it.accepted }) { "Работа уже принята" }
         val affected = old.subtree(node.id)
         require(affected.all { old.sessions.getValue(it).settled } && old.auxiliaryRuns.values.none { it.ownerSessionId in affected && !it.settled }) { "Рабочая область этапа ещё не остановлена" }
@@ -292,7 +343,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     /** Adapter entry called only for an actual persisted, human-confirmed plan attempt. */
     suspend fun admitPlanWorker(id: String, session: CodingSession, task: SessionTask,
         binding: SessionLegacyAttempt, rules: PlanningRulesSnapshot?, unfinishedStageIds: Set<String>,
-        retryAuthorization: PlanAttemptRetryAuthorization? = null): SessionOrganism = lock.withLock {
+        retryAuthorization: PlanAttemptRetryAuthorization? = null, continuationConfirmed: Boolean = false): SessionOrganism = lock.withLock {
         val old = read(id).reconcileTokenBudget(session.parentSessionId ?: error("Родитель не задан"))
         require(binding.stageId in unfinishedStageIds) { "Этап уже завершён или не выбран" }
         require(session.projectId == old.projectId && session.parentSessionId == task.resultRecipient) { "Другой проект или получатель" }
@@ -301,8 +352,9 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         val existing = old.sessions[session.id]
         require(existing == null || (existing.originParentId == parent.id && existing.authorityParentId == parent.id)) { "Другая ветка происхождения" }
         val retry = retryAuthorization?.takeIf { existing?.desired == SessionDesiredState.STOP }?.also { authorization ->
-            requirePlanRetryEligible(old, existing!!, binding)
-            require(authorization.id.isNotBlank() && authorization.binding == binding && authorization.expectedVersion == existing.version &&
+            requireRetryTurn(authorization.binding, binding, continuationConfirmed)
+            requirePlanRetryEligible(old, existing!!, authorization.binding)
+            require(authorization.id.isNotBlank() && authorization.requestedBinding == binding && authorization.expectedVersion == existing.version &&
                 old.audit.none { it.operationId == "plan-retry-${authorization.id}" }) { "Разрешение повтора устарело; подтвердите повтор заново" }
         }
         require(existing?.archived != true && (existing == null || existing.desired == SessionDesiredState.RUN || retry != null) && existing?.observed != SessionObservedState.UNKNOWN) { "Сначала разрешите состояние старого запуска" }
@@ -631,16 +683,23 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     suspend fun observe(id: String, sessionId: String, generation: Long, observed: SessionObservedState): SessionOrganism = lock.withLock {
         val old = read(id); val node = old.sessions.getValue(sessionId)
         require(node.generation == generation) { "Поздний ответ отозванного запуска" }
-        require(observed !in setOf(SessionObservedState.COMPLETED, SessionObservedState.STOPPED, SessionObservedState.FAILED) ||
+        // Native completion can race a stop during cleanup. Never leave revoked work
+        // pending, and never clear an unknown external effect with an ordinary completion.
+        val actualObserved = if (observed in setOf(SessionObservedState.PENDING, SessionObservedState.COMPLETED) &&
+            node.desired != SessionDesiredState.RUN) {
+            if (node.observed == SessionObservedState.UNKNOWN || old.unresolvedQuarantines(sessionId).isNotEmpty()) SessionObservedState.UNKNOWN
+            else SessionObservedState.STOPPED
+        } else observed
+        require(actualObserved !in setOf(SessionObservedState.COMPLETED, SessionObservedState.STOPPED, SessionObservedState.FAILED) ||
             old.auxiliaryRuns.values.none { it.ownerSessionId == sessionId && !it.settled }) { "Вспомогательные запуски ещё не остановлены" }
-        require(observed !in setOf(SessionObservedState.COMPLETED, SessionObservedState.STOPPED, SessionObservedState.FAILED) || old.sessions.values.none { it.lifecycleParentId == sessionId && !it.settled }) { "Дети ещё не остановлены" }
-        require(observed != SessionObservedState.RUNNING || node.acceptsWork) { "Рабочая область закрыта" }
-        var nodes = old.sessions + (sessionId to node.copy(observed = observed, version = node.version + 1, lastObservedAt = clock()))
-        if (observed in setOf(SessionObservedState.COMPLETED, SessionObservedState.STOPPED, SessionObservedState.FAILED) && !node.settled) {
+        require(actualObserved !in setOf(SessionObservedState.COMPLETED, SessionObservedState.STOPPED, SessionObservedState.FAILED) || old.sessions.values.none { it.lifecycleParentId == sessionId && !it.settled }) { "Дети ещё не остановлены" }
+        require(actualObserved != SessionObservedState.RUNNING || node.acceptsWork) { "Рабочая область закрыта" }
+        var nodes = old.sessions + (sessionId to node.copy(observed = actualObserved, version = node.version + 1, lastObservedAt = clock()))
+        if (actualObserved in setOf(SessionObservedState.COMPLETED, SessionObservedState.STOPPED, SessionObservedState.FAILED) && !node.settled) {
             node.authorityParentId?.let { parent -> nodes = nodes + (parent to nodes.getValue(parent).let { it.copy(remainingTokens = it.remainingTokens + node.remainingTokens, version = it.version + 1) })
                 nodes = nodes + (sessionId to nodes.getValue(sessionId).copy(remainingTokens = 0)) }
         }
-        if (observed == SessionObservedState.FAILED && node.authorityParentId?.let { nodes[it]?.failurePolicy } == SessionFailurePolicy.CANCEL_SIBLINGS) {
+        if (actualObserved == SessionObservedState.FAILED && node.authorityParentId?.let { nodes[it]?.failurePolicy } == SessionFailurePolicy.CANCEL_SIBLINGS) {
             val siblings = nodes.values.filter { it.lifecycleParentId == node.lifecycleParentId && it.id != sessionId }.flatMap { old.subtree(it.id) }.toSet()
             nodes = nodes.mapValues { (id, value) -> if (id in siblings && !value.settled) value.copy(desired = SessionDesiredState.STOP, observed = SessionObservedState.STOPPING) else value }
         }

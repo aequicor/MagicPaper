@@ -172,19 +172,31 @@ class PlanningExecutionService(
             status = if (updated.intent == ExecutionIntent.RUN) PlanStatus.RUNNING else PlanStatus.STOPPED)
     }
     /** Explicit retry does not erase counters; the caller fixes configuration or acknowledges uncertainty. */
-    suspend fun retry(projectId: String) {
+    suspend fun retry(projectId: String, expectedCheckpoint: Plan? = null, expectedBlockerIds: Set<String>? = null) {
         val before = store.planFor(projectId) ?: return
+        expectedCheckpoint?.let { before.requireRetryCheckpoint(it) }
+        expectedBlockerIds?.let { expected ->
+            require(expected.isNotEmpty() && before.blockingIssues(emptyList()).map { it.messageId }.toSet() == expected) {
+                "Причина остановки изменилась; ответьте на актуальный запрос восстановления"
+            }
+        }
         if (before.phase == ExecutionPhase.COMPLETE) return
         check(!before.stopping) { "Дождитесь подтверждения остановки" }
         val authorizations = before.selectedMilestones.mapNotNull { stage ->
             stage.attempts.lastOrNull()?.takeIf { it.phase != AttemptPhase.COMPLETE &&
-                (it.error != null || it.interrupted || it.phase == AttemptPhase.FAILED) }?.let { attempt ->
+                (it.error != null || it.interrupted || it.phase == AttemptPhase.FAILED ||
+                    expectedCheckpoint?.milestones?.firstOrNull { original -> original.id == stage.id }?.attempts?.lastOrNull()?.let { original ->
+                        original.id == it.id && (original.error != null || original.interrupted || original.phase == AttemptPhase.FAILED)
+                    } == true) }?.let { attempt ->
+                check(store.planFor(projectId) == before) { "Состояние плана изменилось; повторите действие" }
+                expectedCheckpoint?.let { before.requireRetryCheckpoint(it) }
                 authorizeRetry(before, stage.id, attempt)?.let { attempt.id to it }
             }
         }.toMap()
         store.update(projectId) { p ->
             check(!p.stopping) { "Дождитесь подтверждения остановки" }
             check(p == before) { "Состояние плана изменилось; повторите действие" }
+            expectedCheckpoint?.let { p.requireRetryCheckpoint(it) }
             p.copy(issue = null, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING, status = PlanStatus.RUNNING,
             finalAttempt = p.finalAttempt?.retryAfterUserAction()?.let { if (p.issue?.kind == IssueKind.UNCERTAIN) it.copy(pendingToolExternal = false, pendingTool = "") else it },
             milestones = p.milestones.map { m -> m.copy(attempts = m.attempts.map { a ->
@@ -694,6 +706,21 @@ class PlanningExecutionService(
                     plan.milestones.first { it.id == dep }.let { "${it.title}: ${it.report}\nПриёмка этапа: ${it.checkNote}" }
                 }
                 val extraInstructions = chatHooks?.instructions(plan, stage, attempt).orEmpty()
+                // Inbox migration can restore a completed turn's VERIFY checkpoint while this
+                // coroutine is suspended. Never overwrite that checkpoint with a fresh native intent.
+                if (!canRunStage(id, stageId)) return
+                val checkpointPlan = store.planFor(id) ?: return
+                val checkpointStage = checkpointPlan.milestones.firstOrNull { it.id == stageId } ?: return
+                val checkpointAttempt = checkpointStage.attempts.lastOrNull() ?: return
+                if (checkpointPlan.runId != plan.runId || checkpointAttempt.id != attempt.id ||
+                    checkpointAttempt.turnIndex != attempt.turnIndex || checkpointAttempt.sessionGeneration != attempt.sessionGeneration) return
+                if (checkpointAttempt.phase != attempt.phase) {
+                    stage = checkpointStage
+                    attempt = checkpointAttempt
+                    currentAttempt = attempt
+                    if (attempt.phase == AttemptPhase.VERIFYING) break
+                    return
+                }
                 val prompt = """
                     Общая цель: ${plan.goal}
                     Этап: ${stage.title}

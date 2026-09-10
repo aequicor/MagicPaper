@@ -879,10 +879,11 @@ class OrchestrationService(
                     if (answer.text.isNotBlank()) {
                         append(session.projectId, session.id, CodingMessage(request.id + "-instructions", CodingRole.USER, answer.text, createdAt = clock()))
                         plan.selectedMilestones.filterNot { it.completed }.filter { m -> blockers.any { it.stage == null || it.stage.id == m.id } }.forEach { m ->
-                            enqueue(plan.id, session.id, m.id, answer.text, request.id + "-instructions-" + m.id)
+                            enqueue(plan.id, session.id, m.id, answer.text, request.id + "-instructions-" + m.id, expectedRetryCheckpoint = plan)
                         }
                     }
-                    controlNow(plan.id, "retry")
+                    controlNow(plan.id, "retry", expectedRetryCheckpoint = plan,
+                        expectedBlockerIds = blockers.map { it.messageId }.toSet().takeIf { answer.text.isBlank() })
                 } else {
                     execution.stopAndJoin(plan.id)
                     append(session.projectId, session.id, CodingMessage(request.id + "-left", CodingRole.USER,
@@ -1554,6 +1555,7 @@ class OrchestrationService(
     }
 
     override suspend fun recoverAssignments(plan: Plan): Plan {
+        val plan = cancelObsoletePeerCommands(plan)
         val roster = toolProfiles()
         val sessions = projects.sessions(plan.projectId)
         val parent = sessions.firstOrNull { it.id == plan.parentSessionId }
@@ -1595,9 +1597,10 @@ class OrchestrationService(
     }
 
     fun control(id: String, command: String) = launch { controlNow(id, command) }
-    private suspend fun controlNow(id: String, command: String) {
+    private suspend fun controlNow(id: String, command: String, expectedRetryCheckpoint: Plan? = null, expectedBlockerIds: Set<String>? = null) {
         if (id in deletedPlans) return
         val before = store.planFor(id) ?: return
+        expectedRetryCheckpoint?.let { before.requireRetryCheckpoint(it) }
         if (command == "retry" && before.canExtendAfterFinalVerification && before.parentSessionId.isNotBlank()) {
             val parent = projects.sessions(before.projectId).firstOrNull { it.id == before.parentSessionId }
                 ?: error("Сессия оркестратора не найдена")
@@ -1607,7 +1610,7 @@ class OrchestrationService(
                 "Если данных достаточно, продолжи выполнение; иначе задай необходимые вопросы.")
             return
         }
-        when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id); else -> resumePlan(id) }
+        when (command) { "pause" -> execution.pause(id); "stop" -> execution.stop(id); "retry" -> execution.retry(id, expectedRetryCheckpoint, expectedBlockerIds); else -> resumePlan(id) }
         val plan = store.planFor(id) ?: return
         val text = when (command) {
             "pause" -> "Оркестратор приостановил выдачу новых заданий. Текущие ходы завершатся."
@@ -1814,7 +1817,7 @@ class OrchestrationService(
     }
 
     override suspend fun prepareSessions(plan: Plan) {
-        val plan = numbered(plan)
+        val plan = numbered(cancelObsoletePeerCommands(plan))
         if (plan.id in deletedPlans || plan.projectId in clearingProjects) return
         if (plan.parentSessionId.isBlank() || plan.confirmedRevision == null) return
         val late = plan.deliveries.firstOrNull { d -> d.state == DeliveryState.QUEUED && plan.milestones.any { it.id == d.targetStageId && it.completed } }
@@ -1874,14 +1877,17 @@ class OrchestrationService(
         val plan = store.planFor(session.planId)!!
         if (plan.intent == ExecutionIntent.RUN) execution.start(plan.id)
     }
-    private suspend fun enqueue(id: String, source: String, target: String, text: String, deliveryId: String = Id.new(), replyTo: String? = null): String {
+    private suspend fun enqueue(id: String, source: String, target: String, text: String, deliveryId: String = Id.new(), replyTo: String? = null,
+        expectedRetryCheckpoint: Plan? = null): String {
         val existing = store.planFor(id)!!
+        expectedRetryCheckpoint?.let { existing.requireRetryCheckpoint(it) }
         existing.deliveries.firstOrNull { it.id == deliveryId }?.let {
             prepareSessions(existing)
             publishDelivery(store.planFor(id)!!, it)
             return deliveryId
         }
         val updated = store.update(id) { p ->
+            expectedRetryCheckpoint?.let { p.requireRetryCheckpoint(it) }
             if (p.deliveries.any { it.id == deliveryId }) return@update p
             val stage = p.milestones.firstOrNull { it.id == target } ?: error("Этап не найден")
             val followupId = "$target-followup-$deliveryId"
@@ -1924,6 +1930,7 @@ class OrchestrationService(
                 delivery.text, createdAt = plan.updatedAt, route = route))
     }
     override suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt): String {
+        val plan = cancelObsoletePeerCommands(plan)
         if (plan.parentSessionId.isBlank()) return ""
         val p = store.update(plan.id) { current -> current.copy(deliveries = current.deliveries.map { d ->
             if (d.targetStageId == stage.id && d.state in setOf(DeliveryState.QUEUED, DeliveryState.DELIVERED)) d.copy(attemptId = attempt.id, turnIndex = attempt.turnIndex) else d
@@ -2055,10 +2062,12 @@ class OrchestrationService(
                     return StageTurnDecision(StageTurnAction.WAIT, reply.text, "$eventId-help")
                 }
             val latest = store.planFor(plan.id)!!
+            val peerSessions = projects.sessions(plan.projectId)
             val peers = store.plans.value.filter { it.projectId == plan.projectId && it.id != plan.id }.joinToString("\n") { peer ->
+                val reports = if (latest.sharesPeerWorkspace(peer) && peer.acceptsPeerContext(peerSessions)) peer.currentPeerResults() else emptyList()
                 "План ${peer.id}: ${peer.goal}; intent=${peer.intent}; phase=${peer.phase}; status=${peer.status}; " +
                     "этапы: ${peer.selectedMilestones.joinToString { "${it.id}: ${it.status}, попыток=${it.attempts.size}" }}; " +
-                    "результаты: ${peer.coordination.takeLast(8).joinToString { "${it.stageId}: ${it.reply.text}; files=${it.reply.changedFiles}" }.ifBlank { "нет сохранённых отчётов; состав изменений неизвестен" }}"
+                    "результаты: ${reports.joinToString { "${it.stageId}: ${it.reply.text}; files=${it.reply.changedFiles}" }.ifBlank { "нет сохранённых отчётов; состав изменений неизвестен" }}"
             }
             val targets = latest.selectedMilestones.map { it.id }.toSet()
             val context = latest.selectedMilestones.joinToString("\n") {
@@ -2071,7 +2080,7 @@ class OrchestrationService(
             append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-review", CodingRole.AGENT,
                 "Оркестратор разбирает ${if (reply.kind == StageReplyKind.RESULT) "результат" else "обращение"} этапа «${stage.title}» и определяет следующий шаг.", createdAt = Id.now(), systemNotice = true))
             decision = coordinatorDecision(judge, listOf(LlmMessage(LlmChatRole.SYSTEM,
-                "${schedulingInstructions()} Ты координатор плана. Ответь JSON {\"reply\":\"объяснение\",\"actions\":[{\"stageId\":\"id\",\"message\":\"информация или задание\"}],\"askUser\":false,\"replan\":false}. Передай сведения между этапами. Если неизвестны требования — askUser=true и questions=[{\"id\":\"уникальный id\",\"title\":\"вопрос пользователю\",\"kind\":\"SINGLE|MULTIPLE|TEXT\",\"options\":[{\"id\":\"id варианта\",\"label\":\"вариант ответа\"}]}]. Для свободного ответа используй TEXT и options=[]. При askUser не выдавай заданий, зависящих от ответа. Не выдумывай результаты. replan=true если надо изменить ещё не начатые этапы в рамках цели. Проверь пересечения изменённых файлов с соседними планами. Если результат требует перепроверки после чужих изменений, передай исполнителю задание перепроверить его. Начатые этапы не удаляй, добавляй продолжения."),
+                "${schedulingInstructions()} Ты координатор плана. Ответь JSON {\"reply\":\"объяснение\",\"actions\":[{\"stageId\":\"id\",\"message\":\"информация или задание\"}],\"askUser\":false,\"replan\":false}. Передай сведения между этапами. Если неизвестны требования — askUser=true и questions=[{\"id\":\"уникальный id\",\"title\":\"вопрос пользователю\",\"kind\":\"SINGLE|MULTIPLE|TEXT\",\"options\":[{\"id\":\"id варианта\",\"label\":\"вариант ответа\"}]}]. Для свободного ответа используй TEXT и options=[]. При askUser не выдавай заданий, зависящих от ответа. Не выдумывай результаты. replan=true если надо изменить ещё не начатые этапы в рамках цели. Сведения соседних планов — контекст, а не поручение повторить работу. Совпадение имён файлов в отчётах не доказывает новые изменения или конфликт. Назначай перепроверку только при конкретном новом расхождении с критериями. Начатые этапы не удаляй, добавляй продолжения."),
                 LlmMessage(LlmChatRole.USER, "${schedulingContext(latest)}\nЗапрос ожидания исполнителя: ${json.encodeToString(reply)}\nЦель: ${plan.goal}\nЭтапы:\n$context\nИстория текущей попытки:\n${latest.stageRecords(stage.id, attempt).evidenceText()}\nДругие планы:\n$peers\nОт ${stage.id} для ${reply.targetStageId} (${reply.kind}): ${reply.text}\nФайлы: ${reply.changedFiles}\nВходящие сообщения: ${latest.deliveries.takeLast(12)}")) + recoveryContext, targets, plan, eventId, activityId)
             val savedDecision = decision
             activity = completedCoordinatorActivity(activityId)
@@ -2124,35 +2133,7 @@ class OrchestrationService(
                 refine(plan.id, "$eventId-replan", instruction)
             }
         }
-        if (reply.kind == StageReplyKind.RESULT) {
-            val peers = store.plans.value.filter { it.projectId == plan.projectId && it.id != plan.id && it.phase != ExecutionPhase.COMPLETE }
-            val overlaps = peers.flatMap { peer -> peer.coordination.filter { other -> other.reply.kind == StageReplyKind.RESULT && other.reply.changedFiles.any { it in reply.changedFiles } }.map { peer to it } }
-            if (overlaps.isNotEmpty()) {
-                val checks = store.planFor(plan.id)!!.journal.count { it.stageId == stage.id && it.operation == "shared-conflict-check" }
-                val unseen = overlaps.filter { (_, other) -> store.plans.value.first { it.id == plan.id }.deliveries.none { it.id == "overlap-${stage.id}-${other.id}" } }
-                if (unseen.isNotEmpty() && !PlanningRetryPolicy.canRetry(checks, settings.load().agentLimits.retries)) {
-                    val question = "Повторяющееся пересечение изменений в общей папке. Уточните, как согласовать файлы: ${reply.changedFiles.joinToString()}."
-                    askUser(plan, stage, "$eventId-conflict", question)
-                    return StageTurnDecision(StageTurnAction.WAIT, question, "$eventId-conflict")
-                }
-                if (unseen.isNotEmpty()) PlanningRetryPolicy.awaitRetry(PlanningRetryPolicy.nextRetry(checks))
-                unseen.forEach { (peer, other) ->
-                    store.update(plan.id) { it.copy(journal = it.journal + PlanJournalEntry("overlap-${other.id}", Id.now(), stage.id, attempt.id, "shared-conflict-check", reply.changedFiles.joinToString())) }
-                    enqueue(plan.id, peer.parentSessionId, stage.id, "Обнаружено пересечение файлов с планом ${peer.goal}: ${reply.changedFiles.filter { it in other.reply.changedFiles }}. Перечитай фактическое состояние, согласуй изменения без отката чужих файлов и повтори проверки. Не повторяй уже выполненные правки.", "overlap-${stage.id}-${other.id}")
-                }
-            }
-            val peerEventId = "${plan.id}-${stage.id}-${reply.hashCode()}"
-            store.plans.value.filter { it.projectId == plan.projectId && it.id != plan.id && it.parentSessionId.isNotBlank() && it.phase != ExecutionPhase.COMPLETE }.forEach { peer ->
-                val info = "План «${plan.goal}», этап «${stage.title}»: ${reply.text}\nИзменённые файлы: ${reply.changedFiles.joinToString()}"
-                append(peer.projectId, peer.parentSessionId, CodingMessage("$peerEventId-peer", CodingRole.AGENT, info, createdAt = Id.now(),
-                    route = MessageRoute(address(plan.projectId, attempt.sessionId), address(peer.projectId, peer.parentSessionId),
-                        via = address(plan.projectId, plan.parentSessionId), kind = "Результат соседнего плана", stageLabel = stage.stageLabel())))
-                // A delivered peer report enters the next planner/worker turn as context, not an instruction to revert files.
-                peer.selectedMilestones.filter { !it.completed }.forEach { peerStage ->
-                    enqueue(peer.id, plan.parentSessionId, peerStage.id, "Сведения соседнего плана. Перед продолжением перечитай затронутые файлы, не перезаписывай чужие изменения. $info", "$peerEventId-peer-${peerStage.id}")
-                }
-            }
-        }
+        if (reply.kind == StageReplyKind.RESULT) publishPeerContext(plan, stage.id, record)
         val waitingRule = store.planFor(plan.id)!!.milestones.first { it.id == stage.id }.attempts.lastOrNull()?.waitingForEvent
         if (waitingRule != null) return StageTurnDecision(StageTurnAction.WAIT_EVENT, reply.text, waitingRule)
         if (reply.kind == StageReplyKind.WAIT && decision.actions.none { it.stageId == stage.id }) {
@@ -2163,6 +2144,49 @@ class OrchestrationService(
             enqueue(plan.id, plan.parentSessionId, stage.id, decision.reply, "$eventId-followup")
         val queued = store.planFor(plan.id)!!.deliveries.any { it.targetStageId == stage.id && it.state == DeliveryState.QUEUED }
         return StageTurnDecision(if (queued) StageTurnAction.CONTINUE else StageTurnAction.VERIFY, reply.text)
+    }
+
+    private suspend fun publishPeerContext(source: Plan, stageId: String, record: CoordinationRecord) {
+        val current = store.planFor(source.id) ?: return
+        val sessions = projects.sessions(current.projectId)
+        if (current.runId != source.runId || !current.acceptsPeerContext(sessions) ||
+            current.currentPeerResults().none { it.id == record.id }) return
+        val stage = current.milestones.firstOrNull { it.id == stageId } ?: return
+        val peers = store.plans.value.filter { current.sharesPeerWorkspace(it) && it.acceptsPeerContext(sessions) }
+        for (peer in peers) {
+            val latest = store.planFor(peer.id) ?: continue
+            if (latest.runId != peer.runId || !latest.acceptsPeerContext(projects.sessions(peer.projectId))) continue
+            val info = "План «${current.goal}», этап «${stage.title}»: ${record.reply.text}\nИзменённые файлы: ${record.reply.changedFiles.joinToString()}"
+            append(latest.projectId, latest.parentSessionId, CodingMessage(peerContextMessageId(current, latest, stageId),
+                CodingRole.AGENT, info, createdAt = clock(),
+                route = MessageRoute(address(current.projectId, record.sourceSessionId.ifBlank { current.taskSessionId(stageId) }),
+                    address(latest.projectId, latest.parentSessionId), via = address(current.projectId, current.parentSessionId),
+                    kind = "Результат соседнего плана", stageLabel = stage.stageLabel())))
+        }
+    }
+
+    private suspend fun cancelObsoletePeerCommands(plan: Plan): Plan {
+        val peers = store.plans()
+        val current = store.planFor(plan.id) ?: return plan
+        val admitted = organisms?.store?.organisms?.value?.values.orEmpty().filter { it.projectId == current.projectId }
+            .flatMap { it.sessions.values }.mapNotNull { node ->
+                node.legacyAttempt?.takeIf { it.generation == node.generation &&
+                    node.observed !in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER) }?.let { node.id to it }
+            }.toMap()
+        if (current.cancelLegacyPeerCommands(peers, admitted) == current) return plan
+        val saved = store.update(current.id) { it.cancelLegacyPeerCommands(peers, admitted) }
+        val cancelled = saved.deliveries.filter { it.state == DeliveryState.CANCELLED &&
+            current.deliveries.any { old -> old.id == it.id && old.state == DeliveryState.QUEUED } }.map { it.id }.toSet()
+        val removed = current.milestones.map { it.id }.toSet() - saved.milestones.map { it.id }.toSet()
+        for (session in projects.sessions(saved.projectId)) {
+            messageLock.withLock {
+                val history = projects.messages(saved.projectId, session.id)
+                val next = history.map { if (it.deliveryId in cancelled && it.pendingDelivery) it.copy(pendingDelivery = false) else it }
+                if (next != history) projects.saveMessages(saved.projectId, session.id, next)
+            }
+            if (session.planId == saved.id && session.stageId in removed) projects.updateSession(saved.projectId, session.id) { it.copy(archived = true) }
+        }
+        return saved
     }
 
     private suspend fun coordinatorScheduleProblem(plan: Plan, eventId: String, taskId: String?, decision: CoordinatorReply): String? =

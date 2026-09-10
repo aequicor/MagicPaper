@@ -98,6 +98,10 @@ class DesktopCodingRuntime(
         }
     }
     override suspend fun reconcile(sessionId: String) { ResearchCheckRunner.shared.reconcile(sessionId); pi.reconcile(sessionId); (clients[sessionId] ?: subscription).reconcileCoding(sessionId) }
+    override suspend fun nativeToolResults(session: CodingSession, callIds: Set<String>): List<CodingEvent.ToolFinished> =
+        if (session.engine == CodingEngine.CODEX && session.piSessionId.isNotBlank())
+            // Reconciliation may have disposed the worker client; history reads use the long-lived metadata connection.
+            subscription.readCodingToolResults(session.piSessionId, callIds) else emptyList()
     override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> = flow {
         require(session.projectId == project.id) { "План принадлежит другому проекту." }
         check(java.io.File(project.path).isDirectory) { "Папка проекта недоступна: ${project.path}" }

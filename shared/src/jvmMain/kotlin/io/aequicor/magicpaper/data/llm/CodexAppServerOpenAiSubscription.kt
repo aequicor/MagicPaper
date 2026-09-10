@@ -112,17 +112,33 @@ class CodexAppServerOpenAiSubscription(
         approvalBroker.respond(id, decision)
     private val stderrTail = ArrayDeque<String>()
     private val ownedCoding = io.aequicor.magicpaper.data.coding.OwnedCodingProcess(appHome.resolve("coding-processes").toFile())
+    internal suspend fun readCodingToolResults(threadId: String, callIds: Set<String>): List<CodingEvent.ToolFinished> {
+        if (callIds.isEmpty()) return emptyList()
+        val response = request("thread/read", buildJsonObject { put("threadId", threadId); put("includeTurns", true) }).jsonObject
+        return CodexNativeToolResults.read(response, threadId, callIds)
+    }
     suspend fun reconcileCoding(sessionId: String) = withContext(Dispatchers.IO) {
         if (ownedCoding.belongsTo(sessionId, process)) {
             // Interrupt just the owned turn and await its acknowledgement; other projects keep running.
             val threadId = codingSessions[sessionId]
             val run = threadId?.let { codingRuns[it] }
                 ?: error("Предыдущий Codex-прогон ещё не подтвердил завершение; требуется восстановление сессии")
-            if (!run.done.isCompleted) {
+            if (run.waitingForNativeCompletion) {
+                // turn/interrupt cannot stop a command after that model turn has ended.
+                // A per-session connection can instead reconcile its exact owned process tree;
+                // never use this fallback on a shared connection with unrelated active work.
+                check(codingRuns.none { (id, other) -> id != threadId && !other.done.isCompleted } &&
+                    turns.values.none { !it.done.isCompleted }) { "Другие задачи используют этот процесс; дождитесь завершения команды" }
+                ownedCoding.reconcile(sessionId)
+                run.finish("Процесс остановлен; фактический результат незавершённых инструментов требует проверки", confirmed = false)
+            } else if (!run.done.isCompleted) {
                 check(run.turnId != null) { "Codex ещё не подтвердил идентификатор прерванной операции" }
                 abortCoding(sessionId)
+                withTimeout(10_000) { run.done.await() }
+            } else {
+                // Exceptional completion proves disconnection, not process termination.
+                run.done.await()
             }
-            withTimeout(10_000) { run.done.await() }
             ownedCoding.clear(sessionId)
             codingSessions.remove(sessionId)
             codingRuns.remove(threadId)
@@ -443,8 +459,17 @@ class CodexAppServerOpenAiSubscription(
         pending.values.forEach { it.cancel() }
         turns.values.forEach { it.done.cancel() }
         codingRuns.values.forEach { it.events.close() }
-        process?.destroy()
-        scope.cancel()
+        try {
+            process?.let { owned ->
+                // Keep the parent alive until its recorded descendants have stopped, so a
+                // failed cleanup retains ancestry for durable recovery on macOS/Linux too.
+                val children = owned.descendants().use { it.toList() }
+                children.asReversed().forEach { it.destroyForcibly() }
+                children.forEach { if (it.isAlive) it.onExit().get(10, java.util.concurrent.TimeUnit.SECONDS) }
+                owned.destroyForcibly()
+                check(owned.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) { "Не удалось остановить процесс Codex" }
+            }
+        } finally { scope.cancel() }
     }
 
     private suspend fun readRateLimits(): List<OpenAiRateLimit> {
@@ -737,7 +762,15 @@ class CodexAppServerOpenAiSubscription(
                 val turn = params["turn"] as? JsonObject
                 val error = (turn?.get("error") as? JsonObject)?.string("message")
                 turns[threadId]?.finish(error)
-                codingRuns[threadId]?.finish(error)
+                codingRuns[threadId]?.let { run ->
+                    val completedTurnId = turn?.string("id")
+                    if (run.turnId != null && completedTurnId != null && run.turnId != completedTurnId) return@let
+                    // Completion can carry terminal items whose individual notification was lost.
+                    (turn?.get("items") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.forEach { item ->
+                        if (run.items.containsKey(item.string("id").orEmpty()) && CodexNativeToolResults.terminal(item) != null) run.completeItem(item)
+                    }
+                    run.finish(error, interrupted = turn?.string("status") == "interrupted")
+                }
                 approvalBroker.clearTurn(threadId, turn?.string("id"))
                 questionnaireBroker.clearTurn(threadId, turn?.string("id"))
             }
@@ -880,13 +913,18 @@ class CodexAppServerOpenAiSubscription(
         val done = CompletableDeferred<Unit>()
         @Volatile var confirmed = false
         @Volatile var turnId: String? = null
+        @Volatile private var turnCompleted = false
+        @Volatile private var closed = false
+        private val completedItems = mutableSetOf<String>()
+        val waitingForNativeCompletion: Boolean get() = turnCompleted && !closed
 
         fun emit(event: CodingEvent) {
             events.trySend(event)
         }
 
-        fun startItem(item: JsonObject) {
+        @Synchronized fun startItem(item: JsonObject) {
             val id = item.string("id").orEmpty()
+            if (closed || id in completedItems) return
             if (id.isNotBlank()) items[id] = item
             when (item.string("type")) {
                 "contextCompaction" -> { compactionItemSeen = true; emit(CodingEvent.Compaction(CompactionStatus(id, CompactionPhase.STARTED))) }
@@ -934,8 +972,11 @@ class CodexAppServerOpenAiSubscription(
             emit(CodingEvent.ToolProgress(name, id, params.string("message").orEmpty()))
         }
 
-        fun completeItem(item: JsonObject) {
+        @Synchronized fun completeItem(item: JsonObject) {
             val id = item.string("id").orEmpty()
+            val terminal = if (item.string("type") in setOf("commandExecution", "fileChange", "mcpToolCall"))
+                CodexNativeToolResults.terminal(item) ?: return else null
+            if (closed || id.isNotBlank() && !completedItems.add(id)) return
             val started = items.remove(id)
             commandOutput.remove(id)
             when (item.string("type")) {
@@ -960,8 +1001,9 @@ class CodexAppServerOpenAiSubscription(
                 "mcpToolCall" -> {
                     val result = item["result"] as? JsonObject
                     emit(CodingEvent.ToolFinished(if (item.string("server") == "magicpaper_computer") "computer" else "${item.string("server")}:${item.string("tool")}",
-                        isError = item.string("status") in listOf("failed", "declined") || result?.get("isError") == JsonPrimitive(true),
+                        isError = checkNotNull(terminal).isError,
                         callId = id,
+                        phase = terminal.phase,
                         resultPreview = (result?.get("content") as? JsonArray).orEmpty().mapNotNull { block ->
                             (block as? JsonObject)?.takeIf { it.string("type") == "text" }?.string("text")
                         }.joinToString("\n").ifBlank { (item["error"] as? JsonObject)?.string("message").orEmpty() }.take(2000),
@@ -976,27 +1018,30 @@ class CodexAppServerOpenAiSubscription(
                     if (summary.isNotBlank()) emit(CodingEvent.FinalThinking(summary, id, summary = true))
                     if (content.isNotBlank()) emit(CodingEvent.FinalThinking(content, id))
                 }
-                "commandExecution" -> emit(
-                    CodingEvent.ToolFinished(
-                        // Keep the start identity even if the final item omits or revises its actions.
-                        tool = commandTool(started ?: item),
-                        isError = item.string("status") in listOf("failed", "declined"),
-                        callId = id,
-                        resultPreview = item.string("aggregatedOutput").orEmpty(),
-                    ),
-                )
+                // Keep the start identity even if the final item omits or revises its actions.
+                "commandExecution" -> emit(checkNotNull(terminal).copy(tool = commandTool(started ?: item)))
                 "fileChange" -> emit(
                     CodingEvent.ToolFinished(
                         tool = "edit",
-                        isError = item.string("status") in listOf("failed", "declined"),
+                        isError = checkNotNull(terminal).isError,
                         callId = id,
+                        phase = terminal.phase,
                         resultPreview = fileSummary(item),
                     ),
                 )
             }
+            if (turnCompleted) finish(null)
         }
 
-        fun finish(error: String?, confirmed: Boolean = true) {
+        @Synchronized fun finish(error: String?, confirmed: Boolean = true, interrupted: Boolean = false) {
+            if (closed) return
+            // A native background command can outlive the model's final message. Keep its client,
+            // process ownership and event collector alive until the actual tool result arrives.
+            if (confirmed && error.isNullOrBlank() && !interrupted) {
+                turnCompleted = true
+                if (items.values.any { it.string("type") in setOf("commandExecution", "fileChange", "mcpToolCall", "webSearch") }) return
+            }
+            closed = true
             items.values.filter { it.string("type") == "contextCompaction" }.forEach {
                 emit(CodingEvent.Compaction(CompactionStatus(it.string("id").orEmpty(),
                     if (error.isNullOrBlank()) CompactionPhase.CANCELLED else CompactionPhase.FAILED)))

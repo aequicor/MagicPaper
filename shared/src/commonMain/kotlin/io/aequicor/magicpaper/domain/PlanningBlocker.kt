@@ -15,12 +15,13 @@ internal data class PlanningBlocker(
     val issue: PlanningIssue,
     val stage: Milestone? = null,
     val attempt: StageAttempt? = null,
+    val runId: String = "",
 ) {
     private val acceptance: AcceptanceRecord? get() = attempt?.acceptanceRecord.takeIf { issue.kind == IssueKind.VERIFICATION }
     val needsWorker: Boolean get() = issue.kind == IssueKind.VERIFICATION && (acceptance == null || acceptance?.canRetryWithWorker == true)
     val canSkipVerification: Boolean get() = issue.kind == IssueKind.VERIFICATION && acceptance?.canSkipByUser == true &&
         attempt?.phase == AttemptPhase.VERIFYING && attempt.pendingTool.isBlank() && !attempt.pendingToolExternal && attempt.mergePhase == null
-    val messageId: String get() = "$planId-blocked-${stage?.id ?: "plan"}-${attempt?.id.orEmpty()}-${attempt?.repairRetries ?: 0}-${issue.hashCode()}"
+    val messageId: String get() = "$planId-blocked-$runId-${stage?.id ?: "plan"}-${attempt?.id.orEmpty()}-${attempt?.sessionGeneration ?: 0}-${attempt?.turnIndex ?: 0}-${attempt?.repairRetries ?: 0}-${issue.hashCode()}"
     val title: String get() = when {
         acceptance?.status == AcceptanceStatus.PARTIAL && stage != null -> "Этап «${stage.title}»: не хватает подтверждений"
         acceptance?.status == AcceptanceStatus.PARTIAL -> "Итоговая проверка: не хватает подтверждений"
@@ -69,11 +70,11 @@ internal fun Plan.blockingIssues(history: List<CodingMessage>): List<PlanningBlo
     if (phase == ExecutionPhase.COMPLETE) return emptyList()
     val blockers = selectedMilestones.filterNot { it.completed }.mapNotNull { stage ->
         val attempt = stage.attempts.lastOrNull()
-        attempt?.error?.takeIf { it.requiresUser }?.let { PlanningBlocker(id, it, stage, attempt) }
+        attempt?.error?.takeIf { it.requiresUser }?.let { PlanningBlocker(id, it, stage, attempt, runId) }
     }.toMutableList()
-    finalAttempt?.error?.takeIf { it.requiresUser }?.let { blockers += PlanningBlocker(id, it, attempt = finalAttempt) }
+    finalAttempt?.error?.takeIf { it.requiresUser }?.let { blockers += PlanningBlocker(id, it, attempt = finalAttempt, runId = runId) }
     issue?.takeIf { it.requiresUser && blockers.none { b -> b.issue.kind == it.kind && b.issue.message == it.message } }
-        ?.let { blockers += PlanningBlocker(id, it) }
+        ?.let { blockers += PlanningBlocker(id, it, runId = runId) }
     val answered = history.mapNotNull { it.planning?.replyTo }.toSet()
     val questions = history.filter { it.id !in answered && it.planning?.planId == id && it.planning.questions.isNotEmpty() }
     return blockers.filter { blocker ->

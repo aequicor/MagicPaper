@@ -116,6 +116,7 @@ import kotlinx.serialization.Serializable
     val id: String,
     val binding: SessionLegacyAttempt,
     val expectedVersion: Long,
+    val requestedBinding: SessionLegacyAttempt = binding,
 )
 
 @Serializable data class ImmunityDiagnosis(

@@ -52,7 +52,7 @@ class CodexCommandActionsTest {
             val item = command("c", actions)
             assertEquals("command", assertIs<CodingEvent.ToolStarted>(f.item("item/started", item).single()).tool, actions)
             assertEquals("command", assertIs<CodingEvent.ToolProgress>(f.delta("c", "output").single()).tool, actions)
-            assertEquals("command", assertIs<CodingEvent.ToolFinished>(f.item("item/completed", item).single()).tool, actions)
+            assertEquals("command", assertIs<CodingEvent.ToolFinished>(f.item("item/completed", command("c", actions, "completed")).single()).tool, actions)
         }
     }
 
@@ -70,8 +70,8 @@ class CodexCommandActionsTest {
             val declined = assertIs<CodingEvent.ToolFinished>(f.item("item/completed", command("shell", null, "declined")).single())
             assertEquals("command", declined.tool)
             assertTrue(declined.isError)
-            f.item("item/started", command("read", """[{"type":"read"}]"""))
-            assertEquals("new", assertIs<CodingEvent.ToolProgress>(f.delta("read", "new").single()).resultPreview)
+            f.item("item/started", command("read-next", """[{"type":"read"}]"""))
+            assertEquals("new", assertIs<CodingEvent.ToolProgress>(f.delta("read-next", "new").single()).resultPreview)
         }
     }
 
@@ -100,7 +100,7 @@ class CodexCommandActionsTest {
         Fixture().use { f ->
             val edit = Json.parseToJsonElement("""{"id":"edit","type":"fileChange","changes":[{"path":"source.kt","kind":{"type":"update"},"diff":"+line"}]}""").jsonObject
             assertEquals("edit", assertIs<CodingEvent.ToolStarted>(f.item("item/started", edit).single()).tool)
-            assertEquals("edit", assertIs<CodingEvent.ToolFinished>(f.item("item/completed", edit).single()).tool)
+            assertEquals("edit", assertIs<CodingEvent.ToolFinished>(f.item("item/completed", JsonObject(edit + ("status" to JsonPrimitive("completed")))).single()).tool)
             val recorder = CodingRunRecorder()
             f.item("item/started", command("c", """[{"type":"read"}]""")).forEach { recorder.apply(it) }
             f.receive("turn/completed", buildJsonObject { putJsonObject("turn") { put("id", "turn"); put("status", "interrupted") } })
@@ -113,6 +113,7 @@ class CodexCommandActionsTest {
     private fun command(id: String, actions: String?, status: String = "inProgress", output: String = "") = buildJsonObject {
         put("id", id); put("type", "commandExecution"); put("command", "cat source.kt")
         put("status", status); put("aggregatedOutput", output)
+        if (status == "completed") put("exitCode", 0)
         if (actions != null) put("commandActions", Json.parseToJsonElement(actions))
     }
 
