@@ -620,7 +620,7 @@ class PlanningExecutionServiceTest {
         var failures = 0
         val verifier = object : MilestoneVerifier {
             override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) =
-                if (milestone.id == "a" && failures++ < 4) Verdict(false, "Another scenario remains") else Verdict(true, "All scenarios checked")
+                if (milestone.id == "a" && failures++ < 4) Verdict(false, "Another scenario $failures remains") else Verdict(true, "All scenarios checked")
         }
         val (store, service, runtime) = fixture(verifier = verifier, retryLimit = null)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1_000); runCurrent()
@@ -677,14 +677,14 @@ class PlanningExecutionServiceTest {
         assertEquals(1, runtime.calls.size)
     }
 
-    @Test fun failedChecksHaveOnlyTwoRepairs() = runTest {
+    @Test fun identicalFailureStopsAfterOneRepair() = runTest {
         val fail = object : MilestoneVerifier {
             override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(false, "Test failed")
         }
         val (store, service, runtime) = fixture(verifier = fail, retryLimit = 2)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
-        assertEquals(3, runtime.calls.size)
-        assertEquals(2, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
+        assertEquals(2, runtime.calls.size)
+        assertEquals(1, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
     }
 
@@ -694,7 +694,7 @@ class PlanningExecutionServiceTest {
             override suspend fun review(milestone: Milestone, criteria: List<AcceptanceCriterion>, goal: String, report: String, profile: LlmProfile?): AcceptanceReview {
                 val status = if (milestone.id == "a" && reviews++ == 0) CheckStatus.NOT_RUN else CheckStatus.PASS
                 return AcceptanceReview(criteria.map { AcceptanceFinding(it.id, status, it.description,
-                    if (status == CheckStatus.NOT_RUN) "Provide the layout source and check output" else "Source and checks reviewed") })
+                    if (status == CheckStatus.NOT_RUN) "Provide the layout source and check output" else "Source and checks reviewed", recovery = AcceptanceRecovery.EVIDENCE) })
             }
         }
         val (store, service, runtime) = fixture(verifier = verifier)
@@ -710,21 +710,21 @@ class PlanningExecutionServiceTest {
         assertEquals(AcceptanceStatus.ACCEPTED, attempt.acceptanceRecord?.status)
     }
 
-    @Test fun missingReviewEvidenceExhaustsTwoRepairsWithoutAcceptingTheStage() = runTest {
+    @Test fun repeatedMissingEvidenceStopsWithoutAcceptingTheStage() = runTest {
         val verifier = object : MilestoneVerifier by pass {
             override suspend fun review(milestone: Milestone, criteria: List<AcceptanceCriterion>, goal: String, report: String, profile: LlmProfile?) =
-                AcceptanceReview(criteria.map { AcceptanceFinding(it.id, CheckStatus.NOT_RUN, it.description, "No source evidence") })
+                AcceptanceReview(criteria.map { AcceptanceFinding(it.id, CheckStatus.NOT_RUN, it.description, "No source evidence", recovery = AcceptanceRecovery.EVIDENCE) })
         }
         val (store, service, runtime) = fixture(verifier = verifier, retryLimit = 2)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
         val saved = store.planFor(project.id)!!
-        assertEquals(3, runtime.calls.size)
-        assertEquals(2, saved.milestones.single().attempts.single().repairRetries)
+        assertEquals(2, runtime.calls.size)
+        assertEquals(1, saved.milestones.single().attempts.single().repairRetries)
         assertEquals(AcceptanceStatus.PARTIAL, saved.milestones.single().attempts.single().acceptanceRecord?.status)
         assertTrue(saved.issue!!.requiresUser)
         service.retry(project.id); advanceTimeBy(1000); runCurrent()
-        assertEquals(4, runtime.calls.size)
-        assertEquals(2, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
+        assertEquals(3, runtime.calls.size)
+        assertEquals(1, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
     }
 
     @Test fun registeredCheckFailureCanBeRepairedByTheWorker() = runTest {
@@ -749,12 +749,12 @@ class PlanningExecutionServiceTest {
         }
         val (store, service, runtime) = fixture(verifier = fail, retryLimit = 2)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
-        assertEquals(3, runtime.calls.size)
+        assertEquals(2, runtime.calls.size)
         service.retry(project.id); advanceTimeBy(1000); runCurrent()
-        assertEquals(4, runtime.calls.size)
+        assertEquals(3, runtime.calls.size)
         val attempt = store.planFor(project.id)!!.milestones.single().attempts.single()
         assertContains(attempt.prompt, "Restore permissions")
-        assertEquals(2, attempt.repairRetries)
+        assertEquals(1, attempt.repairRetries)
         assertTrue(store.planFor(project.id)!!.issue!!.requiresUser)
     }
 

@@ -30,6 +30,28 @@ class SessionTreeRuntimeTest {
         return tree
     }
 
+    @Test fun immunityResearchRunsAfterParentStopsWithoutChangingParentOrGrantingControl() = runTest { withContext(Dispatchers.Default) {
+        val f = SessionOrganismTestFixture(); f.initialize()
+        val tree = connect(f, Runtime { emit(CodingEvent.Finished) })
+        val id = f.root.organismId!!
+        f.store.requestUserStop(id, f.root.id, "stop-root", archive = false)
+        f.store.observe(id, f.root.id, f.root.runtimeGeneration, SessionObservedState.STOPPED)
+        val parent = f.store.get(id).sessions.getValue(f.root.id)
+        val immunity = f.projects.sessions(f.project.id).single { it.sessionKind == SessionKind.IMMUNITY }
+        repeat(2) {
+            tree.withScope(immunity) { admitted ->
+                assertEquals(CodingInteractionMode.RESEARCH, admitted.interactionMode)
+                assertTrue(admitted.runtimeGeneration > 0)
+                assertFailsWith<IllegalArgumentException> {
+                    f.store.command(SessionAuthority(f.project.id, id, admitted.id, admitted.runtimeGeneration, admitted.interactionMode),
+                        "bad-control-$it", OrganismCommand(OrganismAction.RESTORE, target = f.root.id, reason = "model wants retry"))
+                }
+            }
+            assertEquals(parent, f.store.get(id).sessions.getValue(f.root.id))
+            assertEquals(SessionObservedState.PENDING, f.store.get(id).sessions.getValue(immunity.id).observed)
+        }
+    } }
+
     @Test fun parentScopeWaitsForActualChildRuntimeAndRecordsInheritedRules() = runTest { withContext(Dispatchers.Default) {
         val f = SessionOrganismTestFixture(); f.initialize()
         val started = CompletableDeferred<CodingSession>(); val finish = CompletableDeferred<Unit>(); val parentReturned = CompletableDeferred<Unit>()

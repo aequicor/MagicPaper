@@ -11,6 +11,28 @@ class AcceptanceTest {
         AcceptanceRecord("run", "attempt", "snapshot", criteria,
             criteria.map { AcceptanceFinding(it.id, status, it.description, "Наблюдение", listOf("report:1")) })
 
+    @Test fun historicalViolationAndUnclassifiedLegacyFailureNeverAuthorizeAutomaticRepair() {
+        for (recovery in listOf(AcceptanceRecovery.OWNER, AcceptanceRecovery.UNAVAILABLE, AcceptanceRecovery.UNSPECIFIED)) {
+            val base = record(status = CheckStatus.FAIL)
+            val result = AcceptanceGate.evaluate(base.copy(findings = base.findings.map { it.copy(recovery = recovery) }), base.criteria, "snapshot")
+            assertNotNull(result.automaticRepairProblem(null))
+            assertFalse(result.permitsProgress)
+            if (recovery != AcceptanceRecovery.UNSPECIFIED) assertFalse(result.canRetryWithWorker)
+        }
+    }
+
+    @Test fun repeatedProblemStopsEvenWhenReportAndSnapshotChangeButNewProblemCanBeRepaired() {
+        val base = record(status = CheckStatus.FAIL)
+        val previous = AcceptanceGate.evaluate(base.copy(findings = base.findings.map {
+            it.copy(recovery = AcceptanceRecovery.WORKER, problemKey = "head-moved")
+        }), base.criteria, "snapshot")
+        val repeated = previous.copy(snapshotId = "new", findings = previous.findings.map { it.copy(observed = "Another wording") })
+        assertNotNull(repeated.automaticRepairProblem(previous))
+        val fresh = repeated.copy(findings = repeated.findings.map { it.copy(problemKey = "different-case") })
+        assertNull(fresh.automaticRepairProblem(previous))
+        assertNull(repeated.copy(runId = "another-run").automaticRepairProblem(previous))
+    }
+
     @Test fun aModelPassCannotReplaceMissingOrWrongEnvironmentHostEvidence() {
         val base = record(listOf(live))
         assertEquals(AcceptanceStatus.PARTIAL, AcceptanceGate.evaluate(base, base.criteria, "snapshot").status)

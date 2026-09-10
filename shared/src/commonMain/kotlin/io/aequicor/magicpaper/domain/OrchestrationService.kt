@@ -870,7 +870,10 @@ class OrchestrationService(
                 require(plan != null && plan.parentSessionId == session.id) { "План недоступен" }
                 val blockers = plan.blockingIssues(projects.messages(session.projectId, session.id))
                 require(request.id == "blocker:${blockers.map { it.messageId }.sorted().joinToString(":")}") { "Причина остановки изменилась" }
-                if ("skip_verification" in answer.selected) {
+                if (("review" in answer.selected || answer.text.isNotBlank() && blockers.any { it.issue.retryBlocked }) && !answer.skipped) {
+                    send(session, "Разбери причины блокировки и предложи безопасные варианты изменения плана. Только обсуждение: не возобновляй выполнение и не меняй критерии.\n\n" +
+                        blockers.joinToString("\n\n") { it.text } + "\n\n" + answer.text)
+                } else if ("skip_verification" in answer.selected) {
                     require(blockers.isNotEmpty() && blockers.all { it.canSkipVerification }) { "Пропуск проверки недоступен" }
                     execution.continueWithoutVerification(plan.id, blockers.map { it.messageId }.toSet())
                     append(session.projectId, session.id, CodingMessage(request.id + "-verification-skipped", CodingRole.USER,
@@ -1023,7 +1026,7 @@ class OrchestrationService(
         if (plan == null) {
             val id = "plan-${input.id}"
             plan = Plan(id, session.projectId, input.text, parentSessionId = session.id, sessionId = session.id,
-                sharedWorkspace = true, plannerSelection = session.modelSelection, engine = session.engine, searchProvider = session.searchProvider,
+                sharedWorkspace = false, plannerSelection = session.modelSelection, engine = session.engine, searchProvider = session.searchProvider,
                 createdAt = input.createdAt, updatedAt = input.createdAt,
                 tree = listOf(DecisionNode("$id-root", input.text, DecisionKind.GOAL)),
                 dialogue = inputHistory(session).filter { it.id != input.id }.map {
@@ -1955,17 +1958,43 @@ class OrchestrationService(
             if (it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex && it.state == DeliveryState.QUEUED)
                 it.copy(state = DeliveryState.DELIVERED) else it
         }) }
-        val count = saved.deliveries.count { it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex }
-        val returning = attempt.turnIndex > 0
+        publishStageDispatch(saved, stage, attempt, attempt.turnIndex,
+            attempt.prompt.ifBlank { stage.description + "\n\nКритерии: " + stage.acceptance }, clock())
+    }
+
+    private suspend fun publishStageDispatch(plan: Plan, stage: Milestone, attempt: StageAttempt, turn: Int, prompt: String, at: Long) {
+        if (prompt.isBlank()) return
+        val count = plan.deliveries.count { it.attemptId == attempt.id && it.turnIndex == turn }
         val route = MessageRoute(address(plan.projectId, plan.parentSessionId), address(plan.projectId, attempt.sessionId),
-            kind = if (returning) "Возврат работы" else "Задание", stageLabel = stage.stageLabel())
-        val text = if (returning) "Оркестратор вернул работу в сессию «${route.target.name}» для продолжения."
+            kind = if (turn > 0) "Возврат работы" else "Задание", stageLabel = stage.stageLabel())
+        val title = if (turn > 0) "Оркестратор вернул работу в сессию «${route.target.name}» для продолжения."
             else "Работа передана исполнителю в сессию «${route.target.name}»."
-        val message = CodingMessage("${attempt.id}-turn-${attempt.turnIndex}-started", CodingRole.AGENT,
-            text + if (count == 0) "" else " Передано сообщений: $count.", createdAt = Id.now(), route = route, systemNotice = true)
+        val id = "${attempt.id}-turn-$turn-started"
+        val text = title + (if (count == 0) "" else " Передано сообщений: $count.") + "\n\n" + prompt
         for (sessionId in listOf(plan.parentSessionId, attempt.sessionId).distinct()) {
-            if (projects.messages(plan.projectId, sessionId).none { it.id == message.id })
-                append(plan.projectId, sessionId, message)
+            if (projects.sessions(plan.projectId).none { it.id == sessionId }) continue
+            val existing = projects.messages(plan.projectId, sessionId).firstOrNull { it.id == id }
+            // Only expand the old application receipt; never reinterpret user messages or another turn.
+            if (existing == null || existing.systemNotice && !existing.text.contains("\n\n"))
+                append(plan.projectId, sessionId, CodingMessage(id, CodingRole.AGENT, text,
+                    createdAt = existing?.createdAt ?: at, route = existing?.route ?: route, systemNotice = true))
+        }
+    }
+
+    override suspend fun verified(plan: Plan, stage: Milestone, attempt: StageAttempt, record: AcceptanceRecord, reviewer: String) {
+        val reviewer = record.reviewer.ifBlank { reviewer }
+        val id = record.reviewId.takeIf(String::isNotBlank)?.let { "verification-$it" }
+            ?: "${attempt.id}-verification-${attempt.turnIndex}-${stage.id}-${record.snapshotId}"
+        val target = plan.parentSessionId.ifBlank { attempt.sessionId }
+        val route = MessageRoute(SessionAddress("", "Проверяющий · $reviewer", "Приёмка"), address(plan.projectId, target),
+            kind = "Решение по приёмке", stageLabel = stage.stageLabel())
+        val text = "Проверяющий: $reviewer\n${record.userSummary()}\n\nВерсия: ${record.snapshotId}\n" +
+            record.findings.joinToString("\n\n") { "${it.criterionId}: ${it.status}\n${it.observed}" }
+        for (sessionId in listOf(target, attempt.sessionId).filter(String::isNotBlank).distinct()) {
+            if (projects.sessions(plan.projectId).none { it.id == sessionId }) continue
+            if (projects.messages(plan.projectId, sessionId).none { it.id == id })
+                append(plan.projectId, sessionId, CodingMessage(id, CodingRole.AGENT, text, createdAt = record.reviewedAt.takeIf { it > 0 } ?: attempt.updatedAt,
+                    origin = MessageOrigin.TOOL, route = route, systemNotice = true))
         }
     }
 
@@ -2313,6 +2342,16 @@ class OrchestrationService(
         val plan = numbered(plan)
         plan.deliveries.forEach { publishDelivery(plan, it) }
         plan.coordination.forEach { publishHandoff(plan, it) }
+        plan.milestones.forEach { stage -> stage.attempts.forEach { attempt ->
+            attempt.chatTurns.forEachIndexed { index, turn ->
+                val prompt = turn.prompt.ifBlank { if (index == attempt.chatTurns.lastIndex) attempt.prompt else "" }
+                publishStageDispatch(plan, stage, attempt, index, prompt, turn.startedAt)
+            }
+            attempt.acceptanceRecord?.let { verified(plan, stage, attempt, it, "модель не сохранена") }
+        } }
+        plan.finalAttempt?.let { attempt -> attempt.acceptanceRecord?.let {
+            verified(plan, Milestone("final", "Итоговая проверка"), attempt, it, "модель не сохранена")
+        } }
         val history = projects.messages(plan.projectId, plan.parentSessionId)
         val existingGraph = history.firstOrNull { it.planning?.planId == plan.id && it.planning.graph }
         plan.dialogue.filter { it.role == "assistant" }.forEach { m ->

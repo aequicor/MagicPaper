@@ -338,6 +338,7 @@ class MagicPaperViewModel(
                         withPlanningState(previous.copy(session = session, messages = histories[session.id] ?: previous.messages))
                     }))
                 }
+                startPendingImmunityDiagnostics()
             }
         } }
         planningChat?.let { service -> scope.launch {
@@ -426,6 +427,7 @@ class MagicPaperViewModel(
         projects.firstOrNull()?.let { project -> openCodingProject(project.id) }
         refreshCodingEngines()
         restoreCodingRuns(projects)
+        startPendingImmunityDiagnostics()
         if (openAiSubscription != null && profiles.any { it.provider == ProviderType.OPENAI_SUBSCRIPTION }) {
             refreshOpenAiSubscription()
         }
@@ -1564,6 +1566,18 @@ class MagicPaperViewModel(
         })
     }
 
+    private fun startPendingImmunityDiagnostics() {
+        val service = planningChat ?: return
+        for (item in _state.value.coding.sessions) {
+            val organism = item.session.organismId?.let { service.organisms?.store?.organisms?.value?.get(it) } ?: continue
+            val signal = organism.nextImmunityResearch(item.session, item.messages) ?: continue
+            if (item.session.id in codingJobs.value || item.running) continue
+            launchCodingRun(item.session, CodingRunCheckpoint("signal-${signal.id}", signal.diagnostic,
+                responseId = "immunity-report-${signal.id}", interactionMode = CodingInteractionMode.RESEARCH),
+                recovering = false, userInitiated = false)
+        }
+    }
+
     private suspend fun restoreCodingRuns(projects: List<CodingProject>) {
         if (codingRuntime?.supported != true) return
         val repo = codingProjects ?: return
@@ -1601,6 +1615,17 @@ class MagicPaperViewModel(
             val history = repo.messages(session.projectId, session.id)
             if (history.none { it.id == message.id }) repo.saveMessages(session.projectId, session.id, history + message)
         }
+        if (session.sessionKind == SessionKind.IMMUNITY && message.id.startsWith("immunity-report-")) {
+            val organism = session.organismId?.let { planningChat?.organisms?.store?.organisms?.value?.get(it) }
+            val signal = organism?.signals?.firstOrNull { "immunity-report-${it.id}" == message.id }
+            if (signal != null && signal.sender !in organism.historyDeletedIds) {
+                val recipient = repo.sessions(session.projectId).firstOrNull { it.id == signal.sender }
+                if (recipient != null) planningChat?.append(session.projectId, recipient.id, message.copy(
+                    id = message.id + "-received", origin = MessageOrigin.SESSION,
+                    route = MessageRoute(SessionAddress(session.id, session.name, "Иммунитет"),
+                        SessionAddress(recipient.id, recipient.name, "Сессия"), kind = "Результат диагностики")))
+            }
+        }
         val history = repo.messages(session.projectId, session.id)
         updateCodingSession(session.id) {
             val savedDraft = message.timelineId != null && message.timelineId == it.draft.timelineId
@@ -1615,7 +1640,7 @@ class MagicPaperViewModel(
         // are being cleaned up. Its finally block releases this entry.
         if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value) return
         val recorder = CodingRunRecorder()
-        var request = checkpoint.copy(responseId = Id.new())
+        var request = checkpoint.copy(responseId = checkpoint.responseId.ifBlank { Id.new() })
         val job = scope.launch(workerDispatcher, start = CoroutineStart.LAZY) {
             try {
                 if (userInitiated) planningChat?.prepareManagedUserTurn(session, checkpoint.messageId)
@@ -1633,7 +1658,11 @@ class MagicPaperViewModel(
                 if (recovering) runtime.reconcile(session.id)
                 var prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                     "результаты команд и состояние файлов; учитывай уже сделанное и не повторяй завершённые действия.\n\n" + request.prompt else request.prompt
-                if (current.needsHistorySeed) {
+                if (current.sessionKind == SessionKind.IMMUNITY) {
+                    prompt = immunityResearchPrompt(prompt, planningChat?.organisms?.store?.organisms?.value?.get(current.organismId),
+                        planningChat?.store?.plans?.value.orEmpty())
+                }
+                if (current.needsHistorySeed || current.sessionKind == SessionKind.IMMUNITY) {
                     prompt = researchContextSeed(codingProjects!!.messages(project.id, session.id),
                         codingProfileOf(current)?.advanced?.contextMessages ?: 20, request.messageId) + prompt
                 }
@@ -1678,7 +1707,7 @@ class MagicPaperViewModel(
                 // Keep cleanup atomic with respect to UI starts. A shutdown hook can
                 // run while AWT is exiting, so shutdown must not wait for the UI thread.
                 if (closing) clearRun()
-                else withContext(NonCancellable + Dispatchers.Main.immediate) { clearRun() }
+                else withContext(NonCancellable + Dispatchers.Main.immediate) { clearRun(); startPendingImmunityDiagnostics() }
                 withContext(NonCancellable) {
                     runCatching { refreshProjectStatus(project.id) }.onFailure { failure ->
                         _state.update { it.copy(notice = "Не удалось прочитать состояние сессии: ${failure.message}") }

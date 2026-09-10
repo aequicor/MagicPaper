@@ -669,13 +669,32 @@ class SessionOrganismService(
         }
         if (missing.isNotEmpty() && organism.immunityId !in organism.historyDeletedIds)
             projects.saveMessages(organism.projectId, organism.immunityId, immunityMessages + missing)
+        // Project the exact signal at its source, and repair a crash between saving a research
+        // reply and delivering it back. Deterministic IDs never re-run the model.
+        val researched = projects.messages(organism.projectId, organism.immunityId)
+        for (signal in organism.signals) {
+            if (signal.sender in organism.historyDeletedIds) continue
+            val source = organism.sessions[signal.sender] ?: continue
+            val route = MessageRoute(SessionAddress(source.id, source.name, "Сессия"),
+                SessionAddress(organism.immunityId, "Иммунитет", "Иммунитет"), kind = "Диагностический сигнал")
+            var history = projects.messages(organism.projectId, source.id)
+            val sentId = "sent-signal-${signal.id}"
+            if (history.none { it.id == sentId }) history = history + CodingMessage(sentId, CodingRole.AGENT,
+                signal.diagnostic, createdAt = signal.createdAt, origin = MessageOrigin.SESSION, route = route)
+            researched.firstOrNull { it.id == "immunity-report-${signal.id}" }?.let { report ->
+                val receivedId = report.id + "-received"
+                if (history.none { it.id == receivedId }) history = history + report.copy(id = receivedId,
+                    origin = MessageOrigin.SESSION, route = MessageRoute(route.target, route.source, kind = "Результат диагностики"))
+            }
+            if (history != projects.messages(organism.projectId, source.id)) projects.saveMessages(organism.projectId, source.id, history)
+        }
         organism.diagnoses.forEach { diagnosis ->
             (diagnosis.affected + organism.immunityId).filterNot { it in organism.historyDeletedIds }.forEach { sessionId ->
                 val history = projects.messages(organism.projectId, sessionId)
                 val messageId = "diagnosis-${diagnosis.signalId}-$sessionId"
                 if (history.none { it.id == messageId }) projects.saveMessages(organism.projectId, sessionId, history + CodingMessage(
                     messageId, CodingRole.AGENT,
-                    if (diagnosis.evidence.isEmpty()) "Иммунитет: оснований для вмешательства не найдено."
+                    if (diagnosis.evidence.isEmpty()) "Автоматическая проверка состояния: оснований для карантина не найдено. Содержание обращения требует отдельной диагностики."
                     else "Иммунитет: карантин. ${diagnosis.evidence.joinToString("; ")}", createdAt = diagnosis.createdAt,
                     origin = MessageOrigin.TOOL, systemNotice = true))
             }
@@ -684,7 +703,10 @@ class SessionOrganismService(
             val history = projects.messages(organism.projectId, sessionId)
             val updated = history.map { message ->
                 val delivery = organism.outbox.firstOrNull { it.id == message.deliveryId }
-                if (delivery == null || message.route == null) message else message.copy(route = message.route.copy(sessionDeliveryState = delivery.state))
+                if (delivery == null || message.route == null) message else message.copy(
+                    route = message.route.copy(sessionDeliveryState = delivery.state),
+                    text = if (message.id == "sent-${delivery.id}" && message.contextPacket == null) delivery.packet.text else message.text,
+                    contextPacket = if (message.id == "sent-${delivery.id}") delivery.packet else message.contextPacket)
             }
             if (updated != history) projects.saveMessages(organism.projectId, sessionId, updated)
         }
@@ -714,8 +736,8 @@ class SessionOrganismService(
                 }
                 append(recipient.id, CodingMessage("context-${delivery.id}", CodingRole.USER, delivery.packet.text,
                     createdAt = Id.now(), deliveryId = delivery.id, route = route, origin = MessageOrigin.SESSION, contextPacket = delivery.packet))
-                append(source.id, CodingMessage("sent-${delivery.id}", CodingRole.AGENT, "Контекст доставлен в сессию «${recipient.name}».",
-                    createdAt = Id.now(), deliveryId = delivery.id, route = route, origin = MessageOrigin.TOOL))
+                append(source.id, CodingMessage("sent-${delivery.id}", CodingRole.AGENT, delivery.packet.text,
+                    createdAt = Id.now(), deliveryId = delivery.id, route = route, origin = MessageOrigin.TOOL, contextPacket = delivery.packet))
                 store.acknowledge(organism.id, delivery.id, recipient.id, delivery.recipientGeneration, processed = false)
             }
         }

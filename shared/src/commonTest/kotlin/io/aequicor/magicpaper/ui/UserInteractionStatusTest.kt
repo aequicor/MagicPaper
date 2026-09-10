@@ -12,6 +12,16 @@ class UserInteractionStatusTest {
     private fun CodingUi.project(requests: List<UserInteractionRequest>) = copy(interactions = requests,
         sessions = sessions.map { item -> item.copy(interactions = requests.filter { it.affects(item.session) }) })
 
+    @Test fun ownerDecisionOffersDiscussionInsteadOfRepeatingTheWorker() {
+        val issue = PlanningIssue(IssueKind.VERIFICATION, "HEAD already moved; a new commit cannot undo the incident", requiresUser = true, retryBlocked = true)
+        val stage = Milestone("stage", "Delivery", attempts = listOf(StageAttempt("a", worker.id, StageAssignment("p", "m"), error = issue)))
+        val blocked = plan.copy(milestones = listOf(stage), phase = ExecutionPhase.WAITING, issue = issue)
+        val request = interactionCandidates(CodingUi(sessions = listOf(CodingSessionUi(parent), CodingSessionUi(worker))),
+            listOf(blocked), emptyMap(), emptyMap()).single()
+        assertEquals(listOf("review", "leave"), request.questions.single().options.map { it.id })
+        assertContains(request.details, "HEAD already moved")
+    }
+
     @Test fun childRuntimeQuestionBelongsToItsCreatorAndDoesNotSuspendParentOrSibling() {
         val sibling = worker.copy(id = "sibling")
         val ui = CodingUi(sessions = listOf(CodingSessionUi(parent), CodingSessionUi(worker), CodingSessionUi(sibling)))

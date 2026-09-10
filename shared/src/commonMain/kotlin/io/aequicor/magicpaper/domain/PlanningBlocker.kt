@@ -31,7 +31,7 @@ internal data class PlanningBlocker(
         stage != null -> "Этап «${stage.title}» остановлен"
         else -> "Выполнение плана остановлено"
     }
-    val text: String get() = "$title.\n\n${acceptance?.userSummary() ?: issue.message}"
+    val text: String get() = "$title.\n\n${if (issue.retryBlocked) issue.message else acceptance?.userSummary() ?: issue.message}"
 }
 
 internal fun List<PlanningBlocker>.recoveryActionLabel(): String = when {

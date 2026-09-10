@@ -445,7 +445,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     suspend fun prepareUserTurn(id: String, sessionId: String, requestId: String): SessionOrganism = lock.withLock {
         val old = read(id); val node = old.sessions.getValue(sessionId)
         if (node.desired != SessionDesiredState.STOP || node.observed != SessionObservedState.STOPPED) return@withLock old
-        require(node.kind == SessionKind.ZYGOTE && !node.archived && !old.stoppedByUser) { "Сначала восстановите рабочую область" }
+        require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) && !node.archived && !old.stoppedByUser) { "Сначала восстановите рабочую область" }
         require(old.subtree(sessionId).all { old.sessions.getValue(it).settled }) { "Остановка поддерева ещё не подтверждена" }
         require(old.audit.none { it.action == "QUARANTINE" && sessionId in it.affected }) { "Сначала проверьте фактический исход операции" }
         require(old.hasTokenBudget() && old.withinDuration()) { "Бюджет организма исчерпан; создайте новую сессию" }
@@ -459,13 +459,14 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     suspend fun beginRun(id: String, sessionId: String): SessionNode = lock.withLock {
         val old = read(id); val node = old.sessions.getValue(sessionId)
         require(old.deletedAt == null && sessionId !in old.historyDeletedIds) { "Сессия удалена пользователем" }
-        require(!old.stoppedByUser && !node.archived && node.kind != SessionKind.IMMUNITY) { "Сессия остановлена" }
+        require(!old.stoppedByUser && !node.archived) { "Сессия остановлена" }
+        require(node.kind != SessionKind.IMMUNITY || node.mode == CodingInteractionMode.RESEARCH) { "Диагностика доступна только в режиме исследования" }
         require(node.desired == SessionDesiredState.RUN) { "Возобновление требует явного восстановления" }
         require(old.withinDuration() && old.hasTokenBudget()) { "Бюджет или время организма исчерпаны" }
         require(node.observed != SessionObservedState.UNKNOWN && node.observed != SessionObservedState.STOPPING) { "Сначала сверяйте незавершённый запуск" }
         require(old.auxiliaryRuns.values.none { it.ownerSessionId == sessionId && !it.settled }) { "Сначала остановите вспомогательные запуски владельца" }
-        require(node.kind == SessionKind.ZYGOTE || node.acceptsWork) { "Восстановите сессию через родителя" }
-        val lineage = old.route(sessionId, old.zygoteId)
+        require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) || node.acceptsWork) { "Восстановите сессию через родителя" }
+        val lineage = if (node.kind == SessionKind.IMMUNITY) listOf(sessionId) else old.route(sessionId, old.zygoteId)
         require(old.limits.depth.allows(lineage.size)) { "Достигнута глубина дерева" }
         lineage.drop(1).forEach { require(old.sessions.getValue(it).acceptsWork) { "Рабочая область родителя закрыта" } }
         // Legacy history can contain more pending nodes than today's admission limits.
@@ -511,7 +512,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         val action = if (archive) OrganismAction.ARCHIVE else OrganismAction.STOP
         commit(old.copy(version = old.version + 1, sessions = old.sessions.mapValues { (sessionId, node) ->
             if (sessionId !in affected) node else node.copy(desired = SessionDesiredState.STOP,
-                observed = if (node.settled || node.kind == SessionKind.IMMUNITY) SessionObservedState.STOPPED else SessionObservedState.STOPPING,
+                observed = if (node.settled || (node.kind == SessionKind.IMMUNITY && node.observed == SessionObservedState.PENDING)) SessionObservedState.STOPPED else SessionObservedState.STOPPING,
                 version = node.version + 1)
         }, operations = old.operations + (operationId to OrganismOperation(operationId, "USER:$action:$target", target, SessionOperationState.ACCEPTED)),
             audit = old.audit + SessionAuditEvent(operationId, "USER", action.name, affected, "Действие пользователя", clock()),
@@ -561,6 +562,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             val targetId = if (command.action == OrganismAction.CREATE) "session-$operationId" else command.target
             requireTool(targetId !in old.historyDeletedIds) { "История адресата удалена пользователем" }
             val target = old.sessions[targetId]
+            requireTool(actor.kind != SessionKind.IMMUNITY) { "Диагностический запуск не управляет сессиями. Передайте выводы пользователю." }
             val supervisor = actor.kind == SessionKind.IMMUNITY
             fun requireChild() { requireTool(target != null && (target.authorityParentId == actor.id || (supervisor && target.kind != SessionKind.IMMUNITY))) { "Разрешены только непосредственные дети" } }
             var next = old
@@ -668,7 +670,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                 OrganismAction.SIGNAL -> {
                     requireTool(target != null && target.kind != SessionKind.IMMUNITY && command.reason.isNotBlank()) { "Укажите сессию и диагностический сигнал" }
                     requireTool(old.limits.queueSize.hasRoom(old.signals.count { signal -> old.diagnoses.none { it.signalId == signal.id } })) { "Очередь сигналов заполнена" }
-                    next = old.copy(signals = old.signals + ImmunitySignal(operationId, actor.id, targetId, PlanningDiagnostics.redact(command.reason).takeConfigured(old.limits.contextCharacters), clock()))
+                    next = old.copy(signals = old.signals + ImmunitySignal(operationId, actor.id, targetId, PlanningDiagnostics.redact(command.reason).takeConfigured(old.limits.contextCharacters), clock(), requestResearch = true))
                     affected = setOf(targetId, old.immunityId)
                 }
             }

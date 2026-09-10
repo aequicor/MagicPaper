@@ -106,7 +106,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
         require(proposal.reply.isNotBlank()) { "Нет вопросов или объяснения оркестратора" }
         val dialogue = (if (plan.dialogue.lastOrNull()?.let { it.role == "user" && it.text == message } == true) plan.dialogue
             else plan.dialogue + PlanningMessage(Id.new(), "user", message)) + PlanningMessage(Id.new(), "assistant", proposal.reply, questions = proposal.questions, questionStageIds = proposal.questionStageIds)
-        if (proposal.tree.isEmpty()) return plan.copy(dialogue = dialogue, wizardStep = PlanningStep.CLARIFY, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace)
+        if (proposal.tree.isEmpty()) return plan.copy(dialogue = dialogue, wizardStep = PlanningStep.CLARIFY, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace == true) false else plan.sharedWorkspace)
         val existing = plan.milestones.associateBy { it.id }
         val bound = proposal.milestones.map { stage ->
             val old = existing[stage.id]
@@ -122,7 +122,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 n.copy(selectedOptionId = old.selectedOptionId, manualSelection = true)
             } ?: n.copy(manualSelection = false)
         }
-        val updated = recommendChoices(plan.copy(tree = nodes, milestones = bound, dialogue = dialogue, wizardStep = PlanningStep.REVIEW, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace != null) !proposal.isolatedWorkspace else plan.sharedWorkspace))
+        val updated = recommendChoices(plan.copy(tree = nodes, milestones = bound, dialogue = dialogue, wizardStep = PlanningStep.REVIEW, sharedWorkspace = if (plan.confirmedRevision == null && proposal.isolatedWorkspace == true) false else plan.sharedWorkspace))
         DecisionCompiler.validateEdit(plan, updated)
         require(updated.milestones.all { it.title.isNotBlank() && it.acceptance.isNotBlank() }) { "Каждому этапу нужны название и критерии проверки" }
         val unavailable = updated.milestones.flatMap { stage -> stage.acceptanceCriteria.filter { criterion ->

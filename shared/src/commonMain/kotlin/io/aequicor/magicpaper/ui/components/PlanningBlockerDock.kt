@@ -38,7 +38,7 @@ internal fun PlanningBlockerCard(
                     blockers.forEach { PaperText(it.text) }
                 }
             }
-            PaperButton(blockers.recoveryActionLabel(), onRetry, enabled = !busy)
+            if (blockers.none { it.issue.retryBlocked }) PaperButton(blockers.recoveryActionLabel(), onRetry, enabled = !busy)
         }
     }
 }

@@ -144,6 +144,32 @@ class PlanningChatServiceTest {
         CodingUi(sessions = listOf(CodingSessionUi(parent, projects.messages(project.id, parent.id)))),
         store.plans.value, service.states.value, service.persistenceErrors.value)
 
+    @Test fun dispatchAndReviewerDecisionRetainFullTextAtBothEndsAndDeduplicateReplay() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val base = f.readyPlan("p", f.session("parent"))
+        val stage = base.milestones.single()
+        val prompt = "Investigate the failed criterion\nExact message from the parent\nDo not change HEAD"
+        val attempt = StageAttempt("attempt", "plan-p-stage-stage", StageAssignment("model", "m"),
+            turnIndex = 1, prompt = prompt, chatTurns = listOf(StageChatTurn(0, 1), StageChatTurn(0, 2, prompt = prompt)))
+        val plan = base.copy(confirmedRevision = 1, milestones = listOf(stage.copy(attempts = listOf(attempt))))
+        f.store.save(plan); f.service.prepareSessions(plan)
+        f.service.started(plan, stage, attempt)
+        val criterion = stage.criteria().single()
+        val record = AcceptanceRecord("run", attempt.id, "snapshot", listOf(criterion),
+            listOf(AcceptanceFinding(criterion.id, CheckStatus.FAIL, criterion.description, "Historical HEAD violation", recovery = AcceptanceRecovery.OWNER)),
+            status = AcceptanceStatus.FAILED, reviewId = "review-1", reviewer = "review-model", reviewedAt = 3)
+        repeat(2) { f.service.verified(plan, stage, attempt, record, "wrong-current-model") }
+        for (id in listOf("parent", attempt.sessionId)) {
+            val history = f.projects.messages(project.id, id)
+            assertContains(history.single { it.id == "attempt-turn-1-started" }.text, prompt)
+            val decision = history.single { it.id == "verification-review-1" }
+            assertContains(decision.text, "review-model")
+            assertContains(decision.text, "Historical HEAD violation")
+            assertEquals("Решение по приёмке", decision.route?.kind)
+        }
+        assertTrue(f.runtime.calls.isEmpty())
+    }
+
     @Test fun explicitVerificationSkipIsRoutedWithoutAskingTheModelAndRecordedInHistory() = runTest {
         val f = Fixture(this); f.initialize()
         val parent = f.session("parent")
@@ -464,8 +490,8 @@ class PlanningChatServiceTest {
         f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
         val blocked = f.store.planFor(plan.id)!!
         val worker = f.projects.sessions(project.id).single { it.stageId != null }
-        assertEquals(3, f.runtime.calls.size)
-        assertEquals(2, blocked.milestones.single().attempts.single().repairRetries)
+        assertEquals(2, f.runtime.calls.size)
+        assertEquals(1, blocked.milestones.single().attempts.single().repairRetries)
         val history = f.projects.messages(project.id, parent.id)
         assertNull(history.pendingPlanningQuestion())
         assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(parent, history, plan = blocked)))
@@ -473,18 +499,18 @@ class PlanningChatServiceTest {
         assertContains(notice.text, reason)
         assertEquals(notice, f.projects.messages(project.id, worker.id).single { it.id == notice.id })
         val restored = JsonPlanningRepository(f.kv, json).planFor(plan.id)!!
-        assertEquals(reason, restored.blockingIssues(history).single().issue.message)
+        assertContains(restored.blockingIssues(history).single().issue.message, reason)
         f.store.update(plan.id) { it }; runCurrent()
         assertEquals(history, f.projects.messages(project.id, parent.id))
 
         f.verdict = Verdict(true, "Исправления проверены")
         f.service.control(plan.id, "retry"); advanceTimeBy(1000); runCurrent()
-        assertEquals(4, f.runtime.calls.count { it.first.id == worker.id })
+        assertEquals(3, f.runtime.calls.count { it.first.id == worker.id })
         assertContains(f.runtime.calls.last { it.first.id == worker.id }.second, reason)
         val completed = f.store.planFor(plan.id)!!
         assertEquals(PlanStatus.DONE, completed.status)
         assertEquals(1, completed.milestones.size)
-        assertEquals(2, completed.milestones.single().attempts.single().repairRetries)
+        assertEquals(1, completed.milestones.single().attempts.single().repairRetries)
         assertTrue(completed.blockingIssues(f.projects.messages(project.id, parent.id)).isEmpty())
     }
 
@@ -679,7 +705,7 @@ class PlanningChatServiceTest {
         assertEquals(PlanStatus.DONE, completed.status)
         assertEquals(1, completed.milestones.size)
         assertEquals("stage", completed.deliveries.single().targetStageId)
-        assertEquals(4, f.runtime.calls.count { it.first.id == workerId })
+        assertEquals(3, f.runtime.calls.count { it.first.id == workerId })
         assertContains(f.runtime.calls.last { it.first.id == workerId }.second, "Добавь проверку восстановления разрешений")
         assertContains(f.runtime.calls.last { it.first.id == workerId }.second, "Нужно проверить откат разрешений")
     }
@@ -1170,7 +1196,7 @@ class PlanningChatServiceTest {
         f.projects.saveMessages(project.id, session.id, listOf(CodingMessage("history", CodingRole.USER, "Existing context", createdAt = 1)))
         f.service.send(session, "Make an editor"); runCurrent()
         val plan = f.store.plans.value.single()
-        assertTrue(plan.sharedWorkspace)
+        assertFalse(plan.sharedWorkspace)
         assertTrue(plan.dialogue.any { it.text == "Existing context" })
         val question = plan.dialogue.last()
         assertEquals(listOf(QuestionKind.SINGLE, QuestionKind.MULTIPLE, QuestionKind.TEXT), question.questions.map { it.kind })

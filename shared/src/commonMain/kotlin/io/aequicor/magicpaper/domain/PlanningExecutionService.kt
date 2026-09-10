@@ -181,6 +181,7 @@ class PlanningExecutionService(
             }
         }
         if (before.phase == ExecutionPhase.COMPLETE) return
+        check(before.blockingIssues(emptyList()).none { it.issue.retryBlocked }) { "Повтор запуска не устраняет причину. Обсудите изменение плана с оркестратором." }
         check(!before.stopping) { "Дождитесь подтверждения остановки" }
         val authorizations = before.selectedMilestones.mapNotNull { stage ->
             stage.attempts.lastOrNull()?.takeIf { it.phase != AttemptPhase.COMPLETE &&
@@ -257,6 +258,7 @@ class PlanningExecutionService(
         var acquiredProject: CodingProject? = null
         try {
             val initial = store.planFor(id) ?: return
+            if (initial.blockingIssues(emptyList()).any { it.issue.retryBlocked }) return
             val project = projects?.all()?.firstOrNull { it.id == initial.projectId }
             if (project == null) { block(id, PlanningIssue(IssueKind.CONFIGURATION, "Папка проекта не найдена")); return }
             check(store.plans().none { it.id != id && it.projectId == project.id && it.stopping }) {
@@ -299,6 +301,7 @@ class PlanningExecutionService(
             }
             chatHooks?.prepareSessions(plan)
             val workspace = plan.workspace!!
+            workspaces.validateExecutionPath(project, workspace.integrationPath)
             val integration = Mutex()
             coroutineScope {
                 val active = mutableMapOf<String, Job>()
@@ -375,7 +378,8 @@ class PlanningExecutionService(
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             try {
-                val issue = classify(e.message ?: "Ошибка исполнения")
+                val issue = if (e is UnsafePlanningWorkspace) PlanningIssue(IssueKind.CONFIGURATION, e.message.orEmpty(), requiresUser = true, retryBlocked = true)
+                    else classify(e.message ?: "Ошибка исполнения")
                 val saved = store.planFor(id)
                 val failed = saved?.finalAttempt?.let { withRetry(it, issue) }
                 if (failed != null) {
@@ -576,6 +580,7 @@ class PlanningExecutionService(
             attempt, workspace.integrationPath, plan.acceptanceCriteria(), attempt.verificationToolEvidence() + attempt.report, judge)
         attempt = attempt.copy(acceptanceRecord = acceptance)
         persist()
+        chatHooks?.verified(plan, Milestone("final", "Итоговая проверка"), attempt, acceptance, judge.modelId)
         if (!verdict.passed) {
             attempt = withRetry(attempt, verdict.issue ?: PlanningIssue(IssueKind.VERIFICATION, verdict.note, requiresUser = true))
             persist(); block(id, attempt.error!!); return false
@@ -603,10 +608,12 @@ class PlanningExecutionService(
         val skipped = if (stage.id == "final") plan.selectedMilestones.filter { it.status == MilestoneStatus.SKIPPED }.flatMap { it.criteria() }.map { it.id }.toSet() else emptySet()
         val findings = (reviewed.findings + unavailable).sortedBy { finding -> criteria.indexOfFirst { it.id == finding.criterionId } }.map { if (it.criterionId in skipped) it.copy(status = CheckStatus.SKIPPED, observed = "Этап пропущен; проверка не выполнялась") else it } +
             waivers.map { AcceptanceFinding(it.criterion.id, CheckStatus.SKIPPED, it.criterion.description, "Проверка пропущена по решению пользователя") }
-        val record = AcceptanceGate.evaluate(AcceptanceRecord(plan.runId, attempt.id, snapshot.orEmpty(), criteria, findings, evidence, waivers = waivers),
+        val record = AcceptanceGate.evaluate(AcceptanceRecord(plan.runId, attempt.id, snapshot.orEmpty(), criteria, findings, evidence, waivers = waivers, reviewId = Id.new(), reviewer = judge.modelId, reviewedAt = Id.now()),
             criteria, if (pending.isEmpty()) snapshot else workspaces.verificationSnapshot(path))
-        val issue = reviewed.issue ?: if (!record.permitsProgress && !record.canRetryWithWorker)
-            PlanningIssue(IssueKind.VERIFICATION, record.summary(), requiresUser = true) else null
+        val repairProblem = if (!record.permitsProgress) record.automaticRepairProblem(attempt.acceptanceRecord) else null
+        val issue = reviewed.issue ?: if (!record.permitsProgress && (!record.canRetryWithWorker || repairProblem != null))
+            PlanningIssue(IssueKind.VERIFICATION, listOfNotNull(repairProblem, record.summary()).joinToString("\n\n"), requiresUser = true,
+                retryBlocked = record.findings.any { it.recovery == AcceptanceRecovery.OWNER && it.status != CheckStatus.PASS && record.criteria.any { c -> c.id == it.criterionId && c.required } }) else null
         return record to Verdict(record.permitsProgress && issue == null,
             if (record.status == AcceptanceStatus.ACCEPTED_WITH_SKIPS) record.userSummary() else record.findings.singleOrNull()?.observed ?: record.summary(), issue)
     }
@@ -662,6 +669,7 @@ class PlanningExecutionService(
                 saveAttempt(id, stageId, attempt)
             }
             currentAttempt = attempt
+            workspaces.validateExecutionPath(project, attempt.path)
             workspaces.reconcile(attempt)
             runtime.reconcile(attempt.sessionId)
             runtime.reconcile("${attempt.sessionId}-merge")
@@ -677,6 +685,13 @@ class PlanningExecutionService(
             while (attempt.phase in listOf(AttemptPhase.PREPARED, AttemptPhase.EXECUTING, AttemptPhase.FAILED)) {
                 if (!canRunStage(id, stageId)) return
                 val plan = store.planFor(id)!!
+                val savedReview = attempt.acceptanceRecord
+                if (attempt.repairRetries > 0 && savedReview != null && !savedReview.permitsProgress &&
+                    savedReview.automaticRepairProblem(null) != null) {
+                    val issue = PlanningIssue(IssueKind.VERIFICATION,
+                        savedReview.automaticRepairProblem(null) + "\n\n" + savedReview.summary(), requiresUser = true, retryBlocked = true)
+                    saveAttempt(id, stageId, attempt.copy(error = issue)); block(id, issue); return
+                }
                 // A completed runtime turn may have been checkpointed before its coordinator finished.
                 // Resume the durable decision, never re-run its file operations just to redeliver a reply.
                 val recorded = plan.coordination.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
@@ -738,7 +753,7 @@ class PlanningExecutionService(
                     ${verificationGuidance()}
                 """.trimIndent() + "\n" + extraInstructions
                 attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false, coordinationPending = false,
-                    chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now()))
+                    chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now(), prompt = prompt))
                 saveAttempt(id, stageId, attempt)
                 journal(id, "agent-intent", stageId, attempt.id)
                 val admitted = prepareAttempt(store.planFor(id)!!, stageId, attempt)
@@ -876,6 +891,7 @@ class PlanningExecutionService(
                     stage.criteria(), verificationPlan.stageVerificationReport(stageId, attempt), judge)
                 attempt = attempt.copy(acceptanceRecord = acceptance)
                 saveAttempt(id, stageId, attempt)
+                chatHooks?.verified(verificationPlan, stage, attempt, acceptance, judge.modelId)
                 if (verdict.issue != null) {
                     val issue = if (verdict.issue.kind == IssueKind.TRANSIENT && canRetry(attempt.transportRetries)) {
                         attempt = attempt.copy(transportRetries = PlanningRetryPolicy.nextRetry(attempt.transportRetries))
@@ -1007,7 +1023,8 @@ class PlanningExecutionService(
             }
             throw e
         } catch (e: Exception) {
-            val issue = classify(e.message ?: "Ошибка этапа")
+            val issue = if (e is UnsafePlanningWorkspace) PlanningIssue(IssueKind.CONFIGURATION, e.message.orEmpty(), requiresUser = true, retryBlocked = true)
+                else classify(e.message ?: "Ошибка этапа")
             try {
                 // Read the durable attempt: local snapshots can precede a phase transition.
                 val saved = store.planFor(id)?.milestones?.firstOrNull { it.id == stageId }?.attempts?.lastOrNull()
@@ -1021,6 +1038,7 @@ class PlanningExecutionService(
     }
     private val shared = object : PlanningWorkspace by LocalPlanningWorkspace() {
         override suspend fun acquire(project: CodingProject) = workspaces.acquire(project)
+        override suspend fun validateExecutionPath(project: CodingProject, path: String) = workspaces.validateExecutionPath(project, path)
         override suspend fun release(project: CodingProject) = workspaces.release(project)
         override suspend fun verificationSnapshot(path: String) = workspaces.verificationSnapshot(path)
     }

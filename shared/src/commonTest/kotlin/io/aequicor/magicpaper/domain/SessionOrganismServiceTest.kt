@@ -17,6 +17,8 @@ class SessionOrganismServiceTest {
         assertEquals(MessageOrigin.SESSION, incoming.origin)
         assertEquals("delivery", incoming.deliveryId)
         assertEquals(outgoing.deliveryId, incoming.deliveryId)
+        assertEquals(incoming.text, outgoing.text)
+        assertEquals(incoming.contextPacket, outgoing.contextPacket)
         assertEquals(MessageOrigin.TOOL, outgoing.origin)
         assertEquals("Контекст от сессии Зигота", incoming.route?.kind)
         assertEquals("root", incoming.route?.source?.sessionId)

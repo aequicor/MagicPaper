@@ -352,3 +352,23 @@ compilation succeeded. The settings form was rendered at narrow and desktop
 widths and at 200% text scale; validation and saving were exercised. Commands,
 suite totals and verification scope are recorded in
 `docs/session-infrastructure-verification/optional-agent-limits-2026-09-10.json`.
+
+## Immunity research and diagnostic delivery (September 10 correction)
+
+Immunity accepts an independent RESEARCH turn, including while the ordinary root
+is stopped. Its generation, resource accounting, native cleanup and explicit stop
+use the normal runtime ownership boundaries. Stopping a live immunity run waits
+for termination instead of immediately claiming STOPPED. A successful diagnostic
+turn returns the immunity to its passive PENDING state. The model cannot issue
+session mutations; approved application interventions retain their separate path.
+
+New diagnostic signals persist `requestResearch=true`. After the deterministic
+runtime-state inspection, the UI runtime queues one research checkpoint at a time,
+waits for an available configured runtime slot, streams the reply, and delivers the
+saved answer back to the sender. The prompt includes saved plan failures and
+acceptance evidence and distinguishes them from independently observed facts.
+A failed saved reply does not automatically restart the same diagnostic. Stops,
+archives, deleted history and pending checkpoints remain authoritative. Old signals
+decode requestResearch as false, so opening old history never starts model work.
+The original automatic inspection is labelled as a quarantine check, not as a
+completed investigation of the complaint.

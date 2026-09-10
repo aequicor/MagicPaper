@@ -34,6 +34,7 @@ interface PlanningExecutionHooks {
     suspend fun prepareSessions(plan: Plan)
     suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt): String
     suspend fun started(plan: Plan, stage: Milestone, attempt: StageAttempt) = Unit
+    suspend fun verified(plan: Plan, stage: Milestone, attempt: StageAttempt, record: AcceptanceRecord, reviewer: String) = Unit
     suspend fun finished(plan: Plan, stage: Milestone, attempt: StageAttempt): StageTurnDecision
 }
 

@@ -4,6 +4,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable enum class EvidenceEnvironment { REVIEW, LOCAL_TEST, HERMETIC, REAL_BACKEND, MANUAL }
 @Serializable enum class CheckStatus { PASS, FAIL, NOT_RUN, SKIPPED, BLOCKED, STALE }
+@Serializable enum class AcceptanceRecovery { UNSPECIFIED, WORKER, EVIDENCE, UNAVAILABLE, OWNER }
+
 @Serializable enum class AcceptanceStatus { UNKNOWN, ACCEPTED, PARTIAL, FAILED, BLOCKED, STALE, ACCEPTED_WITH_SKIPS }
 
 /** Created only by an explicit questionnaire answer, scoped to this run and exact criterion. */
@@ -39,6 +41,8 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
     val expected: String,
     val observed: String,
     val artifacts: List<String> = emptyList(),
+    val recovery: AcceptanceRecovery = AcceptanceRecovery.UNSPECIFIED,
+    val problemKey: String = "",
 )
 
 @Serializable data class AcceptanceEvidence(
@@ -59,6 +63,9 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
     val evidence: List<AcceptanceEvidence> = emptyList(),
     val status: AcceptanceStatus = AcceptanceStatus.UNKNOWN,
     val waivers: List<AcceptanceWaiver> = emptyList(),
+    val reviewId: String = "",
+    val reviewer: String = "",
+    val reviewedAt: Long = 0,
 ) {
     internal val permitsProgress: Boolean get() = status in setOf(AcceptanceStatus.ACCEPTED, AcceptanceStatus.ACCEPTED_WITH_SKIPS)
     internal fun wasSkippedByUser(criterion: AcceptanceCriterion): Boolean =
@@ -81,11 +88,27 @@ internal fun EvidenceEnvironment.label(): String = when (this) {
             val finding = findings.singleOrNull { it.criterionId == criterion.id }
             finding?.status == CheckStatus.PASS ||
                 finding?.status in setOf(CheckStatus.FAIL, CheckStatus.NOT_RUN, CheckStatus.SKIPPED) &&
+                finding?.recovery !in setOf(AcceptanceRecovery.OWNER, AcceptanceRecovery.UNAVAILABLE) &&
                 (criterion.environment == EvidenceEnvironment.REVIEW || evidence.any {
                     it.criterionId == criterion.id && it.environment == criterion.environment && it.snapshotId == snapshotId &&
                         it.status in setOf(CheckStatus.PASS, CheckStatus.FAIL) && it.artifacts.isNotEmpty()
                 })
         }
+
+    /** Repair is a new action, so missing recovery classification never authorizes it. */
+    internal fun automaticRepairProblem(previous: AcceptanceRecord?): String? {
+        val blockers = findings.filter { f -> criteria.any { it.id == f.criterionId && it.required } && f.status != CheckStatus.PASS }
+        if (blockers.any { it.recovery !in setOf(AcceptanceRecovery.WORKER, AcceptanceRecovery.EVIDENCE) })
+            return "Требуется решение по замечаниям проверяющего. Автоматическая доработка не назначена."
+        // The reviewer carries a stable problem key; legacy findings fall back to the actual observation.
+        if (previous != null && previous.runId == runId && previous.attemptId == attemptId && previous.criteria == criteria) {
+            val old = previous.findings.filter { f -> criteria.any { it.id == f.criterionId && it.required } && f.status != CheckStatus.PASS }
+            if (blockers.isNotEmpty() && blockers.map { Triple(it.criterionId, it.status, it.problemKey.ifBlank { it.observed.trim().lowercase() }) }.toSet() ==
+                old.map { Triple(it.criterionId, it.status, it.problemKey.ifBlank { it.observed.trim().lowercase() }) }.toSet())
+                return "После доработки те же критерии остаются неподтверждёнными. Требуется решение ответственного за приёмку."
+        }
+        return null
+    }
 
     internal fun userSummary(): String = buildString {
         append(when (status) {
@@ -167,7 +190,8 @@ object AcceptanceGate {
                     it.snapshotId == snapshotId && it.environment == criterion.environment }
                 if (proof?.status == CheckStatus.PASS && proof.artifacts.isNotEmpty()) review
                 else AcceptanceFinding(criterion.id, proof?.status?.takeUnless { it == CheckStatus.PASS } ?: CheckStatus.NOT_RUN,
-                    criterion.description, proof?.detail ?: "Нет подтверждения приложения для ${criterion.environment}", proof?.artifacts.orEmpty())
+                    criterion.description, proof?.detail ?: "Нет подтверждения приложения для ${criterion.environment}", proof?.artifacts.orEmpty(),
+                    recovery = if (proof?.status == CheckStatus.FAIL && proof.artifacts.isNotEmpty()) AcceptanceRecovery.WORKER else AcceptanceRecovery.UNAVAILABLE)
             }
         }
         val requiredFindings = findings.filter { f -> criteria.single { it.id == f.criterionId }.required }

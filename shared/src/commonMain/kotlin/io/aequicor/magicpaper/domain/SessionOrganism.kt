@@ -146,6 +146,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class ImmunitySignal(
     val id: String, val sender: String, val target: String, val diagnostic: String, val createdAt: Long,
+    val requestResearch: Boolean = false,
 )
 @Serializable data class SessionAuditEvent(
     val operationId: String, val actor: String, val action: String,

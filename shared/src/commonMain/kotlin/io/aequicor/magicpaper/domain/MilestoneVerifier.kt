@@ -21,7 +21,7 @@ interface MilestoneVerifier {
             val verdict = verify(milestone.copy(acceptance = criterion.description), goal, report, profile)
             verdict.issue?.let { return AcceptanceReview(findings, it) }
             findings += AcceptanceFinding(criterion.id, if (verdict.passed) CheckStatus.PASS else CheckStatus.FAIL,
-                criterion.description, verdict.note)
+                criterion.description, verdict.note, recovery = AcceptanceRecovery.WORKER)
         }
         return AcceptanceReview(findings)
     }
@@ -54,7 +54,12 @@ class LlmMilestoneVerifier(
                 val raw = gateway.complete(profile, listOf(
                     LlmMessage(LlmChatRole.SYSTEM, VERIFY_PROMPT + "\n" + """
                         Для этой проверки верни {"findings":[{"criterionId":"точный ID","status":"PASS|FAIL|NOT_RUN|SKIPPED|BLOCKED",
-                        "expected":"требование","observed":"конкретное наблюдение","artifacts":["путь и строка либо ID доказательства"]}]}.
+                        "expected":"требование","observed":"конкретное наблюдение","artifacts":["путь и строка либо ID доказательства"],"recovery":"WORKER|EVIDENCE|UNAVAILABLE|OWNER","problemKey":"стабильный ключ причины"}]}.
+                        Для каждого непройденного критерия укажи recovery: WORKER — исправимое несоответствие кода;
+                        EVIDENCE — можно предоставить недостающие доказательства; UNAVAILABLE — среда недоступна;
+                        OWNER — требуется решение владельца, включая уже совершённое нарушение HEAD/index или чужих данных.
+                        Сохраняй problemKey для той же причины отказа между проверками; не меняй его из-за перефразирования отчёта.
+                        Историческое нарушение не исправляется новым коммитом, reset или переписыванием истории.
                         Ровно один результат на каждый критерий. Общего passed нет. Не меняй критерии, обязательность и среду.
                         При отсутствии подтверждений ставь NOT_RUN. Успех фикстуры не подтверждает реальный backend.
                         Указывай точное расхождение и источник, чтобы следующий исполнитель мог исправить его без догадок.

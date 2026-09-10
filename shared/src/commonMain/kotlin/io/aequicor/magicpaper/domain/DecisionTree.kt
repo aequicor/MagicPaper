@@ -45,9 +45,10 @@ import kotlinx.serialization.Serializable
 @Serializable data class PlanningIssue(
     val kind: IssueKind, val message: String, val retryAt: Long = 0,
     val retries: Int = 0, val requiresUser: Boolean = false,
+    val retryBlocked: Boolean = false,
 )
 /** Boundaries in the cumulative activity log, independent of coordinator retries. */
-@Serializable data class StageChatTurn(val startStep: Int, val startedAt: Long = 0, val completedAt: Long = 0)
+@Serializable data class StageChatTurn(val startStep: Int, val startedAt: Long = 0, val completedAt: Long = 0, val prompt: String = "")
 @Serializable data class StageAttempt(
     val id: String, val sessionId: String, val assignment: StageAssignment,
     val phase: AttemptPhase = AttemptPhase.PREPARED, val engineSessionId: String = "",

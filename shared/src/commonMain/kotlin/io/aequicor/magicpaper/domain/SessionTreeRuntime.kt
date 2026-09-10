@@ -283,7 +283,7 @@ class SessionTreeRuntime(
             failure is CancellationException -> SessionObservedState.STOPPED
             failure != null || handle.failed -> SessionObservedState.FAILED
             node.desired != SessionDesiredState.RUN -> SessionObservedState.STOPPED
-            session.stageId != null || (node.kind == SessionKind.ZYGOTE && session.planningMode) -> SessionObservedState.PENDING
+            session.stageId != null || node.kind == SessionKind.IMMUNITY || (node.kind == SessionKind.ZYGOTE && session.planningMode) -> SessionObservedState.PENDING
             else -> SessionObservedState.COMPLETED
         }
         val updated = try { organisms.store.observe(organism.id, session.id, node.generation, observed) }

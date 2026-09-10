@@ -77,7 +77,7 @@ internal fun interactionCandidates(
                 blockers.any { b -> b.stage == null || b.stage.id == it.stageId } }.map { it.id }
             add(recoveryInteraction("blocker:${blockers.map { it.messageId }.sorted().joinToString(":")}", parent,
                 InteractionKind.RECOVER_PLAN, "Выполнение остановлено. Как продолжить?", blockers.joinToString("\n\n") { it.text }, action,
-                sourceId = plan.id, allowSkipVerification = blockers.all { it.canSkipVerification })
+                sourceId = plan.id, allowSkipVerification = blockers.all { it.canSkipVerification }, allowRetry = blockers.none { it.issue.retryBlocked })
                 .copy(planId = plan.id, affectedSessionIds = (affected + parent.id).toSet()))
         }
         val pendingQuestions = any { it.kind == InteractionKind.QUESTION && it.planId == plan.id }
@@ -115,10 +115,10 @@ internal fun interactionCandidates(
 }
 
 private fun recoveryInteraction(id: String, session: CodingSession, kind: InteractionKind, title: String, details: String,
-    retry: String, sourceId: String = id, allowSkipVerification: Boolean = false) = UserInteractionRequest(id, session.projectId, session.id, kind,
+    retry: String, sourceId: String = id, allowSkipVerification: Boolean = false, allowRetry: Boolean = true) = UserInteractionRequest(id, session.projectId, session.id, kind,
     listOf(PlanningQuestion("decision", title, QuestionKind.SINGLE,
         buildList {
-            add(QuestionOption("retry", retry))
+            if (allowRetry) add(QuestionOption("retry", retry)) else add(QuestionOption("review", "Разобрать с оркестратором"))
             if (allowSkipVerification) add(QuestionOption("skip_verification", "Продолжить без проверки"))
             add(QuestionOption("leave", "Оставить остановленной"))
         })),

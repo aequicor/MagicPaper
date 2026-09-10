@@ -23,6 +23,15 @@ class GitPlanningWorkspace(
     companion object {
         private val mutationLocks = ConcurrentHashMap<String, Mutex>()
     }
+    override suspend fun validateExecutionPath(project: CodingProject, path: String) = withContext(Dispatchers.IO) {
+        val source = File(project.path).canonicalFile
+        val target = File(path).canonicalFile
+        val sourceGit = runCatching { File(git(source, "rev-parse", "--show-toplevel").trim()).canonicalFile }.getOrNull()
+        val targetGit = runCatching { File(git(target, "rev-parse", "--show-toplevel").trim()).canonicalFile }.getOrNull()
+        if (sourceGit != null && sourceGit == targetGit || source == target && File(source, ".git").exists())
+            throw UnsafePlanningWorkspace("Этот план использует пользовательскую Git-папку. Создайте план с отдельной рабочей копией; сохранённые результаты и исходники оставлены на месте.")
+    }
+
     override suspend fun verificationSnapshot(path: String): String = io.aequicor.magicpaper.data.planning.verificationSnapshot(path)
     private data class ProjectLock(val path: String, val resources: Pair<RandomAccessFile, FileLock>)
     private val locks = mutableMapOf<String, ProjectLock>()

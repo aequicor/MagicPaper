@@ -8,6 +8,19 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class GitPlanningWorkspaceTest {
+    @Test fun executionRejectsSharedGitCheckoutAndAliasesButAcceptsManagedWorktree() = runTest {
+        val source = repository(); val project = CodingProject("p", "P", source.path, 1)
+        val head = git(source, "rev-parse", "HEAD")
+        val port = GitPlanningWorkspace(Files.createTempDirectory("planning-path-guard-").toFile())
+        assertFailsWith<IllegalArgumentException> { port.validateExecutionPath(project, source.path) }
+        assertFailsWith<IllegalArgumentException> { port.validateExecutionPath(project, File(source, ".").path) }
+        val workspace = port.prepare(project, "run")
+        port.validateExecutionPath(project, workspace.integrationPath)
+        val worker = port.stage(project, workspace, attempt("isolated"))
+        port.validateExecutionPath(project, worker.path)
+        assertEquals(head, git(source, "rev-parse", "HEAD"))
+    }
+
     @Test fun failedLeaseReleaseRetainsItsIdentityAndCanBeRetriedAtEveryBoundary() = runTest {
         for (boundary in listOf("project-lock-releasing", "project-lock-released", "store-lock-releasing", "store-lock-released")) {
             val source = Files.createTempDirectory("planning-release-source-").toFile()
