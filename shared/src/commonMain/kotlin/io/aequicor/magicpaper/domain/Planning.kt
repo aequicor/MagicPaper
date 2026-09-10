@@ -111,6 +111,8 @@ data class Plan(
     val scheduleReceipts: Map<String, String> = emptyMap(),
     val scheduleQuestionIds: Set<String> = emptySet(),
     val proposal: PlanProposal? = null,
+    /** A separate draft replaces this stopped plan; results are not implicitly accepted again. */
+    val replacesPlanId: String? = null,
     val runHistory: List<PlanRunSnapshot> = emptyList(),
 
     val status: PlanStatus = PlanStatus.DRAFT,

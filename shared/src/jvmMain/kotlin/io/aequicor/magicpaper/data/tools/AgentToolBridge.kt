@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -16,6 +17,13 @@ import kotlinx.serialization.json.*
 
 /** Per-run authenticated local endpoint. Human deliberation has no short HTTP/tool deadline. */
 internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
+    // JSON-RPC IDs belong to this transport, not to the durable worker turn. A resumed
+    // turn opens a new bridge and Codex restarts its counter; those are new calls.
+    // Keep retries within this bridge stable, including the JSON ID's string/number type.
+    private val callNamespace = UUID.randomUUID().toString()
+    private fun callIdentity(id: JsonElement): String = "mcp:$callNamespace:" +
+        Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(id.toString().toByteArray(Charsets.UTF_8)))
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 8)
     private val executor = Executors.newCachedThreadPool { task -> Thread(task, "magicpaper-agent-tools").apply { isDaemon = true } }
     private val closed = AtomicBoolean()
@@ -71,7 +79,7 @@ internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
                         val name = params["name"]?.jsonPrimitive?.content ?: error("Нет имени инструмента")
                         val args = params["arguments"] as? JsonObject ?: error("Нет аргументов инструмента")
                         try {
-                            val result = tools.call(id.jsonPrimitive.content, name, args)
+                            val result = tools.call(callIdentity(id), name, args)
                             buildJsonObject {
                                 put("content", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", result.toString()) }) })
                                 put("isError", false)

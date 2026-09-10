@@ -29,6 +29,7 @@ internal fun interactionCandidates(
     requestedInputRecovery: Set<String> = emptySet(),
 ): List<UserInteractionRequest> = buildList {
     val sessions = ui.sessions.map { it.session }
+    val replacedPlanIds = plans.mapNotNull { it.replacesPlanId }.toSet()
     addAll(runtime.map { request ->
         val source = sessions.firstOrNull { request.sessionId in setOf(it.id, "${it.id}-merge", "${it.id}-delivery") }
         if (source == null) request else request.copy(sessionId = source.id, ownerSessionId = source.id,
@@ -37,7 +38,7 @@ internal fun interactionCandidates(
     addAll(ui.approvals.map { approvalInteraction(it, sessions) })
     states.values.forEach { state ->
         val parent = sessions.firstOrNull { it.id == state.sessionId && !it.archived } ?: return@forEach
-        state.openQuestions().filter { q -> plans.any { it.id == q.planId } }.forEach { q ->
+        state.openQuestions().filter { q -> q.planId !in replacedPlanIds && plans.any { it.id == q.planId } }.forEach { q ->
             val workers = sessions.filter { q.refinementRequest == null && !q.forDiscussion && it.parentSessionId == parent.id && it.planId == q.planId &&
                 (q.stageIds.isEmpty() || it.stageId in q.stageIds || it.id == q.sourceSessionId) }.map { it.id }
             add(UserInteractionRequest("question:${q.id}", parent.projectId, q.sourceSessionId, InteractionKind.QUESTION,
@@ -53,6 +54,7 @@ internal fun interactionCandidates(
         }
     }
     plans.forEach { plan ->
+        if (plan.id in replacedPlanIds) return@forEach
         val parentUi = ui.sessions.firstOrNull { it.session.id == plan.parentSessionId && !it.session.archived } ?: return@forEach
         val parent = parentUi.session
         val history = parentUi.messages

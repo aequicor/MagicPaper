@@ -162,3 +162,16 @@ OS-изоляцией. Факты о внешней среде подтверж�
 пути: исполнение в той же пользовательской Git-рабочей копии (включая алиасы и
 подкаталоги) блокируется до запуска. Старые планы, результаты и файлы остаются на
 месте; автоматическая миграция незавершённого Git-состояния не выполняется.
+
+
+### Separate replacement plans and truthful refinement receipts
+
+`plan.refine(newPlan=true)` stops and reconciles the previous plan, creates a separate unconfirmed draft, and makes that draft current for its owner. `replacesPlanId` retains the source-plan link. The source tree, attempts, failed acceptance and workspace remain in their original record; the new plan starts with fresh pending stages and creates its isolated workspace only after confirmation. A deterministic operation-derived ID makes recovery reuse the same draft.
+
+Refinement receipts distinguish `proposal_saved`, `clarification_required`, `applied` and `unchanged` from durable structure. Planner prose alone is not a saved proposal. `context.get` exposes proposal identity, revision, confirmation readiness, workspace choice and whether the workspace has actually been prepared. A missing proposal ID fails confirmation instead of reporting a successful no-op. Explicit chat consent can confirm the same proposal as the UI action.
+
+The owner UI selects the persisted active plan and offers its confirmation; recovery questions for the stopped replaced plan remain in history instead of obscuring the new draft.
+
+A reconciled, interrupted stage before integration may receive a user-confirmed requirement correction with the same stage ID and dependencies. The prior definition and attempts remain in `runHistory`; the current attempt keeps its workspace and conversation while acceptance for the old specification is invalidated. Completed, integrating and unresolved external-effect attempts are not editable through this path. Refinement rebases over telemetry revisions and still validates specification changes at commit time.
+
+The local MCP bridge namespaces JSON-RPC request IDs per bridge instance. Resuming a durable worker turn may restart the client's numeric counter, so a new transport request must not replay an unrelated old receipt. Within a bridge, identical retries share one operation; changed arguments under the same ID are rejected, and numeric/string IDs remain distinct. Historical receipts and unresolved-effect guards remain intact. `AgentToolBridgeTest` covers a context read followed by a resumed handoff with the same transport ID, retry deduplication and conflicting arguments over HTTP.

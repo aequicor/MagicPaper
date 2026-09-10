@@ -123,6 +123,39 @@ internal val Plan.proposalReadyForConfirmation: Boolean
             (selectedMilestones.any { it.attempts.lastOrNull()?.interrupted == true } ||
                 (phase == ExecutionPhase.WAITING && selectedMilestones.all { it.completed }))))
 
+/** Only a reconciled interruption before integration may receive an approved specification revision. */
+internal val Milestone.canRevisePausedSpecification: Boolean
+    get() = !completed && attempts.lastOrNull()?.let { it.interrupted &&
+        it.phase in setOf(AttemptPhase.PREPARED, AttemptPhase.EXECUTING, AttemptPhase.FAILED) &&
+        !it.pendingToolExternal && it.mergePhase == null && !it.awaitingPlanner } == true
+
+internal fun Plan.refinementView(): Plan = copy(milestones = milestones.map { stage ->
+    if (stage.canRevisePausedSpecification) stage.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "") else stage
+})
+
+internal fun Plan.reconcileApprovedProposal(proposal: PlanProposal): Plan {
+    val updated = copy(tree = proposal.tree, milestones = proposal.milestones.map { proposed ->
+        val old = milestones.firstOrNull { it.id == proposed.id }
+        when {
+            old == null || old.attempts.isEmpty() && !old.completed -> proposed
+            old.canRevisePausedSpecification -> proposed.copy(status = old.status, assignment = old.assignment,
+                report = old.report, checkNote = "", attempts = old.attempts.mapIndexed { index, attempt ->
+                    if (index != old.attempts.lastIndex) attempt else attempt.copy(acceptanceRecord = null, verificationSnapshot = null)
+                })
+            else -> old
+        }
+    })
+    val oldGraph = DecisionCompiler.compile(this)
+    val newGraph = DecisionCompiler.compile(updated)
+    milestones.filter { it.canRevisePausedSpecification }.forEach { stage ->
+        require(stage.id in newGraph.stageIds && oldGraph.dependencies[stage.id] == newGraph.dependencies[stage.id]) {
+            "Приостановленный этап и его зависимости должны сохраняться"
+        }
+    }
+    DecisionCompiler.validateEdit(refinementView(), updated)
+    return updated
+}
+
 @Serializable data class PlanRunSnapshot(
     val runId: String, val tree: List<DecisionNode>, val milestones: List<Milestone>,
     val workspace: PlanWorkspace?, val finalAttempt: StageAttempt?, val completedAt: Long,

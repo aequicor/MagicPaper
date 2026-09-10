@@ -356,7 +356,9 @@ class MagicPaperViewModel(
     private fun withPlanningState(item: CodingSessionUi): CodingSessionUi {
         val service = planningChat ?: return item
         val session = item.session
+        val activePlanId = service.states.value[session.id]?.activePlanId
         val plan = service.store.plans.value.firstOrNull { it.id == session.planId }
+            ?: service.store.plans.value.firstOrNull { it.id == activePlanId && it.parentSessionId == session.id }
             ?: service.store.plans.value.filter { it.parentSessionId == session.id }
                 .let { plans -> plans.firstOrNull { it.phase != io.aequicor.magicpaper.domain.ExecutionPhase.COMPLETE } ?: plans.lastOrNull() }
         val workerRunning = plan?.milestones?.firstOrNull { it.id == session.stageId }?.let {

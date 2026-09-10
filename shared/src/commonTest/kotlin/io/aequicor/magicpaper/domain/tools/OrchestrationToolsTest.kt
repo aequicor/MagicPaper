@@ -99,6 +99,117 @@ class OrchestrationToolsTest {
         }
     }
 
+    @Test fun proseWithoutStructureDoesNotProduceASavedProposalReceipt() = runTest {
+        val f = Fixture(this); f.init()
+        f.planningRun = { tools ->
+            tools.call("empty", "plan.propose", f.args("""{"reply":"Предложение сохранено: три новых этапа"}"""))
+            "Готово"
+        }
+        val tools = f.orchestrator()
+        tools.call("pause", "stage.pause", f.args("""{"stageIds":["stage"],"reason":"Clarify requirements"}"""))
+        val result = tools.call("refine", "plan.refine", f.args("""{"message":"Prepare a new proposal","revision":0}""")).jsonObject
+        assertTrue(f.projects.orchestration("parent")!!.workPauses.getValue("request").requiresUser)
+        assertEquals("unchanged", result.getValue("status").jsonPrimitive.content)
+        assertFalse(result.getValue("confirmationReady").jsonPrimitive.boolean)
+        assertNull(f.store.planFor("plan")!!.proposal)
+        val receipt = f.host.receipts.forRequest("p/parent/request").first { it.toolId == "plan.refine" }
+        assertEquals(result, f.host.reconcile!!(f.orchestrator().context, receipt))
+    }
+
+    @Test fun contextExposesActualPendingProposalAndRejectsMissingConfirmation() = runTest {
+        val f = Fixture(this); f.init()
+        val proposed = Milestone("next", "Next", acceptance = "Checked")
+        f.store.update("plan") { it.copy(proposal = PlanProposal("proposal", it.runId, it.tree, it.milestones,
+            it.tree, it.milestones + proposed, "Pending extension")) }
+        val context = f.orchestrator().call("context", "context.get", JsonObject(emptyMap())).jsonObject
+        assertEquals("proposal", context.getValue("proposal").jsonObject.getValue("id").jsonPrimitive.content)
+        assertContains(context.getValue("proposal").toString(), "Pending extension")
+        assertTrue(context.getValue("sharedWorkspace").jsonPrimitive.boolean)
+        f.store.update("plan") { it.copy(proposal = null) }
+        val current = f.store.planFor("plan")!!
+        assertFailsWith<IllegalArgumentException> {
+            f.orchestrator("go", OrchestrationInput("go", "го", 1)).call("confirm", "plan.control",
+                f.args("""{"action":"confirm","revision":${current.revision},"proposalId":"missing"}"""))
+        }
+        assertTrue(f.workerCalls.isEmpty())
+    }
+
+    @Test fun pausedStageCriteriaCanBeApprovedWithoutExtraStagesOrLosingHistory() = runTest {
+        val f = Fixture(this); f.init()
+        val paused = f.store.update("plan") { it.copy(intent = ExecutionIntent.PAUSE, phase = ExecutionPhase.WAITING,
+            milestones = it.milestones.map { stage -> stage.copy(status = MilestoneStatus.ACTIVE, displayNumber = 1,
+                attempts = stage.attempts.map { attempt -> attempt.copy(interrupted = true, verificationSnapshot = "old-snapshot",
+                    acceptanceRecord = AcceptanceRecord("run", attempt.id, "old-snapshot", stage.criteria(),
+                        listOf(AcceptanceFinding("old", CheckStatus.FAIL, "Old criterion", "Old rejection")), status = AcceptanceStatus.FAILED)) }) }) }
+        f.planningRun = { tools ->
+            tools.call("proposal", "plan.propose", f.args("""{"reply":"Уточнение критериев","tree":[{"id":"root","title":"Goal","kind":"GOAL","children":["node"]},{"id":"node","title":"Stage","kind":"STAGE","stageId":"stage"}],"milestones":[{"id":"stage","title":"Stage","description":"Use the provided baseline","acceptance":"Only new changes are in scope"}]}"""))
+            "Уточнение готово"
+        }
+        val tools = f.orchestrator("revise", OrchestrationInput("revise", "Correct the baseline criterion", 1))
+        val result = tools.call("refine", "plan.refine", f.args("""{"message":"Correct the baseline criterion"}""")).jsonObject
+        assertEquals("proposal_saved", result.getValue("status").jsonPrimitive.content)
+        val proposed = f.store.planFor("plan")!!
+        assertEquals(paused.milestones, proposed.milestones)
+        assertEquals("Only new changes are in scope", proposed.proposal!!.milestones.single().acceptance)
+        assertTrue(f.workerCalls.isEmpty())
+        f.workerRun = { awaitCancellation() }
+        f.orchestrator("approve", OrchestrationInput("approve", "Apply this correction", 2)).call("confirm", "plan.control",
+            f.args("""{"action":"confirm","revision":${proposed.revision},"proposalId":"${proposed.proposal.id}"}"""))
+        val approved = f.store.planFor("plan")!!
+        assertEquals("Only new changes are in scope", approved.milestones.single().acceptance)
+        assertEquals(paused.milestones, approved.runHistory.last().milestones)
+        assertEquals(paused.milestones.single().attempts.single().id, approved.milestones.single().attempts.single().id)
+        assertNull(approved.milestones.single().attempts.single().acceptanceRecord)
+    }
+
+    @Test fun replacementDraftIsDurableVisibleAndOnlyItsConfirmationStartsNewWork() = runTest {
+        val f = Fixture(this); f.init()
+        val blocked = f.blockOnStaleAcceptance()
+        f.store.update("plan") { it.copy(issue = it.issue!!.copy(retryBlocked = true)) }
+        var planningCalls = 0
+        f.planningRun = { tools ->
+            planningCalls++
+            assertEquals(ToolRole.PLANNER, tools.context.role)
+            tools.call("proposal", "plan.propose", f.args("""{"reply":"Новый план для отдельной рабочей копии","tree":[{"id":"new-root","title":"Goal","kind":"GOAL","children":["new-node"]},{"id":"new-node","title":"Review","kind":"STAGE","stageId":"fresh"}],"milestones":[{"id":"fresh","title":"Review","description":"Review current files independently","acceptance":"Verified"}]}"""))
+            "Готово"
+        }
+        val tools = f.orchestrator("replace", OrchestrationInput("replace", "Новый план в отдельной копии", 1))
+        val args = f.args("""{"message":"Create a separate replacement plan","newPlan":true}""")
+        val result = tools.call("refine", "plan.refine", args).jsonObject
+        assertEquals("proposal_saved", result.getValue("status").jsonPrimitive.content)
+        assertTrue(result.getValue("confirmationReady").jsonPrimitive.boolean)
+        val id = result.getValue("planId").jsonPrimitive.content
+        assertNotEquals("plan", id)
+        val draft = f.store.planFor(id)!!
+        assertEquals("plan", draft.replacesPlanId)
+        assertEquals(ExecutionIntent.STOP, draft.intent)
+        assertFalse(draft.sharedWorkspace)
+        assertNull(draft.workspace); assertNull(draft.confirmedRevision)
+        assertTrue(draft.milestones.all { it.attempts.isEmpty() && !it.completed })
+        assertTrue(f.workerCalls.isEmpty())
+        val old = f.store.planFor("plan")!!
+        assertEquals(ExecutionIntent.STOP, old.intent)
+        assertEquals(blocked.tree, old.tree)
+        assertEquals(blocked.milestones.single().attempts.single().acceptanceRecord, old.milestones.single().attempts.single().acceptanceRecord)
+        assertTrue(old.issue!!.retryBlocked)
+        assertEquals(id, f.projects.orchestration("parent")!!.activePlanId)
+        val reloaded = PlanningStore(JsonPlanningRepository(f.kv, f.json)).plans().single { it.id == id }
+        assertEquals(draft, reloaded)
+        assertEquals(result, tools.call("refine", "plan.refine", args))
+        assertEquals(1, planningCalls)
+        val context = tools.call("context", "context.get", JsonObject(emptyMap())).jsonObject
+        assertEquals(id, context.getValue("planId").jsonPrimitive.content)
+        assertTrue(context.getValue("confirmationReady").jsonPrimitive.boolean)
+        f.workerRun = { awaitCancellation() }
+        f.orchestrator("go", OrchestrationInput("go", "го", 2)).call("confirm", "plan.control",
+            f.args("""{"action":"confirm","revision":${draft.revision}}"""))
+        runCurrent()
+        assertNotNull(f.store.planFor(id)!!.confirmedRevision)
+        assertEquals(ExecutionIntent.STOP, f.store.planFor("plan")!!.intent)
+        assertTrue(f.workerCalls.isNotEmpty())
+        assertTrue(f.workerCalls.all { it.planId == id })
+    }
+
     @Test fun statusQuestionsIncludingLegacyResumeInputsDoNotRetryAcceptance() = runTest {
         val f = Fixture(this); f.init()
         val blocked = f.blockOnStaleAcceptance()

@@ -12,6 +12,17 @@ class UserInteractionStatusTest {
     private fun CodingUi.project(requests: List<UserInteractionRequest>) = copy(interactions = requests,
         sessions = sessions.map { item -> item.copy(interactions = requests.filter { it.affects(item.session) }) })
 
+    @Test fun replacementShowsItsConfirmationInsteadOfTheOldRecoveryQuestion() {
+        val old = plan.copy(issue = PlanningIssue(IssueKind.CONFIGURATION, "Old workspace", requiresUser = true, retryBlocked = true),
+            phase = ExecutionPhase.WAITING)
+        val draft = Plan("replacement", plan.projectId, "New plan", parentSessionId = parent.id, replacesPlanId = old.id,
+            wizardStep = PlanningStep.REVIEW, milestones = listOf(Milestone("new", "Review", acceptance = "Verified")))
+        val candidates = interactionCandidates(CodingUi(sessions = listOf(CodingSessionUi(parent, plan = draft))),
+            listOf(old, draft), emptyMap(), emptyMap())
+        assertEquals(listOf(InteractionKind.CONFIRM_PLAN), candidates.map { it.kind })
+        assertEquals(draft.id, candidates.single().planId)
+    }
+
     @Test fun ownerDecisionOffersDiscussionInsteadOfRepeatingTheWorker() {
         val issue = PlanningIssue(IssueKind.VERIFICATION, "HEAD already moved; a new commit cannot undo the incident", requiresUser = true, retryBlocked = true)
         val stage = Milestone("stage", "Delivery", attempts = listOf(StageAttempt("a", worker.id, StageAssignment("p", "m"), error = issue)))

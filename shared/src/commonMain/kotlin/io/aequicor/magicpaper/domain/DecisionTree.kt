@@ -41,7 +41,7 @@ import kotlinx.serialization.Serializable
     val assessment: StageAssessment = StageAssessment(), val explanation: String = "",
     val manualSelection: Boolean = false,
 )
-@Serializable data class PlanningMessage(val id: String, val role: String, val text: String, val activity: List<CodingStep> = emptyList(), val questions: List<PlanningQuestion> = emptyList(), val questionStageIds: List<String> = emptyList())
+@Serializable data class PlanningMessage(val id: String, val role: String, val text: String, val activity: List<CodingStep> = emptyList(), val questions: List<PlanningQuestion> = emptyList(), val questionStageIds: List<String> = emptyList(), val planChanged: Boolean = false)
 @Serializable data class PlanningIssue(
     val kind: IssueKind, val message: String, val retryAt: Long = 0,
     val retries: Int = 0, val requiresUser: Boolean = false,

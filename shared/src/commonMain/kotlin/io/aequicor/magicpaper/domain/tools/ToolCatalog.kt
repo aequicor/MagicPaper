@@ -15,7 +15,7 @@ import kotlinx.serialization.json.*
     val acceptance: String, val dependsOn: List<String> = emptyList(), val assessment: StageAssessment = StageAssessment(),
     val assignment: PlanToolAssignment? = null, val durationHours: Double? = null, val complexityPoints: Double? = null,
     val continuationOf: String? = null, val acceptanceCriteria: List<AcceptanceCriterion> = emptyList())
-@Serializable data class ToolMessage(val message: String, val revision: Long? = null, val requiresConfirmation: Boolean = true)
+@Serializable data class ToolMessage(val message: String, val revision: Long? = null, val requiresConfirmation: Boolean = true, val newPlan: Boolean = false)
 @Serializable data class ToolRecalculate(val nodeId: String, val revision: Long)
 @Serializable data class ToolPlanControl(val action: String, val revision: Long, val proposalId: String? = null)
 @Serializable data class ToolStagePause(val stageIds: List<String>, val reason: String)
@@ -71,7 +71,7 @@ object ToolCatalog {
         app<ToolSearch>("web.search", "Поиск источников в интернете", category = ToolCategory.SEARCH),
         app<ToolQuestions>("questionnaire", "Уточнение у пользователя. Ожидает подтверждённых ответов; не выдаёт разрешений"),
         app<PlanToolProposal>("plan.propose", "Передать проект плана с объяснением, деревом решений и этапами. Не запускает исполнителей", setOf(ToolRole.PLANNER), true, true),
-        app<ToolMessage>("plan.refine", "Разработать или доработать план по явному поручению пользователя", coordinator, true, true),
+        app<ToolMessage>("plan.refine", "Разработать или доработать план. newPlan=true по поручению пользователя создаёт отдельный план взамен старого, сохраняя его историю; запуск требует отдельного подтверждения", coordinator, true, true),
         app<ToolRecalculate>("plan.recalculate", "Пересчитать часть плана по идентификатору узла", coordinator, true, true),
         app<ToolPlanControl>("plan.control", "Управление планом: pause, stop, resume, retry, confirm. Подтверждение требует действия пользователя", coordinator, true, true),
         app<ToolStagePause>("stage.pause", "Приостановить только затронутые этапы до уточнения требований", coordinator, true, true),
