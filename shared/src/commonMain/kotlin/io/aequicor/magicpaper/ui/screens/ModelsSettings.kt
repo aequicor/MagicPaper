@@ -184,7 +184,7 @@ private fun VariantEditor(profile: LlmProfile, model: String, onSave: (LlmProfil
     fun validNumber(text: String, min: Double, max: Double) = text.isBlank() || text.toDoubleOrNull()?.let { it.isFinite() && it in min..max } == true
     val valid = name.isNotBlank() && validNumber(temperature, 0.0, 2.0) && validNumber(topP, 0.0, 1.0) &&
         (maxTokens.isBlank() || maxTokens.toIntOrNull()?.let { it in 1..(fact?.maxOutputTokens ?: 10000000) } == true) &&
-        timeout.toIntOrNull()?.let { it in 0..3600 } == true && history.toIntOrNull()?.let { it in 1..1000 } == true &&
+        parseModelTimeoutSeconds(timeout) != null && history.toIntOrNull()?.let { it in 1..1000 } == true &&
         extras.values.all { it.isBlank() || runCatching { Json.parseToJsonElement(it) }.isSuccess }
     EditorDialog("${if (existing == null) "Новый вариант" else "Параметры варианта"}", onDismiss) {
         PaperText("На основе $source. Пустое поле сохраняет поведение поставщика.", style = paperTextStyle(PaperTextRole.BODY))
@@ -229,3 +229,6 @@ private fun EditorDialog(title: String, onDismiss: () -> Unit, content: @Composa
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
     }
 }
+
+/** Zero waits until completion or cancellation; positive seconds preserve the user’s chosen deadline. */
+internal fun parseModelTimeoutSeconds(value: String): Int? = value.toIntOrNull()?.takeIf { it >= 0 }

@@ -99,6 +99,25 @@ class JsonLlmProfileRepositoryTest {
     }
 
     @Test
+    fun missingTimeoutDefaultsToUnlimitedAndSavedTimeoutsRemainExplicit() = runTest {
+        val store = InMemoryKeyValueStore()
+        val raw = """[{"id":"missing","name":"Missing","baseUrl":"http://test/v1","modelId":"m"},
+            {"id":"legacy-default","name":"Saved 120","baseUrl":"http://test/v1","modelId":"m","advanced":{"timeoutSeconds":120}},
+            {"id":"long","name":"Saved long timeout","baseUrl":"http://test/v1","modelId":"m","advanced":{"timeoutSeconds":7200}},
+            {"id":"unlimited","name":"Unlimited","baseUrl":"http://test/v1","modelId":"m","advanced":{"timeoutSeconds":0}}]"""
+        store.write("llm_profiles", raw)
+        val repository = JsonLlmProfileRepository(store, json)
+        val profiles = repository.load()
+        val expected = mapOf("missing" to 0, "legacy-default" to 120, "long" to 7200, "unlimited" to 0)
+        assertEquals(expected, profiles.associate { it.id to it.advanced.safeTimeoutSeconds })
+        assertEquals(raw, store.read("llm_profiles"))
+        repository.save(profiles.first().copy(name = "Renamed"))
+        assertEquals(expected, repository.load().associate { it.id to it.advanced.safeTimeoutSeconds })
+        assertEquals(0, AdvancedLlmOptions().safeTimeoutSeconds)
+        assertEquals(Int.MAX_VALUE, AdvancedLlmOptions(timeoutSeconds = Int.MAX_VALUE).safeTimeoutSeconds)
+    }
+
+    @Test
     fun favoriteModelsRoundTrip() = runTest {
         val repository = repo()
         val profile = LlmProfile(

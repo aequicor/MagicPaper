@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui
 
+import io.aequicor.magicpaper.domain.OrganismLimits
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -19,6 +20,29 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ShellSettingsViewModelTest {
+    @Test
+    fun explicitAgentLimitsPersistAndCanBeRemovedWithoutChangingOtherSettings() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val fixture = ModelSettingsFixture()
+            val vm = fixture.prepare()
+            val initial = vm.state.value.settings
+            val configured = initial.copy(agentLimits = OrganismLimits(tokens = 900_000,
+                durationMillis = 9_000_000, activeSessions = 4, depth = 3, retries = 0,
+                queueSize = 20, contextCharacters = 30_000))
+            vm.saveSettings(configured)
+            advanceUntilIdle()
+            assertEquals(configured, fixture.settings.load())
+            assertEquals(configured, vm.state.value.settings)
+            vm.saveSettings(configured.copy(agentLimits = OrganismLimits()))
+            advanceUntilIdle()
+            assertEquals(initial, fixture.settings.load())
+            assertEquals(initial, vm.state.value.settings)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun navigationSidebarSettingsAndWelcomeKeepTheirExistingStateContracts() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))

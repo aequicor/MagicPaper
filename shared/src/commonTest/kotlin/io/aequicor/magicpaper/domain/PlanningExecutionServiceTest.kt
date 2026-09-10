@@ -40,6 +40,7 @@ class PlanningExecutionServiceTest {
     private class Runtime(
         private val gate: CompletableDeferred<Unit>? = null,
         private val failure: String? = null,
+        private val failuresBeforeSuccess: Int = Int.MAX_VALUE,
         private val commandGate: CompletableDeferred<Unit>? = null,
         private val trailingDelta: String? = null,
         private val report: String = "Verified result",
@@ -76,7 +77,7 @@ class PlanningExecutionServiceTest {
             trailingDelta?.let { emit(CodingEvent.TextDelta(it)) }
             terminateAfterOutput?.invoke()
             gate?.await()
-            if (failure != null) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText(report))
+            if (failure != null && calls.size <= failuresBeforeSuccess) emit(CodingEvent.Failed(failure)) else emit(CodingEvent.FinalText(report))
             emit(CodingEvent.Finished)
         }.onCompletion { if (cleanupGate != null) withContext(NonCancellable) { cleanupGate.await() } }
     }
@@ -89,12 +90,13 @@ class PlanningExecutionServiceTest {
         override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace { applied++; return workspace.copy(applied = true) }
     }
     private suspend fun TestScope.fixture(runtime: Runtime = Runtime(), workspace: PlanningWorkspace = Workspaces(), verifier: MilestoneVerifier = pass,
-        acceptanceChecks: AcceptanceChecks = AcceptanceChecks()): Triple<PlanningStore, PlanningExecutionService, Runtime> {
+        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3): Triple<PlanningStore, PlanningExecutionService, Runtime> {
         val kv = InMemoryKeyValueStore()
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val profiles = JsonLlmProfileRepository(kv, json).also { it.save(profile) }
         val projects = JsonCodingProjectRepository(kv, json).also { it.save(project) }
         val settings = JsonSettingsRepository(kv, json)
+        settings.save(AppSettings(agentLimits = OrganismLimits(retries = retryLimit)))
         return Triple(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope,
             outputClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks), runtime)
     }
@@ -595,11 +597,91 @@ class PlanningExecutionServiceTest {
         assertEquals(IssueKind.UNCERTAIN, store.planFor(project.id)!!.issue?.kind)
     }
 
+    @Test fun defaultPolicyCompletesAfterMoreThanThreeTransportRetries() = runTest {
+        val (store, service, runtime) = fixture(Runtime(failure = "HTTP 503 network unavailable", failuresBeforeSuccess = 4), retryLimit = null)
+        store.save(plan(stage("a")))
+        service.bootstrap(); service.start(project.id); advanceTimeBy(200); runCurrent()
+        repeat(4) { index ->
+            val waiting = store.planFor(project.id)!!
+            assertEquals(index + 1, waiting.milestones.single().attempts.single().transportRetries)
+            assertFalse(waiting.issue!!.requiresUser)
+            // Make the persisted backoff due; bootstrap, rather than a user retry, resumes it.
+            store.update(project.id) { p -> p.copy(issue = p.issue?.copy(retryAt = 0),
+                milestones = p.milestones.map { m -> m.copy(attempts = m.attempts.map { a -> a.copy(error = a.error?.copy(retryAt = 0)) }) }) }
+            advanceTimeBy(5_100); runCurrent()
+        }
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(4, saved.milestones.single().attempts.single().transportRetries)
+        assertEquals(5, runtime.calls.count { it == saved.milestones.single().attempts.single().sessionId })
+    }
+
+    @Test fun defaultPolicyCompletesAfterMoreThanTwoWorkerRepairs() = runTest {
+        var failures = 0
+        val verifier = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) =
+                if (milestone.id == "a" && failures++ < 4) Verdict(false, "Another scenario remains") else Verdict(true, "All scenarios checked")
+        }
+        val (store, service, runtime) = fixture(verifier = verifier, retryLimit = null)
+        store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(4, saved.milestones.single().attempts.single().repairRetries)
+        assertEquals(5, runtime.calls.count { it == saved.milestones.single().attempts.single().sessionId })
+    }
+
+    @Test fun defaultPolicyCompletesAfterMoreThanTwoMergeRepairs() = runTest {
+        var resolutions = 0
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun integrate(workspace: PlanWorkspace, attempt: StageAttempt) = false
+            override suspend fun finishConflict(workspace: PlanWorkspace, attempt: StageAttempt) = ++resolutions >= 4
+        }
+        val (store, service, runtime) = fixture(workspace = workspace, retryLimit = null)
+        store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(30_000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(PlanStatus.DONE, saved.status)
+        assertEquals(4, saved.milestones.single().attempts.single().mergeRetries)
+        assertEquals(4, runtime.calls.count { it.endsWith("-merge") })
+    }
+
+    @Test fun explicitMergeRetryLimitPreservesTheUnresolvedWorkspace() = runTest {
+        val base = Workspaces()
+        val workspace = object : PlanningWorkspace by base {
+            override suspend fun integrate(workspace: PlanWorkspace, attempt: StageAttempt) = false
+            override suspend fun finishConflict(workspace: PlanWorkspace, attempt: StageAttempt) = false
+        }
+        val (store, service, runtime) = fixture(workspace = workspace, retryLimit = 2)
+        store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(10_000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertEquals(IssueKind.CONFLICT, saved.issue?.kind)
+        assertTrue(saved.issue!!.requiresUser)
+        assertEquals(2, runtime.calls.count { it.endsWith("-merge") })
+        assertEquals(0, base.applied)
+        assertFalse(saved.milestones.single().completed)
+    }
+
+    @Test fun independentWorktreesCanUseMoreThanEightRequestedSlots() = runTest {
+        val (store, service, runtime) = fixture(Runtime(CompletableDeferred()), retryLimit = null)
+        store.save(plan(*(1..10).map { stage("task-$it") }.toTypedArray()).copy(parallelism = 10))
+        service.start(project.id); runCurrent()
+        assertEquals(10, runtime.calls.size)
+        service.stop(project.id); runCurrent()
+    }
+
+    @Test fun explicitlyDisabledRetriesStopAfterTheFirstFailure() = runTest {
+        val (store, service, runtime) = fixture(Runtime(failure = "HTTP 503 network unavailable"), retryLimit = 0)
+        store.save(plan(stage("a"))); service.bootstrap(); service.start(project.id); advanceTimeBy(30_000); runCurrent()
+        val saved = store.planFor(project.id)!!
+        assertTrue(saved.issue!!.requiresUser)
+        assertEquals(0, saved.milestones.single().attempts.single().transportRetries)
+        assertEquals(1, runtime.calls.size)
+    }
+
     @Test fun failedChecksHaveOnlyTwoRepairs() = runTest {
         val fail = object : MilestoneVerifier {
             override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(false, "Test failed")
         }
-        val (store, service, runtime) = fixture(verifier = fail)
+        val (store, service, runtime) = fixture(verifier = fail, retryLimit = 2)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
         assertEquals(3, runtime.calls.size)
         assertEquals(2, store.planFor(project.id)!!.milestones.single().attempts.single().repairRetries)
@@ -633,7 +715,7 @@ class PlanningExecutionServiceTest {
             override suspend fun review(milestone: Milestone, criteria: List<AcceptanceCriterion>, goal: String, report: String, profile: LlmProfile?) =
                 AcceptanceReview(criteria.map { AcceptanceFinding(it.id, CheckStatus.NOT_RUN, it.description, "No source evidence") })
         }
-        val (store, service, runtime) = fixture(verifier = verifier)
+        val (store, service, runtime) = fixture(verifier = verifier, retryLimit = 2)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
         val saved = store.planFor(project.id)!!
         assertEquals(3, runtime.calls.size)
@@ -665,7 +747,7 @@ class PlanningExecutionServiceTest {
         val fail = object : MilestoneVerifier {
             override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(false, "Restore permissions")
         }
-        val (store, service, runtime) = fixture(verifier = fail)
+        val (store, service, runtime) = fixture(verifier = fail, retryLimit = 2)
         store.save(plan(stage("a"))); service.start(project.id); advanceTimeBy(1000); runCurrent()
         assertEquals(3, runtime.calls.size)
         service.retry(project.id); advanceTimeBy(1000); runCurrent()

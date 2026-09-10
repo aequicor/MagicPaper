@@ -61,13 +61,7 @@ internal fun CoordinatorReply.resultProblem(record: CoordinationRecord?): String
 internal fun Plan.coordinatorResultProblem(eventId: String, decision: CoordinatorReply): String? {
     val record = coordination.firstOrNull { it.id == eventId } ?: return null
     decision.resultProblem(record)?.let { return it }
-    if (record.reply.kind != StageReplyKind.RESULT || decision.resultAction != CoordinatorResultAction.CONTINUE ||
-        decision.askUser || decision.questions.isNotEmpty()) return null
-    val attemptId = record.attemptId.ifBlank { record.id.substringBeforeLast("-turn-") }
-    val unverified = coordination.filter { it.stageId == record.stageId && (it.runId.isBlank() || it.runId == runId) &&
-        it.attemptId.ifBlank { it.id.substringBeforeLast("-turn-") } == attemptId }
-        .takeLastWhile { it.verification == null }.count { it.reply.kind == StageReplyKind.RESULT }
-    return if (unverified >= 3) "Исполнитель уже вернул три RESULT без проверки. Передай сохранённые отчёты на проверку через VERIFY; если требуется решение пользователя, задай вопрос. Ещё один автоматический CONTINUE создаёт цикл." else null
+    return null
 }
 
 internal fun CoordinationRecord.actionOrigin(): String = if (actionRevision == 0) id else "$id-revision-$actionRevision"

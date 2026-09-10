@@ -58,6 +58,14 @@ class DecisionPlannerTest {
         assertTrue(DecisionCompiler.compile(result).valid)
     }
 
+    @Test fun defaultPolicyRepairsMoreThanThreeInvalidProposals() = runTest {
+        val gateway = Gateway("invalid one", "invalid two", "invalid three", "invalid four", response(plan()))
+        val result = textPlanComposer(gateway, retryLimit = null).refine(plan(), "Refine", profile, listOf(profile), emptyList())
+        assertEquals(5, gateway.calls)
+        assertTrue(DecisionCompiler.compile(result).valid)
+        assertTrue(gateway.requests.all { it.size <= 4 })
+    }
+
     @Test fun correctionLimitLeavesTheLastValidPlanUntouched() = runTest {
         val gateway = Gateway("{}")
         val original = plan()
@@ -100,7 +108,7 @@ class DecisionPlannerTest {
         assertEquals(proposed.milestones.map { it.acceptanceCriteria }, result.milestones.map { it.acceptanceCriteria })
         val wrong = proposed.copy(milestones = proposed.milestones.map { it.copy(acceptanceCriteria =
             it.acceptanceCriteria.map { c -> c.copy(environment = EvidenceEnvironment.MANUAL) }) })
-        val invalidPlanner = DecisionPlanner(completePlanning = { _, _, _, _ -> response(wrong) }, acceptanceChecks = registry)
+        val invalidPlanner = DecisionPlanner(completePlanning = { _, _, _, _ -> response(wrong) }, acceptanceChecks = registry, retryLimit = { 2 })
         assertFailsWith<IllegalStateException> { invalidPlanner.refine(original, "Move button", profile, listOf(profile), emptyList()) }
     }
 

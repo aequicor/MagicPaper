@@ -63,40 +63,89 @@ side effects. An interrupted potentially mutating tool retains an `UNKNOWN` tool
 phase and its saved pending-effect checkpoint. Stopping or archiving a session does
 not undo an already completed command, Git operation or API request.
 
-## Plan budgets and explicit retry
+## Resource settings, plan budgets and explicit retry
 
 The September 10 early-stop failure came from a fixed 64,000-token stage grant:
 four read/search operations reported 93,956 tokens while the parent still held
 926,000. The quota cancellation then lost its cause at the scheduler's event-channel
 boundary and appeared as a stream ending without a confirmed result.
 
-Plan admission now divides available parent tokens among unfunded unfinished
-selected stages and one retained parent share for orchestration and verification.
-Funded siblings are excluded under the aggregate lock, and continuation turns keep
-their remaining grant. Explicit existing allocations and the organism limit remain
-authoritative. Normal allocation does not borrow the immunity recovery reserve.
+The earlier correction in `c5c7279` replaced that fixed grant with fair allocation,
+reconciled overruns, preserved cancellation causes and added explicit stage retry.
+It still treated a worker's grant as a stopping limit and retained implicit task
+ceilings. The current policy supersedes those resource limits.
 
-Provider usage is observed after work and can exceed a grant. Actual spend is
-preserved; excess reservations are removed from the responsible branch and its
-ancestors, then other grants, with recovery last. The same reconciliation repairs
-older excessive reservations during admission. An observed overrun beyond the
-whole organism limit leaves no spendable grants; it is not hidden by clamping the
-reported cost. Already incurred usage from another live session remains
-accountable after its grant is exhausted, without authorizing further work.
+`AppSettings.agentLimits` is the live resource policy for agent tasks. Each of its
+seven configurable ceilings defaults to `null`, meaning no application limit:
 
-A child cancellation now preserves its budget/deadline reason and partial tool
-evidence. It neither supplies a successful completion event nor triggers an
-automatic retry. Owner/user cancellation still cancels the scheduler normally.
+| Field | Explicit setting limits |
+| --- | --- |
+| `activeSessions` | Concurrent ordinary and auxiliary native runs |
+| `depth` | Session-tree depth |
+| `tokens` | Total reported token use across the task |
+| `durationMillis` | Task duration measured from organism creation |
+| `retries` | Retries on eligible recovery paths |
+| `queueSize` | Context, result and diagnostic queues |
+| `contextCharacters` | Transferred context size |
+
+The settings screen leaves unset values empty and allows removing them. Ordinary
+pending children and passive immunity do not occupy native runtime slots. An
+explicit limit of one therefore permits one live agent. The compatibility field
+`recoveryTokens` defaults to zero; it does not introduce a separate stopping limit.
+
+When a token limit is configured, plan admission still divides available parent
+tokens among unfunded unfinished selected stages and one retained parent share for
+orchestration and verification. Funded siblings are excluded under the aggregate
+lock, and continuation turns retain their remaining reservation. These shares are
+accounting allocations: a worker whose reservation reaches zero can continue while
+the task has unspent tokens. The configured task-wide limit is authoritative.
+Without a token limit, reservations remain zero and do not restrict admission;
+there is no synthetic maximum-sized token pool.
+
+Provider usage arrives after work and can exceed a reservation or the task limit.
+Actual spend is preserved. Excess reservations are removed from the responsible
+branch and its ancestors, then other grants, with recovery last. An overrun beyond
+the configured task limit leaves no spendable grants without clamping the reported
+cost. Already incurred usage from another live session remains accountable after
+the limit is reached. Native and auxiliary runs observe the same aggregate spend.
+
+An aggregate with missing or zero `limitPolicyVersion` predates explicit resource
+settings. Its hidden limits migrate to the unbounded policy, reservations are
+cleared, and version 1 plus an audit event are persisted. Actual spend, history,
+results, generations and stop/unknown states are preserved. The service applies
+current user settings before admission, including when recovering an aggregate
+whose legacy session projection was never completed.
+
+Policy synchronization, saving settings and initial adoption share a service
+mutex. An older settings snapshot cannot overwrite a newer saved removal. Token
+limit changes redistribute only the remaining allowance after actual spend; other
+limit changes leave reservations intact. Live runtime observers replace deadline
+timers when settings change and stop work when an explicit task budget is reached.
+Removing a limit does not reset spend or reopen a stopped generation. The UI reports
+settings-save failures separately from failures applying successfully saved settings
+to live tasks.
+
+Eligible format and transport recovery has no default retry-count ceiling.
+Repeated recovery yields or waits with backoff and remains cancellable; a configured
+retry limit is enforced. Elapsed time alone no longer quarantines an unconfirmed
+operation after five minutes, and immunity recreation has no implicit one-minute
+cooldown. Unknown external effects still require reconciliation.
+
+A child cancellation preserves its budget/deadline reason and partial tool
+evidence. It neither supplies a successful completion event nor authorizes an
+automatic retry of uncertain work. Owner/user cancellation still cancels the
+scheduler normally.
 
 Explicit retry captures a persisted `StageAttempt.retryAuthorization` for the
 exact plan/run/stage/attempt/turn, session generation and node version. Saving it
 requires the Plan snapshot to remain unchanged. Admission atomically checks and
-consumes its ID, records user authorization, reserves available budget and advances
-the stopped worker's generation. Replaying admission before native startup reuses
-the grant. A later stop invalidates the authorization; active descendants, unknown
-outcomes, quarantine, archive, accepted results and a closed parent remain blockers.
-Old plans decode the new optional field as null. The Plan and organism remain
-separate storage transactions; retry does not alter existing worktrees or evidence.
+consumes its ID, records user authorization, checks any configured resource limits
+and advances the stopped worker's generation. Replaying admission before native
+startup reuses that generation and reservation. A later stop invalidates the
+authorization; active descendants, unknown outcomes, quarantine, archive, accepted
+results and a closed parent remain blockers. Old plans decode the optional field
+as null. The Plan and organism remain separate storage transactions; retry does
+not alter existing worktrees or evidence.
 
 ## Generic coding child workspaces
 
@@ -224,9 +273,10 @@ existing run ID freeze the supplied default with `LEGACY` provenance. Descendant
 stage, verification and conflict runs inherit the snapshot. No historic ephemeral
 native question can be reconstructed if an older application never saved it.
 
-The tree enforces the remaining organism deadline and charges observed token
-increments to the current node's existing budget. Repeated observations from the
-same source are deduplicated within a live generation. Providers that do not emit
+The tree enforces only a configured organism deadline or aggregate token limit.
+Observed token increments are attributed to the current node and counted in the
+task-wide total; a node's reservation is not an independent stopping limit. Repeated
+observations from the same source are deduplicated within a live generation. Providers that do not emit
 accountable token usage cannot support a hard token/cost ceiling from this stream;
 the implementation does not claim a hard financial spending cap. Legacy planning
 stages retain the durable milestone scheduler, worktree and integration lifecycle;
@@ -235,9 +285,9 @@ they are not a second unrestricted ordinary child executor.
 Application-authenticated final-verification, merge, delivery-conflict and planning
 aliases now have separate durable auxiliary-run records. Each record binds the
 native alias and request to its actual owner's generation and plan run. Cumulative
-usage is deduplicated persistently and charged to that owner's existing token
-budget. Live and unknown aliases consume the same runtime capacity limit and obey
-the remaining organism deadline. They do not create ordinary session nodes or
+usage is deduplicated persistently, attributed to that owner and counted toward
+any configured task-wide token limit. Live and unknown aliases consume the same
+configured runtime capacity and obey a task deadline only when one is configured. They do not create ordinary session nodes or
 acquire additional lifecycle authority. Owner stop and shutdown include these
 aliases; failed process reconciliation stays `UNKNOWN` and prevents a new owner
 generation, terminal owner observation or history deletion until cleanup succeeds.
@@ -280,7 +330,7 @@ parent joining, delayed cancellation cleanup, isolated and cancelling failure
 policies, dependency ordering, startup failures, stale results, failure during
 hydration and question cleanup, and reconciliation before terminal observation.
 
-The September 10 planner correction adds 20 regression tests for fair allocation,
+The earlier September 10 planner correction (`c5c7279`) added 20 regression tests for fair allocation,
 legacy overrun accounting, concurrent usage after exhaustion, cancellation causes,
 durable retry authorization and newer stop/Plan snapshots. All 1,246 shared and
 30 design-system tests passed; two existing opt-in live catalog checks were skipped.
@@ -291,7 +341,14 @@ in three failing tests. Counts, commands and control results are stored in
 Live application records were inspected read-only; no plan was restarted and the
 running desktop application was not replaced.
 
-The combined Gradle verification is reported with the task's final execution
-results. `python3 docs/desktop-ui/verify-design-system.py --self-test` passes for the
-current changes. UI changes here are state/routing projections; no new visual
-component or platform-specific native behavior is claimed.
+The current optional-policy change adds regression coverage for exceeding the old
+implicit ceilings, explicit limits, use beyond a worker reservation, legacy policy
+migration, live deadline/token changes, serialized policy updates and settings
+validation. These additions and updated expectations are separate from the
+historical verification totals above. Current Gradle, platform and design-system
+verification passed: 1,290 shared tests and 30 design-system tests, with the same
+two opt-in live catalog tests skipped. Desktop, Android, JavaScript and Wasm
+compilation succeeded. The settings form was rendered at narrow and desktop
+widths and at 200% text scale; validation and saving were exercised. Commands,
+suite totals and verification scope are recorded in
+`docs/session-infrastructure-verification/optional-agent-limits-2026-09-10.json`.

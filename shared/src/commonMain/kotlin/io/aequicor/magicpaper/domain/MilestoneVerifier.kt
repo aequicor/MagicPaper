@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.domain
 
+import kotlinx.coroutines.ensureActive
+
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -33,6 +35,7 @@ interface MilestoneVerifier {
 class LlmMilestoneVerifier(
     private val gateway: LlmGateway,
     private val json: Json = DEFAULT_JSON,
+    private val retryLimit: suspend () -> Int? = { null },
 ) : MilestoneVerifier {
 
     @Serializable
@@ -44,7 +47,9 @@ class LlmMilestoneVerifier(
         if (profile == null || !profile.configured) return AcceptanceReview(emptyList(),
             PlanningIssue(IssueKind.CONFIGURATION, "Подключите модель для проверки", requiresUser = true))
         var correction = ""
-        repeat(3) {
+        var retries = 0
+        while (true) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             try {
                 val raw = gateway.complete(profile, listOf(
                     LlmMessage(LlmChatRole.SYSTEM, VERIFY_PROMPT + "\n" + """
@@ -70,6 +75,9 @@ class LlmMilestoneVerifier(
                 return AcceptanceReview(emptyList(), PlanningIssue(if (temporary) IssueKind.TRANSIENT else IssueKind.CONFIGURATION,
                     e.message.orEmpty(), requiresUser = !temporary))
             } catch (e: Exception) { correction = "Исправь ответ: ${e.message}" }
+            if (!PlanningRetryPolicy.canRetry(retries, retryLimit())) break
+            retries = PlanningRetryPolicy.nextRetry(retries)
+            PlanningRetryPolicy.awaitRetry(retries)
         }
         return AcceptanceReview(emptyList(), PlanningIssue(IssueKind.INVALID_RESPONSE, correction, requiresUser = true))
     }
@@ -89,7 +97,9 @@ class LlmMilestoneVerifier(
             )
         }
         var failure = ""
-        repeat(3) {
+        var retries = 0
+        while (true) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             try { return modelVerdict(milestone, goal, report, profile, failure) }
             catch (e: LlmTransportException) {
                 val temporary = e.statusCode == 429 || e.statusCode >= 500
@@ -101,9 +111,12 @@ class LlmMilestoneVerifier(
             }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { failure = e.message ?: failure }
+            if (!PlanningRetryPolicy.canRetry(retries, retryLimit())) break
+            retries = PlanningRetryPolicy.nextRetry(retries)
+            PlanningRetryPolicy.awaitRetry(retries)
         }
         return Verdict(false, "Проверка не сработала: $failure. Результат не принят.",
-            PlanningIssue(IssueKind.INVALID_RESPONSE, failure, retries = 2, requiresUser = true))
+            PlanningIssue(IssueKind.INVALID_RESPONSE, failure, retries = retries, requiresUser = true))
     }
 
     private suspend fun modelVerdict(

@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper.domain
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.yield
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
@@ -23,9 +27,19 @@ object PlanningRetryPolicy {
         if (Regex("\\b(publish|deploy|upload|push|install|release)\\b").containsMatchIn(value)) return false
         return Regex("^(?:git (?:status|diff|log|show|rev-parse)\\b|(?:npm|pnpm|yarn) (?:test|run (?:test|lint|typecheck|build))\\b|(?:python(?:3)? -m )?pytest\\b|cargo (?:test|check|build)\\b|go test\\b|(?:\\./|\\.\\\\)?gradlew(?:\\.bat)? :?(?:(?:[\\w-]+:)*(?:[\\w-]*test|check|lint|assemble\\w*|compile\\w*|build))(?:\\s|$))").containsMatchIn(value)
     }
+    /** Limits are user choices; absent limits never exhaust an automatic recovery path. */
+    fun canRetry(completedRetries: Int, limit: Int?): Boolean = limit == null || completedRetries < limit
+    fun nextRetry(completedRetries: Int): Int = if (completedRetries == Int.MAX_VALUE) completedRetries else completedRetries + 1
+
+    /** A couple of immediate format corrections remain cheap; prolonged recovery backs off. */
+    suspend fun awaitRetry(retry: Int) {
+        currentCoroutineContext().ensureActive()
+        if (retry > 2) delay(delayMillis(retry)) else yield()
+    }
+
     fun delayMillis(retry: Int, retryAfter: String? = null, now: Long = 0, jitter: Long = 0): Long {
-        require(retry in 1..3)
-        return maxOf(listOf(2000L, 5000L, 15000L)[retry - 1], retryAfterMillis(retryAfter, now)) + jitter.coerceIn(0, 500)
+        require(retry >= 1)
+        return maxOf(listOf(2000L, 5000L, 15000L)[(retry - 1).coerceAtMost(2)], retryAfterMillis(retryAfter, now)) + jitter.coerceIn(0, 500)
     }
     fun retryAfterMillis(value: String?, now: Long): Long {
         val raw = value?.trim() ?: return 0

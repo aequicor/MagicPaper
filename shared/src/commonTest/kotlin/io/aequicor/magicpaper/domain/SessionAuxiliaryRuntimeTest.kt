@@ -124,7 +124,7 @@ class SessionAuxiliaryRuntimeTest {
 
     @Test fun auxiliaryReservationsShareActualRuntimeCapacityAndCannotDebitLaterGeneration() = runTest {
         val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
-        val runs = (0..6).map { f.store.beginAuxiliary(context(f, "alias-$it")) }
+        val runs = (0..7).map { f.store.beginAuxiliary(context(f, "alias-$it")) }
         assertFailsWith<IllegalArgumentException> { f.store.beginAuxiliary(context(f, "over-limit")) }
         runs.forEach { f.store.finishAuxiliary(f.root.organismId!!, it.id, SessionObservedState.COMPLETED) }
         f.store.beginRun(f.root.organismId!!, f.root.id)

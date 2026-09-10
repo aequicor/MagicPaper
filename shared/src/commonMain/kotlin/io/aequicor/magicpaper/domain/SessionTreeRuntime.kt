@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.domain.tools.ToolExecutionContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -47,7 +48,10 @@ class SessionTreeRuntime(
     suspend fun incoming(session: CodingSession): List<SessionDelivery> = organisms.pendingContext(session)
     suspend fun processed(session: CodingSession, ids: List<String>) = organisms.acknowledgeContext(session, ids)
     suspend fun auxiliaryContext(context: ToolExecutionContext): ToolExecutionContext {
-        if (context.organismId != null) return context
+        if (context.organismId != null) {
+            organisms.synchronizeLimits(context.organismId)
+            return context
+        }
         val owner = projects.sessions(context.projectId).firstOrNull { it.id == context.ownerSessionId }
             ?: error("Владелец вспомогательного запуска не сохранён")
         require(owner.runtimeGeneration == context.runtimeGeneration) { "Владелец другого поколения" }
@@ -71,10 +75,7 @@ class SessionTreeRuntime(
             }
             val auxiliary = organisms.store.beginAuxiliary(bound)
             handle.auxiliary = auxiliary
-            val organism = organisms.store.get(organismId)
-            val remaining = organism.limits.durationMillis - (clock() - organism.createdAt).coerceAtLeast(0)
-            check(remaining > 0) { "Время организма исчерпано" }
-            withTimeout(remaining) {
+            withConfiguredLimits(organismId) {
                 val result = block(session.copy(organismId = organismId, runtimeGeneration = auxiliary.generation,
                     planningRulesSnapshot = bound.planningRulesSnapshot))
                 lock.withLock { handle.closing = true }
@@ -169,6 +170,7 @@ class SessionTreeRuntime(
                 current = current.copy(organismId = adopted.id, runtimeGeneration = adopted.sessions.getValue(current.id).generation)
             }
             if (current.organismId != null) {
+                organisms.synchronizeLimits(current.organismId!!)
                 val node = organisms.store.beginRun(current.organismId!!, session.id)
                 current = current.copy(runtimeGeneration = node.generation, planningRulesSnapshot = node.rules)
                 handle.generation = current.runtimeGeneration
@@ -200,12 +202,7 @@ class SessionTreeRuntime(
                 childScope.join()
                 return result
             }
-            val organism = current.organismId?.let { organisms.store.get(it) }
-            if (organism == null) execute() else {
-                val remaining = organism.limits.durationMillis - (clock() - organism.createdAt).coerceAtLeast(0)
-                check(remaining > 0) { "Время организма исчерпано" }
-                withTimeout(remaining) { execute() }
-            }
+            if (current.organismId == null) execute() else withConfiguredLimits(current.organismId!!) { execute() }
         } catch (error: Throwable) { failure = error; throw error }
         finally {
             withContext(NonCancellable) {
@@ -218,6 +215,31 @@ class SessionTreeRuntime(
             }
         }
     }
+
+    /** A live policy observer allows removing/increasing a deadline without an old timer
+     * cancelling the run. No timer or token grant imposes a ceiling by default. */
+    private suspend fun <T> withConfiguredLimits(organismId: String, block: suspend () -> T): T = coroutineScope {
+        // Keep the body in this scope: callers may emit into their own Flow collector.
+        val work = currentCoroutineContext().job
+        val monitor = launch(start = CoroutineStart.UNDISPATCHED) {
+            organisms.store.organisms.collectLatest {
+                val organism = organisms.store.organisms.value[organismId] ?: return@collectLatest
+                if (organism.tokensExhausted()) {
+                    work.cancel(CancellationException("Бюджет задачи исчерпан"))
+                    return@collectLatest
+                }
+                val duration = organism.limits.durationMillis ?: return@collectLatest
+                delay((duration - (clock() - organism.createdAt).coerceAtLeast(0)).coerceAtLeast(0))
+                val latest = organisms.store.organisms.value[organismId] ?: return@collectLatest
+                if (latest.limits.durationMillis?.let { clock() - latest.createdAt >= it } == true)
+                    work.cancel(CancellationException("Время задачи исчерпано"))
+            }
+        }
+        try { ensureActive(); block() } finally { monitor.cancel() }
+    }
+
+    private fun SessionOrganism.tokensExhausted(): Boolean =
+        limits.tokens?.let { limit -> sessions.values.sumOf { it.spentTokens } >= limit } == true
 
     private suspend fun finishScope(session: CodingSession, handle: Handle, failure: Throwable?) {
         var uncertain = false
@@ -278,26 +300,29 @@ class SessionTreeRuntime(
         val id = session.organismId ?: return
         val total = event.tokens.totalTokens?.coerceAtLeast(0) ?: return
         if (!event.accounting || event.sourceId.isBlank()) return
-        val auxiliary = lock.withLock { handles[session.id]?.auxiliary }
-        if (auxiliary != null) {
-            val updated = organisms.store.chargeAuxiliary(id, auxiliary.id, event.sourceId, total)
-            if (updated.sessions.getValue(auxiliary.ownerSessionId).remainingTokens <= 0) {
-                try { runtime?.abort(session.id) } finally { throw CancellationException("Бюджет владельца исчерпан") }
+        // This observation already describes incurred work. A concurrently changed limit
+        // may cancel the owner while we wait for policy/accounting locks; keep its cost.
+        // Generation checks still reject a late observation after runtime ownership changes.
+        val exhausted = withContext(NonCancellable) {
+            organisms.synchronizeLimits(id)
+            lock.withLock {
+                val handle = handles[session.id] ?: throw CancellationException("Рабочая область закрыта")
+                require(handle.generation == session.runtimeGeneration) { "Поздний результат другого поколения" }
+                val auxiliary = handle.auxiliary
+                if (auxiliary != null) {
+                    organisms.store.chargeAuxiliary(id, auxiliary.id, event.sourceId, total).tokensExhausted()
+                } else {
+                    val before = handle.usage[event.sourceId] ?: 0
+                    if (total <= before) return@withLock false
+                    val updated = organisms.store.charge(SessionAuthority(session.projectId, id, session.id,
+                        session.runtimeGeneration, session.interactionMode), total - before)
+                    handle.usage[event.sourceId] = total
+                    updated.tokensExhausted()
+                }
             }
-            return
-        }
-        val exhausted = lock.withLock {
-            val handle = handles[session.id] ?: throw CancellationException("Рабочая область закрыта")
-            require(handle.generation == session.runtimeGeneration) { "Поздний результат другого поколения" }
-            val before = handle.usage[event.sourceId] ?: 0
-            if (total <= before) return@withLock false
-            val updated = organisms.store.charge(SessionAuthority(session.projectId, id, session.id,
-                session.runtimeGeneration, session.interactionMode), total - before)
-            handle.usage[event.sourceId] = total
-            updated.sessions.getValue(session.id).remainingTokens <= 0
         }
         if (exhausted) {
-            try { runtime?.abort(session.id) } finally { throw CancellationException("Бюджет сессии исчерпан") }
+            try { runtime?.abort(session.id) } finally { throw CancellationException("Бюджет задачи исчерпан") }
         }
     }
 

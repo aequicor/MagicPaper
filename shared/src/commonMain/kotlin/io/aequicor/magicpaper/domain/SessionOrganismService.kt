@@ -16,6 +16,7 @@ class SessionOrganismService(
     private val sourceSnapshot: suspend (CodingProject) -> String? = { null },
 ) {
     private val projectionLock = Mutex()
+    private val limitPolicyLock = Mutex()
     private val supervisionLock = Mutex()
     private val deletingProjects = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
     private val supervision = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -105,8 +106,9 @@ class SessionOrganismService(
         require(plan.projectId !in deletingProjects.value && plan.confirmedRevision != null) { "План недоступен для повтора" }
         require(plan.selectedMilestones.firstOrNull { it.id == stageId }?.attempts?.lastOrNull() == attempt) { "Попытка этапа заменена" }
         val parent = projects.sessions(plan.projectId).firstOrNull { it.id == plan.parentSessionId } ?: return null
-        val organism = parent.organismId ?: return null
-        return store.authorizePlanRetry(organism, attempt.sessionId, planBinding(plan, stageId, attempt))
+        if (parent.organismId == null) return null
+        val organism = ensure(parent)
+        return store.authorizePlanRetry(organism.id, attempt.sessionId, planBinding(plan, stageId, attempt))
     }
 
     suspend fun preparePlanAttempt(plan: Plan, stageId: String, attempt: StageAttempt): StageAttempt {
@@ -282,11 +284,11 @@ class SessionOrganismService(
         val id = session.organismId ?: return emptyList()
         deliver(id)
         val organism = store.get(id)
-        var remaining = organism.limits.contextCharacters
+        var remaining = organism.limits.contextCharacters?.toLong()
         return organism.outbox.filter { it.recipient == session.id && it.recipientGeneration == session.runtimeGeneration && it.state == SessionDeliveryState.DELIVERED }
             .sortedBy { it.sequence }.takeWhile { delivery ->
                 val size = json.encodeToString(SessionContextPacket.serializer(), delivery.packet).length
-                (size <= remaining).also { if (it) remaining -= size }
+                (remaining == null || size <= remaining!!).also { if (it) remaining = remaining?.minus(size) }
             }
     }
 
@@ -354,10 +356,37 @@ class SessionOrganismService(
         } finally { if (sessionId == null) deletingProjects.value = deletingProjects.value - projectId }
     } }
 
+    /** Serialize policy reads and writes so an old snapshot cannot restore a removed limit. */
+    suspend fun synchronizeLimits(organismId: String): SessionOrganism = limitPolicyLock.withLock {
+        store.applyLimits(organismId, settings.load().agentLimits)
+    }
+
+    suspend fun synchronizeAllLimits() = limitPolicyLock.withLock {
+        applyLimitsToAll(settings.load().agentLimits)
+    }
+
+    /** Save errors still throw. A failed result means settings persisted but live propagation
+     * failed, which lets the UI report those distinct outcomes without losing the saved choice. */
+    suspend fun saveSettingsAndApplyLimits(updated: AppSettings): Result<Unit> = limitPolicyLock.withLock {
+        settings.save(updated)
+        try {
+            applyLimitsToAll(updated.agentLimits)
+            Result.success(Unit)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
+
+    private suspend fun applyLimitsToAll(limits: OrganismLimits) {
+        store.loadAll().filter { it.deletedAt == null }.forEach { store.applyLimits(it.id, limits) }
+    }
+
     suspend fun ensure(session: CodingSession): SessionOrganism {
         require(session.projectId !in deletingProjects.value) { "Проект удаляется" }
         require(projects.all().any { it.id == session.projectId }) { "Проект удалён" }
-        session.organismId?.let { return store.get(it) }
+        session.organismId?.let { return synchronizeLimits(it) }
         val sessions = projects.sessions(session.projectId)
         var root = sessions.firstOrNull { it.id == session.id } ?: session
         val seen = mutableSetOf<String>()
@@ -365,10 +394,16 @@ class SessionOrganismService(
             require(seen.add(root.id)) { "Цикл происхождения сессий" }
             root = sessions.firstOrNull { it.id == root.parentSessionId } ?: error("Восстановите родительскую сессию")
         }
-        root.organismId?.let { id -> return store.get(id) }
-        val rules = root.planningRulesSnapshot ?: settings.load().planningRules.snapshot()
+        root.organismId?.let { id -> return synchronizeLimits(id) }
         val ids = sessions.sessionTreeIds(root.id)
-        val organism = store.adopt(root.projectId, root.copy(planningRulesSnapshot = rules), sessions.filter { it.id in ids && it.id != root.id })
+        val organism = limitPolicyLock.withLock {
+            val configured = settings.load()
+            val rules = root.planningRulesSnapshot ?: configured.planningRules.snapshot()
+            val adopted = store.adopt(root.projectId, root.copy(planningRulesSnapshot = rules),
+                sessions.filter { it.id in ids && it.id != root.id }, configured.agentLimits)
+            // An earlier adoption may exist before its legacy projection has completed.
+            store.applyLimits(adopted.id, configured.agentLimits)
+        }
         project(organism)
         return organism
     }

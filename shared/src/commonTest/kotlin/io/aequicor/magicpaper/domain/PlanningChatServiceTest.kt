@@ -85,6 +85,7 @@ class PlanningChatServiceTest {
     }
     private inner class Fixture(scope: TestScope, val kv: KeyValueStore = InMemoryKeyValueStore(),
         private val isolatedWorkspaces: Boolean = false,
+        private val retryLimit: Int? = 2,
     ) {
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val projects = JsonCodingProjectRepository(kv, json)
@@ -99,7 +100,7 @@ class PlanningChatServiceTest {
                 onActivity(CodingStep(CodingStepKind.TOOL, "Прочитан source.kt", tool = "read", callId = "$requestId-read", result = "code", running = false))
                 return gateway.completeWithActivity(profile, messages, onActivity)
             }
-        }, projectLookup = { id -> projects.all().firstOrNull { it.id == id } })
+        }, projectLookup = { id -> projects.all().firstOrNull { it.id == id } }, retryLimit = { settings.load().agentLimits.retries })
         val runtime = Runtime()
         var verdict = Verdict(true, "Checked")
         val verificationReports = mutableListOf<Pair<String, String>>()
@@ -122,7 +123,7 @@ class PlanningChatServiceTest {
         val service = PlanningChatService(store, execution, projects, profiles, settings, composer, gateway, scope.backgroundScope,
             workerDispatcher = StandardTestDispatcher(scope.testScheduler))
         suspend fun initialize() {
-            projects.save(project); profiles.save(profile); settings.save(AppSettings(activeLlmProfileId = profile.id))
+            projects.save(project); profiles.save(profile); settings.save(AppSettings(activeLlmProfileId = profile.id, agentLimits = OrganismLimits(retries = retryLimit)))
             service.bootstrap()
         }
         suspend fun session(id: String, engine: CodingEngine? = null): CodingSession = CodingSession(id, project.id, id, 1, planningMode = true,
@@ -470,7 +471,6 @@ class PlanningChatServiceTest {
         assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(parent, history, plan = blocked)))
         val notice = history.single { it.failed }
         assertContains(notice.text, reason)
-        assertContains(notice.text, "исчерпаны (2)")
         assertEquals(notice, f.projects.messages(project.id, worker.id).single { it.id == notice.id })
         val restored = JsonPlanningRepository(f.kv, json).planFor(plan.id)!!
         assertEquals(reason, restored.blockingIssues(history).single().issue.message)
@@ -620,19 +620,19 @@ class PlanningChatServiceTest {
         assertEquals(1, f.store.planFor(plan.id)!!.scheduledMessages.size)
     }
 
-    @Test fun repeatedExplicitContinuationsMustReachVerificationWithinThreeResults() = runTest {
-        val f = Fixture(this); f.initialize(); runCurrent()
+    @Test fun concreteContinuationsCanExceedThreeResultsWithoutAnUnconfiguredStop() = runTest {
+        val f = Fixture(this, retryLimit = null); f.initialize(); runCurrent()
         val plan = f.readyPlan("p", f.session("parent"))
-        f.gateway.coordinatorReplies += List(3) {
-            """{"reply":"Ещё раз заверши этап","resultAction":"CONTINUE","continuationReason":"Нужен успешный статус","actions":[{"stageId":"stage","message":"Отметь результат принятым"}]}"""
+        f.gateway.coordinatorReplies += List(4) {
+            """{"reply":"Нужна ещё одна проверка","resultAction":"CONTINUE","continuationReason":"Остался непроверенный сценарий","actions":[{"stageId":"stage","message":"Проверь следующий сценарий"}]}"""
         }
         f.runtime.gate.complete(Unit)
         f.service.confirm(plan.id); advanceTimeBy(1000); runCurrent()
         val saved = f.store.planFor(plan.id)!!
         assertEquals(PlanStatus.DONE, saved.status)
-        assertEquals(3, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
-        assertEquals(4, f.gateway.coordinatorCallbacks.size)
-        assertEquals(2, saved.deliveries.size)
+        assertEquals(5, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        assertEquals(5, f.gateway.coordinatorCallbacks.size)
+        assertEquals(4, saved.deliveries.size)
         assertTrue(saved.deliveries.all { it.state == DeliveryState.ANSWERED })
         assertEquals(1, f.verificationReports.count { it.first == "stage" })
     }
@@ -1094,6 +1094,31 @@ class PlanningChatServiceTest {
         assertTrue(f.store.planFor(plan.id)!!.deliveries.isEmpty())
     }
 
+    @Test fun defaultPolicyRepairsFourInvalidCoordinatorResponsesWithoutRepeatingWorker() = runTest {
+        val f = Fixture(this, retryLimit = null); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.gateway.coordinatorReplies += List(4) { "invalid JSON $it" } + """{"reply":"Проверить результат"}"""
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(40_000); runCurrent()
+        assertEquals(PlanStatus.DONE, f.store.planFor(plan.id)!!.status)
+        assertEquals(5, f.gateway.coordinatorCallbacks.size)
+        assertEquals(1, f.runtime.calls.count { it.first.id == "plan-p-stage-stage" })
+        assertTrue(f.gateway.requests.filter { it.first().content.contains("Ты координатор") }.all { it.size <= 4 })
+    }
+
+    @Test fun defaultCoordinatorRecoveryStillRespondsToUserStop() = runTest {
+        val f = Fixture(this, retryLimit = null); f.initialize(); runCurrent()
+        val plan = f.readyPlan("p", f.session("parent"))
+        f.gateway.coordinator = "invalid JSON"
+        f.runtime.gate.complete(Unit)
+        f.service.confirm(plan.id); advanceTimeBy(1_000); runCurrent()
+        assertEquals(3, f.gateway.coordinatorCallbacks.size)
+        f.execution.stop(plan.id); runCurrent()
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(3, f.gateway.coordinatorCallbacks.size)
+        assertEquals(ExecutionIntent.STOP, f.store.planFor(plan.id)!!.intent)
+    }
+
     @Test fun repeatedlyInvalidCoordinatorResponseOpensAnswerableQuestionAndCanResume() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")
@@ -1111,7 +1136,7 @@ class PlanningChatServiceTest {
         val history = f.projects.messages(project.id, parent.id)
         val question = assertNotNull(history.pendingPlanningQuestion())
         assertEquals("stage", question.planning!!.sourceStageId)
-        assertTrue(question.text.contains("за три попытки"))
+        assertTrue(question.text.contains("лимит повторов: 2"))
         assertEquals(CodingSessionStatus.WAITING, f.status(CodingSessionUi(parent, history, plan = saved)))
         f.gateway.coordinator = """{"reply":"Результат принят"}"""
         f.service.send(parent, "Продолжить с сохранённого результата", replyTo = question.id)
@@ -2026,7 +2051,7 @@ class PlanningChatServiceTest {
 
     @Test fun bootReplaysStoredInboxWithoutRepeatingAnAlreadyAppliedReply() = runTest {
         val f = Fixture(this)
-        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id))
+        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id, agentLimits = OrganismLimits(retries = 2)))
         val parent = f.session("parent")
         val base = f.readyPlan("p", parent)
         f.store.save(base.copy(dialogue = listOf(PlanningMessage("applied-reply", "assistant", "Уже сохранено"))))
@@ -2060,7 +2085,7 @@ class PlanningChatServiceTest {
 
     @Test fun bootReconstructsMissingDeliveryCardsOnlyOnce() = runTest {
         val f = Fixture(this)
-        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id))
+        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id, agentLimits = OrganismLimits(retries = 2)))
         val parent = f.session("parent")
         val base = f.readyPlan("p", parent)
         f.store.save(base.copy(confirmedRevision = base.revision, engine = CodingEngine.CODEX, deliveries = listOf(PlanDelivery("saved", parent.id, "stage", "Сохранённое поручение"))))
@@ -2101,7 +2126,7 @@ class PlanningChatServiceTest {
 
     @Test fun damagedOrchestratorDoesNotPreventAnotherFromRestoringItsInbox() = runTest {
         val f = Fixture(this)
-        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id))
+        f.projects.save(project); f.profiles.save(profile); f.settings.save(AppSettings(activeLlmProfileId = profile.id, agentLimits = OrganismLimits(retries = 2)))
         val damaged = f.session("damaged"); f.readyPlan("bad", damaged)
         val healthy = f.session("healthy")
         val plan = f.readyPlan("good", healthy)

@@ -707,8 +707,20 @@ class MagicPaperViewModel(
 
     fun saveSettings(settings: AppSettings) {
         scope.launch {
-            settingsRepo.save(settings)
-            _state.update { it.copy(settings = settings, notice = "Настройки сохранены.") }
+            val applied = try {
+                planningChat?.organisms?.saveSettingsAndApplyLimits(settings) ?: run {
+                    settingsRepo.save(settings)
+                    Result.success(Unit)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _state.update { it.copy(notice = "Не удалось сохранить настройки: ${error.message}") }
+                return@launch
+            }
+            val notice = applied.exceptionOrNull()?.let { "Настройки сохранены. Не удалось применить ограничения: ${it.message}" }
+                ?: "Настройки сохранены."
+            _state.update { it.copy(settings = settings, notice = notice) }
         }
     }
 

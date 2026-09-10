@@ -124,7 +124,7 @@ class SessionPlanBudgetTest {
         assertEquals(330_000L, f.store.get(f.root.organismId!!).sessions.getValue("worker-1").remainingTokens)
     }
 
-    @Test fun stageOverrunStopsItsGrantAndDebitsActualExcessFromParent() = runTest {
+    @Test fun stageOverrunUsesTheRemainingTaskBudgetAndDebitsActualExcessFromParent() = runTest {
         val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
         admit(f, plan(f))
         f.store.beginRun(f.root.organismId!!, "worker-1")
@@ -132,8 +132,9 @@ class SessionPlanBudgetTest {
         val saved = f.store.charge(before.authority("worker-1"), 228_000)
         assertEquals(228_000L, saved.sessions.getValue("worker-1").spentTokens)
         assertEquals(0L, saved.sessions.getValue("worker-1").remainingTokens)
-        assertEquals(SessionDesiredState.STOP, saved.sessions.getValue("worker-1").desired)
-        assertEquals(SessionObservedState.STOPPING, saved.sessions.getValue("worker-1").observed)
+        assertEquals(SessionDesiredState.RUN, saved.sessions.getValue("worker-1").desired)
+        assertEquals(SessionObservedState.RUNNING, saved.sessions.getValue("worker-1").observed)
+        f.store.check(saved.authority("worker-1"))
         assertEquals(762_000L, saved.sessions.getValue(f.root.id).remainingTokens)
         assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })

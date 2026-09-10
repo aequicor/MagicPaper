@@ -25,9 +25,11 @@ class JsonSettingsRepository(
     override suspend fun load(): AppSettings {
         val raw = store.read(KEY_SETTINGS) ?: return AppSettings()
         return runCatching { json.decodeFromString<AppSettings>(raw) }.getOrDefault(AppSettings())
+            .also { it.agentLimits.validate() }
     }
 
     override suspend fun save(settings: AppSettings) {
+        settings.agentLimits.validate()
         store.write(KEY_SETTINGS, json.encodeToString(AppSettings.serializer(), settings))
     }
 

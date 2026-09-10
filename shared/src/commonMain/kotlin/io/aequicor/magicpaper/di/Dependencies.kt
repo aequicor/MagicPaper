@@ -190,10 +190,11 @@ internal fun buildDependencies(
     val acceptanceChecks = io.aequicor.magicpaper.domain.AcceptanceChecks()
     val planComposer = PlanComposer(gateway, json, search,
         io.aequicor.magicpaper.domain.RuntimePlanningGateway(runtime ?: NoopCodingRuntime),
-        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks, toolHost = toolHost)
+        projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks, toolHost = toolHost,
+        retryLimit = { settingsRepo.load().agentLimits.retries })
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, runtime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
-        LlmMilestoneVerifier(gateway, json), planningWorkspace, acceptanceChecks = acceptanceChecks,
+        LlmMilestoneVerifier(gateway, json, retryLimit = { settingsRepo.load().agentLimits.retries }), planningWorkspace, acceptanceChecks = acceptanceChecks,
     )
     val planner = CodingPlanningPlugin(
         store = planningStore,

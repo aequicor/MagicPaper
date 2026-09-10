@@ -3,7 +3,7 @@ package io.aequicor.magicpaper.domain.tools
 import io.aequicor.magicpaper.domain.*
 import kotlinx.serialization.Serializable
 
-@Serializable data class SessionCreateArgs(val name: String, val task: String, val acceptance: String, val tokens: Long,
+@Serializable data class SessionCreateArgs(val name: String, val task: String, val acceptance: String, val tokens: Long = 0,
     val sourceVersion: String = "", val dependencies: Set<String> = emptySet(), val failurePolicy: SessionFailurePolicy = SessionFailurePolicy.ISOLATE,
     val expectedVersion: Long? = null)
 @Serializable data class SessionSendArgs(val sessionId: String, val context: SessionContextPacket, val expectedVersion: Long? = null)
@@ -23,7 +23,7 @@ import kotlinx.serialization.Serializable
 /** Every ordinary session receives the same orchestration surface; the host checks authority. */
 object SessionToolCatalog {
     val definitions = listOf(
-        ToolDefinition("session.create", "Создать непосредственную дочернюю сессию, выделив часть своего бюджета. Дочерняя сессия наследует режим и правила.", toolSchema(SessionCreateArgs.serializer().descriptor), mutating = true),
+        ToolDefinition("session.create", "Создать непосредственную дочернюю сессию. Она разделяет общий бюджет задачи, наследует режим и правила. Ограничения задаёт пользователь в настройках; tokens можно не указывать.", toolSchema(SessionCreateArgs.serializer().descriptor), mutating = true),
         ToolDefinition("session.send", "Передать сохранённый контекст родителю, ребёнку или по разрешённому общим предком маршруту. Для другой ветки запросите маршрут у родителя.", toolSchema(SessionSendArgs.serializer().descriptor), mutating = true),
         ToolDefinition("session.control", "Управлять непосредственным ребёнком: STOP, ARCHIVE, RESTORE, PAUSE, QUARANTINE, RENAME. Остановка подтверждается приложением.", toolSchema(SessionControlArgs.serializer().descriptor), mutating = true),
         ToolDefinition("session.wait", "Дождаться непосредственных детей. Приложение проверяет зависимости и циклы ожидания.", toolSchema(SessionWaitArgs.serializer().descriptor), mutating = true),

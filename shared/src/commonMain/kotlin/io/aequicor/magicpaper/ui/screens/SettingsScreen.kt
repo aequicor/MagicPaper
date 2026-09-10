@@ -56,6 +56,7 @@ import io.aequicor.magicpaper.util.Id
 fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
     val settings = state.settings
     var draft by remember(settings) { mutableStateOf(settings) }
+    var agentLimits by remember(settings.agentLimits) { mutableStateOf(AgentLimitsDraft.from(settings.agentLimits)) }
     val editing = state.editingLlmProfileId
 
     // Открыт редактор профиля — показываем его вместо общего списка.
@@ -134,6 +135,9 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         Spacer(Modifier.height(12.dp))
         PlanningRulesSettingsSection(draft.planningRules) { draft = draft.copy(planningRules = it) }
 
+        Spacer(Modifier.height(12.dp))
+        AgentLimitsSettingsSection(agentLimits) { agentLimits = it }
+
         if (state.coding.computerSupported) {
             Spacer(Modifier.height(12.dp))
             Section("Доступ к экрану")
@@ -161,7 +165,8 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
 
         Spacer(Modifier.height(16.dp))
         PaperAction(
-            onClick = { vm.saveSettings(draft) },
+            onClick = { agentLimits.limits()?.let { vm.saveSettings(draft.copy(agentLimits = it)) } },
+            enabled = agentLimits.valid,
             modifier = Modifier.heightIn(min = 48.dp),
         ) { PaperText("Сохранить настройки") }
         Spacer(Modifier.height(20.dp))

@@ -19,11 +19,11 @@ class SessionIntegrationResultsTest {
         commitSha = "$id-sha", snapshot = "$id-files")
     private fun organism(): SessionOrganism {
         val root = SessionNode("root", SessionKind.ZYGOTE, "Root", generation = 1, mode = CodingInteractionMode.CODE,
-            observed = SessionObservedState.RUNNING, remainingTokens = 10_000)
+            observed = SessionObservedState.RUNNING, remainingTokens = 0)
         val parent = SessionNode("parent", SessionKind.SESSION, "Parent", "root", generation = 1,
             mode = CodingInteractionMode.CODE, observed = SessionObservedState.COMPLETED,
             task = SessionTask("Implement nested feature", "root", "Verified feature", "grandparent-files"), workspace = own)
-        return SessionOrganism("organism", "project", "root", "immunity", 1,
+        return SessionOrganism("organism", "project", "root", "immunity", 1, limitPolicyVersion = 1,
             sessions = mapOf("root" to root, "parent" to parent), integrations = mapOf("combined" to integration()),
             audit = listOf(SessionAuditEvent("combined-checkpoint-5", "parent", "INTEGRATION_VERIFIED", setOf("parent"), "Checks passed", 5)))
     }

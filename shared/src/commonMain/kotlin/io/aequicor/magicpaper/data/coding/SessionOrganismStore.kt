@@ -32,7 +32,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         ruleVersion = redact(ruleVersion), resultIds = resultIds.map(::redact), attachments = attachments.map(::redact), omissions = redact(omissions))
     private fun SessionTask.redacted() = copy(text = redact(text), acceptance = redact(acceptance), sourceVersion = redact(sourceVersion))
     private fun key(id: String) = "session-organism-$id"
-    private fun read(id: String): SessionOrganism = storage.read(key(id))?.let { json.decodeFromString<SessionOrganism>(it) }
+    private fun read(id: String): SessionOrganism = storage.read(key(id))?.let { migrateLimits(json.decodeFromString<SessionOrganism>(it)) }
         ?: error("Организм не найден")
 
     private fun commit(next: SessionOrganism): SessionOrganism {
@@ -48,10 +48,48 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
 
     suspend fun get(id: String): SessionOrganism = lock.withLock { read(id).also { state.value += id to it } }
 
+    private fun Int?.allows(value: Int): Boolean = this == null || value <= this
+    private fun Int?.hasRoom(occupied: Int): Boolean = this == null || occupied < this
+    private fun String.takeConfigured(limit: Int?): String = if (limit == null) this else take(limit)
+    private fun SessionOrganism.withinDuration(): Boolean = limits.durationMillis?.let { clock() - createdAt <= it } ?: true
+    private fun SessionOrganism.hasTokenBudget(): Boolean = limits.tokens?.let { total -> sessions.values.sumOf { it.spentTokens } < total } ?: true
+
+    /** Old persisted limits came from application defaults, not an explicit user choice. */
+    private fun migrateLimits(old: SessionOrganism): SessionOrganism {
+        if (old.limitPolicyVersion >= 1) return old
+        return commit(old.copy(version = old.version + 1, limitPolicyVersion = 1, limits = OrganismLimits(),
+            sessions = old.sessions.mapValues { (_, node) ->
+                if (node.remainingTokens == 0L) node else node.copy(remainingTokens = 0, version = node.version + 1)
+            }, audit = old.audit + SessionAuditEvent("limit-policy-${old.id}", "APPLICATION", "LIMIT_POLICY_MIGRATION",
+                old.sessions.keys, "Неявные ограничения сняты; расход и состояния запусков сохранены", clock())))
+    }
+
+    /** Settings change accounting authority without reopening stopped or uncertain work. */
+    suspend fun applyLimits(id: String, limits: OrganismLimits): SessionOrganism = lock.withLock {
+        limits.validate()
+        val old = read(id)
+        if (old.limits == limits) return@withLock old
+        val nodes = if (old.limits.tokens == limits.tokens) old.sessions else {
+            val available = limits.tokens?.let { (it - old.sessions.values.sumOf { node -> node.spentTokens }).coerceAtLeast(0) } ?: 0
+            val recovery = minOf(limits.recoveryTokens, available)
+            old.sessions.mapValues { (sessionId, node) ->
+                val remaining = when (sessionId) {
+                    old.zygoteId -> available - recovery
+                    old.immunityId -> recovery
+                    else -> 0
+                }
+                if (node.remainingTokens == remaining) node else node.copy(remainingTokens = remaining, version = node.version + 1)
+            }
+        }
+        commit(old.copy(version = old.version + 1, limitPolicyVersion = 1, limits = limits, sessions = nodes,
+            audit = old.audit + SessionAuditEvent("limits-${old.id}-${old.version + 1}", "USER", "LIMITS_CHANGED",
+                old.sessions.keys, "Применены ограничения из настроек; фактический расход сохранён", clock())))
+    }
+
     /** Discover a committed aggregate even if the first legacy projection never completed. */
     suspend fun loadAll(): List<SessionOrganism> = lock.withLock {
         storage.keys("session-organism-").map { key ->
-            json.decodeFromString<SessionOrganism>(storage.read(key) ?: error("Сохранённый организм исчез"))
+            migrateLimits(json.decodeFromString<SessionOrganism>(storage.read(key) ?: error("Сохранённый организм исчез")))
         }.also { state.value = it.associateBy(SessionOrganism::id) }
     }
 
@@ -126,9 +164,9 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     /** Idempotent migration retains every legacy session and never moves or removes history. */
     suspend fun adopt(projectId: String, root: CodingSession, descendants: List<CodingSession>, limits: OrganismLimits = OrganismLimits()): SessionOrganism = lock.withLock {
         val id = root.organismId ?: root.id
-        storage.read(key(id))?.let { return@withLock json.decodeFromString<SessionOrganism>(it) }
+        storage.read(key(id))?.let { return@withLock migrateLimits(json.decodeFromString<SessionOrganism>(it)) }
         require(root.projectId == projectId && descendants.all { it.projectId == projectId }) { "Другой проект" }
-        require(limits.activeSessions >= 2 && limits.depth > 0 && limits.tokens > limits.recoveryTokens && limits.recoveryTokens > 0 && limits.durationMillis > 0 && limits.queueSize > 0 && limits.contextCharacters > 0 && limits.retries >= 0)
+        limits.validate()
         val immunity = "$id-immunity"
         val migrated = (listOf(root) + descendants).distinctBy { it.id }
         require(migrated.none { it.id == immunity }) { "Идентификатор иммунитета занят" }
@@ -143,11 +181,11 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                 session.archived -> SessionObservedState.STOPPED
                 else -> session.observedState ?: SessionObservedState.PENDING
             },
-            remainingTokens = if (session.archived) 0 else (limits.tokens - limits.recoveryTokens) / migrated.count { !it.archived }.coerceAtLeast(1),
+            remainingTokens = if (session.archived) 0 else limits.tokens?.let { (it - limits.recoveryTokens) / migrated.count { !it.archived }.coerceAtLeast(1) } ?: 0,
             rules = root.planningRulesSnapshot, lastObservedAt = clock(), nameManuallySet = session.nameManuallySet,
-        ) } + (immunity to SessionNode(immunity, SessionKind.IMMUNITY, "Иммунитет", remainingTokens = limits.recoveryTokens,
+        ) } + (immunity to SessionNode(immunity, SessionKind.IMMUNITY, "Иммунитет", remainingTokens = if (limits.tokens == null) 0 else limits.recoveryTokens,
             observed = SessionObservedState.PENDING, rules = root.planningRulesSnapshot, lastObservedAt = clock()))
-        val organism = SessionOrganism(id, projectId, root.id, immunity, clock(), limits, sessions = nodes,
+        val organism = SessionOrganism(id, projectId, root.id, immunity, clock(), limits, sessions = nodes, limitPolicyVersion = 1,
             audit = listOf(SessionAuditEvent("$id-migration", "USER", "MIGRATE", nodes.keys, "Сохранены происхождение и история сессий", clock())))
         nodes.values.filter { it.kind == SessionKind.SESSION }.forEach { organism.route(it.id, root.id) }
         commit(organism)
@@ -182,8 +220,8 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         requireTool(!stoppedByUser && !actor.archived) { "Организм или сессия остановлены" }
         if (!signal) {
             requireTool(actor.acceptsWork) { "Сессия не принимает работу" }
-            requireTool(clock() - createdAt <= limits.durationMillis) { "Время организма исчерпано" }
-            requireTool(actor.remainingTokens > 0) { "Бюджет сессии исчерпан" }
+            requireTool(withinDuration()) { "Время организма исчерпано" }
+            requireTool(hasTokenBudget()) { "Бюджет сессии исчерпан" }
             var parent = actor.lifecycleParentId
             while (parent != null) {
                 val node = sessions.getValue(parent)
@@ -246,7 +284,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(old.results.none { it.sessionId == node.id && it.accepted }) { "Работа уже принята" }
         val affected = old.subtree(node.id)
         require(affected.all { old.sessions.getValue(it).settled } && old.auxiliaryRuns.values.none { it.ownerSessionId in affected && !it.settled }) { "Рабочая область этапа ещё не остановлена" }
-        require(node.retryCount < old.limits.retries) { "Лимит восстановлений исчерпан" }
+        require(old.limits.retries.hasRoom(node.retryCount)) { "Лимит восстановлений исчерпан" }
         val parent = old.sessions.getValue(node.authorityParentId ?: error("Родитель не задан"))
         old.actor(SessionAuthority(old.projectId, old.id, parent.id, parent.generation, parent.mode))
     }
@@ -270,20 +308,20 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(existing?.archived != true && (existing == null || existing.desired == SessionDesiredState.RUN || retry != null) && existing?.observed != SessionObservedState.UNKNOWN) { "Сначала разрешите состояние старого запуска" }
         require(old.results.none { it.sessionId == session.id && it.accepted }) { "Работа уже принята" }
         require(existing?.observed !in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER, SessionObservedState.STOPPING)) { "Предыдущий запуск ещё работает" }
-        val active = old.sessions.values.count { !it.settled && !it.archived && it.id != session.id } + old.auxiliaryRuns.values.count { !it.settled }
-        require(active < old.limits.activeSessions && old.route(parent.id, old.zygoteId).size <= old.limits.depth) { "Лимит рабочей области исчерпан" }
+        require(old.limits.depth.allows(old.route(parent.id, old.zygoteId).size)) { "Лимит рабочей области исчерпан" }
         val retained = existing?.remainingTokens ?: 0
         // Reserve an equal share for every unfinished stage and for the parent, whose
         // planner/verification turns use the same task budget. Already funded siblings
         // are removed under this lock so parallel admissions cannot dilute later shares.
-        // An existing allocation remains authoritative across continuation turns.
+        // These shares are accounting reservations, not independent stop limits.
+        // Every worker can use the remaining task budget across continuation turns.
         val fundedStages = old.sessions.values.mapNotNull { sibling -> sibling.legacyAttempt?.takeIf {
             sibling.id != session.id && sibling.authorityParentId == parent.id && sibling.remainingTokens > 0 &&
                 it.planId == binding.planId && it.runId == binding.runId && it.stageId != binding.stageId
         }?.stageId }.toSet()
         val unfundedStages = (unfinishedStageIds - fundedStages).size
         val allocated = if (retained > 0) 0 else parent.remainingTokens / (unfundedStages.toLong() + 1)
-        require(retained + allocated > 0 && parent.remainingTokens - allocated > 0) { "Недостаточно бюджета" }
+        require(old.hasTokenBudget()) { "Бюджет задачи исчерпан" }
         val generation = if (existing == null) 1 else maxOf(existing.generation + if (retry == null) 0 else 1,
             existing.lastStartedGeneration + 1).coerceAtLeast(1)
         val node = (existing ?: SessionNode(session.id, SessionKind.SESSION, redact(session.name), parent.id)).copy(
@@ -313,10 +351,10 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             artifacts = result.artifacts.map(::redact), checks = result.checks.map(::redact), sourceVersion = redact(result.sourceVersion))
         old.results.firstOrNull { it.id == result.id }?.let { require(it == safe) { "Результат этапа изменился" }; return@withLock old }
         val parent = old.sessions.getValue(result.recipient)
-        require(old.outbox.count { it.state in setOf(SessionDeliveryState.ACCEPTED, SessionDeliveryState.DELIVERED) } < old.limits.queueSize) { "Очередь результатов заполнена" }
-        val packet = SessionContextPacket(safe.summary.take(old.limits.contextCharacters / 2), result.sourceVersion, node.rules?.version.orEmpty(),
-            resultIds = listOf(result.id), summarized = safe.summary.length > old.limits.contextCharacters / 2,
-            omissions = if (safe.summary.length > old.limits.contextCharacters / 2) "Полный результат: ${result.id}" else "")
+        require(old.limits.queueSize.hasRoom(old.outbox.count { it.state in setOf(SessionDeliveryState.ACCEPTED, SessionDeliveryState.DELIVERED) })) { "Очередь результатов заполнена" }
+        val packet = SessionContextPacket(safe.summary.takeConfigured(old.limits.contextCharacters?.div(2)), result.sourceVersion, node.rules?.version.orEmpty(),
+            resultIds = listOf(result.id), summarized = !old.limits.contextCharacters?.div(2).allows(safe.summary.length),
+            omissions = if (!old.limits.contextCharacters?.div(2).allows(safe.summary.length)) "Полный результат: ${result.id}" else "")
         val delivery = SessionDelivery("result-${result.id}", node.id, parent.id, old.route(node.id, parent.id), packet,
             old.outbox.filter { it.recipient == parent.id }.maxOfOrNull { it.sequence }?.plus(1) ?: 1, parent.generation)
         commit(old.copy(version = old.version + 1, results = old.results + safe, outbox = old.outbox + delivery,
@@ -358,7 +396,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(node.kind == SessionKind.ZYGOTE && !node.archived && !old.stoppedByUser) { "Сначала восстановите рабочую область" }
         require(old.subtree(sessionId).all { old.sessions.getValue(it).settled }) { "Остановка поддерева ещё не подтверждена" }
         require(old.audit.none { it.action == "QUARANTINE" && sessionId in it.affected }) { "Сначала проверьте фактический исход операции" }
-        require(node.remainingTokens > 0 && clock() - old.createdAt <= old.limits.durationMillis) { "Бюджет организма исчерпан; создайте новую сессию" }
+        require(old.hasTokenBudget() && old.withinDuration()) { "Бюджет организма исчерпан; создайте новую сессию" }
         val next = node.copy(desired = SessionDesiredState.RUN, observed = SessionObservedState.PENDING,
             generation = node.generation + 1, previousGeneration = node.generation, version = node.version + 1)
         commit(old.copy(version = old.version + 1, sessions = old.sessions + (node.id to next),
@@ -371,20 +409,19 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(old.deletedAt == null && sessionId !in old.historyDeletedIds) { "Сессия удалена пользователем" }
         require(!old.stoppedByUser && !node.archived && node.kind != SessionKind.IMMUNITY) { "Сессия остановлена" }
         require(node.desired == SessionDesiredState.RUN) { "Возобновление требует явного восстановления" }
-        require(clock() - old.createdAt <= old.limits.durationMillis && node.remainingTokens > 0) { "Бюджет или время организма исчерпаны" }
+        require(old.withinDuration() && old.hasTokenBudget()) { "Бюджет или время организма исчерпаны" }
         require(node.observed != SessionObservedState.UNKNOWN && node.observed != SessionObservedState.STOPPING) { "Сначала сверяйте незавершённый запуск" }
         require(old.auxiliaryRuns.values.none { it.ownerSessionId == sessionId && !it.settled }) { "Сначала остановите вспомогательные запуски владельца" }
         require(node.kind == SessionKind.ZYGOTE || node.acceptsWork) { "Восстановите сессию через родителя" }
         val lineage = old.route(sessionId, old.zygoteId)
-        require(lineage.size <= old.limits.depth) { "Достигнута глубина дерева" }
+        require(old.limits.depth.allows(lineage.size)) { "Достигнута глубина дерева" }
         lineage.drop(1).forEach { require(old.sessions.getValue(it).acceptsWork) { "Рабочая область родителя закрыта" } }
         // Legacy history can contain more pending nodes than today's admission limits.
         // Retain that history while reserving each actual runtime slot in this commit.
         val occupied = old.sessions.values.count { other -> other.id != sessionId &&
-            ((other.kind == SessionKind.IMMUNITY && other.acceptsWork) ||
-                other.observed in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER,
-                    SessionObservedState.STOPPING, SessionObservedState.UNKNOWN)) }
-        require(occupied + old.auxiliaryRuns.values.count { !it.settled } < old.limits.activeSessions) { "Достигнут лимит активных сессий" }
+            other.observed in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER,
+                    SessionObservedState.STOPPING, SessionObservedState.UNKNOWN) }
+        require(old.limits.activeSessions.hasRoom(occupied + old.auxiliaryRuns.values.count { !it.settled })) { "Достигнут лимит активных сессий" }
         val generation = if (node.observed != SessionObservedState.PENDING || node.generation <= node.lastStartedGeneration)
             node.generation + 1 else node.generation.coerceAtLeast(1)
         val next = node.copy(generation = generation, lastStartedGeneration = generation, desired = SessionDesiredState.RUN,
@@ -441,9 +478,9 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(node.rules == rules && (parent == null || parent.rules == node.rules)) { "Правила изменились; требуется новое задание" }
         require(node.task == null || (sourceVersion != null && sourceVersion == node.task.sourceVersion)) { "Исходники изменились или не проверены; требуется новое задание" }
         require(old.results.none { it.sessionId == target && it.accepted }) { "Задание уже принято" }
-        require(node.retryCount < old.limits.retries && clock() - old.createdAt <= old.limits.durationMillis) { "Бюджет восстановления исчерпан" }
+        require(old.limits.retries.hasRoom(node.retryCount) && old.withinDuration()) { "Бюджет восстановления исчерпан" }
         val budget = if (parent == null) node.remainingTokens else parent.remainingTokens / 2
-        require(budget > 0) { "Недостаточно бюджета для восстановления" }
+        require(old.hasTokenBudget()) { "Бюджет задачи исчерпан" }
         val restored = node.copy(generation = node.generation + 1, previousGeneration = node.generation,
             version = node.version + 1, desired = SessionDesiredState.RUN, observed = SessionObservedState.PENDING,
             archived = false, retryCount = node.retryCount + 1, remainingTokens = budget)
@@ -481,17 +518,17 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                     requireTool(!supervisor) { "Иммунитет не создаёт рабочие ветки" }
                     requireTool(command.name.isNotBlank() && command.name.length <= 256 && command.task != null && command.task.acceptance.isNotBlank()) { "Добавьте задание и критерии" }
                     requireTool(command.task.resultRecipient == actor.id) { "Получатель результата — родитель" }
-                    requireTool(command.task.text.length + command.task.acceptance.length <= old.limits.contextCharacters) { "Контекст слишком большой" }
-                    requireTool(command.tokens > 0 && command.tokens < actor.remainingTokens) { "Недостаточно бюджета с сохранением резерва родителя" }
-                    requireTool(old.sessions.values.count { !it.settled && !it.archived } + old.auxiliaryRuns.values.count { !it.settled } < old.limits.activeSessions) { "Достигнут лимит активных сессий" }
-                    requireTool(old.outbox.count { it.state in setOf(SessionDeliveryState.ACCEPTED, SessionDeliveryState.DELIVERED) } +
-                        old.sessions.values.count { it.kind == SessionKind.SESSION && !it.settled } < old.limits.queueSize) { "Нет места для результата ребёнка" }
-                    requireTool(old.route(actor.id, old.zygoteId).size < old.limits.depth) { "Достигнута глубина дерева" }
+                    requireTool(old.limits.contextCharacters.allows(command.task.text.length + command.task.acceptance.length)) { "Контекст слишком большой" }
+                    requireTool(command.tokens >= 0) { "Бюджет не может быть отрицательным" }
+                    val allocation = minOf(command.tokens, actor.remainingTokens)
+                    requireTool(old.limits.queueSize.hasRoom(old.outbox.count { it.state in setOf(SessionDeliveryState.ACCEPTED, SessionDeliveryState.DELIVERED) } +
+                        old.sessions.values.count { it.kind == SessionKind.SESSION && !it.settled })) { "Нет места для результата ребёнка" }
+                    requireTool(old.limits.depth.hasRoom(old.route(actor.id, old.zygoteId).size)) { "Достигнута глубина дерева" }
                     requireTool(command.task.dependencies.all { old.sessions[it]?.authorityParentId == actor.id }) { "Зависимость вне рабочей области" }
                     val child = SessionNode(targetId, SessionKind.SESSION, command.name, actor.id, generation = 1,
-                        mode = actor.mode, remainingTokens = command.tokens, task = command.task,
+                        mode = actor.mode, remainingTokens = allocation, task = command.task,
                         rules = actor.rules, failurePolicy = command.failurePolicy, lastObservedAt = clock())
-                    next = old.copy(sessions = old.sessions + (targetId to child) + (actor.id to actor.copy(remainingTokens = actor.remainingTokens - command.tokens, version = actor.version + 1)))
+                    next = old.copy(sessions = old.sessions + (targetId to child) + (actor.id to actor.copy(remainingTokens = actor.remainingTokens - allocation, version = actor.version + 1)))
                     affected = setOf(actor.id, targetId)
                 }
                 OrganismAction.SEND -> {
@@ -503,9 +540,9 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                     requireTool(target.authorityParentId == actor.id || actor.authorityParentId == target.id || grant != null) { "Маршрут в другую ветку должен разрешить общий родитель" }
                     requireTool(route.all { old.sessions.getValue(it).acceptsWork }) { "Рабочая область маршрута закрыта" }
                     val packet = command.packet ?: error("Нет контекста")
-                    requireTool(json.encodeToString(packet).length <= old.limits.contextCharacters) { "Контекст слишком большой; сократите явно" }
-                    requireTool(old.outbox.count { it.state == SessionDeliveryState.ACCEPTED || it.state == SessionDeliveryState.DELIVERED } +
-                        old.sessions.values.count { it.kind == SessionKind.SESSION && !it.settled } < old.limits.queueSize) { "Очередь заполнена; сохранён резерв результатов" }
+                    requireTool(old.limits.contextCharacters.allows(json.encodeToString(packet).length)) { "Контекст слишком большой; сократите явно" }
+                    requireTool(old.limits.queueSize.hasRoom(old.outbox.count { it.state == SessionDeliveryState.ACCEPTED || it.state == SessionDeliveryState.DELIVERED } +
+                        old.sessions.values.count { it.kind == SessionKind.SESSION && !it.settled })) { "Очередь заполнена; сохранён резерв результатов" }
                     val safe = packet.copy(text = PlanningDiagnostics.redact(packet.text))
                     val sequence = old.outbox.filter { it.recipient == targetId }.maxOfOrNull { it.sequence }?.plus(1) ?: 1
                     next = old.copy(outbox = old.outbox + SessionDelivery(operationId, actor.id, targetId, route, safe, sequence, target.generation, routeGrantId = grant?.id))
@@ -518,7 +555,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                     // The common ancestor, not an arbitrary model-provided address, authorizes transit.
                     requireTool(actor.id in route && from.id in old.subtree(actor.id) && target.id in old.subtree(actor.id) &&
                         actor.id != from.id && actor.id != target.id && route.all { old.sessions.getValue(it).acceptsWork }) { "Разрешить маршрут может общий родитель своих веток" }
-                    requireTool(old.routeGrants.size < old.limits.queueSize) { "Лимит маршрутов исчерпан" }
+                    requireTool(old.limits.queueSize.hasRoom(old.routeGrants.size)) { "Лимит маршрутов исчерпан" }
                     next = old.copy(routeGrants = old.routeGrants + SessionRouteGrant(operationId, actor.id, from.id, target.id,
                         from.generation, target.generation, route))
                     affected = route.toSet()
@@ -563,23 +600,23 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                     requireChild()
                     requireTool(old.audit.none { it.action == "QUARANTINE" && targetId in it.affected }) { "Карантин требует проверки фактического исхода операции" }
                     requireTool(target!!.settled && (target.lifecycleParentId == null || old.sessions.getValue(target.lifecycleParentId).acceptsWork)) { "Восстановите рабочую область родителя" }
-                    requireTool(target.retryCount < old.limits.retries) { "Лимит восстановлений исчерпан" }
+                    requireTool(old.limits.retries.hasRoom(target.retryCount)) { "Лимит восстановлений исчерпан" }
                     requireTool(old.results.none { it.sessionId == targetId && it.accepted }) { "Принятая работа уже выполнена" }
                     requireTool(command.reason.isNotBlank() && target.rules == actor.rules) { "Проверьте актуальность задания и правил" }
-                    requireTool(command.tokens > 0 && command.tokens < actor.remainingTokens) { "Выделите бюджет восстановления" }
-                    requireTool(old.sessions.values.count { !it.settled && !it.archived } + old.auxiliaryRuns.values.count { !it.settled } < old.limits.activeSessions) { "Достигнут лимит активных сессий" }
+                    requireTool(command.tokens >= 0 && old.hasTokenBudget()) { "Бюджет задачи исчерпан" }
+                    val allocation = minOf(command.tokens, actor.remainingTokens)
                     next = old.copy(sessions = old.sessions + (targetId to target.copy(generation = target.generation + 1,
                         previousGeneration = target.generation, archived = false, desired = SessionDesiredState.RUN,
                         observed = SessionObservedState.PENDING, version = target.version + 1, retryCount = target.retryCount + 1,
-                        remainingTokens = command.tokens, lastObservedAt = clock())) +
-                        (actor.id to actor.copy(remainingTokens = actor.remainingTokens - command.tokens, version = actor.version + 1)))
+                        remainingTokens = allocation, lastObservedAt = clock())) +
+                        (actor.id to actor.copy(remainingTokens = actor.remainingTokens - allocation, version = actor.version + 1)))
                 }
                 OrganismAction.RENAME -> { requireChild(); requireTool(command.name.isNotBlank() && command.name.length <= 256) { "Некорректное название" }
                     next = old.copy(sessions = old.sessions + (targetId to target!!.copy(name = command.name, version = target.version + 1))) }
                 OrganismAction.SIGNAL -> {
                     requireTool(target != null && target.kind != SessionKind.IMMUNITY && command.reason.isNotBlank()) { "Укажите сессию и диагностический сигнал" }
-                    requireTool(old.signals.count { signal -> old.diagnoses.none { it.signalId == signal.id } } < old.limits.queueSize) { "Очередь сигналов заполнена" }
-                    next = old.copy(signals = old.signals + ImmunitySignal(operationId, actor.id, targetId, PlanningDiagnostics.redact(command.reason).take(old.limits.contextCharacters), clock()))
+                    requireTool(old.limits.queueSize.hasRoom(old.signals.count { signal -> old.diagnoses.none { it.signalId == signal.id } })) { "Очередь сигналов заполнена" }
+                    next = old.copy(signals = old.signals + ImmunitySignal(operationId, actor.id, targetId, PlanningDiagnostics.redact(command.reason).takeConfigured(old.limits.contextCharacters), clock()))
                     affected = setOf(targetId, old.immunityId)
                 }
             }
@@ -625,7 +662,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
      * Spend is borne by the responsible branch/ancestors first, recovery only as a last resort.
      */
     private fun SessionOrganism.reconcileTokenBudget(preferredSessionId: String): SessionOrganism {
-        val available = (limits.tokens - sessions.values.sumOf { it.spentTokens }).coerceAtLeast(0)
+        val available = limits.tokens?.let { (it - sessions.values.sumOf { node -> node.spentTokens }).coerceAtLeast(0) } ?: return this
         var excess = (sessions.values.sumOf { it.remainingTokens } - available).coerceAtLeast(0)
         if (excess == 0L) return this
         val priority = mutableListOf<String>()
@@ -654,10 +691,10 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     suspend fun charge(scope: SessionAuthority, tokens: Long): SessionOrganism = lock.withLock {
         require(tokens >= 0)
         val old = read(scope.organismId); val node = old.usageActor(scope)
-        val excess = tokens > node.remainingTokens
+        val exhausted = old.limits.tokens?.let { tokens >= (it - old.sessions.values.sumOf { session -> session.spentTokens }).coerceAtLeast(0) } == true
         val updated = node.copy(remainingTokens = (node.remainingTokens - tokens).coerceAtLeast(0), spentTokens = node.spentTokens + tokens,
-            desired = if (excess && node.desired == SessionDesiredState.RUN) SessionDesiredState.STOP else node.desired,
-            observed = if (excess) SessionObservedState.STOPPING else node.observed, version = node.version + 1)
+            desired = if (exhausted && node.desired == SessionDesiredState.RUN) SessionDesiredState.STOP else node.desired,
+            observed = if (exhausted) SessionObservedState.STOPPING else node.observed, version = node.version + 1)
         commit(old.copy(sessions = old.sessions + (node.id to updated))
             .reconcileTokenBudget(node.id).copy(version = old.version + 1))
     }
@@ -672,8 +709,8 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(context.mode == owner.mode || context.auxiliaryExecution && context.mode == CodingInteractionMode.CODE) { "Режим вспомогательного запуска не разрешён" }
         require(old.auxiliaryRuns.values.none { it.sessionId == context.sessionId && !it.settled }) { "Предыдущий вспомогательный запуск ещё не остановлен" }
         val occupied = old.sessions.values.count { it.observed in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER,
-            SessionObservedState.STOPPING, SessionObservedState.UNKNOWN) || it.kind == SessionKind.IMMUNITY && it.acceptsWork }
-        require(occupied + old.auxiliaryRuns.values.count { !it.settled } < old.limits.activeSessions) { "Достигнут лимит активных сессий" }
+            SessionObservedState.STOPPING, SessionObservedState.UNKNOWN) }
+        require(old.limits.activeSessions.hasRoom(occupied + old.auxiliaryRuns.values.count { !it.settled })) { "Достигнут лимит активных сессий" }
         val id = "aux-${context.sessionId}-${context.runtimeGeneration}-${old.version + 1}"
         val run = SessionAuxiliaryRun(id, context.sessionId, context.ownerSessionId, context.runtimeGeneration,
             context.runId.orEmpty(), context.requestId, context.mode, startedAt = clock())
@@ -691,9 +728,10 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         val previous = run.usage[sourceId] ?: 0
         if (totalTokens <= previous) return@withLock old
         val tokens = totalTokens - previous
+        val exhausted = old.limits.tokens?.let { tokens >= (it - old.sessions.values.sumOf { session -> session.spentTokens }).coerceAtLeast(0) } == true
         val node = owner.copy(remainingTokens = (owner.remainingTokens - tokens).coerceAtLeast(0), spentTokens = owner.spentTokens + tokens,
-            desired = if (tokens >= owner.remainingTokens && owner.desired == SessionDesiredState.RUN) SessionDesiredState.STOP else owner.desired,
-            observed = if (tokens >= owner.remainingTokens) SessionObservedState.STOPPING else owner.observed, version = owner.version + 1)
+            desired = if (exhausted && owner.desired == SessionDesiredState.RUN) SessionDesiredState.STOP else owner.desired,
+            observed = if (exhausted) SessionObservedState.STOPPING else owner.observed, version = owner.version + 1)
         commit(old.copy(sessions = old.sessions + (owner.id to node),
             auxiliaryRuns = old.auxiliaryRuns + (run.id to run.copy(usage = run.usage + (sourceId to totalTokens)))).reconcileTokenBudget(owner.id)
             .copy(version = old.version + 1))
@@ -760,11 +798,11 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         val safe = result.copy(summary = redact(result.summary), evidence = result.evidence.map(::redact),
             artifacts = result.artifacts.map(::redact), checks = result.checks.map(::redact), sourceVersion = redact(result.sourceVersion))
         old.results.firstOrNull { it.id == result.id }?.let { require(it == safe) { "Результат уже сохранён с другим содержимым" }; return@withLock old }
-        require(old.outbox.count { it.state in setOf(SessionDeliveryState.ACCEPTED, SessionDeliveryState.DELIVERED) } < old.limits.queueSize) { "Очередь результатов заполнена" }
+        require(old.limits.queueSize.hasRoom(old.outbox.count { it.state in setOf(SessionDeliveryState.ACCEPTED, SessionDeliveryState.DELIVERED) })) { "Очередь результатов заполнена" }
         val recipient = old.sessions.getValue(result.recipient)
-        val shortened = safe.summary.length > old.limits.contextCharacters / 2
+        val shortened = !old.limits.contextCharacters?.div(2).allows(safe.summary.length)
         val delivery = SessionDelivery("result-${result.id}", source.id, recipient.id, old.route(source.id, recipient.id),
-            SessionContextPacket(safe.summary.take(old.limits.contextCharacters / 2), safe.sourceVersion, source.rules?.version.orEmpty(), resultIds = listOf(result.id),
+            SessionContextPacket(safe.summary.takeConfigured(old.limits.contextCharacters?.div(2)), safe.sourceVersion, source.rules?.version.orEmpty(), resultIds = listOf(result.id),
                 summarized = shortened, omissions = if (shortened) "Полный результат сохранён: ${result.id}" else ""),
             old.outbox.filter { it.recipient == recipient.id }.maxOfOrNull { it.sequence }?.plus(1) ?: 1, recipient.generation)
         commit(old.copy(version = old.version + 1, results = old.results + safe, outbox = old.outbox + delivery,
@@ -775,15 +813,15 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     suspend fun proposeImmunityInterventions(id: String): SessionOrganism = lock.withLock {
         val old = read(id)
         if (old.deletedAt != null || old.stoppedByUser || !old.sessions.getValue(old.immunityId).acceptsWork) return@withLock old
-        val available = (old.limits.queueSize - old.interventions.count { it.state in setOf(ImmunityInterventionState.PROPOSED, ImmunityInterventionState.ACCEPTED, ImmunityInterventionState.UNKNOWN) }).coerceAtLeast(0)
+        val available = old.limits.queueSize?.let { (it - old.interventions.count { proposal -> proposal.state in setOf(ImmunityInterventionState.PROPOSED, ImmunityInterventionState.ACCEPTED, ImmunityInterventionState.UNKNOWN) }).coerceAtLeast(0) }
         val proposals = old.diagnoses.filter { diagnosis -> diagnosis.evidence.isNotEmpty() &&
             diagnosis.generation == old.sessions[diagnosis.target]?.generation && diagnosis.generation != null &&
-            diagnosis.target !in old.historyDeletedIds && old.interventions.none { it.signalId == diagnosis.signalId } }.take(available).map { diagnosis ->
+            diagnosis.target !in old.historyDeletedIds && old.interventions.none { it.signalId == diagnosis.signalId } }.let { if (available == null) it else it.take(available) }.map { diagnosis ->
             val node = old.sessions.getValue(diagnosis.target)
             val actions = buildSet {
                 addAll(setOf(ImmunityAction.PAUSE, ImmunityAction.QUARANTINE, ImmunityAction.STOP, ImmunityAction.ARCHIVE, ImmunityAction.DELETE_HISTORY))
                 // Legacy attempts are resumed by their human-confirmed plan, not a generic native replay.
-                if (node.settled && node.legacyAttempt == null && node.retryCount < old.limits.retries &&
+                if (node.settled && node.legacyAttempt == null && old.limits.retries.hasRoom(node.retryCount) &&
                     old.results.none { it.sessionId == node.id && it.accepted }) add(ImmunityAction.RECREATE)
             }
             ImmunityIntervention("intervention-${diagnosis.signalId}", diagnosis.signalId, node.id, node.generation,
@@ -822,12 +860,10 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             require(parent == null || parent.acceptsWork) { "Сначала восстановите рабочую область родителя" }
             require(rules != null && node.rules == rules && (parent == null || parent.rules == rules)) { "Правила изменились; требуется новое задание" }
             require(node.task == null || (sourceVersion != null && sourceVersion == node.task.sourceVersion)) { "Исходники задания изменились или не проверены" }
-            require(node.retryCount < old.limits.retries && clock() - old.createdAt <= old.limits.durationMillis) { "Лимит восстановления исчерпан" }
-            require(old.interventions.none { it.target == node.id && it.action == ImmunityAction.RECREATE && it.confirmedAt?.let { time -> clock() - time < 60_000 } == true }) { "Повторное восстановление доступно через минуту" }
-            require(old.sessions.values.count { !it.archived && !it.settled } < old.limits.activeSessions) { "Лимит активных сессий исчерпан" }
+            require(old.limits.retries.hasRoom(node.retryCount) && old.withinDuration()) { "Лимит восстановления исчерпан" }
             val immunity = old.sessions.getValue(old.immunityId)
-            val allocation = minOf(64_000L, immunity.remainingTokens / 2)
-            require(allocation > 0) { "Резерв восстановления исчерпан" }
+            val allocation = immunity.remainingTokens / 2
+            require(old.hasTokenBudget()) { "Бюджет задачи исчерпан" }
             nodes = nodes + (node.id to node.copy(generation = node.generation + 1, previousGeneration = node.generation,
                 desired = SessionDesiredState.RUN, observed = SessionObservedState.PENDING, archived = false,
                 retryCount = node.retryCount + 1, remainingTokens = node.remainingTokens + allocation,
@@ -899,11 +935,9 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             val evidence = buildList {
                 if (node.observed == SessionObservedState.UNKNOWN) add("Наблюдаемый исход неизвестен: поколение ${node.generation}, версия ${node.version}")
                 if (node.observed == SessionObservedState.FAILED) add("Runtime подтвердил ошибку поколения ${node.generation}")
-                if (node.remainingTokens == 0L && !node.settled) add("Выделенный бюджет исчерпан")
-                if (!node.settled && clock() - next.createdAt > next.limits.durationMillis) add("Превышен срок организма")
+                if (!next.hasTokenBudget() && !node.settled) add("Бюджет задачи исчерпан")
+                if (!node.settled && !next.withinDuration()) add("Превышен срок организма")
                 if (!node.settled && node.lifecycleParentId?.let { next.sessions.getValue(it).settled } == true) add("Рабочая область родителя завершена")
-                if (next.operations.values.any { operation -> operation.target == node.id && operation.state == SessionOperationState.ACCEPTED &&
-                    next.audit.firstOrNull { it.operationId == operation.id }?.let { clock() - it.createdAt > 300_000 } == true }) add("Операция не подтверждена более пяти минут")
             }
             val affected = if (evidence.isEmpty()) setOf(node.id) else next.subtree(node.id)
             val action = if (evidence.isEmpty()) "NO_INTERVENTION" else "QUARANTINE"

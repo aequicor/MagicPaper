@@ -1131,6 +1131,19 @@
     "annotationLine": 99
   },
   {
+    "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/AgentLimitsSettings.kt",
+    "symbol": "AgentLimitsSettingsSection",
+    "annotationLine": 98,
+    "targets": [
+      "PaperSettingsSection",
+      "PaperField",
+      "PaperButton",
+      "PaperText"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ChatScreen.kt",
     "symbol": "ChatScreen",
     "annotationLine": 91,
@@ -1781,7 +1794,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "PlanningRulesSettingsSection",
-    "annotationLine": 187,
+    "annotationLine": 192,
     "targets": [
       "PaperSettingsSection",
       "PaperField",
@@ -1795,7 +1808,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "ProfileEditor",
-    "annotationLine": 215,
+    "annotationLine": 220,
     "targets": [
       "PaperSettingsSection",
       "PaperField",
@@ -1807,7 +1820,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "CatalogModelPicker",
-    "annotationLine": 354,
+    "annotationLine": 359,
     "targets": [
       "PaperListRow",
       "PaperChoice",
@@ -1819,7 +1832,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "ProviderRow",
-    "annotationLine": 379,
+    "annotationLine": 384,
     "targets": [
       "PaperListRow",
       "PaperChoice"
@@ -1830,7 +1843,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "SubscriptionAccount",
-    "annotationLine": 414,
+    "annotationLine": 419,
     "targets": [
       "PaperPanel",
       "PaperField",
@@ -1843,7 +1856,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "NavEntry",
-    "annotationLine": 478,
+    "annotationLine": 483,
     "targets": [
       "PaperNavigation",
       "PaperText"
@@ -1854,7 +1867,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "Section",
-    "annotationLine": 503,
+    "annotationLine": 508,
     "targets": [
       "PaperSettingsSection",
       "PaperText"
@@ -1865,7 +1878,7 @@
   {
     "path": "shared/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "Field",
-    "annotationLine": 513,
+    "annotationLine": 518,
     "targets": [
       "PaperField"
     ],

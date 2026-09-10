@@ -11,16 +11,28 @@ import kotlinx.serialization.Serializable
 @Serializable enum class SessionDeliveryState { ACCEPTED, DELIVERED, PROCESSED, CANCELLED }
 @Serializable enum class SessionOperationState { ACCEPTED, SUCCEEDED, UNKNOWN }
 
+/** Only explicit user settings impose resource ceilings. Null means unbounded. */
 @Serializable data class OrganismLimits(
-    val activeSessions: Int = 8,
-    val depth: Int = 6,
-    val tokens: Long = 1_000_000,
-    val recoveryTokens: Long = 10_000,
-    val durationMillis: Long = 3_600_000,
-    val retries: Int = 3,
-    val queueSize: Int = 128,
-    val contextCharacters: Int = 64_000,
-)
+    val activeSessions: Int? = null,
+    val depth: Int? = null,
+    val tokens: Long? = null,
+    val recoveryTokens: Long = 0,
+    val durationMillis: Long? = null,
+    val retries: Int? = null,
+    val queueSize: Int? = null,
+    val contextCharacters: Int? = null,
+) {
+    fun validate() {
+        require(activeSessions == null || activeSessions > 0) { "Число активных сессий должно быть положительным" }
+        require(depth == null || depth > 0) { "Глубина дерева должна быть положительной" }
+        require(tokens == null || tokens > 0) { "Бюджет токенов должен быть положительным" }
+        require(recoveryTokens >= 0 && (tokens == null || recoveryTokens < tokens)) { "Резерв превышает бюджет" }
+        require(durationMillis == null || durationMillis > 0) { "Время работы должно быть положительным" }
+        require(retries == null || retries >= 0) { "Число повторов не может быть отрицательным" }
+        require(queueSize == null || queueSize > 0) { "Размер очереди должен быть положительным" }
+        require(contextCharacters == null || contextCharacters > 0) { "Размер контекста должен быть положительным" }
+    }
+}
 
 @Serializable data class SessionTask(
     val text: String,
@@ -169,6 +181,8 @@ import kotlinx.serialization.Serializable
     val historyDeletedIds: Set<String> = emptySet(),
     val deletedAt: Long? = null,
     val interventions: List<ImmunityIntervention> = emptyList(),
+    /** Version 0 records predate user-configurable limits and contain implicit defaults. */
+    val limitPolicyVersion: Int = 0,
 ) {
     fun subtree(root: String): Set<String> {
         require(root in sessions) { "Сессия не найдена" }

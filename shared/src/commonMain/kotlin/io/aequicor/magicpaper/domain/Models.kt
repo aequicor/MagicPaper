@@ -56,6 +56,8 @@ data class AppSettings(
     val defaultCodingEngine: CodingEngine = CodingEngine.PI,
     /** Default methodology for new organisms; active runs keep an immutable snapshot. */
     val planningRules: PlanningRulesSettings = PlanningRulesSettings(),
+    /** Live resource policy for all agent tasks; no limits until the user sets them. */
+    val agentLimits: OrganismLimits = OrganismLimits(),
     val searchProvider: SearchProvider = SearchProvider.AUTO,
     val queritApiKey: String = "",
     val queritBaseUrl: String = "https://api.querit.ai/v1",

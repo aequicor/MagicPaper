@@ -1194,7 +1194,10 @@ class OrchestrationService(
             messages += LlmMessage(LlmChatRole.USER, "Сохранённое решение нельзя применить: $savedDecisionProblem Пересмотри его по текущему состоянию правил и доставок. Не повторяй уже выполненную работу исполнителя.")
         }
         var lastProblem: String? = savedDecisionProblem
-        repeat(3) { index ->
+        val repairContextSize = messages.size
+        var index = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
             val current = store.planFor(plan.id) ?: error("План удалён")
             require(current.runId == plan.runId) { "Запуск изменился во время ответа; решение не применено" }
             requests = state(session.id, session.projectId).openQuestions(plan.id)
@@ -1227,15 +1230,18 @@ class OrchestrationService(
                 (result.intent != UserTurnIntent.DISCUSS || result.reply.isNotBlank()) && result.questions.validQuestions() &&
                 (result.intent != UserTurnIntent.INSTRUCT || (current.confirmedRevision != null && current.finalAttempt == null && current.phase != ExecutionPhase.COMPLETE && current.selectedMilestones.any { it.id == result.stageId && !it.completed }))
             if (valid) return if (result!!.intent == UserTurnIntent.CONTROL && result.command == "confirm") result.copy(proposalId = plan.proposal?.id) else result
-            if (index < 2) {
+            if (PlanningRetryPolicy.canRetry(index, settings.load().agentLimits.retries)) {
                 _drafts.update { all ->
                     val draft = all[session.id] ?: CodingDraft(timelineId = "${input.id}-reply")
                     all + (session.id to draft.copy(steps = draft.steps + CodingStep(CodingStepKind.INFO,
                         "Предыдущий ответ не принят; действия из него не выполнены. Исправляю решение.", id = "${input.id}:rejected:$index")))
                 }
+                while (messages.size > repairContextSize) messages.removeAt(messages.lastIndex)
                 messages += LlmMessage(LlmChatRole.ASSISTANT, raw)
                 messages += LlmMessage(LlmChatRole.USER, "Ответ не принят: ${scheduleProblem ?: "Исправь JSON и адресат ответа."} Действия из этого ответа ещё не выполнены. Исправь весь ответ по текущему состоянию плана.")
-            }
+                index = PlanningRetryPolicy.nextRetry(index)
+                PlanningRetryPolicy.awaitRetry(index)
+            } else break
         }
         error("Оркестратор не смог определить действие. Сообщение сохранено; можно повторить обработку." + lastProblem?.let { " Причина: $it" }.orEmpty())
     }
@@ -2029,10 +2035,11 @@ class OrchestrationService(
         val reply = record.reply
         publishHandoff(plan, record)
         val blocked = store.planFor(plan.id)!!.blockedTurnCount(stage.id, attempt)
-        if (blocked >= 3) {
-            askUser(plan, stage, "$eventId-help", "Этап «${stage.title}» остановлен после трёх попыток разрешить блокировку. Нужно ваше уточнение: ${reply.text}")
+        if (blocked > 0 && !PlanningRetryPolicy.canRetry(blocked - 1, settings.load().agentLimits.retries)) {
+            askUser(plan, stage, "$eventId-help", "Этап «${stage.title}» достиг заданного в настройках лимита повторов. Нужно ваше уточнение: ${reply.text}")
             return StageTurnDecision(StageTurnAction.WAIT, reply.text, "$eventId-help")
         }
+        if (blocked > 0) PlanningRetryPolicy.awaitRetry(blocked)
         var decision = record.decision
         var activity = record.activity
         val savedResultProblem = decision?.let { plan.coordinatorResultProblem(eventId, it) }
@@ -2123,11 +2130,12 @@ class OrchestrationService(
             if (overlaps.isNotEmpty()) {
                 val checks = store.planFor(plan.id)!!.journal.count { it.stageId == stage.id && it.operation == "shared-conflict-check" }
                 val unseen = overlaps.filter { (_, other) -> store.plans.value.first { it.id == plan.id }.deliveries.none { it.id == "overlap-${stage.id}-${other.id}" } }
-                if (unseen.isNotEmpty() && checks >= 3) {
+                if (unseen.isNotEmpty() && !PlanningRetryPolicy.canRetry(checks, settings.load().agentLimits.retries)) {
                     val question = "Повторяющееся пересечение изменений в общей папке. Уточните, как согласовать файлы: ${reply.changedFiles.joinToString()}."
                     askUser(plan, stage, "$eventId-conflict", question)
                     return StageTurnDecision(StageTurnAction.WAIT, question, "$eventId-conflict")
                 }
+                if (unseen.isNotEmpty()) PlanningRetryPolicy.awaitRetry(PlanningRetryPolicy.nextRetry(checks))
                 unseen.forEach { (peer, other) ->
                     store.update(plan.id) { it.copy(journal = it.journal + PlanJournalEntry("overlap-${other.id}", Id.now(), stage.id, attempt.id, "shared-conflict-check", reply.changedFiles.joinToString())) }
                     enqueue(plan.id, peer.parentSessionId, stage.id, "Обнаружено пересечение файлов с планом ${peer.goal}: ${reply.changedFiles.filter { it in other.reply.changedFiles }}. Перечитай фактическое состояние, согласуй изменения без отката чужих файлов и повтори проверки. Не повторяй уже выполненные правки.", "overlap-${stage.id}-${other.id}")
@@ -2204,7 +2212,10 @@ class OrchestrationService(
         val messages = context.mapIndexed { index, message ->
             if (index == 0) message.copy(content = "${message.content}\n$routing") else message
         }.toMutableList()
-        repeat(3) { index ->
+        val repairContextSize = messages.size
+        var index = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
             val raw = withContext(workerDispatcher) {
                 requirePlanningRequestSize(messages)
                 gateway.completeWithActivity(judge, messages.toList()) { coordinatorEvent(activityId, it) }
@@ -2228,20 +2239,23 @@ class OrchestrationService(
                 resultProblem != null -> resultProblem
                 else -> return decision
             }
-            if (index < 2) {
+            if (PlanningRetryPolicy.canRetry(index, settings.load().agentLimits.retries)) {
                 coordinatorActivity.update { all -> all[activityId]?.let { current ->
                     all + (activityId to current.copy(steps = current.steps.filter { it.kind != CodingStepKind.ANSWER }))
                 } ?: all }
-                val text = "Оркестратор исправляет формат или адресата сообщения (попытка ${index + 2} из 3)."
+                val text = "Оркестратор исправляет формат или адресата сообщения (повтор ${PlanningRetryPolicy.nextRetry(index)})."
                 coordinatorEvent(activityId, CodingStep(CodingStepKind.INFO, text, callId = "coordinator-repair-$index"))
                 append(plan.projectId, plan.parentSessionId, CodingMessage("$eventId-repair-$index", CodingRole.AGENT,
                     text, createdAt = Id.now()))
+                while (messages.size > repairContextSize) messages.removeAt(messages.lastIndex)
                 messages += LlmMessage(LlmChatRole.ASSISTANT, raw)
                 messages += LlmMessage(LlmChatRole.USER,
                     "Ответ не принят: $problem Никакие actions из него не выполнены. Исправь весь ответ без повторения работы исполнителя. $routing")
-            }
+                index = PlanningRetryPolicy.nextRetry(index)
+                PlanningRetryPolicy.awaitRetry(index)
+            } else break
         }
-        return CoordinatorReply("Оркестратор не смог подготовить корректное сообщение за три попытки. " +
+        return CoordinatorReply("Достигнут заданный в настройках лимит повторов: $index. " +
             "Результат исполнителя сохранён, новые задания не переданы. Уточните, как продолжить этап.", askUser = true)
     }
 

@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.ui.screens
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
@@ -24,8 +25,11 @@ class CodingMessageVisibilityRenderTest {
             val hiddenHistory = listOf(answer) + (1..24).map {
                 CodingMessage("system-$it", CodingRole.AGENT, "", steps = listOf(info), createdAt = 1L + it)
             }
+            // This comparison covers visibility and geometry, so sample the working dot
+            // at a fixed pulse size instead of depending on each scene's animation start.
+            val fixedMotion = object : MotionDurationScale { override val scaleFactor: Float = 0f }
             fun render(width: Int, busy: Boolean, history: List<CodingMessage>, draftSteps: List<CodingStep>, hide: Boolean): ByteArray =
-                ImageComposeScene(width, 660) {
+                ImageComposeScene(width, 660, coroutineContext = Dispatchers.Unconfined + fixedMotion) {
                     MagicPaperTheme { Surface {
                         CompositionLocalProvider(LocalHideSystemSteps provides hide) {
                             CodingChat(CodingProject("p", "Проект", "/project", 1),

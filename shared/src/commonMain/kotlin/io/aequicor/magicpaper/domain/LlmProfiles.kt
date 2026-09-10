@@ -52,7 +52,7 @@ data class AdvancedLlmOptions(
     /** Top-p сэмплирование; `null` — не отправлять. */
     val topP: Double? = null,
     /** Сколько секунд ждать отклик; 0 — без ограничения. */
-    val timeoutSeconds: Int = 120,
+    val timeoutSeconds: Int = 0,
     /**
      * Верхняя граница ответа в токенах; Anthropic требует её явно. Значение — для
      * чата: кодинг-прогон рассуждающей модели поднимает потолок до дефолта пи
@@ -72,7 +72,7 @@ data class AdvancedLlmOptions(
     val safeTemperature: Double? get() = temperature?.coerceIn(0.0, 2.0)
     val safeTopP: Double? get() = topP?.coerceIn(0.0, 1.0)
     val safeMaxTokens: Int get() = maxTokens.coerceIn(1, 10_000_000)
-    val safeTimeoutSeconds: Int get() = timeoutSeconds.coerceIn(0, 3600)
+    val safeTimeoutSeconds: Int get() = timeoutSeconds.coerceAtLeast(0)
     val safeContextLimit: Int get() = contextLimit.coerceIn(1_024, 10_000_000)
 }
 

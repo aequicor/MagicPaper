@@ -90,8 +90,10 @@ class SessionPlanBridgeTest {
         val attempt = f.service.preparePlanAttempt(plan, "stage", plan.milestones.single().attempts.single())
         val id = f.root.organismId!!
         val running = f.store.beginRun(id, attempt.sessionId)
-        f.store.charge(SessionAuthority(f.project.id, id, running.id, running.generation, running.mode), running.remainingTokens + 1)
+        f.store.charge(SessionAuthority(f.project.id, id, running.id, running.generation, running.mode), f.limits.tokens!! + 1)
         f.store.observe(id, running.id, running.generation, SessionObservedState.STOPPED)
+        // A user increases the exhausted task limit before explicitly retrying it.
+        f.settings.save(f.settings.load().copy(agentLimits = f.limits.copy(tokens = f.limits.tokens!! * 2)))
         val failed = attempt.copy(phase = AttemptPhase.FAILED, error = PlanningIssue(IssueKind.UNCERTAIN, "Бюджет сессии исчерпан", requiresUser = true))
         return plan.withAttempt(failed) to failed
     }

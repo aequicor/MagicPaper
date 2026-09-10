@@ -56,6 +56,29 @@ class PlanningGatewayTest {
         assertEquals(2, runtime.aborted.distinct().size)
     }
 
+    @Test fun defaultProfileWaitsForSlowStartupAndStillSupportsCancellation() = runTest {
+        val runtime = Runtime(flow { awaitCancellation() })
+        val request = launch { RuntimePlanningGateway(runtime).completeWithActivity(project, CodingEngine.CODEX, "default",
+            profile.copy(advanced = AdvancedLlmOptions()), messages) {} }
+        runCurrent(); advanceTimeBy(3_600_000); runCurrent()
+        assertTrue(request.isActive)
+        assertTrue(runtime.aborted.isEmpty())
+        request.cancelAndJoin()
+        assertEquals(listOf(runtime.calls.single().second.id), runtime.aborted)
+    }
+
+    @Test fun explicitStartupTimeoutCanExceedOneHour() = runTest {
+        val runtime = Runtime(flow {
+            delay(3_600_001)
+            emit(CodingEvent.SessionStarted("native"))
+            emit(CodingEvent.FinalText("Ready")); emit(CodingEvent.Finished)
+        })
+        val result = RuntimePlanningGateway(runtime).completeWithActivity(project, CodingEngine.CODEX, "long-startup",
+            profile.copy(advanced = AdvancedLlmOptions(timeoutSeconds = 7200)), messages) {}
+        assertEquals("Ready", result)
+        assertTrue(runtime.aborted.isEmpty())
+    }
+
     @Test fun nativeSessionMayGenerateAPlanWithoutVisibleEventsPastTheChatDeadline() = runTest {
         for (engine in CodingEngine.entries) {
             val runtime = Runtime(flow {

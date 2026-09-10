@@ -1,0 +1,184 @@
+{
+  "date": "2026-09-10",
+  "baseCommit": "c5c72795f2a955edd5f6b843546714308c66f616",
+  "command": "./gradlew --offline :shared:jvmTest :designSystem:jvmTest :desktopApp:compileKotlin :androidApp:compileDebugKotlin :shared:compileAndroidMain :webApp:compileKotlinJs :webApp:compileKotlinWasmJs",
+  "result": "BUILD SUCCESSFUL",
+  "elapsed": "3m 47s",
+  "modules": {
+    "shared": {
+      "tests": 1292,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 1290
+    },
+    "designSystem": {
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 30
+    }
+  },
+  "focusedSuites": {
+    "io.aequicor.magicpaper.domain.SessionPlanBudgetTest": {
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.ImmunityInterventionTest": {
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.AgentLimitsSettingsRenderTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.SessionPlanBridgeTest": {
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.coding.SessionOptionalLimitsTest": {
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.SessionRuntimeLimitsTest": {
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.CodingMessageVisibilityRenderTest": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.PlanningChatServiceTest": {
+      "tests": 103,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.AgentLimitsDraftTest": {
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.ui.screens.ModelTimeoutValidationTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.SessionLimitPolicyRaceTest": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.llm.PlanningResponseTimeoutTest": {
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.PlanningGatewayTest": {
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.data.storage.JsonLlmProfileRepositoryTest": {
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "io.aequicor.magicpaper.domain.PlanningExecutionServiceTest": {
+      "tests": 68,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "skipped": [
+    "io.aequicor.magicpaper.data.skills.GithubSkillCatalogLiveTest.liveSearchAndTypedLinkImport[jvm]",
+    "io.aequicor.magicpaper.data.skills.SkillCatalogLiveUiTest.searchAndEnteredLinkThroughProjectCatalog[jvm]"
+  ],
+  "platformTasks": [
+    ":webApp:compileKotlinJs",
+    ":webApp:compileKotlinWasmJs",
+    ":shared:compileAndroidMain",
+    ":androidApp:compileDebugKotlin UP-TO-DATE",
+    ":desktopApp:compileKotlin UP-TO-DATE"
+  ],
+  "verifiedBehavior": [
+    "Unset task limits permit use beyond former token, duration, concurrency, depth, retry, queue and context ceilings.",
+    "An explicit token cap limits aggregate task spend; an exhausted worker reservation alone does not stop execution.",
+    "Legacy hidden limits migrate once without erasing spend, history, results or stop/unknown states.",
+    "Removing a deadline cancels the obsolete timer for ordinary and auxiliary work.",
+    "Settings saving, policy synchronization and adoption are serialized against stale policy snapshots.",
+    "Received usage remains accounted for when a concurrent settings update cancels ordinary or auxiliary work.",
+    "Eligible retries continue with cancellable backoff unless the user configures a ceiling.",
+    "New model profiles wait without a default timeout; saved timeout values and cancellation remain supported.",
+    "Settings Save validates and persists optional fields; clearing limits stays a draft until Save."
+  ],
+  "ui": {
+    "render": "PASS",
+    "widths": [
+      390,
+      1000
+    ],
+    "fontScales": [
+      1.0,
+      2.0
+    ],
+    "inspectedArtifacts": [
+      "shared/build/reports/agent-limits/unlimited-1000-1.0.png",
+      "shared/build/reports/agent-limits/unlimited-390-2.0.png",
+      "shared/build/reports/agent-limits/invalid-390-1.0.png",
+      "shared/build/reports/agent-limits/invalid-390-2.0.png"
+    ],
+    "scope": "macOS JVM Compose rendering, semantic validation and settings interaction tests",
+    "windowsNative": "NOT_RUN",
+    "nativeScreenReader": "NOT_RUN",
+    "visibilityTestStabilization": "Exact image comparison retained; the scene fixes animation scale because the earlier difference was confined to 48 pixels of the animated status dot."
+  },
+  "designSystemSelfTest": "PASS: production modules use Paper API; renderer dependencies and raw clickable imports are contained",
+  "surfaceMapSelfTest": {
+    "criterion": "4aa76be6-198a-4448-8af5-69bd0c97e7f2/ac-research-map",
+    "status": "PASS",
+    "explicitBindings": 190,
+    "composableDeclarations": 187,
+    "entries": 3,
+    "missingBindings": [],
+    "staleBindings": [],
+    "unknownTargets": [],
+    "unknownStages": [],
+    "byStage": {
+      "3": 14,
+      "5": 48,
+      "6": 100,
+      "7": 28
+    },
+    "negativeControlsRejected": [
+      "missing-binding",
+      "unknown-component",
+      "unknown-stage"
+    ],
+    "scope": "Source declarations → explicit DS API → valid migration task. Not a runtime UI test or compiler-resolved call graph."
+  },
+  "profileTimeoutCompatibility": "Persisted values, including 120 seconds, remain unchanged because the old format has no provenance distinguishing user choice from its old default. Zero disables that timeout.",
+  "liveApplication": "Verification did not restart the desktop app or modify live task records."
+}

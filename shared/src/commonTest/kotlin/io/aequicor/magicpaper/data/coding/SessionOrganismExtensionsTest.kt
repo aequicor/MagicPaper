@@ -123,7 +123,8 @@ class SessionOrganismExtensionsTest {
         val changed = f.store.changeRootMode(f.organism.id, "root", CodingInteractionMode.CODE)
         assertEquals(CodingInteractionMode.CODE, changed.sessions.getValue("root").mode)
         assertFailsWith<IllegalArgumentException> { f.store.check(old) }
-        assertEquals(1_000_000L, changed.sessions.values.sumOf { it.remainingTokens })
+        assertNull(changed.limits.tokens)
+        assertEquals(f.organism.sessions.values.sumOf { it.remainingTokens }, changed.sessions.values.sumOf { it.remainingTokens })
     }
 
     @Test fun secretsAreMaskedInStoredTasksContextAndResultsWithoutCollapsingOperationIdentity() = runTest {

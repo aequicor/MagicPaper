@@ -108,12 +108,27 @@ class AcceptanceTest {
         assertEquals(CheckStatus.BLOCKED, result.findings.single().status)
     }
 
+    @Test fun defaultReviewRepairsMoreThanThreeInvalidResponses() = runTest {
+        var calls = 0
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+                calls++
+                return if (calls <= 4) "{}" else """{"findings":[{"criterionId":"docs","status":"PASS","expected":"Documentation","observed":"Reviewed source","artifacts":[]}]}"""
+            }
+        }
+        val result = LlmMilestoneVerifier(gateway).review(Milestone("final", "Final"), listOf(review), "Goal", "Report",
+            LlmProfile("p", "P", baseUrl = "http://test", modelId = "m"))
+        assertEquals(5, calls)
+        assertNull(result.issue)
+        assertEquals(CheckStatus.PASS, result.findings.single().status)
+    }
+
     @Test fun missingStructuredResultsFailClosedAfterBoundedRepair() = runTest {
         var calls = 0
         val gateway = object : LlmGateway {
             override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String { calls++; return """{"passed":true,"note":"Everything done"}""" }
         }
-        val result = LlmMilestoneVerifier(gateway).review(Milestone("final", "Final"), listOf(review), "Goal", "Готово",
+        val result = LlmMilestoneVerifier(gateway, retryLimit = { 2 }).review(Milestone("final", "Final"), listOf(review), "Goal", "Готово",
             LlmProfile("p", "P", baseUrl = "http://test", modelId = "m"))
         assertEquals(3, calls)
         assertEquals(IssueKind.INVALID_RESPONSE, result.issue?.kind)

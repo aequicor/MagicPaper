@@ -25,7 +25,8 @@ class ImmunityInterventionTest {
         var starts = 0
         var stops = 0
         lateinit var id: String
-        suspend fun initialize() {
+        suspend fun initialize(limits: OrganismLimits = OrganismLimits()) {
+            settings.save(settings.load().copy(agentLimits = limits))
             projects.save(project)
             val root = CodingSession("root", "p", "Root", 1, researchMode = true, piSessionId = "old-native",
                 planningRulesSnapshot = settings.load().planningRules.snapshot())
@@ -127,7 +128,8 @@ class ImmunityInterventionTest {
         assertEquals(0, f.starts)
         assertEquals("", f.projects.sessions("p").single { it.id == "root" }.piSessionId)
         assertEquals(before.sessions.values.sumOf { it.remainingTokens }, saved.sessions.values.sumOf { it.remainingTokens })
-        assertTrue(saved.sessions.getValue(saved.immunityId).remainingTokens > 0)
+        assertNull(saved.limits.tokens)
+        assertTrue(saved.sessions.values.all { it.remainingTokens == 0L })
         assertFailsWith<ToolArgumentRejection> { f.store.command(SessionAuthority("p", f.id, "root", proposal.generation, node.mode), "late", OrganismCommand(OrganismAction.SIGNAL, "root", reason = "Old runtime")) }
         f.service.approveImmunityIntervention(f.id, proposal.id, ImmunityAction.RECREATE)
         assertEquals(saved, f.store.get(f.id))
@@ -170,21 +172,34 @@ class ImmunityInterventionTest {
         assertFailsWith<IllegalArgumentException> { g.service.approveImmunityIntervention(g.id, stale.id, ImmunityAction.RECREATE) }
     }
 
-    @Test fun recoveryHasCooldownAndBoundedRetryBudget() = runTest {
-        val f = Fixture(); f.initialize(); f.fail()
-        val first = assertNotNull(f.signal())
-        f.service.approveImmunityIntervention(f.id, first.id, ImmunityAction.RECREATE)
-        f.fail(); val second = assertNotNull(f.signal(signal = "second"))
-        assertFailsWith<IllegalArgumentException> { f.service.approveImmunityIntervention(f.id, second.id, ImmunityAction.RECREATE) }
-        f.now += 60_000
-        f.service.approveImmunityIntervention(f.id, second.id, ImmunityAction.RECREATE)
-        f.fail(); f.now += 60_000
-        f.service.approveImmunityIntervention(f.id, assertNotNull(f.signal(signal = "third")).id, ImmunityAction.RECREATE)
-        f.fail(); f.now += 60_000
+    @Test fun recoveryHonorsAnExplicitRetryLimitWithoutAnImplicitCooldown() = runTest {
+        val f = Fixture(); f.initialize(OrganismLimits(retries = 3))
+        repeat(3) { index ->
+            f.fail()
+            val proposal = assertNotNull(f.signal(signal = "retry-$index"))
+            f.service.approveImmunityIntervention(f.id, proposal.id, ImmunityAction.RECREATE)
+        }
+        f.fail()
         val exhausted = assertNotNull(f.signal(signal = "exhausted"))
         assertFalse(ImmunityAction.RECREATE in exhausted.actions)
         assertFailsWith<IllegalArgumentException> { f.service.approveImmunityIntervention(f.id, exhausted.id, ImmunityAction.RECREATE) }
         assertEquals(3, f.store.get(f.id).sessions.getValue("root").retryCount)
+        assertEquals(1_000L, f.now, "Explicit retries do not require an unrelated waiting period")
+    }
+
+    @Test fun defaultRecoveryHasNoImplicitRetryCeilingOrCooldown() = runTest {
+        val f = Fixture(); f.initialize()
+        repeat(5) { index ->
+            f.fail()
+            val proposal = assertNotNull(f.signal(signal = "retry-$index"))
+            assertTrue(ImmunityAction.RECREATE in proposal.actions)
+            f.service.approveImmunityIntervention(f.id, proposal.id, ImmunityAction.RECREATE)
+        }
+        val saved = f.store.get(f.id)
+        assertEquals(5, saved.sessions.getValue("root").retryCount)
+        assertEquals(SessionDesiredState.RUN, saved.sessions.getValue("root").desired)
+        assertTrue(saved.interventions.all { it.state == ImmunityInterventionState.COMPLETED })
+        assertEquals(1_000L, f.now)
     }
 
     @Test fun deletionUsesConfirmedProposalIdentityAndRetainsAuditAfterTombstone() = runTest {

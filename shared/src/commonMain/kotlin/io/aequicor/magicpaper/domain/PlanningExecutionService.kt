@@ -318,7 +318,7 @@ class PlanningExecutionService(
                             compiled.dependencies[m.id].orEmpty().all { dep -> plan.milestones.first { it.id == dep }.completed }
                     }
                     // Whole-project acceptance snapshots require exclusive writers in a shared folder.
-                    val slots = (if (workspace.git && !plan.sharedWorkspace) plan.parallelism.coerceIn(1, 8) else 1) - active.size
+                    val slots = (if (workspace.git && !plan.sharedWorkspace) minOf(plan.parallelism.coerceAtLeast(1), settings.load().agentLimits.activeSessions ?: Int.MAX_VALUE) else 1) - active.size
                     candidates.take(slots.coerceAtLeast(0)).forEach { stage ->
                         val key = id to stage.id
                         val job = launch(start = CoroutineStart.LAZY) {
@@ -371,8 +371,8 @@ class PlanningExecutionService(
                     block(id, failed.error!!)
                 } else if (issue.kind == IssueKind.TRANSIENT && saved != null) {
                     val count = saved.transportRetries
-                    val exhausted = count >= 3
-                    val next = if (exhausted) count else count + 1
+                    val exhausted = !canRetry(count)
+                    val next = if (exhausted) count else PlanningRetryPolicy.nextRetry(count)
                     val waiting = issue.copy(retries = next, requiresUser = exhausted,
                         retryAt = if (exhausted) 0 else Id.now() + PlanningRetryPolicy.delayMillis(next,
                             PlanningRetryPolicy.fromMessage(issue.message), Id.now(), Random.nextLong(500)))
@@ -428,10 +428,12 @@ class PlanningExecutionService(
                 var attempt = plan.finalAttempt ?: error("Нет итоговой проверки")
                 suspend fun persist() { store.update(id) { it.copy(finalAttempt = safeAttempt(attempt.copy(updatedAt = Id.now())), phase = ExecutionPhase.INTEGRATING) } }
                 if (attempt.mergePhase == null || attempt.mergePhase == AttemptPhase.FAILED) {
-                    if (attempt.mergeRetries >= 2) {
+                    if (!canRetry(attempt.mergeRetries)) {
                         block(id, PlanningIssue(IssueKind.CONFLICT, "Не удалось разрешить конфликт переноса: ${conflict.workingPath}", requiresUser = true)); return null
                     }
-                    attempt = attempt.copy(mergeRetries = attempt.mergeRetries + 1, activity = "Разрешение конфликта переноса",
+                    if (attempt.mergeRetries > 0) delay(PlanningRetryPolicy.delayMillis(attempt.mergeRetries))
+                    currentCoroutineContext().ensureActive()
+                    attempt = attempt.copy(mergeRetries = PlanningRetryPolicy.nextRetry(attempt.mergeRetries), activity = "Разрешение конфликта переноса",
                         mergeAssignment = attempt.mergeAssignment ?: attempt.assignment, mergePhase = AttemptPhase.PREPARED, mergePath = conflict.workingPath)
                     persist()
                 }
@@ -804,8 +806,8 @@ class PlanningExecutionService(
                 currentAttempt = attempt
                 if (failure != null || !ended || attempt.report.isBlank()) {
                     val issue = classify(failure ?: "Поток завершился без подтверждённого результата", uncertain = !ended)
-                    if (issue.kind == IssueKind.TRANSIENT && attempt.transportRetries < 3) {
-                        val count = attempt.transportRetries + 1
+                    if (issue.kind == IssueKind.TRANSIENT && canRetry(attempt.transportRetries)) {
+                        val count = PlanningRetryPolicy.nextRetry(attempt.transportRetries)
                         val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(failure.orEmpty()), Id.now(), Random.nextLong(500))
                         attempt = attempt.copy(phase = AttemptPhase.FAILED, transportRetries = count,
                             error = issue.copy(retryAt = Id.now() + wait, retries = count))
@@ -848,8 +850,8 @@ class PlanningExecutionService(
                 attempt = attempt.copy(acceptanceRecord = acceptance)
                 saveAttempt(id, stageId, attempt)
                 if (verdict.issue != null) {
-                    val issue = if (verdict.issue.kind == IssueKind.TRANSIENT && attempt.transportRetries < 3) {
-                        attempt = attempt.copy(transportRetries = attempt.transportRetries + 1)
+                    val issue = if (verdict.issue.kind == IssueKind.TRANSIENT && canRetry(attempt.transportRetries)) {
+                        attempt = attempt.copy(transportRetries = PlanningRetryPolicy.nextRetry(attempt.transportRetries))
                         verdict.issue.copy(retries = attempt.transportRetries, retryAt = Id.now() + PlanningRetryPolicy.delayMillis(attempt.transportRetries,
                             PlanningRetryPolicy.fromMessage(verdict.issue.message), Id.now(), Random.nextLong(500)))
                     } else verdict.issue.copy(requiresUser = verdict.issue.requiresUser || verdict.issue.kind == IssueKind.TRANSIENT)
@@ -864,8 +866,8 @@ class PlanningExecutionService(
                             record.copy(verification = StageVerification(verdict.passed, safeText(verdict.note))) else record
                     }) }
                 if (!verdict.passed) {
-                    if (attempt.repairRetries < 2) {
-                        attempt = attempt.copy(phase = AttemptPhase.FAILED, repairRetries = attempt.repairRetries + 1,
+                    if (canRetry(attempt.repairRetries)) {
+                        attempt = attempt.copy(phase = AttemptPhase.FAILED, repairRetries = PlanningRetryPolicy.nextRetry(attempt.repairRetries),
                             error = PlanningIssue(IssueKind.VERIFICATION, verdict.note))
                         saveAttempt(id, stageId, attempt)
                         // The scheduler picks the same durable attempt up on its next pass.
@@ -887,8 +889,10 @@ class PlanningExecutionService(
                 if (attempt.mergePhase != null && attempt.mergePhase != AttemptPhase.COMPLETE) merged = false
                 while (!merged && canRun(id)) {
                     if (attempt.mergePhase == null || attempt.mergePhase == AttemptPhase.FAILED) {
-                        if (attempt.mergeRetries >= 2) break
-                        attempt = attempt.copy(mergeRetries = attempt.mergeRetries + 1, mergePhase = AttemptPhase.PREPARED,
+                        if (!canRetry(attempt.mergeRetries)) break
+                        if (attempt.mergeRetries > 0) delay(PlanningRetryPolicy.delayMillis(attempt.mergeRetries))
+                        currentCoroutineContext().ensureActive()
+                        attempt = attempt.copy(mergeRetries = PlanningRetryPolicy.nextRetry(attempt.mergeRetries), mergePhase = AttemptPhase.PREPARED,
                             mergeAssignment = attempt.mergeAssignment ?: attempt.assignment, mergePath = workspace.integrationPath,
                             activity = "Агент разрешает конфликт объединения")
                         saveAttempt(id, stageId, attempt)
@@ -997,10 +1001,11 @@ class PlanningExecutionService(
     private suspend fun canRunStage(id: String, stageId: String): Boolean = canRun(id) &&
         store.planFor(id)?.let { stageId !in chatHooks?.blockedStages(it).orEmpty() } == true
     private suspend fun canRun(id: String) = !closing && store.failure.value == null && store.planFor(id)?.intent == ExecutionIntent.RUN
-    private fun withRetry(attempt: StageAttempt, issue: PlanningIssue): StageAttempt {
+    private suspend fun canRetry(count: Int): Boolean = PlanningRetryPolicy.canRetry(count, settings.load().agentLimits.retries)
+    private suspend fun withRetry(attempt: StageAttempt, issue: PlanningIssue): StageAttempt {
         if (issue.kind != IssueKind.TRANSIENT) return attempt.copy(error = issue)
-        if (attempt.transportRetries >= 3) return attempt.copy(error = issue.copy(retries = attempt.transportRetries, requiresUser = true))
-        val count = attempt.transportRetries + 1
+        if (!canRetry(attempt.transportRetries)) return attempt.copy(error = issue.copy(retries = attempt.transportRetries, requiresUser = true))
+        val count = PlanningRetryPolicy.nextRetry(attempt.transportRetries)
         val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(issue.message), Id.now(), Random.nextLong(500))
         return attempt.copy(transportRetries = count, error = issue.copy(retries = count, retryAt = Id.now() + wait))
     }

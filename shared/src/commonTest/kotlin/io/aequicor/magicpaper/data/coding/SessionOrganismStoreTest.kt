@@ -44,19 +44,24 @@ class SessionOrganismStoreTest {
             task = SessionTask("Independent work", parent, "Verified result"))
     }
 
-    @Test fun concurrentCreationReservesExistingBudgetAndActiveSlotsAtomically() = runTest {
+    @Test fun concurrentCreationPreservesBudgetAndActualRuntimeAdmissionEnforcesSlots() = runTest {
         val f = Fixture(); f.initialize(OrganismLimits(activeSessions = 4, tokens = 1_000, recoveryTokens = 100))
         val authority = f.authority()
         val results = (1..12).map { index -> async {
             runCatching { f.store.command(authority, "create-$index", f.create("root", 300)) }
         } }.awaitAll()
-        assertEquals(2, results.count { it.isSuccess })
+        assertEquals(12, results.count { it.isSuccess })
         val saved = f.store.get(f.organism.id)
-        assertEquals(4, saved.sessions.values.count { !it.settled && !it.archived })
+        assertEquals(14, saved.sessions.values.count { !it.settled && !it.archived })
         assertEquals(1_000L, saved.sessions.values.sumOf { it.remainingTokens })
-        assertEquals(300L, saved.sessions.getValue("root").remainingTokens)
+        assertEquals(0L, saved.sessions.getValue("root").remainingTokens)
         assertEquals(100L, saved.sessions.getValue(saved.immunityId).remainingTokens)
         assertTrue(saved.sessions.values.all { it.rules == saved.sessions.getValue("root").rules })
+        val starts = saved.sessions.values.filter { it.kind == SessionKind.SESSION }.map { child ->
+            async { runCatching { f.store.beginRun(saved.id, child.id) } }
+        }.awaitAll()
+        assertEquals(3, starts.count { it.isSuccess })
+        assertEquals(4, f.store.get(saved.id).sessions.values.count { it.observed == SessionObservedState.RUNNING })
     }
 
     @Test fun commandDeduplicationSurvivesRestartAndRejectsChangedArguments() = runTest {

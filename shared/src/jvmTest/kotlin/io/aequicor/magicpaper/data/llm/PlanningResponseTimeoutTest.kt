@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.llm
 
+import io.aequicor.magicpaper.domain.AdvancedLlmOptions
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.CodingStepKind
 import kotlinx.coroutines.*
@@ -82,9 +83,9 @@ class PlanningResponseTimeoutTest {
         assertEquals("Answer", result.await())
     }
 
-    @Test fun zeroTimeoutWaitsAndCancellationStopsWait() = runTest {
+    @Test fun defaultTimeoutWaitsAndCancellationStopsWait() = runTest {
         val turn = CodexAppServerOpenAiSubscription.TurnAccumulator {}
-        val result = async { turn.awaitResult(0) }
+        val result = async { turn.awaitResult(AdvancedLlmOptions().safeTimeoutSeconds) }
         runCurrent()
         advanceTimeBy(3_600_000)
         assertTrue(result.isActive)

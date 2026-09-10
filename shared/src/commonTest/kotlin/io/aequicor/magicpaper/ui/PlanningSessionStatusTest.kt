@@ -145,7 +145,7 @@ class PlanningSessionStatusTest {
         assertEquals(CodingSessionStatus.WAITING, CodingSessionUi(worker, messages, plan = failed).attentionStatus)
         val blocker = failed.blockingIssues(messages).single()
         assertEquals(issue.message, blocker.issue.message)
-        assertContains(blocker.text, "Автоматические попытки исправления исчерпаны (2)")
+        assertContains(blocker.text, issue.message)
         assertNull(messages.pendingPlanningQuestion())
         assertEquals(CodingSessionStatus.WAITING, CodingUi(projects = listOf(CodingProject("project", "Project", "/project", 1)),
             sessions = listOf(CodingSessionUi(parent, messages, plan = failed), CodingSessionUi(worker, messages, plan = failed))).withRequests().statusOf("project"))
