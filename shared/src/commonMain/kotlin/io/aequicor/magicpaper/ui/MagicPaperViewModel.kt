@@ -1641,8 +1641,17 @@ class MagicPaperViewModel(
         // A cancelled job still owns the session while its runtime and saved output
         // are being cleaned up. Its finally block releases this entry.
         if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value) return
-        val recorder = CodingRunRecorder()
-        var request = checkpoint.copy(responseId = checkpoint.responseId.ifBlank { Id.new() })
+        var request = checkpoint.copy(
+            responseId = checkpoint.responseId.ifBlank { Id.new() },
+            responseTimelineId = checkpoint.responseTimelineId.ifBlank { Id.new() },
+        )
+        val recorder = CodingRunRecorder(CodingImageInvocation(
+            sessionId = session.id,
+            invocationId = request.runId,
+            inputMessageId = request.messageId,
+            responseMessageId = request.responseId,
+            responseTimelineId = request.responseTimelineId,
+        ))
         val job = scope.launch(workerDispatcher, start = CoroutineStart.LAZY) {
             try {
                 if (userInitiated) planningChat?.prepareManagedUserTurn(session, checkpoint.messageId)
@@ -1653,7 +1662,8 @@ class MagicPaperViewModel(
                 }
                 if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
                     appendCodingMessage(session, CodingMessage(request.messageId, CodingRole.USER,
-                        request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() }))
+                        request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() },
+                        images = request.attachments.mapNotNull { it.asCodingInputImage(checkNotNull(recorder.imageInvocation)) }))
                 }
                 additionalMessage?.let { appendCodingMessage(session, it) }
                 updateCodingSession(session.id) { it.copy(running = true, draft = recorder.draft(active = true)) }

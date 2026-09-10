@@ -958,6 +958,26 @@ class CodexAppServerOpenAiSubscription(
             }
         }
 
+        /** MCP image blocks are structured terminal output, unlike text that merely looks like a path or URL. */
+        private fun resultImages(result: JsonObject?): List<CodingImageArtifact> =
+            (result?.get("content") as? JsonArray).orEmpty().mapIndexedNotNull { index, block ->
+                (block as? JsonObject)?.takeIf { it.string("type") == "image" }?.let { image ->
+                    val data = image.string("data").orEmpty()
+                    val mime = image.string("mimeType").orEmpty()
+                    if (data.isBlank() || !mime.startsWith("image/", ignoreCase = true)) null
+                    else CodingImageArtifact(
+                        id = image.string("id").orEmpty().ifBlank { "image:$index" },
+                        name = image.string("name").orEmpty(),
+                        mimeType = mime,
+                        sizeBytes = decodedBase64Size(data),
+                        dataBase64 = data,
+                    )
+                }
+            }
+
+        private fun decodedBase64Size(data: String): Long =
+            ((data.length.toLong() * 3) / 4 - data.takeLastWhile { it == '=' }.length).coerceAtLeast(0)
+
         fun commandProgress(params: JsonObject) {
             val id = params.string("itemId").orEmpty()
             val item = items[id]?.takeIf { it.string("type") == "commandExecution" } ?: return
@@ -1007,6 +1027,7 @@ class CodexAppServerOpenAiSubscription(
                         resultPreview = (result?.get("content") as? JsonArray).orEmpty().mapNotNull { block ->
                             (block as? JsonObject)?.takeIf { it.string("type") == "text" }?.string("text")
                         }.joinToString("\n").ifBlank { (item["error"] as? JsonObject)?.string("message").orEmpty() }.take(2000),
+                        images = resultImages(result),
                     ))
                 }
                 "reasoning" -> {

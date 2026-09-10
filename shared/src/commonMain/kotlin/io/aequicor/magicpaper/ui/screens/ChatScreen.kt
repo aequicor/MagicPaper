@@ -320,7 +320,7 @@ private fun ModelChip(
 }
 
 @Composable
-private fun Composer(
+internal fun Composer(
     enabled: Boolean,
     session: ChatSession?,
     profiles: List<LlmProfile>,
@@ -333,7 +333,7 @@ private fun Composer(
     // Черновик переживает поворот экрана и потерю фокуса окна.
     var text by rememberSaveable { mutableStateOf("") }
     // Прикреплённые файлы живут до отправки; байты в rememberSaveable не сунуть.
-    var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
+    var attachments by remember(session?.id) { mutableStateOf<List<Attachment>>(emptyList()) }
     fun submit() {
         if (text.isBlank() && attachments.isEmpty()) return
         onSend(text, attachments)
@@ -350,7 +350,7 @@ private fun Composer(
         }
         PendingAttachmentsRow(
             attachments = attachments,
-            onRemove = { target -> attachments = attachments.filterNot { it.id == target.id } },
+            onRemove = { index -> attachments = attachments.filterIndexed { itemIndex, _ -> itemIndex != index } },
             modifier = Modifier.padding(bottom = 6.dp),
         )
         Row(

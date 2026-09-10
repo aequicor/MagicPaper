@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -23,6 +24,46 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperSemanticsTest {
+    @Test fun attachmentThumbnailPublishesLoadingReadyAndErrorStates() {
+        ImageComposeScene(320, 180) { PaperTheme {
+            androidx.compose.foundation.layout.Column {
+                PaperAttachmentThumbnail("load.png", "load.png", PaperAttachmentThumbnailState.LOADING, onRemove = null)
+                PaperAttachmentThumbnail("ready.png", "ready.png", PaperAttachmentThumbnailState.READY, ImageBitmap(1, 1), onRemove = null)
+                PaperAttachmentThumbnail("error.png", "error.png", PaperAttachmentThumbnailState.ERROR, onRemove = null)
+            }
+        } }.use { scene ->
+            scene.render(16_000_000).close()
+            val labels = scene.nodes().flatMap { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() }
+            assertTrue(labels.any { it.contains("Загрузка миниатюры") })
+            assertTrue(labels.any { it.contains("Миниатюра готова") })
+            assertTrue(labels.any { it.contains("Миниатюра недоступна") })
+        }
+    }
+
+    @Test fun attachmentThumbnailExposesStateAndOpenAction() {
+        var opens = 0
+        var removes = 0
+        ImageComposeScene(320, 120) { PaperTheme {
+            PaperAttachmentThumbnail(
+                label = "picture.png · 1 Б", description = "picture.png",
+                state = PaperAttachmentThumbnailState.READY, bitmap = ImageBitmap(1, 1),
+                onRemove = { removes++ }, onOpen = { opens++ },
+            )
+        } }.use { scene ->
+            scene.render(16_000_000).close()
+            val open = scene.nodes().single {
+                it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Открыть picture.png")
+            }
+            val remove = scene.nodes().single {
+                it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Удалить picture.png · 1 Б")
+            }
+            assertTrue(open.config[SemanticsActions.OnClick].action?.invoke() == true)
+            assertTrue(remove.config[SemanticsActions.OnClick].action?.invoke() == true)
+            assertEquals(1, opens)
+            assertEquals(1, removes)
+        }
+    }
+
     @Test fun contextIndicatorExposesProgressAndSupportsKeyboard() {
         val focus = FocusRequester()
         val fraction = mutableStateOf<Float?>(.5f)

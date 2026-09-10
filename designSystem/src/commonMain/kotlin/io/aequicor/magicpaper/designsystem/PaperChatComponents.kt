@@ -264,6 +264,7 @@ public fun PaperAttachmentThumbnail(
     state: PaperAttachmentThumbnailState,
     bitmap: ImageBitmap? = null,
     onRemove: (() -> Unit)?,
+    onOpen: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val previewStatus = when (state) {
@@ -278,7 +279,13 @@ public fun PaperAttachmentThumbnail(
     ) {
         when (state) {
             PaperAttachmentThumbnailState.READY -> bitmap?.let {
-                PaperImage(it, description, Modifier.size(34.dp).clip(RoundedCornerShape(7.dp)))
+                if (onOpen == null) {
+                    PaperImage(it, description, Modifier.size(34.dp).clip(RoundedCornerShape(7.dp)))
+                } else {
+                    PaperIconButton("Открыть $description", onOpen, Modifier.size(34.dp)) {
+                        PaperImage(it, description, Modifier.size(34.dp).clip(RoundedCornerShape(7.dp)))
+                    }
+                }
             } ?: PaperText("!", role = PaperTextRole.LABEL)
             PaperAttachmentThumbnailState.LOADING -> PaperText("…", role = PaperTextRole.BODY)
             PaperAttachmentThumbnailState.ERROR -> PaperText("!", role = PaperTextRole.LABEL)

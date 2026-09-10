@@ -179,6 +179,8 @@ import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.aequicor.magicpaper.ui.withStageChat
 import io.aequicor.magicpaper.ui.components.ChatMarkdown
 import io.aequicor.magicpaper.ui.components.ChatPlainText
+import io.aequicor.magicpaper.ui.components.CodingInputImages
+import io.aequicor.magicpaper.ui.components.CodingResultImages
 import io.aequicor.magicpaper.ui.components.FadingSingleLineText
 import io.aequicor.magicpaper.ui.components.ChatScrollItem
 import io.aequicor.magicpaper.ui.components.ChatScrollToBottomButton
@@ -1120,6 +1122,7 @@ private fun SavedCodingHistoryItem(
                                     style = LocalPaperTypography.current.body.copy(fontFamily = PaperFonts.code),
                                     color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
                             })
+                        if (fragment.last) CodingResultImages(message, step)
                     } else parts.Content(fragment.index,
                         style = when (step?.kind) {
                             CodingStepKind.INFO -> LocalPaperTypography.current.body
@@ -1131,7 +1134,10 @@ private fun SavedCodingHistoryItem(
                             step?.kind == CodingStepKind.INFO -> LocalPaperColors.current.secondaryText
                             else -> LocalPaperColors.current.text
                         })
-                    if (fragment.last) CollapseMessage(onCollapse)
+                    if (fragment.last) {
+                        if (message.role == CodingRole.USER) CodingInputImages(message)
+                        CollapseMessage(onCollapse)
+                    }
                 } },
                 forceWidth = fragment.parts != null,
                 showFooter = item.last && fragment.last,
@@ -1213,8 +1219,9 @@ private fun CodingMessageBubble(
             } else previewState.SaveableStateProvider("preview") {
                 if (isUser) {
                     ChatPlainText(message.text)
+                    CodingInputImages(message)
                 } else if (step != null) {
-                    CodingStepRow(step, live = live)
+                    CodingStepRow(step, live = live, message = message)
                 } else {
                     // Совместимость со старыми журналами без ленты.
                     SelectionContainer {
@@ -1255,7 +1262,7 @@ private fun CodingMessageBubble(
                 }
             }
             if (showFooter) {
-                CodingAttachments(message.attachments)
+                CodingAttachments(message.attachments.filter { it.kind != io.aequicor.magicpaper.domain.AttachmentKind.IMAGE || message.images.isEmpty() })
                 footer?.invoke()
             }
         }
@@ -1267,7 +1274,7 @@ private fun CodingMessageBubble(
  * с раскрывающимся выводом инструмента (что реально пришло в ответ).
  */
 @Composable
-internal fun CodingStepRow(step: CodingStep, live: Boolean) {
+internal fun CodingStepRow(step: CodingStep, live: Boolean, message: CodingMessage? = null) {
     if (!step.isVisibleInChat(LocalHideSystemSteps.current)) return
     when (step.kind) {
         CodingStepKind.ANSWER -> {
@@ -1292,7 +1299,10 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean) {
                 modifier = Modifier.padding(vertical = 2.dp),
             )
         }
-        CodingStepKind.TOOL, CodingStepKind.EXEC -> ToolStepRow(step, live)
+        CodingStepKind.TOOL, CodingStepKind.EXEC -> {
+            ToolStepRow(step, live)
+            message?.let { CodingResultImages(it, step) }
+        }
         CodingStepKind.SUMMARY -> Unit
     }
 }
@@ -1612,7 +1622,9 @@ internal fun CodingComposer(
         val trailingLimit = maxWidth * 0.40f
         val narrowContext = maxWidth < 600.dp
         PaperWorkspaceComposer {
-            PendingAttachmentsRow(attachments, { target -> attachments = attachments.filterNot { it.id == target.id } })
+            PendingAttachmentsRow(attachments, { index ->
+                attachments = attachments.filterIndexed { itemIndex, _ -> itemIndex != index }
+            })
                 PaperPromptField(
                     value = text, onValueChange = { text = it },
                     modifier = Modifier

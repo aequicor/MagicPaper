@@ -77,6 +77,87 @@ data class AttachmentMeta(
     val path: String = "",
 )
 
+/** Origin of an image that the coding transcript is allowed to present. */
+@Serializable
+enum class CodingImageSource { USER_ATTACHMENT, TOOL_RESULT }
+
+/**
+ * Only application-owned bytes may be rendered from coding history. A locator
+ * intentionally cannot represent a URL or arbitrary local path: those are
+ * transport text, not an image capability.
+ */
+@Serializable
+sealed interface CodingImageLocator {
+    @Serializable
+    data class InlineBase64(val dataBase64: String) : CodingImageLocator
+
+    /** Relative name in the managed image store; platform loaders validate it before reading. */
+    @Serializable
+    data class ManagedBlob(val blobId: String) : CodingImageLocator
+}
+
+/** Durable, typed identity of an image in a coding invocation. */
+@Serializable
+data class CodingImageReference(
+    val imageId: String,
+    val source: CodingImageSource,
+    val sessionId: String,
+    val invocationId: String,
+    val timelineId: String,
+    val ownerMessageId: String,
+    /** Null only for USER_ATTACHMENT belonging to the invocation input. */
+    val callId: String? = null,
+    val name: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val locator: CodingImageLocator,
+)
+
+/** A persisted invocation supplies the non-heuristic ownership envelope. */
+@Serializable
+data class CodingImageInvocation(
+    val sessionId: String,
+    val invocationId: String,
+    val inputMessageId: String,
+    val responseMessageId: String,
+    val responseTimelineId: String,
+)
+
+/** Structured result supplied by an adapter's confirmed terminal event. */
+data class CodingImageArtifact(
+    val id: String = "",
+    val name: String = "",
+    val mimeType: String,
+    val sizeBytes: Long,
+    val dataBase64: String,
+)
+
+/** Input images may only be displayed on their exact USER message. */
+fun CodingImageReference.isInputFor(message: CodingMessage): Boolean =
+    source == CodingImageSource.USER_ATTACHMENT && callId == null &&
+        message.role == CodingRole.USER && ownerMessageId == message.id
+
+/** Tool images may only be displayed on the exact AGENT step which produced them. */
+fun CodingImageReference.isResultFor(message: CodingMessage, step: CodingStep): Boolean =
+    source == CodingImageSource.TOOL_RESULT && message.role == CodingRole.AGENT &&
+        ownerMessageId == message.id && timelineId == message.timelineId && callId != null && callId == step.callId
+
+fun Attachment.asCodingInputImage(invocation: CodingImageInvocation): CodingImageReference? =
+    takeIf { it.kind == AttachmentKind.IMAGE && it.dataBase64.isNotBlank() }?.let {
+        CodingImageReference(
+            imageId = it.id,
+            source = CodingImageSource.USER_ATTACHMENT,
+            sessionId = invocation.sessionId,
+            invocationId = invocation.invocationId,
+            timelineId = invocation.responseTimelineId,
+            ownerMessageId = invocation.inputMessageId,
+            name = it.name,
+            mimeType = it.mimeType,
+            sizeBytes = it.sizeBytes,
+            locator = CodingImageLocator.InlineBase64(it.dataBase64),
+        )
+    }
+
 /** Содержимое файла, выбранного пользователем (до упаковки в [Attachment]). */
 data class PickedFile(
     val name: String,

@@ -26,6 +26,42 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingComposerRenderTest {
+    @Test fun imageAttachmentsCanBeRemovedIndividuallyAndSentBeforePreviewCompletes() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val draft = io.aequicor.magicpaper.ui.components.CodingComposerDraft().apply {
+                // Invalid raster bytes intentionally leave both previews in ERROR/LOADING;
+                // attachment delivery must stay independent of preview success.
+                attachments.value = listOf(
+                    Attachment("same", "first.png", "image/png", 3, "YWJj", AttachmentKind.IMAGE),
+                    Attachment("same", "second.png", "image/png", 3, "ZGVm", AttachmentKind.IMAGE),
+                )
+            }
+            val sent = mutableListOf<List<Attachment>>()
+            ImageComposeScene(680, 220) { MagicPaperTheme { Surface {
+                CodingComposer(state = draft, enabled = true, busy = false,
+                    onSend = { _, attachments -> sent += attachments }, onAbort = {}, onPickAttachments = { _, _ -> })
+            } } }.use { scene ->
+                repeat(4) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                fun nodes(): List<SemanticsNode> {
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    return scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                }
+                val remove = nodes().single {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Удалить first.png · 3 Б")
+                }
+                assertTrue(remove.config[SemanticsActions.OnClick].action?.invoke() == true)
+                scene.render(80_000_000L).close(); runCurrent()
+                assertEquals(listOf("second.png"), draft.attachments.value.map { it.name })
+                val send = nodes().single {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Отправить")
+                }
+                assertTrue(send.config[SemanticsActions.OnClick].action?.invoke() == true)
+                assertEquals(listOf(listOf("second.png")), sent.map { it.map(Attachment::name) })
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun planningQuestionIsSentWithoutResumingAndEmptyComposerCanStillContinue() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

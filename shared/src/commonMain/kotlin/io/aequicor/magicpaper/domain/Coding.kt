@@ -90,6 +90,8 @@ data class CodingRunCheckpoint(
     val stoppedByUser: Boolean = false,
     /** Persisted with the request; copies/recovery retain the same identity. */
     val runId: String = messageId,
+    /** Generated before the first draft and retained so recovery keeps image ownership exact. */
+    val responseTimelineId: String = "",
     /** Null only in legacy checkpoints; resolved from the persisted session before execution. */
     val interactionMode: CodingInteractionMode? = null,
 )
@@ -185,8 +187,9 @@ data class CodingDraft(
 }
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
-class CodingRunRecorder {
-    private val timelineId = Id.new()
+class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
+    /** Shared with every image of this response, including its input message. */
+    val timelineId = imageInvocation?.responseTimelineId ?: Id.new()
     private var sequence = 0
     private fun nextStepId(): String = "$timelineId:${sequence++}"
     private var textId = nextStepId()
@@ -283,6 +286,7 @@ class CodingRunRecorder {
                     toolCategory = event.category,
                     toolPhase = ToolPhase.STARTED,
                     id = if (existing >= 0) steps[existing].id else nextStepId(),
+                    images = if (existing >= 0) steps[existing].images else emptyList(),
                 )
                 if (existing >= 0) steps[existing] = step else steps += step
             }
@@ -308,6 +312,7 @@ class CodingRunRecorder {
                         running = false,
                         ok = !event.isError,
                         result = event.resultPreview,
+                        images = mergeImages(steps[index].images, resultImages(event)),
                         toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                     )
                 } else if (event.isError || event.title != null) {
@@ -317,6 +322,7 @@ class CodingRunRecorder {
                         tool = event.tool,
                         callId = event.callId,
                         result = event.resultPreview,
+                        images = resultImages(event),
                         ok = !event.isError,
                         toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                         id = nextStepId(),
@@ -369,6 +375,33 @@ class CodingRunRecorder {
             val step = CodingStep(kind, value, id = nextStepId())
             sourceSteps[source] = step.id
             steps += step
+        }
+    }
+
+    /** A reconnect may replay a terminal event; retain one image per exact adapter id. */
+    private fun mergeImages(existing: List<CodingImageReference>, incoming: List<CodingImageReference>): List<CodingImageReference> =
+        (existing + incoming).distinctBy { it.imageId }
+
+    /** No text parsing: only structured terminal adapter artifacts become results. */
+    private fun resultImages(event: CodingEvent.ToolFinished): List<CodingImageReference> {
+        val invocation = imageInvocation ?: return emptyList()
+        if (event.callId.isBlank()) return emptyList()
+        return event.images.mapIndexedNotNull { index, image ->
+            image.takeIf { it.dataBase64.isNotBlank() && it.mimeType.startsWith("image/", ignoreCase = true) }?.let {
+                CodingImageReference(
+                    imageId = "${event.callId}:${it.id.ifBlank { "image:$index" }}",
+                    source = CodingImageSource.TOOL_RESULT,
+                    sessionId = invocation.sessionId,
+                    invocationId = invocation.invocationId,
+                    timelineId = invocation.responseTimelineId,
+                    ownerMessageId = invocation.responseMessageId,
+                    callId = event.callId,
+                    name = it.name.ifBlank { "Результат изображения" },
+                    mimeType = it.mimeType,
+                    sizeBytes = it.sizeBytes,
+                    locator = CodingImageLocator.InlineBase64(it.dataBase64),
+                )
+            }
         }
     }
 
@@ -529,6 +562,8 @@ sealed interface CodingEvent {
         val resultPreview: String = "",
         val phase: ToolPhase? = null,
         val title: String? = null,
+        /** Structured adapter blocks only; never reconstructed from resultPreview. */
+        val images: List<CodingImageArtifact> = emptyList(),
     ) : CodingEvent
 
     /**
@@ -610,6 +645,8 @@ data class CodingStep(
     val toolPhase: ToolPhase? = null,
     /** A merged live draft can contain steps from several independently saved replies. */
     val sourceTimelineId: String? = null,
+    /** Structured images produced by this exact tool call; legacy logs leave this empty. */
+    val images: List<CodingImageReference> = emptyList(),
 )
 
 /** Роли в журнале проекта. */
@@ -643,6 +680,8 @@ data class CodingMessage(
     /** Visual USER alignment does not grant a session-origin packet human authority. */
     val origin: MessageOrigin = if (role == CodingRole.USER && route == null) MessageOrigin.USER else if (route != null) MessageOrigin.SESSION else MessageOrigin.TOOL,
     val contextPacket: SessionContextPacket? = null,
+    /** Structured images passed to this exact user request. */
+    val images: List<CodingImageReference> = emptyList(),
 
 )
 
