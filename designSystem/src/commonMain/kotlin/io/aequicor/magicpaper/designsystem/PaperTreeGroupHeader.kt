@@ -141,6 +141,7 @@ public fun PaperTreeGroupHeader(
                     }
                 }
             }
+            Spacer(Modifier.width(8.dp))
         }
     }
 }
