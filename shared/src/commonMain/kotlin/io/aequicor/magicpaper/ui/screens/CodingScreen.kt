@@ -467,7 +467,6 @@ private fun ImmunityDiamondButton(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    headerHovered: Boolean = false,
 ) {
     val size = if (selected) 12.dp else 10.dp
     Box(
@@ -480,12 +479,6 @@ private fun ImmunityDiamondButton(
             .semantics { contentDescription = "Иммунитет: ${status.label}" },
         contentAlignment = Alignment.Center,
     ) {
-        // Анимация плавного сдвига влево при hover
-        val offsetX by animateDpAsState(
-            targetValue = if (headerHovered) (-4).dp else 0.dp,
-            animationSpec = tween(durationMillis = 200, easing = EaseInOut)
-        )
-        
         // Ромбик с анимацией статуса
         io.aequicor.magicpaper.designsystem.PaperActivityIndicator(
             tone = when (status) {
@@ -498,8 +491,7 @@ private fun ImmunityDiamondButton(
             label = status.label,
             running = status == CodingSessionStatus.WORKING,
             size = size,
-            shape = io.aequicor.magicpaper.designsystem.PaperActivityShape.DIAMOND,
-            modifier = Modifier.offset(x = offsetX)
+            shape = io.aequicor.magicpaper.designsystem.PaperActivityShape.DIAMOND
         )
     }
 }
@@ -590,12 +582,11 @@ internal fun ProjectsPanel(
                         }
                     },
                     trailing = immunitySession?.let { imm ->
-                        { isHovered ->
+                        {
                             ImmunityDiamondButton(
                                 status = imm.status,
                                 selected = imm.session.id == ui.activeSessionIdOf(imm.session.projectId),
-                                onClick = { onSelectSession(imm.session.id) },
-                                headerHovered = isHovered
+                                onClick = { onSelectSession(imm.session.id) }
                             )
                         }
                     }
