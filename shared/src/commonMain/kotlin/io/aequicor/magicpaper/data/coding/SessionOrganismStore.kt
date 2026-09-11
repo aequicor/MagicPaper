@@ -441,18 +441,24 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             audit = old.audit + SessionAuditEvent("mode-$sessionId-${changed.generation}", "USER", "CHANGE_MODE", setOf(sessionId), "${node.mode} → $mode", clock())))
     }
 
-    /** A fresh explicit human request may reopen a confirmed stopped root, retaining its budget. */
+    /** A fresh explicit human request may reopen a confirmed stopped root, retaining its budget.
+     *  An uncertain (UNKNOWN) root — whose previous run ended without a confirmed outcome —
+     *  is also reopenable: the user is explicitly asking to continue, and the subtree must
+     *  still be settled and free of unresolved quarantines. */
     suspend fun prepareUserTurn(id: String, sessionId: String, requestId: String): SessionOrganism = lock.withLock {
         val old = read(id); val node = old.sessions.getValue(sessionId)
-        if (node.desired != SessionDesiredState.STOP || node.observed != SessionObservedState.STOPPED) return@withLock old
+        val stopped = node.observed == SessionObservedState.STOPPED && node.desired == SessionDesiredState.STOP
+        val uncertain = node.observed == SessionObservedState.UNKNOWN
+        if (!stopped && !uncertain) return@withLock old
         require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) && !node.archived && !old.stoppedByUser) { "Сначала восстановите рабочую область" }
-        require(old.subtree(sessionId).all { old.sessions.getValue(it).settled }) { "Остановка поддерева ещё не подтверждена" }
+        require((old.subtree(sessionId) - sessionId).all { old.sessions.getValue(it).settled }) { "Остановка поддерева ещё не подтверждена" }
         require(old.audit.none { it.action == "QUARANTINE" && sessionId in it.affected }) { "Сначала проверьте фактический исход операции" }
         require(old.hasTokenBudget() && old.withinDuration()) { "Бюджет организма исчерпан; создайте новую сессию" }
         val next = node.copy(desired = SessionDesiredState.RUN, observed = SessionObservedState.PENDING,
             generation = node.generation + 1, previousGeneration = node.generation, version = node.version + 1)
         commit(old.copy(version = old.version + 1, sessions = old.sessions + (node.id to next),
-            audit = old.audit + SessionAuditEvent("user-turn-$requestId", "USER", "RESUME", setOf(node.id), "Новый запрос после подтверждённой остановки", clock())))
+            audit = old.audit + SessionAuditEvent("user-turn-$requestId", "USER", "RESUME", setOf(node.id),
+                if (uncertain) "Новый запрос после незавершённого запуска" else "Новый запрос после подтверждённой остановки", clock())))
     }
 
     /** Application-only turn boundary. Reopening a root never reopens its finished children. */

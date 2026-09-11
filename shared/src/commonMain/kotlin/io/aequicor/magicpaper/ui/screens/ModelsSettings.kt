@@ -174,6 +174,7 @@ private fun VariantEditor(profile: LlmProfile, model: String, onSave: (LlmProfil
     var temperature by remember { mutableStateOf(options.temperature?.toString().orEmpty()) }
     var topP by remember { mutableStateOf(options.topP?.toString().orEmpty()) }
     var maxTokens by remember { mutableStateOf(if (options.sendMaxTokens) options.maxTokens.toString() else "") }
+    var contextLimit by remember { mutableStateOf(options.contextLimit.toString()) }
     var timeout by remember { mutableStateOf(options.timeoutSeconds.toString()) }
     var history by remember { mutableStateOf(options.contextMessages.toString()) }
     var prompt by remember { mutableStateOf(options.systemPromptOverride) }
@@ -185,6 +186,7 @@ private fun VariantEditor(profile: LlmProfile, model: String, onSave: (LlmProfil
     val valid = name.isNotBlank() && validNumber(temperature, 0.0, 2.0) && validNumber(topP, 0.0, 1.0) &&
         (maxTokens.isBlank() || maxTokens.toIntOrNull()?.let { it in 1..(fact?.maxOutputTokens ?: 10000000) } == true) &&
         parseModelTimeoutSeconds(timeout) != null && history.toIntOrNull()?.let { it in 1..1000 } == true &&
+        contextLimit.toIntOrNull()?.let { it in 1024..10_000_000 } == true &&
         extras.values.all { it.isBlank() || runCatching { Json.parseToJsonElement(it) }.isSuccess }
     EditorDialog("${if (existing == null) "Новый вариант" else "Параметры варианта"}", onDismiss) {
         PaperText("На основе $source. Пустое поле сохраняет поведение поставщика.", style = paperTextStyle(PaperTextRole.BODY))
@@ -192,6 +194,7 @@ private fun VariantEditor(profile: LlmProfile, model: String, onSave: (LlmProfil
         if (supports("temperature")) Field("Температура · 0–2", temperature) { temperature = it }
         if (supports("top_p")) Field("Top-p · 0–1", topP) { topP = it }
         if (supports("max_tokens") || supports("max_output_tokens")) Field("Лимит ответа в токенах", maxTokens) { maxTokens = it }
+        Field("Контекст, токенов · до 10000000", contextLimit) { contextLimit = it.filter { c -> c.isDigit() } }
         fact?.supportedParameters.orEmpty().filter { it in CUSTOM_MODEL_PARAMETERS }.forEach { parameter ->
             Field(parameter, extras[parameter].orEmpty()) { extras = extras + (parameter to it) }
         }
@@ -203,6 +206,7 @@ private fun VariantEditor(profile: LlmProfile, model: String, onSave: (LlmProfil
             val variant = ModelVariant(existing?.id ?: "variant:${Id.new()}", name.trim(), source, options.copy(
                 temperature = temperature.toDoubleOrNull(), topP = topP.toDoubleOrNull(),
                 maxTokens = maxTokens.toIntOrNull() ?: options.maxTokens, sendMaxTokens = maxTokens.isNotBlank(),
+                contextLimit = contextLimit.toIntOrNull()?.coerceIn(1024, 10_000_000) ?: options.contextLimit,
                 timeoutSeconds = timeout.toInt(), contextMessages = history.toInt(), systemPromptOverride = prompt,
                 extraParameters = extras.filterValues { it.isNotBlank() }.mapValues { Json.parseToJsonElement(it.value) }))
             onSave(profile.copy(variants = profile.variants.filterNot { it.id == variant.id } + variant))

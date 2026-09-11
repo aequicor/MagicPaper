@@ -78,6 +78,11 @@ data class CodingSession(
     val sessionKind: SessionKind? = null,
     val observedState: SessionObservedState? = null,
     val desiredState: SessionDesiredState? = null,
+    /**
+     * Короткое название списка, 2–3 слова, один раз суммированное из запроса. Пусто — пока
+     * суммаризация не готова или не нужна; тогда список показывает [name].
+     */
+    val shortTitle: String = "",
 )
 
 @Serializable
@@ -789,6 +794,31 @@ fun CodingSession.namedFromPrompt(prompt: String): CodingSession {
     val defaultName = name == "Новая сессия" || name == "Основная" || name.startsWith("Сессия ") || name.startsWith("План:")
     val title = prompt.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(60)
     return if (!nameManuallySet && parentSessionId == null && defaultName && title.isNotBlank()) copy(name = title) else this
+}
+
+/** A started planning session is listed by its short request, never by its placeholder name. */
+fun CodingSession.sidebarTitle(): String = if (shortTitle.isBlank()) name else "\ud83d\uddd3\ufe0f $shortTitle"
+
+/** A planning root owns a task in the list; only it is worth a model call to name shortly. */
+fun CodingSession.needsShortTitle(): Boolean = planningMode && parentSessionId == null &&
+    sessionKind != SessionKind.IMMUNITY && shortTitle.isBlank() && !nameManuallySet && !archived
+
+/**
+ * Модель даёт заголовок, интерфейс — только одну короткую строку: без разметки, без кавычек
+ * и префиксов, не длиннее трёх слов.
+ */
+fun compactSessionTitle(answer: String): String? {
+    val text = answer.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+        .removeSurrounding("\"").removeSurrounding("'").trim()
+        .replace(Regex("^[#*\\-\\s]+"), "")
+        .replace(Regex("[*_`#]"), "")
+        .replace(Regex("^\\s*(\\d+[.)]|[-*])\\s*"), "")
+        .replace(Regex("(?i)^(пользователь просит|запрос|цель|нужно|необходимо|требуется)[:\\s-]*"), "")
+        .replace(Regex("\\s+"), " ").trim()
+    if (text.isBlank()) return null
+    val words = text.split(' ')
+    val short = if (words.size <= 3) text else words.take(3).joinToString(" ")
+    return short.take(40).trimEnd('.', ',', ':', ';', '-').ifBlank { null }
 }
 
 /** Includes archived workers and nested descendants. */

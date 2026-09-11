@@ -150,7 +150,11 @@ object PiModelsConfig {
     fun maxTokens(profile: LlmProfile, modelId: String = profile.modelId): Int {
         val base = profile.advanced.safeMaxTokens
         val controls = controls(profile, modelId) ?: return base
-        return if (profile.modelLibraryVersion >= 1) base else if (controls.supportsEffort) maxOf(base, REASONING_MIN_MAX_TOKENS) else base
+        // Рассуждающей модели всегда поднимаем потолок вывода до минимума:
+        // даже после миграции (modelLibraryVersion >= 1) профиль наследует
+        // дефолт 8192, а рассуждение платит из того же бюджета — телу
+        // сообщения не остаётся ничего, и провайдер режет ответ по length.
+        return if (controls.supportsEffort) maxOf(base, REASONING_MIN_MAX_TOKENS) else base
     }
 
     /** Полная картина о рассуждении модели — её же читает [root]. */
