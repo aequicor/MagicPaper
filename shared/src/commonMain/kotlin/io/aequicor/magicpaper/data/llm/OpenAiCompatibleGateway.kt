@@ -6,6 +6,8 @@ import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.LlmTransportException
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -35,6 +37,7 @@ internal suspend fun HttpClient.postJson(
 ): String {
     suspend fun request(): String {
     val response = post(url) {
+        llmRequestTimeout(timeoutSeconds)
         contentType(ContentType.Application.Json)
         headers.forEach { (key, value) -> header(key, value) }
         setBody(body)
@@ -47,6 +50,21 @@ internal suspend fun HttpClient.postJson(
     return text
     }
     return if (timeoutSeconds <= 0) request() else withTimeout(timeoutSeconds.toLong() * 1000) { request() }
+}
+
+/**
+ * Таймаут запроса из настроек профиля поверх дефолта общего клиента.
+ *
+ * Без `HttpTimeoutCapability` на запросе движок CIO применяет свой жёсткий
+ * 15-секундный `requestTimeout` — рассуждающие модели (Qwen/DashScope и др.)
+ * обрывались на середине генерации. Capability снимает двигательный потолок,
+ * а фактическим ограничением остаётся `timeoutSeconds` профиля: `withTimeout`
+ * вокруг запроса либо (при 0 = «без ограничения») отсутствие убийцы вообще.
+ */
+internal fun io.ktor.client.request.HttpRequestBuilder.llmRequestTimeout(timeoutSeconds: Int) {
+    timeout {
+        requestTimeoutMillis = if (timeoutSeconds > 0) timeoutSeconds * 1_000L else HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+    }
 }
 
 /** OpenAI-совместимый /chat/completions (OpenAI, Ollama, LM Studio, vLLM, OpenRouter…). */

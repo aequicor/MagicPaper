@@ -1,8 +1,8 @@
 package io.aequicor.magicpaper.data.llm
 
 import io.aequicor.magicpaper.data.search.*
+import io.aequicor.magicpaper.di.appHttpClient
 import io.aequicor.magicpaper.domain.*
-import io.ktor.client.HttpClient
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -24,7 +24,7 @@ class ModelDescriptionLiveIntegrationTest {
         val profiles = json.decodeFromString(ListSerializer(LlmProfile.serializer()), root.resolve("llm_profiles.json").readText()).map { it.migrateModelLibrary() }
         val default = requireNotNull(ProfileResolver.resolve(null as ChatSession?, settings, profiles))
         val judge = if (useSubscription) requireNotNull(profiles.firstOrNull { it.provider == ProviderType.OPENAI_SUBSCRIPTION }).forModel() else default
-        val client = HttpClient()
+        val client = appHttpClient()
         val codex = CodexAppServerOpenAiSubscription(json)
         try {
             val gateway = RoutingLlmGateway(mapOf(

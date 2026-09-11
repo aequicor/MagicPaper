@@ -32,6 +32,7 @@ internal suspend fun HttpClient.getText(
     timeoutSeconds: Int,
 ): String = withTimeout(if (timeoutSeconds == 0) Long.MAX_VALUE else timeoutSeconds.toLong() * 1000) {
     val response = get(url) {
+        llmRequestTimeout(timeoutSeconds)
         headers.forEach { (key, value) -> header(key, value) }
     }
     val text = response.bodyAsText()

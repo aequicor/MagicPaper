@@ -423,7 +423,14 @@ toggleModelSwitcher(open: Boolean)
    разрешает). Решение не в коде: документируем; кнопка «Проверить подключение» покажет
    причину (ошибка сети vs 401).
 5. **Один `HttpClient`** — таймаут выставляется на запрос из `advanced.timeoutSeconds`
-   (`HttpTimeout` плагин не нужен — `HttpRequestBuilder.timeout` в ktor 3 достаточно).
+   через `HttpRequestBuilder.timeout` (`llmRequestTimeout` в `OpenAiCompatibleGateway.kt`).
+   ВАЖНО: сам по себе `withTimeout` вокруг запроса недостаточен — движок CIO (jvm/android)
+   режет ЛЮБОЙ запрос без `HttpTimeoutCapability` своими 15 секундами
+   (`CIOEngineConfig.requestTimeout`), и медленные рассуждающие модели (Qwen/DashScope)
+   падали с «Request timeout has expired … request_timeout=unknown ms». Capability на
+   запросе отключает двигательный потолок; общий клиент собирается через `appHttpClient()`
+   (`di/Dependencies.kt`) с установленным `HttpTimeout` (30 с на обычные вызовы,
+   10 с на соединение).
 6. **Секреты в файле профиля** — статус-кво (ключи в JSON); статья в доках предупреждает.
 7. **Производительность переключателя** — список профилей мал (единицы), без ленивых списков.
 

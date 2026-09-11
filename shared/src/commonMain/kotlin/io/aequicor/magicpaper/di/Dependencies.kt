@@ -52,6 +52,7 @@ import io.aequicor.magicpaper.plugins.builtin.SelfEducationPlugin
 import io.aequicor.magicpaper.plugins.builtin.SkillsRepositoryPlugin
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
 import kotlinx.serialization.json.Json
 
 /** Корень композиции: всё приложение собирается в одном месте. */
@@ -59,6 +60,28 @@ class MagicPaperDependencies(val viewModel: MagicPaperViewModel, val planning: i
 
 /** Платформы поставляют хранилище и мост профиля. */
 expect fun createMagicPaperDependencies(): MagicPaperDependencies
+
+/**
+ * Общий HTTP-клиент приложения.
+ *
+ * Движок CIO (jvm/android) по умолчанию обрывает любой запрос через 15 секунд
+ * (`CIOEngineConfig.requestTimeout`), если запрос не несёт `HttpTimeoutCapability`:
+ * медленные рассуждающие модели (Qwen/DashScope, DeepSeek-R1…) не укладывались
+ * в этот потолок и падали с «Request timeout has expired … request_timeout=unknown ms»,
+ * хотя в профиле стоял больший `timeoutSeconds`.
+ *
+ * Установленный `HttpTimeout` выставляет capability на каждый запрос — движок свой
+ * 15-секундный потолок отключает, а ограничителем становится значение плагина.
+ * 30 с — разумный предел для коротких вызовов (поиск, каталоги); LLM-транспорт
+ * (`postJson`/`getText`) снимает его per-request и живёт по `timeoutSeconds`
+ * профиля через `withTimeout` (0 = без ограничения, как и раньше).
+ */
+internal fun appHttpClient(): HttpClient = HttpClient {
+    install(HttpTimeout) {
+        requestTimeoutMillis = 30_000
+        connectTimeoutMillis = 10_000
+    }
+}
 
 internal val appJson: Json = Json {
     ignoreUnknownKeys = true
@@ -140,7 +163,7 @@ internal fun buildDependencies(
             codingRuntime?.abort(context.sessionId)
         }
     }
-    val client = HttpClient()
+    val client = appHttpClient()
     val chatRepo = JsonChatRepository(store, json)
     val docs = EmbeddedDocRepository()
     val search = CompositeSearchEngine(
