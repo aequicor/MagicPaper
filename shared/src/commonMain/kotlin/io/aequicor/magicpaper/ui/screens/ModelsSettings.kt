@@ -84,6 +84,7 @@ fun ModelsSettings(vm: MagicPaperViewModel, state: UiState) {
             if (expanded) {
                 Row {
                     PaperAction(onClick = { vm.refreshModelCatalog(p.id) }, enabled = p.id !in state.catalogRefreshing) { PaperText(if (p.id in state.catalogRefreshing) "Загрузка…" else "Обновить каталог") }
+                    PaperAction(onClick = { vm.refreshProfileParameters(p.id) }, enabled = p.id !in state.catalogRefreshing) { PaperText("Проверить подключение") }
                     PaperAction(onClick = { vm.deleteLlmProfile(p.id) }) { PaperText("Удалить поставщика") }
                 }
                 PaperInput(query, { query = it }, label = { PaperText("Найти модель") }, singleLine = true, modifier = Modifier.fillMaxWidth())

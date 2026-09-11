@@ -24,22 +24,21 @@ internal data class ProjectSessionTask(
         else aggregateCodingStatus(sessions.map { it.status })
 
     fun visibleRows(collapsed: Set<String>): List<ProjectSessionTreeRow> {
+        // Зигота и иммунитет исключены из дерева — они отображаются отдельно.
+        // Зигота открывается по клику на заголовок задачи, иммунитет — ромбик рядом с архивом.
         val parents = sessionForestParents(sessions, parentIds, setOfNotNull(rootId, immunityId))
         val children = sessions.groupBy { parents[it.session.id] }
             .mapValues { (_, items) -> items.sortedBy { it.session.createdAt } }
-        val roots = children[null].orEmpty().sortedBy {
-            when (it.session.id) {
-                rootId -> 0
-                immunityId -> 2
-                else -> 1
-            }
-        }
+        val roots = children[null].orEmpty()
+            .filter { it.session.id != rootId && it.session.id != immunityId }
+            .sortedBy { it.session.createdAt }
         return buildList {
             val pending = ArrayDeque<Pair<CodingSessionUi, Int>>()
             roots.asReversed().forEach { pending.addLast(it to 0) }
             while (pending.isNotEmpty()) {
                 val (item, depth) = pending.removeLast()
                 val ownChildren = children[item.session.id].orEmpty()
+                    .filter { it.session.id != immunityId }
                 add(ProjectSessionTreeRow(item, depth, ownChildren.size))
                 if (item.session.id !in collapsed) {
                     ownChildren.asReversed().forEach { pending.addLast(it to depth + 1) }

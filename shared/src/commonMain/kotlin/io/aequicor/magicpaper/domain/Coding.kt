@@ -793,7 +793,15 @@ val CodingStep.isVisibleActivity: Boolean
 fun CodingSession.namedFromPrompt(prompt: String): CodingSession {
     val defaultName = name == "Новая сессия" || name == "Основная" || name.startsWith("Сессия ") || name.startsWith("План:")
     val title = prompt.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(60)
-    return if (!nameManuallySet && parentSessionId == null && defaultName && title.isNotBlank()) copy(name = title) else this
+    return if (!nameManuallySet && parentSessionId == null && defaultName && title.isNotBlank()) {
+        // Суммаризация запроса до 2-3 слов с префиксом календаря
+        val summary = title.split("\\s+".toRegex())
+            .filter { it.length > 3 }
+            .take(3)
+            .joinToString(" ")
+            .ifBlank { title.take(40) }
+        copy(name = "🗓️ $summary")
+    } else this
 }
 
 /** A started planning session is listed by its short request, never by its placeholder name. */

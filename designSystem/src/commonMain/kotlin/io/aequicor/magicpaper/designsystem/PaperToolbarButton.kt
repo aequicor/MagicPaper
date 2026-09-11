@@ -36,7 +36,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-public enum class PaperToolbarIcon { Sidebar, Settings, Archive }
+public enum class PaperToolbarIcon { Sidebar, Settings, Archive, Immunity }
 
 /** Монохромные значки без зависимости от платформенного emoji-шрифта. */
 @Composable
@@ -78,6 +78,16 @@ public fun PaperToolbarButton(
                     PaperToolbarIcon.Settings -> {
                         drawPath(gear, ink, style = stroke)
                         drawCircle(ink, radius = 2.3f, center = Offset(8f, 8f), style = stroke)
+                    }
+                    PaperToolbarIcon.Immunity -> {
+                        val diamondPath = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(8f, 2f)
+                            lineTo(14f, 8f)
+                            lineTo(8f, 14f)
+                            lineTo(2f, 8f)
+                            close()
+                        }
+                        drawPath(diamondPath, ink, style = stroke)
                     }
                 }
             }

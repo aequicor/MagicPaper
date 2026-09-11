@@ -453,6 +453,62 @@ fun ActivityDot(
 }
 
 /**
+ * Ромбик иммунитета: индикатор статуса в форме ромба.
+ * Отображается справа от заголовка задачи, клик открывает чат иммунитета.
+ * Анимация и цвет соответствуют состоянию сессии иммунитета.
+ */
+@Composable
+private fun ImmunityDiamondButton(
+    status: CodingSessionStatus,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    
+    Box(
+        modifier = modifier
+            .size(16.dp)
+            .hoverable(interactionSource)
+            .paperClickable(
+                onClick = onClick,
+                onClickLabel = "Открыть чат иммунитета",
+            )
+            .semantics { contentDescription = "Иммунитет: ${status.label}" },
+        contentAlignment = Alignment.Center,
+    ) {
+        // Ромбик с анимацией статуса
+        io.aequicor.magicpaper.designsystem.PaperActivityIndicator(
+            tone = when (status) {
+                CodingSessionStatus.IDLE -> io.aequicor.magicpaper.designsystem.PaperActivityTone.READY
+                CodingSessionStatus.WORKING -> io.aequicor.magicpaper.designsystem.PaperActivityTone.WORKING
+                CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING,
+                CodingSessionStatus.CONFIRMATION -> io.aequicor.magicpaper.designsystem.PaperActivityTone.ATTENTION
+                CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED -> io.aequicor.magicpaper.designsystem.PaperActivityTone.QUEUED
+            },
+            label = status.label,
+            running = status == CodingSessionStatus.WORKING,
+            size = if (selected) 12.dp else 10.dp,
+            shape = io.aequicor.magicpaper.designsystem.PaperActivityShape.DIAMOND,
+        )
+        
+        // Подсветка при selected (чат открыт)
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .border(
+                        width = 1.dp,
+                        color = LocalPaperColors.current.focus,
+                        shape = RoundedCornerShape(2.dp)
+                    )
+            )
+        }
+    }
+}
+
+/**
  * Левое меню раздела: список проектов, а под выбранным — его кодинг-сессии.
  * У каждой сессии свой кружок статуса и меню (прервать, удалить).
  */
@@ -502,7 +558,6 @@ internal fun ProjectsPanel(
                     val project = visible.firstOrNull { it.key == "project-${ui.current?.id}" }
                     val top = project?.let { (it.offset + it.size).coerceAtLeast(0) } ?: 0
                     val header = visible.firstOrNull { it.key == task.key }
-                    // Keep the pinned group visible when its scrolled-away members disappear.
                     if (header == null || header.offset < top) listState.requestScrollToItem(group.index, -top)
                 }
                 if (task.organismId != null) collapsedTasks[task.key] = group.expanded
@@ -511,10 +566,24 @@ internal fun ProjectsPanel(
             }
             if (task.organismId != null) {
                 val status = task.status
+                val zygoteSession = task.sessions.find { it.session.id == task.rootId }
+                val immunitySession = task.sessions.find { it.session.id == task.immunityId }
+                // Заголовок задачи: клик открывает зиготу, ромбик иммунитета справа
                 PaperTreeGroupHeader(task.title, group.expanded, toggle,
                     modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
-                    active = task.sessions.any { it.session.id == ui.activeSessionIdOf(it.session.projectId) },
-                    leading = { StatusTooltip(status) { ActivityDot(status, size = 8) } })
+                    active = zygoteSession?.let { it.session.id == ui.activeSessionIdOf(it.session.projectId) } ?: false,
+                    leading = { StatusTooltip(status) { ActivityDot(status, size = 8) } },
+                    onClick = { task.rootId?.let { onSelectSession(it) } },
+                    trailing = immunitySession?.let { imm ->
+                        {
+                            ImmunityDiamondButton(
+                                status = imm.status,
+                                selected = imm.session.id == ui.activeSessionIdOf(imm.session.projectId),
+                                onClick = { onSelectSession(imm.session.id) }
+                            )
+                        }
+                    }
+                )
             } else group.root?.let { root ->
                 val session = root.item
                 SessionRow(session, session.session.id == ui.activeSessionIdOf(session.session.projectId),

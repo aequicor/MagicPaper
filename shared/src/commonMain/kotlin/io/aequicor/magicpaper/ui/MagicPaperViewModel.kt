@@ -1042,6 +1042,41 @@ class MagicPaperViewModel(
         }
     }
 
+    /** Обновить параметры вариантов из каталога провайдера (если они не переопределены вручную). */
+    fun refreshProfileParameters(profileId: String) {
+        scope.launch {
+            val profile = profileRepo.load().firstOrNull { it.id == profileId } ?: return@launch
+            val directory = modelDirectory ?: run {
+                _state.update { it.copy(editorModelsError = "Каталог моделей недоступен на этой платформе.") }
+                return@launch
+            }
+            if (!profile.connectionConfigured) {
+                _state.update { it.copy(editorModelsError = "Укажите адрес поставщика, затем повторите.") }
+                return@launch
+            }
+            _state.update { it.copy(editorModelsLoading = true, editorModelsError = null) }
+            val result = runCatching { directory.models(profile) }
+            val catalog = result.getOrDefault(emptyList())
+            _state.update { it.copy(editorModelsLoading = false, editorModels = catalog, editorModelsFor = "${profile.id}:${profile.provider}:${profile.baseUrl}") }
+            if (result.isFailure) {
+                _state.update { it.copy(editorModelsError = "Не удалось загрузить каталог: ${result.exceptionOrNull()?.message}") }
+                return@launch
+            }
+            // Обновляем варианты: если параметр равен дефолту — берём из каталога
+            val default = AdvancedLlmOptions()
+            val updated = profile.copy(variants = profile.variants.map { variant ->
+                val fact = catalog.firstOrNull { it.id == variant.sourceModelId }?.metadata ?: return@map variant
+                val opts = variant.options
+                val newContextLimit = if (opts.contextLimit == default.contextLimit) fact.contextWindow?.takeIf { it > 0 } ?: opts.contextLimit else opts.contextLimit
+                val newMaxTokens = if (opts.maxTokens == default.maxTokens && !opts.sendMaxTokens) fact.maxOutputTokens?.takeIf { it > 0 } ?: opts.maxTokens else opts.maxTokens
+                variant.copy(options = opts.copy(contextLimit = newContextLimit, maxTokens = newMaxTokens))
+            })
+            profileRepo.save(updated.copy(modelLibraryVersion = 1))
+            val profiles = profileRepo.load()
+            _state.update { it.copy(llmProfiles = profiles, notice = "Параметры актуализированы из каталога поставщика ✓") }
+        }
+    }
+
     /** Проверка подключения: тестовый запрос к модели профиля. */
     fun testConnection(draft: LlmProfile) {
         val testGateway = gateway

@@ -33,6 +33,9 @@ import androidx.compose.ui.unit.dp
  * Left/Right collapse/expand idempotently. Content follows the tree's leading
  * guide while the disclosure, optional status and title share a vertical centre.
  * The full title remains available to accessibility and in a tooltip at any scale.
+ * [onClick] opens the zygote session when the title area is clicked; expansion
+ * is still toggled via the disclosure arrow or keyboard. [trailing] renders
+ * an optional side action (e.g. immunity diamond) after the title.
  */
 @Composable
 public fun PaperTreeGroupHeader(
@@ -42,6 +45,8 @@ public fun PaperTreeGroupHeader(
     modifier: Modifier = Modifier,
     active: Boolean = false,
     leading: (@Composable () -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalPaperColors.current
     val shape = RoundedCornerShape(6.dp)
@@ -55,7 +60,10 @@ public fun PaperTreeGroupHeader(
                     role = Role.Button,
                     onClickLabel = if (expanded) "Свернуть задачу" else "Раскрыть задачу",
                     shape = shape,
-                    onClick = onToggle,
+                    onClick = {
+                        // Arrow toggles expansion; title click opens the zygote if onClick provided
+                        if (onClick != null) onClick() else onToggle()
+                    },
                 )
                 .onPreviewKeyEvent { event ->
                     when (event.key) {
@@ -79,7 +87,9 @@ public fun PaperTreeGroupHeader(
         ) {
             PaperText(
                 if (expanded) "▾" else "▸",
-                modifier = Modifier.widthIn(min = 16.dp).clearAndSetSemantics {},
+                modifier = Modifier.widthIn(min = 16.dp)
+                    .paperClickable(onClick = onToggle)
+                    .clearAndSetSemantics {},
                 role = PaperTextRole.CHROME,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
@@ -95,6 +105,7 @@ public fun PaperTreeGroupHeader(
                 overflow = TextOverflow.Ellipsis,
                 softWrap = false,
             )
+            trailing?.invoke()
         }
     }
 }
