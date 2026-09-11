@@ -76,73 +76,70 @@ public fun PaperTreeGroupHeader(
     val hoverInteraction = remember { MutableInteractionSource() }
     val isHovered by hoverInteraction.collectIsHoveredAsState()
     
-    PaperTooltip(title) {
-        Row(
-            modifier = modifier
-                .fillMaxWidth()
-                .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
-                .clip(shape)
-                .background(
-                    if (active) colors.selected.copy(alpha = 0.55f) else Color.Transparent
-                )
-                .hoverable(hoverInteraction)
-                .paperClickable(
-                    role = Role.Button,
-                    onClickLabel = if (active && childCount > 0) {
-                        if (expanded) "Свернуть задачу" else "Раскрыть задачу"
-                    } else null,
-                    shape = shape,
-                    onClick = {
-                        // Click on active session toggles expansion; otherwise opens zygote
-                        if (active && childCount > 0) onToggle() else onClick?.invoke()
-                    },
-                )
-                .onPreviewKeyEvent { event ->
-                    when (event.key) {
-                        Key.DirectionLeft, Key.DirectionRight -> {
-                            if (event.type == KeyEventType.KeyDown &&
-                                expanded != (event.key == Key.DirectionRight)
-                            ) onToggle()
-                            true
-                        }
-                        else -> false
-                    }
-                }
-                .semantics {
-                    contentDescription = "Задача: $title"
-                    stateDescription = if (expanded) "Развёрнута" else "Свёрнута"
-                    selected = active
-                }
-                .padding(horizontal = 6.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            leading?.invoke()
-            Spacer(Modifier.width(8.dp))
-            PaperText(
-                title,
-                modifier = Modifier.weight(1f),
-                role = PaperTextRole.CHROME,
-                fontWeight = FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                softWrap = false,
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
+            .clip(shape)
+            .background(
+                if (active) colors.selected.copy(alpha = 0.55f) else Color.Transparent
             )
-            if (trailing != null) {
-                Spacer(Modifier.width(8.dp))
-                trailing.invoke(isHovered)
-            }
-            Spacer(Modifier.width(8.dp))
-            HoverActions(visible = isHovered || keepActionsVisible) {
-                hoverActions?.invoke(isHovered || keepActionsVisible)
-                if (childCount > 0) {
-                    Spacer(Modifier.width(4.dp))
-                    Box(Modifier.size(24.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .semantics { contentDescription = if (expanded) "Свернуть задачу" else "Раскрыть задачу" }
-                        .paperClickable(onClick = onToggle),
-                        contentAlignment = Alignment.Center) {
-                        PaperText(if (expanded) "▾" else "▸", color = colors.action)
+            .hoverable(hoverInteraction)
+            .paperClickable(
+                role = Role.Button,
+                onClickLabel = if (active && childCount > 0) {
+                    if (expanded) "Свернуть задачу" else "Раскрыть задачу"
+                } else null,
+                shape = shape,
+                onClick = {
+                    if (active && childCount > 0) onToggle() else onClick?.invoke()
+                },
+            )
+            .onPreviewKeyEvent { event ->
+                when (event.key) {
+                    Key.DirectionLeft, Key.DirectionRight -> {
+                        if (event.type == KeyEventType.KeyDown &&
+                            expanded != (event.key == Key.DirectionRight)
+                        ) onToggle()
+                        true
                     }
+                    else -> false
+                }
+            }
+            .semantics {
+                contentDescription = "Задача: $title"
+                stateDescription = if (expanded) "Развёрнута" else "Свёрнута"
+                selected = active
+            }
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leading?.invoke()
+        Spacer(Modifier.width(8.dp))
+        PaperText(
+            title,
+            modifier = Modifier.weight(1f),
+            role = PaperTextRole.CHROME,
+            fontWeight = FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing.invoke(isHovered)
+        }
+        Spacer(Modifier.width(8.dp))
+        HoverActions(visible = isHovered || keepActionsVisible) {
+            hoverActions?.invoke(isHovered || keepActionsVisible)
+            if (childCount > 0) {
+                Spacer(Modifier.width(4.dp))
+                Box(Modifier.size(24.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .semantics { contentDescription = if (expanded) "Свернуть задачу" else "Раскрыть задачу" }
+                    .paperClickable(onClick = onToggle),
+                    contentAlignment = Alignment.Center) {
+                    PaperText(if (expanded) "▾" else "▸", color = colors.action)
                 }
             }
         }
