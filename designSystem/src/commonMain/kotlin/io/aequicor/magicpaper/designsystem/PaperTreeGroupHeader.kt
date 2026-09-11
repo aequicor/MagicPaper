@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -127,15 +128,10 @@ public fun PaperTreeGroupHeader(
                 softWrap = false,
             )
             if (trailing != null) {
-                val spaceBeforeTrailing by animateDpAsState(
-                    if (isHovered) 4.dp else 8.dp
-                )
-                Spacer(Modifier.width(spaceBeforeTrailing))
+                Spacer(Modifier.width(8.dp))
                 trailing.invoke(isHovered)
-                if (isHovered) {
-                    Spacer(Modifier.width(8.dp))
-                }
             }
+            Spacer(Modifier.width(8.dp))
             HoverActions(visible = isHovered || keepActionsVisible) {
                 hoverActions?.invoke(isHovered || keepActionsVisible)
                 if (childCount > 0) {
@@ -149,7 +145,6 @@ public fun PaperTreeGroupHeader(
                     }
                 }
             }
-            Spacer(Modifier.width(8.dp))
         }
     }
 }
@@ -160,11 +155,8 @@ public fun PaperTreeGroupHeader(
  */
 @Composable
 private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(animationSpec = tween(durationMillis = 150)),
-        exit = fadeOut(animationSpec = tween(durationMillis = 100))
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) { content() }
-    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.alpha(if (visible) 1f else 0f)
+    ) { content() }
 }
