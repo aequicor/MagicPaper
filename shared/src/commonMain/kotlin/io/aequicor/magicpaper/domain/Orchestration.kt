@@ -182,7 +182,7 @@ val CodingSession.effectiveRole: CodingSessionRole get() = when {
 
 fun CodingSession.subtitle(): String = when {
     sessionKind == SessionKind.IMMUNITY -> "Иммунитет"
-    sessionKind == SessionKind.ZYGOTE || (planningMode && parentSessionId == null) -> "Зигота"
+    planningMode && (sessionKind == SessionKind.ZYGOTE || parentSessionId == null) -> "Зигота"
     parentSessionId != null || effectiveRole == CodingSessionRole.WORKER -> "Сессия" + (stageNumber?.let { " · Этап $it" } ?: "") +
         (continuationOfNumber?.let { " · Доработка этапа $it" } ?: "")
     else -> if (researchMode) "Исследование" else "Диалог"

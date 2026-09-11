@@ -57,7 +57,7 @@ class ProjectsPanelTaskGroupTest {
                 repeat(2) { task ->
                     fun session(id: String, name: String, parent: String? = null, kind: SessionKind = SessionKind.SESSION) =
                         CodingSessionUi(CodingSession(id, "a", name, 0, parentSessionId = parent,
-                            organismId = "organism-$task", sessionKind = kind))
+                            organismId = "organism-$task", sessionKind = kind, planningMode = kind == SessionKind.ZYGOTE))
                     add(session("root-$task", title, kind = SessionKind.ZYGOTE))
                     if (task == 0) {
                         repeat(childCount) { child ->

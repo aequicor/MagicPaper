@@ -345,7 +345,7 @@ class CodexAppServerOpenAiSubscription(
             val researchConfig = researchBridge?.codexConfig(questionnaireConfig) ?: questionnaireConfig
             val threadConfig = agentBridge?.codexConfig(researchConfig) ?: researchConfig
             val instructions = io.aequicor.magicpaper.data.coding.codingSystemPrompt(
-                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research, session.planningRulesSnapshot)
+                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules)
             val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
                 if ((research || computerUse != null) && oldId in codingThreads) {
                     request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })

@@ -3,11 +3,29 @@ package io.aequicor.magicpaper.data.coding
 import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.PlanningRulesSettings
 import io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS
+import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.SessionKind
+import io.aequicor.magicpaper.domain.runtimePlanningRules
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CodingSystemPromptsTest {
+    @Test fun ordinarySessionDoesNotInheritPlannerMethodologyFromLifecycleAdoption() {
+        val rules = PlanningRulesSettings().edited("Create milestones and wait for plan approval").snapshot()
+        val ordinary = CodingSession("root", "project", "New session", 1,
+            organismId = "organism", sessionKind = SessionKind.ZYGOTE, planningRulesSnapshot = rules)
+        for (engine in CodingEngine.entries) {
+            val prompt = codingSystemPrompt(engine, false, "PROJECT RULES", planningRules = ordinary.runtimePlanningRules)
+            assertFalse(rules.text in prompt)
+            assertFalse(PLANNING_INSTRUCTIONS in prompt)
+            assertTrue(CODING_FILE_TOOL_INSTRUCTIONS in prompt)
+            for (planned in listOf(ordinary.copy(planningMode = true), ordinary.copy(planId = "plan", stageId = "stage"))) {
+                assertTrue(rules.text in codingSystemPrompt(engine, planned.planningMode, "", planningRules = planned.runtimePlanningRules))
+            }
+        }
+    }
+
     @Test fun customRulesReplaceMethodologyWhileReadOnlyPolicyRemainsEffective() {
         val rules = PlanningRulesSettings().edited("Investigate from experiments").snapshot()
         for (engine in CodingEngine.entries) {

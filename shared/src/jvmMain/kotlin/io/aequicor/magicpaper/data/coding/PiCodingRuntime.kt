@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.runtimePlanningRules
+
 import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.data.tools.*
 import kotlinx.coroutines.currentCoroutineContext
@@ -225,7 +227,7 @@ class PiCodingRuntime(
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = if (planning) profile.forModel() else profile.forCoding()
         writePiConfig(codingProfile, sessionHome(session.id), imageInput = !restricted && computerUse?.grant(session.id) != null)
-        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.planningRulesSnapshot))
+        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)

@@ -52,7 +52,7 @@ class DesktopCodingRuntime(
             }}.")
         }
         sessionContextReport(effective, environment,
-            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode, session.planningRulesSnapshot), skills)
+            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode, session.runtimePlanningRules), skills)
     }
 
     override val computerUse get() = subscription.computerUse

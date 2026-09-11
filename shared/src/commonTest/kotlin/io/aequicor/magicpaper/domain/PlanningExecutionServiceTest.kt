@@ -11,6 +11,56 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlanningExecutionServiceTest {
+    @Test fun resumedIsolatedPlanDoesNotAcquireOrReleaseAnOrdinarySessionsSourceLease() = runTest {
+        val leases = LocalPlanningWorkspace()
+        val workspace = object : PlanningWorkspace by leases {
+            override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
+            override suspend fun stage(project: CodingProject, workspace: PlanWorkspace, attempt: StageAttempt) = attempt.copy(path = "/isolated-stage")
+        }
+        val ordinary = project.copy(id = "ordinary-session")
+        assertTrue(leases.acquire(ordinary))
+        val (store, service, runtime) = fixture(Runtime(CompletableDeferred()), workspace)
+        store.save(plan(stage("work")).copy(workspace = PlanWorkspace("/isolated", "/isolated", git = true), runId = "existing-run"))
+        service.start(project.id); runCurrent()
+        assertEquals(1, runtime.calls.size)
+        service.stop(project.id); runCurrent()
+        assertFalse(leases.acquire(project.copy(id = "intruder")))
+        leases.release(ordinary)
+        assertTrue(leases.acquire(ordinary))
+        leases.release(ordinary)
+    }
+
+    @Test fun isolatedPlanReleasesSourceDuringExecutionAndReacquiresItBeforeApply() = runTest {
+        val leases = LocalPlanningWorkspace()
+        var applied = 0
+        val workspace = object : PlanningWorkspace by leases {
+            override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
+            override suspend fun prepare(project: CodingProject, runId: String) = PlanWorkspace("/isolated", "/isolated", git = true)
+            override suspend fun stage(project: CodingProject, workspace: PlanWorkspace, attempt: StageAttempt) = attempt.copy(path = "/isolated-stage")
+            override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace {
+                assertFalse(leases.acquire(project.copy(id = "competing-writer")), "Applying must own the source checkout")
+                applied++
+                return workspace.copy(applied = true)
+            }
+        }
+        val gate = CompletableDeferred<Unit>()
+        val (store, service, _) = fixture(Runtime(gate), workspace)
+        store.save(plan(stage("work")))
+        service.start(project.id); runCurrent()
+        val ordinary = project.copy(id = "ordinary-session")
+        assertTrue(leases.acquire(ordinary), "An isolated plan must not reserve the user's checkout")
+        assertFalse(leases.acquire(project.copy(id = "intruder", path = "/isolated")))
+        gate.complete(Unit); advanceTimeBy(1_000); runCurrent()
+        assertEquals(0, applied)
+        assertEquals(IssueKind.TRANSIENT, store.planFor(project.id)!!.issue?.kind)
+        leases.release(ordinary)
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        assertEquals(1, applied)
+        assertEquals(ExecutionPhase.COMPLETE, store.planFor(project.id)!!.phase)
+        assertTrue(leases.acquire(ordinary))
+        leases.release(ordinary)
+    }
+
     @Test fun sharedWorkspacePlansUseOneWriterLeaseAndReleaseItAfterStop() = runTest {
         val workspace = Workspaces()
         val (store, service, runtime) = fixture(Runtime(CompletableDeferred()), workspace)

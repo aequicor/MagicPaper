@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
 import io.aequicor.magicpaper.domain.CodingSessionStatus
+import io.aequicor.magicpaper.domain.CodingInteractionMode
 import io.aequicor.magicpaper.domain.ImmunityInterventionState
 import io.aequicor.magicpaper.domain.SessionKind
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
@@ -97,6 +98,24 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
                 ?: allMembers.firstOrNull { it.session.sessionKind == SessionKind.IMMUNITY }?.session?.id
             val root = byId[rootId]
             val title = root?.session?.name ?: organism?.sessions?.get(rootId)?.name ?: "Задача"
+            val immunity = byId[immunityId]
+            // Automatic lifecycle adoption is invisible for a standalone conversation.
+            // Keep real plans, delegated work and diagnostic history reachable.
+            val standalone = root != null && !root.session.planningMode && root.plan == null &&
+                organism?.sessions?.get(rootId)?.mode != CodingInteractionMode.PLANNING &&
+                root.session.planId == null && root.session.stageId == null &&
+                allMembers.all { it.session.id == rootId || it.session.id == immunityId } &&
+                organism?.sessions?.keys.orEmpty().all { it == rootId || it == immunityId } &&
+                organism?.signals.orEmpty().isEmpty() && organism?.diagnoses.orEmpty().isEmpty() &&
+                organism?.interventions.orEmpty().isEmpty() &&
+                (immunity == null || (!immunity.running && !immunity.draft.active && !immunity.awaitingUser &&
+                    !immunity.failedRequest && !immunity.interruptedRequest &&
+                    immunity.messages.none { !it.systemContext }))
+            if (standalone && root.session.archived.not()) {
+                tasks += OrderedTask(ProjectSessionTask("session-$rootId", title, null, rootId, listOf(root)),
+                    root.session.createdAt, inputOrder[rootId] ?: Int.MAX_VALUE)
+                return@forEach
+            }
             val task = ProjectSessionTask(
                 key = "task-$organismId", title = title, organismId = organismId, rootId = rootId,
                 sessions = members, immunityId = immunityId,

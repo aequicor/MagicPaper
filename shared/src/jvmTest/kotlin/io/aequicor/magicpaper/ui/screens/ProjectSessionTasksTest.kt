@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
 import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.CodingInteractionMode
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.ImmunityAction
 import io.aequicor.magicpaper.domain.ImmunityIntervention
@@ -16,6 +17,23 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ProjectSessionTasksTest {
+    @Test fun ordinaryConversationKeepsItsRowAfterAutomaticLifecycleAdoption() {
+        val initial = session("root", organism = null, kind = null, name = "My conversation")
+        val root = initial.copy(session = initial.session.copy(organismId = "organism", sessionKind = SessionKind.ZYGOTE))
+        val immunity = session("immunity", kind = SessionKind.IMMUNITY)
+        val before = CodingUi(sessions = listOf(initial)).projectSessionTasks("project").single()
+        val after = CodingUi(sessions = listOf(root, immunity)).projectSessionTasks("project").single()
+        assertEquals(before.key, after.key)
+        assertEquals("My conversation", after.title)
+        assertNull(after.organismId)
+        assertEquals(listOf("root"), after.ids())
+        val withDiagnostic = immunity.copy(failedRequest = true)
+        assertEquals(setOf("root", "immunity"), CodingUi(sessions = listOf(root, withDiagnostic))
+            .projectSessionTasks("project").single().ids().toSet())
+        assertEquals(setOf("root", "child", "immunity"), CodingUi(sessions = listOf(root, immunity, session("child", parent = "root")))
+            .projectSessionTasks("project").single().ids().toSet())
+    }
+
     @Test fun zygoteAndImmunityShareATaskWithoutChangingTheirRuntimeParents() {
         val zygote = session("zygote", kind = SessionKind.ZYGOTE, createdAt = 10)
         val immunity = session("immunity", kind = SessionKind.IMMUNITY, createdAt = 99)
@@ -238,10 +256,10 @@ class ProjectSessionTasksTest {
         project: String = "project",
         archived: Boolean = false,
     ) = CodingSessionUi(CodingSession(id, project, name, createdAt, parentSessionId = parent,
-        organismId = organism, sessionKind = kind, archived = archived))
+        organismId = organism, sessionKind = kind, archived = archived, planningMode = kind == SessionKind.ZYGOTE))
 
     private fun organism(id: String, rootId: String, immunityId: String, createdAt: Long, vararg children: SessionNode) =
         SessionOrganism(id, "project", rootId, immunityId, createdAt, sessions =
-            (listOf(SessionNode(rootId, SessionKind.ZYGOTE, rootId),
+            (listOf(SessionNode(rootId, SessionKind.ZYGOTE, rootId, mode = CodingInteractionMode.PLANNING),
                 SessionNode(immunityId, SessionKind.IMMUNITY, immunityId)) + children).associateBy { it.id })
 }

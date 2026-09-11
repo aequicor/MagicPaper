@@ -255,7 +255,14 @@ class PlanningExecutionService(
     }
     private suspend fun executeProject(id: String) {
         val workspaces = workspaceFor(id)
-        var acquiredProject: CodingProject? = null
+        val acquiredProjects = mutableListOf<CodingProject>()
+        suspend fun acquire(owner: CodingProject): Boolean = withContext(NonCancellable) {
+            workspaces.acquire(owner).also { if (it) acquiredProjects += owner }
+        }
+        suspend fun release(owner: CodingProject) = withContext(NonCancellable) {
+            workspaces.release(owner)
+            acquiredProjects.remove(owner)
+        }
         try {
             val initial = store.planFor(id) ?: return
             if (initial.blockingIssues(emptyList()).any { it.issue.retryBlocked }) return
@@ -264,11 +271,14 @@ class PlanningExecutionService(
             check(store.plans().none { it.id != id && it.projectId == project.id && it.stopping }) {
                 "Остановка другой работы в этом проекте не подтверждена"
             }
-            if (!workspaces.acquire(project)) {
+            val existingWorkspace = initial.workspace
+            if (existingWorkspace != null) workspaces.validateExecutionPath(project, existingWorkspace.integrationPath)
+            val executionOwner = existingWorkspace?.takeIf { !initial.sharedWorkspace && it.integrationPath != project.path }
+                ?.let { project.copy(id = "plan-$id", path = it.integrationPath) } ?: project
+            if (!acquire(executionOwner)) {
                 errorState.value = "Проект выполняется другим экземпляром приложения"
                 return
             }
-            acquiredProject = project
             chatHooks?.awaitReady()
             var plan = store.planFor(id) ?: return
             if (plan.restoreSkippedVerification() != plan) plan = store.update(id) { it.restoreSkippedVerification() }
@@ -302,6 +312,14 @@ class PlanningExecutionService(
             chatHooks?.prepareSessions(plan)
             val workspace = plan.workspace!!
             workspaces.validateExecutionPath(project, workspace.integrationPath)
+            if (!plan.sharedWorkspace && workspace.integrationPath != project.path && project in acquiredProjects) {
+                // The snapshot is complete. Protect the actual execution directory while
+                // allowing ordinary sessions to use the user's source checkout.
+                check(acquire(project.copy(id = "plan-$id", path = workspace.integrationPath))) {
+                    "Рабочая копия плана уже используется другой сессией"
+                }
+                release(project)
+            }
             val integration = Mutex()
             coroutineScope {
                 val active = mutableMapOf<String, Job>()
@@ -363,6 +381,11 @@ class PlanningExecutionService(
                     store.update(id) { it.copy(finalAttempt = null, finalAttemptHistory = it.finalAttemptHistory + listOfNotNull(it.finalAttempt), phase = ExecutionPhase.EXECUTING) }
                     return
                 }
+                if (project !in acquiredProjects && !acquire(project)) {
+                    block(id, PlanningIssue(IssueKind.TRANSIENT, "Ожидание освобождения папки проекта для применения результата",
+                        retryAt = Id.now() + 1_000, requiresUser = false))
+                    return
+                }
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
                 journal(id, "apply-intent")
                 val applied = applyResult(id, project, workspace, judge) ?: return
@@ -404,7 +427,11 @@ class PlanningExecutionService(
             liveState.update { it - ids }
             withContext(NonCancellable) {
                 if (plan?.stopping == true) confirmStop(id)
-                acquiredProject?.let { workspaces.release(it) }
+                var releaseFailure: Throwable? = null
+                acquiredProjects.toList().asReversed().forEach { owner ->
+                    try { release(owner) } catch (failure: Throwable) { releaseFailure = releaseFailure ?: failure }
+                }
+                releaseFailure?.let { throw it }
             }
         }
     }

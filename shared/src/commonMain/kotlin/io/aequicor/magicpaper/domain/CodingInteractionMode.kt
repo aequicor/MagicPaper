@@ -13,6 +13,10 @@ val CodingSession.interactionMode: CodingInteractionMode get() = when {
     else -> CodingInteractionMode.CODE
 }
 
+/** Lifecycle bookkeeping alone does not opt a normal conversation into planning. */
+val CodingSession.runtimePlanningRules: PlanningRulesSnapshot?
+    get() = planningRulesSnapshot.takeIf { planningMode || planId != null || stageId != null }
+
 /** Persisted request restrictions cannot be weakened by a stale session or a caller. */
 fun CodingSession.forPendingRun(): CodingSession {
     require(!(planningMode && researchMode)) { "Исследование и планирование нельзя включить одновременно" }
