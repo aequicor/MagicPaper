@@ -1,6 +1,10 @@
 package io.aequicor.magicpaper.designsystem
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -63,6 +67,7 @@ public fun PaperTreeGroupHeader(
     onClick: (() -> Unit)? = null,
     trailing: (@Composable (Boolean) -> Unit)? = null,
     hoverActions: (@Composable (Boolean) -> Unit)? = null,
+    keepActionsVisible: Boolean = false,
     childCount: Int = 0,
 ) {
     val colors = LocalPaperColors.current
@@ -131,8 +136,8 @@ public fun PaperTreeGroupHeader(
                     Spacer(Modifier.width(8.dp))
                 }
             }
-            HoverActions(visible = isHovered) {
-                hoverActions?.invoke(isHovered)
+            HoverActions(visible = isHovered || keepActionsVisible) {
+                hoverActions?.invoke(isHovered || keepActionsVisible)
                 if (childCount > 0) {
                     Spacer(Modifier.width(4.dp))
                     Box(Modifier.size(24.dp)
@@ -155,13 +160,11 @@ public fun PaperTreeGroupHeader(
  */
 @Composable
 private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
-    Layout(
-        modifier = if (visible) Modifier else Modifier.clearAndSetSemantics {},
-        content = { Row(verticalAlignment = Alignment.CenterVertically) { content() } },
-    ) { measurables, constraints ->
-        val actions = measurables.single().measure(constraints.copy(minWidth = 0, minHeight = 0))
-        layout(if (visible) actions.width else 0, actions.height) {
-            if (visible) actions.placeRelative(0, 0)
-        }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(animationSpec = tween(durationMillis = 150)),
+        exit = fadeOut(animationSpec = tween(durationMillis = 100))
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) { content() }
     }
 }

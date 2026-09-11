@@ -581,6 +581,7 @@ internal fun ProjectsPanel(
                             )
                         }
                     },
+                    keepActionsVisible = groupMenuOpen,
                     trailing = immunitySession?.let { imm ->
                         {
                             ImmunityDiamondButton(
