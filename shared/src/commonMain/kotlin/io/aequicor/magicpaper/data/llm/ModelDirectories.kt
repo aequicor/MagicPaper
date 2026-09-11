@@ -241,6 +241,6 @@ internal fun parseProviderModels(json: Json, body: String, provider: ProviderTyp
             (entry["pricing"] as? JsonObject)?.let { rates ->
                 io.aequicor.magicpaper.domain.ModelPricing(rates.price("prompt"), rates.price("completion"), rates.price("input_cache_read"), rates.price("input_cache_write"))
             })
-        ModelDefaults.discover(provider, listOf(id), declared?.let { mapOf(id to it) }.orEmpty()).single().copy(metadata = metadata)
+        ModelDefaults.discover(provider, listOf(id), declared?.let { mapOf(id to it) }.orEmpty(), mapOf(id to metadata)).single().copy(metadata = metadata)
     }.distinctBy { it.id }.sortedBy { it.id }
 }

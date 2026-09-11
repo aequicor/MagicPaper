@@ -19,12 +19,15 @@ object ModelDefaults {
      * Настройки по умолчанию для новой модели.
      * Дефолт усилия — «по умолчанию провайдера», если модель сама не объявила
      * штатный уровень; max_tokens приподнимаем, чтобы рассуждения влезли в ответ.
+     * contextLimit — из факта провайдера (ProviderModel.contextWindow), если объявлен;
+     * иначе из текущего профиля; иначе дефолт AdvancedLlmOptions.
      */
     fun recommendation(
         provider: ProviderType,
         modelId: String,
         current: AdvancedLlmOptions = AdvancedLlmOptions(),
         declared: DeclaredReasoning? = null,
+        fact: ProviderModel? = null,
     ): ModelRecommendation {
         val capability = capability(provider, modelId, declared)
         val controls = capability as? ReasoningCapability.Controls
@@ -35,12 +38,13 @@ object ModelDefaults {
             controls != null -> maxOf(current.maxTokens, 16384)
             else -> current.maxTokens
         }
+        val contextLimit = fact?.contextWindow?.takeIf { it > 0 } ?: current.safeContextLimit
         return ModelRecommendation(
             effort = effort,
             advanced = current.copy(
                 temperature = if (controls != null) null else current.temperature,
                 maxTokens = maxTokens,
-                contextLimit = current.safeContextLimit,
+                contextLimit = contextLimit,
             ),
         )
     }
@@ -106,18 +110,21 @@ object ModelDefaults {
     /**
      * Разбор каталога провайдера. [declared] — объявления из ответа сервера
      * (ключ — id модели): они перевешивают эвристику, потому что это факт.
+     * [facts] — полная ProviderModel (с contextWindow, maxOutputTokens и т.д.) для каждой модели.
      */
     fun discover(
         provider: ProviderType,
         ids: List<String>,
         declared: Map<String, DeclaredReasoning> = emptyMap(),
+        facts: Map<String, ProviderModel> = emptyMap(),
     ): List<DiscoveredModel> =
         ids.filter { it.isNotBlank() }.distinct().sorted().map { id ->
             val fact = declared[id] ?: declared[id.trim().lowercase()]
+            val metadata = facts[id] ?: facts[id.trim().lowercase()]
             DiscoveredModel(
                 id = id,
                 reasoning = capability(provider, id, fact),
-                recommendation = recommendation(provider, id, declared = fact),
+                recommendation = recommendation(provider, id, declared = fact, fact = metadata),
                 declared = fact,
             )
         }

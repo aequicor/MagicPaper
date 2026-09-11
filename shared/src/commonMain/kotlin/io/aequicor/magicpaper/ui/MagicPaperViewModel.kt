@@ -120,6 +120,9 @@ class MagicPaperViewModel(
             ?.let(io.aequicor.magicpaper.domain.UsageScope::coding)
             ?: io.aequicor.magicpaper.domain.UsageScope("coding:${conversation.sessionId}", projectId = conversation.projectId)
     } }
+    /** Начатые сессии плана получают короткое название; вызов модели вне прогона. */
+    val sessionTitles = if (codingProjects != null && gateway != null)
+        SessionTitleService(codingProjects, profileRepo, settingsRepo, gateway, scope) else null
 
     private val interactionQueue = UserInteractionQueue()
     private val interactionDecisions = runCatching { json.decodeFromString<Set<String>>(store.read("coding-interaction-decisions") ?: "[]") }.getOrDefault(emptySet()).toMutableSet()
@@ -321,7 +324,10 @@ class MagicPaperViewModel(
                 val old = _state.value.coding.sessions.associateBy { it.session.id }
                 old.values.filter { item -> stored.none { it.id == item.session.id } }.forEach {
                     requestPins?.remove(PinConversation(it.session.id, it.session.projectId))
+                    sessionTitles?.forget(it.session.id)
                 }
+                // Список подписывает начатые задачи плана; сервис сам пропускает названные.
+                stored.forEach { session -> sessionTitles?.sync(session) }
                 val histories = buildMap {
                     for (session in stored) {
                         if (session.id !in old || session.organismId != null || session.stageId != null || session.planningMode ||
@@ -1298,7 +1304,7 @@ class MagicPaperViewModel(
                     ids.forEach { runCatching { codingRuntime?.abort(it) } }
                     running.joinAll()
                     ids.addAll(planningChat.deleteSessionTree(projectId, target))
-                    ids.forEach { requestPins?.remove(PinConversation(it, projectId)) }
+                    ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it) }
                     _state.update { state ->
                         val rest = state.coding.sessions.filterNot { it.session.id in ids }
                         state.copy(coding = state.coding.copy(sessions = rest,
@@ -1342,7 +1348,7 @@ class MagicPaperViewModel(
                     failures.firstOrNull()?.let { throw it }
                     sessions.forEach { codingRuntime?.reconcile(it.id) }
                 }
-                sessions.forEach { requestPins?.remove(PinConversation(it.id, id)) }
+                sessions.forEach { requestPins?.remove(PinConversation(it.id, id)); sessionTitles?.forget(it.id) }
                 repo.delete(id)
                 val rest = repo.all()
                 _state.update {
@@ -1430,7 +1436,7 @@ class MagicPaperViewModel(
                     sessions.forEach { codingRuntime?.reconcile(it.id) }
                     sessions.forEach { repo.deleteSession(projectId, it.id) }
                 }
-                sessions.forEach { requestPins?.remove(PinConversation(it.id, projectId)) }
+                sessions.forEach { requestPins?.remove(PinConversation(it.id, projectId)); sessionTitles?.forget(it.id) }
                 _state.update { state ->
                     val remaining = state.coding.sessions.filterNot { it.session.projectId == projectId }
                     state.copy(coding = state.coding.copy(sessions = remaining,
@@ -1483,7 +1489,7 @@ class MagicPaperViewModel(
                     ids.forEach { codingRuntime?.reconcile(it) }
                     ids.forEach { repo.deleteSession(projectId, it) }
                 }
-                ids.forEach { requestPins?.remove(PinConversation(it, projectId)) }
+                ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it) }
                 _state.update { state ->
                     val rest = state.coding.sessions.filterNot { it.session.id in ids }
                     state.copy(coding = state.coding.copy(
