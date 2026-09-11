@@ -127,6 +127,9 @@ public fun PaperTreeGroupHeader(
                 )
                 Spacer(Modifier.width(spaceBeforeTrailing))
                 trailing.invoke(isHovered)
+                if (isHovered) {
+                    Spacer(Modifier.width(8.dp))
+                }
             }
             HoverActions(visible = isHovered) {
                 hoverActions?.invoke(isHovered)

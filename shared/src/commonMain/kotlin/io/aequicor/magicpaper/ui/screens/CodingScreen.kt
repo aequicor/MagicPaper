@@ -567,15 +567,15 @@ internal fun ProjectsPanel(
                     childCount = group.children.size,
                     hoverActions = { isHovered ->
                         HoverActions(visible = isHovered || groupMenuOpen) {
-                            PaperTooltip("В архив") {
+                            PaperTooltip("Архивировать задачу") {
                                 ToolbarButton(ToolbarIcon.Archive, label = "Архивировать задачу", size = 24.dp, 
                                     onClick = { task.rootId?.let { onArchiveSession(it) } })
                             }
+                            Spacer(Modifier.width(4.dp))
                             RowMenu(
                                 open = groupMenuOpen,
                                 onOpenChange = { groupMenuOpen = it },
                                 entries = buildList<Pair<String, () -> Unit>> {
-                                    add("Архивировать задачу" to { task.rootId?.let { onArchiveSession(it) } })
                                     add("Удалить задачу" to { task.rootId?.let { onDeleteSession(it) } })
                                 },
                             )
