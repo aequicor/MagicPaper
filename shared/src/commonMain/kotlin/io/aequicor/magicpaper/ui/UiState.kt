@@ -30,7 +30,7 @@ import io.aequicor.magicpaper.domain.OrchestrationInputStatus
 import io.aequicor.magicpaper.plugins.MagicPlugin
 
 /** Экраны минималистичной навигации. */
-enum class Screen { CHAT, CODING, PLUGINS, DOCS, SETTINGS }
+enum class Screen { CHAT, PLUGINS, DOCS, SETTINGS }
 
 /** Кодинг-сессия в UI: журнал плюс живой прогон и статус для индикатора. */
 data class CodingSessionUi(
@@ -196,6 +196,8 @@ data class UiState(
     val screen: Screen = Screen.CHAT,
     val sessions: List<ChatSession> = emptyList(),
     val current: ChatSession? = null,
+    /** Выбрана кодинг-сессия (true) или чат-сессия (false). */
+    val viewingCoding: Boolean = false,
     val sessionsPanelOpen: Boolean = false,
     val settings: AppSettings = AppSettings(),
     val plugins: List<MagicPlugin> = emptyList(),
@@ -237,6 +239,10 @@ data class UiState(
         get() = llmProfiles.filter {
             it.provider != io.aequicor.magicpaper.domain.ProviderType.OPENAI_SUBSCRIPTION || openAiSubscription.available
         }
+
+    /** Идентификатор текущей сессии (чат или кодинг) для единой боковой панели. */
+    val activeSessionId: String?
+        get() = if (viewingCoding) coding.currentSessionId else current?.id
 }
 
 /** Состояние desktop-входа через ChatGPT; available=false на Android/Web. */

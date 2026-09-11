@@ -266,10 +266,10 @@ class MagicPaperViewModel(
             val pinSources = mutableMapOf<PinConversation, Any>()
             var previousProfile: LlmProfile? = null
             _state.collect { state ->
-                val opened = when (state.screen) {
-                    Screen.CHAT -> state.current?.let { PinConversation(it.id) }
-                    Screen.CODING -> state.coding.currentSession?.session?.let { PinConversation(it.id, it.projectId) }
-                    else -> null
+                val opened = if (state.viewingCoding) {
+                    state.coding.currentSession?.session?.let { PinConversation(it.id, it.projectId) }
+                } else {
+                    state.current?.let { PinConversation(it.id) }
                 }
                 // Same operational model used by generateModelDescriptions, independent of chat overrides.
                 val profile = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
@@ -598,6 +598,7 @@ class MagicPaperViewModel(
                 it.copy(
                     sessions = listOf(session) + it.sessions,
                     current = session,
+                    viewingCoding = false,
                     sessionsPanelOpen = false,
                 )
         }
@@ -607,7 +608,7 @@ class MagicPaperViewModel(
     fun selectSession(id: String) {
         scope.launch {
             val session = chats.session(id) ?: return@launch
-            _state.update { it.copy(current = session, sessionsPanelOpen = false) }
+            _state.update { it.copy(current = session, viewingCoding = false, sessionsPanelOpen = false) }
         }
     }
 
@@ -625,17 +626,22 @@ class MagicPaperViewModel(
         }
     }
 
+    // Per-session jobs for regular chat (not coding sessions, which use codingJobs)
+    private val chatJobs = MutableStateFlow<Map<String, Job>>(emptyMap())
+    
+    private fun removeChatJob(sessionId: String): Job? = chatJobs.getAndUpdate { it - sessionId }[sessionId]
+
     fun send(text: String, attachments: List<Attachment> = emptyList()) {
         val trimmed = text.trim()
         val visible = attachments.chatVisible()
         if (trimmed.isEmpty() && visible.isEmpty()) return
-        val s = _state.value
-        if (s.busy) return
-        val settings = s.settings
-        val session = s.current ?: run {
+        val settings = _state.value.settings
+        val session = _state.value.current ?: run {
             newSession()
             _state.value.current ?: return
         }
+        // Allow parallel chat sessions - each session has its own job
+        if (session.id in chatJobs.value) return
 
         val userMessage = ChatMessage(
             id = Id.new(),
@@ -656,35 +662,38 @@ class MagicPaperViewModel(
             st.copy(
                 current = updated,
                 sessions = st.sessions.map { if (it.id == updated.id) updated else it },
-                busy = true,
             )
         }
-        scope.launch(workerDispatcher + io.aequicor.magicpaper.domain.UsageOwner(io.aequicor.magicpaper.domain.UsageScope.chat(session.id))) {
-            chats.save(updated)
-            val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile)
-            val agentMessage = ChatMessage(
-                id = Id.new(),
-                role = ChatRole.AGENT,
-                text = answer.text,
-                createdAt = Id.now(),
-                sources = answer.sources,
-            )
-            val latest = _state.value.sessions.firstOrNull { it.id == updated.id } ?: updated
-            val final = updated.copy(
-                modelSelection = latest.modelSelection,
-                llmProfileId = latest.llmProfileId,
-                messages = updated.messages + agentMessage,
-                updatedAt = Id.now(),
-            )
-            chats.save(final)
-            _state.update { st ->
-                st.copy(
-                    current = if (st.current?.id == final.id) final else st.current,
-                    sessions = st.sessions.map { if (it.id == final.id) final else it },
-                    busy = false,
+        val job = scope.launch(workerDispatcher + io.aequicor.magicpaper.domain.UsageOwner(io.aequicor.magicpaper.domain.UsageScope.chat(session.id))) {
+            try {
+                chats.save(updated)
+                val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile)
+                val agentMessage = ChatMessage(
+                    id = Id.new(),
+                    role = ChatRole.AGENT,
+                    text = answer.text,
+                    createdAt = Id.now(),
+                    sources = answer.sources,
                 )
+                val latest = _state.value.sessions.firstOrNull { it.id == updated.id } ?: updated
+                val final = updated.copy(
+                    modelSelection = latest.modelSelection,
+                    llmProfileId = latest.llmProfileId,
+                    messages = updated.messages + agentMessage,
+                    updatedAt = Id.now(),
+                )
+                chats.save(final)
+                _state.update { st ->
+                    st.copy(
+                        current = if (st.current?.id == final.id) final else st.current,
+                        sessions = st.sessions.map { if (it.id == final.id) final else it },
+                    )
+                }
+            } finally {
+                chatJobs.update { it - session.id }
             }
         }
+        chatJobs.update { it + (session.id to job) }
     }
 
     // ---- Настройки ---------------------------------------------------------
@@ -1446,13 +1455,36 @@ class MagicPaperViewModel(
         scope.launch {
             val service = planningChat ?: return@launch
             val plan = service.store.plans().firstOrNull()
-            _state.update { it.copy(screen = Screen.CODING) }
+            _state.update { it.copy(screen = Screen.CHAT, viewingCoding = true) }
             if (plan != null) { openCodingProject(plan.projectId); selectCodingSession(plan.parentSessionId) }
         }
     }
 
     fun selectCodingSession(id: String) {
-        _state.update { it.copy(coding = it.coding.copy(currentSessionId = id)) }
+        _state.update { it.copy(coding = it.coding.copy(currentSessionId = id), viewingCoding = true) }
+    }
+
+    /** Переключатель режима просмотра: чат или кодинг. */
+    fun setViewingCoding(viewingCoding: Boolean) {
+        _state.update { it.copy(viewingCoding = viewingCoding) }
+    }
+
+    /** Выбор сессии из единой боковой панели. */
+    fun selectUnifiedSession(id: String, isCoding: Boolean) {
+        if (isCoding) {
+            val session = _state.value.coding.sessions.firstOrNull { it.session.id == id }
+            if (session != null) {
+                _state.update { st ->
+                    st.copy(
+                        coding = st.coding.copy(currentSessionId = id),
+                        viewingCoding = true,
+                        sessionsPanelOpen = false,
+                    )
+                }
+            }
+        } else {
+            selectSession(id)
+        }
     }
 
     /** Удалить сессию с её журналом (активный прогон прерывается). */

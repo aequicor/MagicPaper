@@ -211,6 +211,7 @@ fun CodingScreen(
     panelPlugin: CodingSessionPanel? = null,
     profiles: List<LlmProfile> = emptyList(),
     activeProfileId: String = "",
+    showProjectsPanel: Boolean = true,
 ) {
     if (ui.creatingSession) {
         val state by vm.state.collectAsState()
@@ -231,6 +232,7 @@ fun CodingScreen(
         }
     }
     Column(modifier = Modifier.fillMaxSize()) {
+        if (showProjectsPanel) {
         ResizableProjectPanels(modifier = Modifier.weight(1f), sidebar = { panelModifier ->
             ProjectsPanel(
                 ui = ui,
@@ -265,6 +267,30 @@ fun CodingScreen(
                         activeProfileId = activeProfileId,
                     )
                 }
+        }
+        } else {
+            // Без панели проектов — только контент текущей сессии (для единой боковой панели).
+            Box(Modifier.weight(1f)) {
+                val project = ui.current
+                val activeId = project?.let { ui.activeSessionIdOf(it.id) }
+                val active = project?.let { ui.sessionsOf(it.id) }?.firstOrNull { it.session.id == activeId }
+                if (project == null || active == null) {
+                    ProjectsEmptyHint(hasProject = project != null, onCreate = {
+                        if (project == null) vm.addCodingProject() else vm.requestCodingSession()
+                    })
+                } else {
+                    SessionArea(
+                        vm = vm,
+                        onSkills = { skillsProject = project.id },
+                        ui = ui,
+                        project = project,
+                        active = active,
+                        panelPlugin = panelPlugin,
+                        profiles = profiles,
+                        activeProfileId = activeProfileId,
+                    )
+                }
+            }
         }
     }
 }

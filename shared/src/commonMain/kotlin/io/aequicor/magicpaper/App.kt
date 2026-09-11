@@ -26,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import io.aequicor.magicpaper.di.MagicPaperDependencies
 import io.aequicor.magicpaper.di.createMagicPaperDependencies
 import io.aequicor.magicpaper.designsystem.PaperTheme
@@ -52,7 +51,7 @@ import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
 import io.aequicor.magicpaper.ui.screens.PluginsScreen
-import io.aequicor.magicpaper.ui.screens.SessionsPanel
+import io.aequicor.magicpaper.ui.screens.UnifiedSidebar
 import io.aequicor.magicpaper.ui.screens.SettingsScreen
 import io.aequicor.magicpaper.ui.screens.WelcomeScreen
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
@@ -81,7 +80,7 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
                             WelcomeScreen(deps.viewModel, state)
                         }
                     } else {
-                        TopBar(deps.viewModel, state.screen)
+                        TopBar(deps.viewModel, state)
                         PaperDivider()
                         Box(modifier = Modifier.weight(1f)) {
                             MainArea(deps.viewModel, state)
@@ -93,7 +92,7 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
                         }
                     }
                 }
-                if (!state.showWelcome && state.modelSwitcherOpen && state.screen == Screen.CHAT) {
+                if (!state.showWelcome && state.modelSwitcherOpen && state.screen == Screen.CHAT && !state.viewingCoding) {
                     ModelSwitcherDialog(
                         vm = deps.viewModel,
                         profiles = state.availableLlmProfiles,
@@ -113,27 +112,36 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
 ) {
     Box(Modifier.fillMaxSize()) {
         Row(modifier = Modifier.fillMaxSize()) {
-            AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen == Screen.CHAT) {
+            AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen != Screen.SETTINGS) {
                 Row {
-                    SessionsPanel(vm, state.sessions, state.current?.id)
+                    UnifiedSidebar(
+                        vm = vm,
+                        chatSessions = state.sessions,
+                        coding = state.coding,
+                        selectedId = state.activeSessionId,
+                        viewingCoding = state.viewingCoding,
+                    )
                     PaperDivider(Modifier.fillMaxHeight().width(1.dp))
                 }
             }
             Box(modifier = Modifier.weight(1f)) {
-                when (state.screen) {
-                    Screen.CHAT -> ChatScreen(vm, state)
-                    Screen.CODING -> CodingScreen(
-                        vm,
-                        state.coding,
-                        state.codingPanelPlugin,
-                        profiles = state.availableLlmProfiles,
-                        activeProfileId = state.settings.activeLlmProfileId,
-                    )
-                    Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
+                when {
+                    state.screen == Screen.CHAT && state.viewingCoding -> {
+                        CodingScreen(
+                            vm = vm,
+                            ui = state.coding,
+                            panelPlugin = state.codingPanelPlugin,
+                            profiles = state.availableLlmProfiles,
+                            activeProfileId = state.settings.activeLlmProfileId,
+                            showProjectsPanel = false,
+                        )
+                    }
+                    state.screen == Screen.CHAT -> ChatScreen(vm, state)
+                    state.screen == Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
                         ActivePlugins(state.plugins, state.pluginStates, vm::openPlanningChat)
                     }
-                    Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
-                    Screen.SETTINGS -> SettingsScreen(vm, state)
+                    state.screen == Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
+                    state.screen == Screen.SETTINGS -> SettingsScreen(vm, state)
                 }
             }
         }
@@ -141,7 +149,8 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
 }
 
 @Composable
-private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
+private fun TopBar(vm: MagicPaperViewModel, state: UiState) {
+    val screen = state.screen
     val chrome = LocalWindowChrome.current
     val desktopHeight = LocalWindowToolbarHeight.current
     val toolbarHeight = desktopHeight ?: 56.dp
@@ -172,7 +181,7 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
                     PaperText("MagicPaper", role = PaperTextRole.CHROME, maxLines = 1)
                     Spacer(Modifier.width(10.dp))
                     PaperText(
-                        screen.subtitle,
+                        subtitle(state.screen, state.viewingCoding),
                         modifier = Modifier.weight(1f),
                         role = PaperTextRole.CHROME,
                         color = LocalPaperColors.current.secondaryText,
@@ -183,14 +192,16 @@ private fun TopBar(vm: MagicPaperViewModel, screen: Screen) {
             }
             val usageState by vm.usage.state.collectAsState()
             val usageFailure by vm.usage.failure.collectAsState()
-            val uiState by vm.state.collectAsState()
-            val usageConversation = if (screen == Screen.CODING) uiState.coding.currentSession?.session?.id?.let { "coding:$it" }
-                else uiState.current?.id?.let { "chat:$it" }
+            val usageConversation = if (state.viewingCoding) state.coding.currentSession?.session?.id?.let { "coding:$it" }
+                else state.current?.id?.let { "chat:$it" }
             io.aequicor.magicpaper.ui.components.UsageMenu(usageState, usageConversation, usageFailure)
             PaperIconButton(
                 label = if (screen == Screen.SETTINGS) "Вернуться в чат" else "Настройки",
                 selected = screen == Screen.SETTINGS,
-                onClick = { vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS) },
+                onClick = {
+                    vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS)
+                    if (screen == Screen.SETTINGS) vm.setViewingCoding(false)
+                },
             ) { PaperText("⚙", role = PaperTextRole.CHROME) }
             if (chrome != null) WindowButtons(chrome)
         }
@@ -213,14 +224,12 @@ private fun WindowButton(glyph: String, danger: Boolean = false, onClick: () -> 
 }
 
 /** Подзаголовок в шапке: где мы находимся. */
-private val Screen.subtitle: String
-    get() = when (this) {
-        Screen.CHAT -> "Шалость удалась"
-        Screen.CODING -> "Проекты и код"
-        Screen.PLUGINS -> "Плагины и панели"
-        Screen.DOCS -> "Справочник"
-        Screen.SETTINGS -> "Настройки и разделы"
-    }
+private fun subtitle(screen: Screen, viewingCoding: Boolean): String = when (screen) {
+    Screen.CHAT -> if (viewingCoding) "Проекты и код" else "Шалость удалась"
+    Screen.PLUGINS -> "Плагины и панели"
+    Screen.DOCS -> "Справочник"
+    Screen.SETTINGS -> "Настройки и разделы"
+}
 
 /** Панели включённых плагинов: интерфейс расширяется их суммой. */
 @Composable

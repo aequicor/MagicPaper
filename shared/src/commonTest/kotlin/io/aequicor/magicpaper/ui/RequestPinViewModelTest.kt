@@ -41,7 +41,7 @@ class RequestPinViewModelTest {
                 }
                 val model = f.prepare(codingRuntime = runtime, codingProjects = repo, requestPinRepository = pins)
                 try {
-                    model.open(Screen.CODING); advanceUntilIdle()
+                    model.open(Screen.CHAT); model.setViewingCoding(true); advanceUntilIdle()
                     model.selectCodingSession("root"); advanceUntilIdle()
                     val key = PinConversation("root", "project")
                     assertTrue(pins.load(key).isNotEmpty())
@@ -78,7 +78,7 @@ class RequestPinViewModelTest {
             val pending = CodingMessage("pending", CodingRole.USER, "Я имел в виду слева", createdAt = 3)
             repo.saveMessages("project", "coding", listOf(task, question, pending))
             val model = f.prepare(codingProjects = repo, requestPinRepository = pins).also { vm = it }
-            model.open(Screen.CODING); advanceUntilIdle()
+            model.open(Screen.CHAT); model.setViewingCoding(true); advanceUntilIdle()
             val key = PinConversation("coding", "project")
             assertEquals(listOf("task"), pins.load(key).map { it.source.id })
             repo.saveMessages("project", "coding", listOf(task, question,
@@ -139,7 +139,7 @@ class RequestPinViewModelTest {
             repo.saveMessages("project", "coding", listOf(input))
             val model = f.prepare(codingProjects = repo, requestPinRepository = pins).also { vm = it }
             assertTrue(f.calls.isEmpty())
-            model.open(Screen.CODING)
+            model.open(Screen.CHAT); model.setViewingCoding(true)
             advanceUntilIdle()
             assertEquals("openai", f.calls.single().id)
             assertEquals(1, model.requestPins?.groups?.value?.get(PinConversation("coding", "project"))?.size)

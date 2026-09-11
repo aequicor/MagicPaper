@@ -83,8 +83,8 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
         // ---- Разделы: сюда переехали кнопки навигации из шапки ----
         Section("Разделы")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            NavEntry("✦", "Чат", "Лента свитка и поле заклинаний") { vm.open(Screen.CHAT) }
-            NavEntry("⌘", "Проекты и код", "Кодинг-агент работает в папке проекта") { vm.open(Screen.CODING) }
+            NavEntry("✦", "Чат", "Лента свитка и поле заклинаний") { vm.open(Screen.CHAT); vm.setViewingCoding(false) }
+            NavEntry("⌘", "Проекты и код", "Кодинг-агент работает в папке проекта") { vm.open(Screen.CHAT); vm.setViewingCoding(true) }
             NavEntry("∑", "Плагины", "Панели и переключатели расширений") { vm.open(Screen.PLUGINS) }
             NavEntry("◷", "Справка", "Документация с живым поиском") { vm.open(Screen.DOCS) }
             NavEntry("✦", "Первый запуск", "Пройти ознакомительный тур заново") { vm.restartOnboarding() }
@@ -155,7 +155,7 @@ fun SettingsScreen(vm: MagicPaperViewModel, state: UiState) {
             } else {
                 PaperText("Выберите сессию кодинга без планирования или исследования.",
                     color = LocalPaperColors.current.secondaryText)
-                PaperAction({ vm.open(Screen.CODING) }) { PaperText("Проекты и код") }
+                PaperAction({ vm.open(Screen.CHAT); vm.setViewingCoding(true) }) { PaperText("Проекты и код") }
             }
         }
 
