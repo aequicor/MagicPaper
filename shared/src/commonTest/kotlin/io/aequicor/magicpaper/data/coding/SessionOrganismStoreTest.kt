@@ -55,7 +55,7 @@ class SessionOrganismStoreTest {
         assertEquals(14, saved.sessions.values.count { !it.settled && !it.archived })
         assertEquals(1_000L, saved.sessions.values.sumOf { it.remainingTokens })
         assertEquals(0L, saved.sessions.getValue("root").remainingTokens)
-        assertEquals(100L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(100L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
         assertTrue(saved.sessions.values.all { it.rules == saved.sessions.getValue("root").rules })
         val starts = saved.sessions.values.filter { it.kind == SessionKind.SESSION }.map { child ->
             async { runCatching { f.store.beginRun(saved.id, child.id) } }

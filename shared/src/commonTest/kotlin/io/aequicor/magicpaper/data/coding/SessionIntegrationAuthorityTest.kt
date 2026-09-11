@@ -40,7 +40,7 @@ class SessionIntegrationAuthorityTest {
         val f = Fixture(); f.initialize()
         val (saved, _) = f.store.admitIntegration(f.scope, f.request, "digest")
         f.store.observe("root", "root", 0, SessionObservedState.STOPPED)
-        f.store.finishStop("root", saved.sessions.keys - saved.immunityId)
+        f.store.finishStop("root", saved.sessions.keys - setOfNotNull(saved.immunityId))
         assertEquals(SessionOperationState.ACCEPTED, f.store.get("root").operations.getValue("integration").state)
         val restarted = SessionOrganismStore(f.storage) { 1_001 }
         val recovered = restarted.recover("root")

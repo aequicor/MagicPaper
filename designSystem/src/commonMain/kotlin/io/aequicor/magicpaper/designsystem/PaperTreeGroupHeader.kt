@@ -1,21 +1,34 @@
 package io.aequicor.magicpaper.designsystem
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -36,6 +49,8 @@ import androidx.compose.ui.unit.dp
  * [onClick] opens the zygote session when the title area is clicked; expansion
  * is still toggled via the disclosure arrow or keyboard. [trailing] renders
  * an optional side action (e.g. immunity diamond) after the title.
+ * [hoverActions] renders additional controls (archive, menu) on hover.
+ * [childCount] controls whether the disclosure arrow is shown.
  */
 @Composable
 public fun PaperTreeGroupHeader(
@@ -46,23 +61,34 @@ public fun PaperTreeGroupHeader(
     active: Boolean = false,
     leading: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
-    trailing: (@Composable () -> Unit)? = null,
+    trailing: (@Composable (Boolean) -> Unit)? = null,
+    hoverActions: (@Composable (Boolean) -> Unit)? = null,
+    childCount: Int = 0,
 ) {
     val colors = LocalPaperColors.current
     val shape = RoundedCornerShape(6.dp)
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val isHovered by hoverInteraction.collectIsHoveredAsState()
+    
     PaperTooltip(title) {
         Row(
             modifier = modifier
                 .fillMaxWidth()
                 .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
-                .background(if (active) colors.selected else colors.raisedSurface, shape)
+                .clip(shape)
+                .background(
+                    if (active) colors.selected.copy(alpha = 0.55f) else Color.Transparent
+                )
+                .hoverable(hoverInteraction)
                 .paperClickable(
                     role = Role.Button,
-                    onClickLabel = if (expanded) "Свернуть задачу" else "Раскрыть задачу",
+                    onClickLabel = if (active && childCount > 0) {
+                        if (expanded) "Свернуть задачу" else "Раскрыть задачу"
+                    } else null,
                     shape = shape,
                     onClick = {
-                        // Arrow toggles expansion; title click opens the zygote if onClick provided
-                        if (onClick != null) onClick() else onToggle()
+                        // Click on active session toggles expansion; otherwise opens zygote
+                        if (active && childCount > 0) onToggle() else onClick?.invoke()
                     },
                 )
                 .onPreviewKeyEvent { event ->
@@ -81,31 +107,57 @@ public fun PaperTreeGroupHeader(
                     stateDescription = if (expanded) "Развёрнута" else "Свёрнута"
                     selected = active
                 }
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 6.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PaperText(
-                if (expanded) "▾" else "▸",
-                modifier = Modifier.widthIn(min = 16.dp)
-                    .paperClickable(onClick = onToggle)
-                    .clearAndSetSemantics {},
-                role = PaperTextRole.CHROME,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                softWrap = false,
-            )
             leading?.invoke()
+            Spacer(Modifier.width(8.dp))
             PaperText(
                 title,
                 modifier = Modifier.weight(1f),
                 role = PaperTextRole.CHROME,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 softWrap = false,
             )
-            trailing?.invoke()
+            if (trailing != null) {
+                val spaceBeforeTrailing by animateDpAsState(
+                    if (isHovered) 4.dp else 8.dp
+                )
+                Spacer(Modifier.width(spaceBeforeTrailing))
+                trailing.invoke(isHovered)
+            }
+            HoverActions(visible = isHovered) {
+                hoverActions?.invoke(isHovered)
+                if (childCount > 0) {
+                    Spacer(Modifier.width(4.dp))
+                    Box(Modifier.size(24.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .semantics { contentDescription = if (expanded) "Свернуть задачу" else "Раскрыть задачу" }
+                        .paperClickable(onClick = onToggle),
+                        contentAlignment = Alignment.Center) {
+                        PaperText(if (expanded) "▾" else "▸", color = colors.action)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Hides its content from layout and accessibility when [visible] is false,
+ * while preserving the measured size for a smooth slide-in on reveal.
+ */
+@Composable
+private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
+    Layout(
+        modifier = if (visible) Modifier else Modifier.clearAndSetSemantics {},
+        content = { Row(verticalAlignment = Alignment.CenterVertically) { content() } },
+    ) { measurables, constraints ->
+        val actions = measurables.single().measure(constraints.copy(minWidth = 0, minHeight = 0))
+        layout(if (visible) actions.width else 0, actions.height) {
+            if (visible) actions.placeRelative(0, 0)
         }
     }
 }

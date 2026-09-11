@@ -83,7 +83,7 @@ class SessionOrganismExtensionsTest {
 
     @Test fun userCanStopImmunityWhileDeterministicQuarantineStillWorks() = runTest {
         val f = Fixture(); f.init(); val child = f.child("a")
-        f.store.requestUserStop(f.organism.id, f.organism.immunityId, "stop-immunity", false)
+        f.store.requestUserStop(f.organism.id, f.organism.immunityId!!, "stop-immunity", false)
         f.store.command(f.scope(), "signal", OrganismCommand(OrganismAction.SIGNAL, child, reason = "Check"))
         assertTrue(f.store.inspectSignals(f.organism.id).diagnoses.isEmpty())
         val saved = f.store.quarantine(f.organism.id, child, 1, "unknown-effect", "External result unavailable")

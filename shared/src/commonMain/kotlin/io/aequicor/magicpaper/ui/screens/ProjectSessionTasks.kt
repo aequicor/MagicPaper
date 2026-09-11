@@ -29,8 +29,11 @@ internal data class ProjectSessionTask(
         val parents = sessionForestParents(sessions, parentIds, setOfNotNull(rootId, immunityId))
         val children = sessions.groupBy { parents[it.session.id] }
             .mapValues { (_, items) -> items.sortedBy { it.session.createdAt } }
+        // Для обычных сессий (без иммунитета) rootId — это сама сессия, не фильтруем её
+        // Для сессий с иммунитетом (режим планирования) исключаем зиготу и иммунитет
+        val excludeIds = if (immunityId == null) emptySet() else setOfNotNull(rootId, immunityId)
         val roots = children[null].orEmpty()
-            .filter { it.session.id != rootId && it.session.id != immunityId }
+            .filter { it.session.id !in excludeIds }
             .sortedBy { it.session.createdAt }
         return buildList {
             val pending = ArrayDeque<Pair<CodingSessionUi, Int>>()
@@ -59,7 +62,7 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
     val projectOrganisms = organisms.values.filter { it.projectId == projectId }.associateBy { it.id }
     val aggregateMembership = buildMap<String, MutableSet<String>> {
         projectOrganisms.values.forEach { organism ->
-            (organism.sessions.keys + organism.zygoteId + organism.immunityId).forEach { id ->
+            (organism.sessions.keys + organism.zygoteId + organism.immunityId?.let { listOf(it) }.orEmpty()).forEach { id ->
                 getOrPut(id) { mutableSetOf() }.add(organism.id)
             }
         }
@@ -100,16 +103,21 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
             val immunity = byId[immunityId]
             // Automatic lifecycle adoption is invisible for a standalone conversation.
             // Keep real plans, delegated work and diagnostic history reachable.
+            // Иммунитет активен только для сессий в режиме планирования.
+            val isPlanningSession = root?.session?.planningMode == true ||
+                organism?.sessions?.get(rootId)?.mode == CodingInteractionMode.PLANNING ||
+                root?.session?.planId != null || root?.session?.stageId != null
+            val hasNoActiveImmunity = !isPlanningSession || immunity == null || (!immunity.running && !immunity.draft.active && !immunity.awaitingUser &&
+                !immunity.failedRequest && !immunity.interruptedRequest &&
+                immunity.messages.none { !it.systemContext })
             val standalone = root != null && !root.session.planningMode && root.plan == null &&
                 organism?.sessions?.get(rootId)?.mode != CodingInteractionMode.PLANNING &&
                 root.session.planId == null && root.session.stageId == null &&
-                allMembers.all { it.session.id == rootId || it.session.id == immunityId } &&
-                organism?.sessions?.keys.orEmpty().all { it == rootId || it == immunityId } &&
+                allMembers.all { it.session.id == rootId || (immunityId != null && it.session.id == immunityId) } &&
+                organism?.sessions?.keys.orEmpty().all { it == rootId || (immunityId != null && it == immunityId) } &&
                 organism?.signals.orEmpty().isEmpty() && organism?.diagnoses.orEmpty().isEmpty() &&
                 organism?.interventions.orEmpty().isEmpty() &&
-                (immunity == null || (!immunity.running && !immunity.draft.active && !immunity.awaitingUser &&
-                    !immunity.failedRequest && !immunity.interruptedRequest &&
-                    immunity.messages.none { !it.systemContext }))
+                hasNoActiveImmunity
             if (standalone && root.session.archived.not()) {
                 tasks += OrderedTask(ProjectSessionTask("session-$rootId", title, null, rootId, listOf(root)),
                     root.session.createdAt, inputOrder[rootId] ?: Int.MAX_VALUE)

@@ -43,7 +43,7 @@ class SessionPlanBudgetTest {
         assertEquals(104_044L, charged.sessions.getValue("worker-1").remainingTokens)
         assertEquals(93_956L, charged.sessions.getValue("worker-1").spentTokens)
         assertEquals(1_000_000L, charged.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
-        assertEquals(10_000L, charged.sessions.getValue(charged.immunityId).remainingTokens)
+        assertEquals(10_000L, charged.sessions.getValue(charged.immunityId!!).remainingTokens)
     }
 
     @Test fun concurrentStagesReserveEqualSharesAndLeaveParentAndRecoveryBudget() = runTest {
@@ -54,7 +54,7 @@ class SessionPlanBudgetTest {
         assertEquals(listOf(198_000L, 198_000L, 198_000L, 198_000L),
             plan.milestones.map { saved.sessions.getValue(it.attempts.single().sessionId).remainingTokens })
         assertEquals(198_000L, saved.sessions.getValue(f.root.id).remainingTokens)
-        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens })
     }
 
@@ -91,7 +91,7 @@ class SessionPlanBudgetTest {
         assertEquals(179_208L, saved.sessions.getValue(attempt.sessionId).remainingTokens)
         assertEquals(93_956L, saved.sessions.getValue(attempt.sessionId).spentTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
-        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
     }
 
     @Test fun explicitlyAllocatedQuotaIsRetainedWhenAnExistingWorkerJoinsAPlan() = runTest {
@@ -136,7 +136,7 @@ class SessionPlanBudgetTest {
         assertEquals(SessionObservedState.RUNNING, saved.sessions.getValue("worker-1").observed)
         f.store.check(saved.authority("worker-1"))
         assertEquals(762_000L, saved.sessions.getValue(f.root.id).remainingTokens)
-        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
         assertEquals(setOf(f.root.id), saved.audit.last { it.action == "BUDGET_RECONCILE" }.affected)
     }
@@ -157,7 +157,7 @@ class SessionPlanBudgetTest {
         assertEquals(179_208L, saved.sessions.getValue("worker-2").remainingTokens)
         assertEquals(716_836L, saved.sessions.getValue(f.root.id).remainingTokens)
         assertEquals(93_956L, saved.sessions.getValue("worker-1").spentTokens)
-        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
         assertEquals(setOf(f.root.id), saved.audit.last { it.action == "BUDGET_RECONCILE" }.affected)
     }
@@ -172,7 +172,7 @@ class SessionPlanBudgetTest {
         assertEquals(750_000L, saved.sessions.getValue("worker-1").spentTokens)
         assertEquals(0L, saved.sessions.getValue(f.root.id).remainingTokens)
         assertEquals(240_000L, saved.sessions.getValue("worker-2").remainingTokens)
-        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
     }
 
@@ -200,7 +200,7 @@ class SessionPlanBudgetTest {
         assertEquals(800_000L, saved.sessions.getValue(f.root.id).spentTokens)
         assertEquals(0L, saved.sessions.getValue(f.root.id).remainingTokens)
         assertEquals(190_000L, saved.sessions.getValue("worker-1").remainingTokens)
-        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId).remainingTokens)
+        assertEquals(10_000L, saved.sessions.getValue(saved.immunityId!!).remainingTokens)
         assertEquals(1_000_000L, saved.sessions.values.sumOf { it.remainingTokens + it.spentTokens })
         assertEquals(800_000L, saved.auxiliaryRuns.getValue(auxiliary.id).usage.getValue("usage"))
     }

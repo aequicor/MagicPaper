@@ -348,7 +348,7 @@ class SessionTreeRuntimeTest {
             assertEquals(SessionObservedState.FAILED, saved.sessions.getValue(f.root.id).observed)
             assertEquals(SessionObservedState.STOPPED, saved.sessions.getValue(child.id).observed)
             assertEquals(SessionDesiredState.STOP, saved.sessions.getValue(child.id).desired)
-            assertEquals(initial.sessions.getValue(initial.immunityId), saved.sessions.getValue(initial.immunityId))
+            assertEquals(initial.sessions.getValue(initial.immunityId!!), saved.sessions.getValue(initial.immunityId!!))
             assertTrue(saved.operations.values.none { it.state == SessionOperationState.ACCEPTED })
         } finally { failRoot.complete(Unit); rootJob.cancelAndJoin(); childJob?.cancelAndJoin() }
     } }

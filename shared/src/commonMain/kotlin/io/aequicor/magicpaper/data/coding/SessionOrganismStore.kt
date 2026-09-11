@@ -167,9 +167,12 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         storage.read(key(id))?.let { return@withLock migrateLimits(json.decodeFromString<SessionOrganism>(it)) }
         require(root.projectId == projectId && descendants.all { it.projectId == projectId }) { "Другой проект" }
         limits.validate()
-        val immunity = "$id-immunity"
+        // Иммунитет создаётся только для режима планирования (план, этапы, планирование).
+        // Режим исследования — обычный режим с защитой от записи, иммунитет не нужен.
+        val needsImmunity = root.planningMode || root.planId != null || root.stageId != null
+        val immunity = if (needsImmunity) "$id-immunity" else null
         val migrated = (listOf(root) + descendants).distinctBy { it.id }
-        require(migrated.none { it.id == immunity }) { "Идентификатор иммунитета занят" }
+        if (immunity != null) require(migrated.none { it.id == immunity }) { "Идентификатор иммунитета занят" }
         val nodes = migrated.associate { session -> session.id to SessionNode(
             session.id, if (session.id == root.id) SessionKind.ZYGOTE else SessionKind.SESSION, session.name,
             originParentId = session.parentSessionId.takeUnless { session.id == root.id },
@@ -183,8 +186,12 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             },
             remainingTokens = if (session.archived) 0 else limits.tokens?.let { (it - limits.recoveryTokens) / migrated.count { !it.archived }.coerceAtLeast(1) } ?: 0,
             rules = root.planningRulesSnapshot, lastObservedAt = clock(), nameManuallySet = session.nameManuallySet,
-        ) } + (immunity to SessionNode(immunity, SessionKind.IMMUNITY, "Иммунитет", remainingTokens = if (limits.tokens == null) 0 else limits.recoveryTokens,
-            observed = SessionObservedState.PENDING, rules = root.planningRulesSnapshot, lastObservedAt = clock()))
+        ) }.let { migratedNodes ->
+            if (immunity != null) {
+                migratedNodes + (immunity to SessionNode(immunity, SessionKind.IMMUNITY, "Иммунитет", remainingTokens = if (limits.tokens == null) 0 else limits.recoveryTokens,
+                    observed = SessionObservedState.PENDING, rules = root.planningRulesSnapshot, lastObservedAt = clock()))
+            } else migratedNodes
+        }
         val organism = SessionOrganism(id, projectId, root.id, immunity, clock(), limits, sessions = nodes, limitPolicyVersion = 1,
             audit = listOf(SessionAuditEvent("$id-migration", "USER", "MIGRATE", nodes.keys, "Сохранены происхождение и история сессий", clock())))
         nodes.values.filter { it.kind == SessionKind.SESSION }.forEach { organism.route(it.id, root.id) }
@@ -677,7 +684,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                     requireTool(target != null && target.kind != SessionKind.IMMUNITY && command.reason.isNotBlank()) { "Укажите сессию и диагностический сигнал" }
                     requireTool(old.limits.queueSize.hasRoom(old.signals.count { signal -> old.diagnoses.none { it.signalId == signal.id } })) { "Очередь сигналов заполнена" }
                     next = old.copy(signals = old.signals + ImmunitySignal(operationId, actor.id, targetId, PlanningDiagnostics.redact(command.reason).takeConfigured(old.limits.contextCharacters), clock(), requestResearch = true))
-                    affected = setOf(targetId, old.immunityId)
+                    affected = setOfNotNull(targetId, old.immunityId)
                 }
             }
             commit(next.copy(version = old.version + 1,
@@ -739,7 +746,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             next = sessions[next]?.authorityParentId
         }
         priority += sessions.keys.sorted()
-        val ordered = priority.distinct().filter { it != immunityId } + immunityId
+        val ordered = priority.distinct().filter { it != immunityId } + listOfNotNull(immunityId)
         val nodes = sessions.toMutableMap()
         val affected = mutableSetOf<String>()
         for (sessionId in ordered) {
@@ -879,7 +886,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     /** Only an application diagnostic with saved evidence can create an intervention proposal. */
     suspend fun proposeImmunityInterventions(id: String): SessionOrganism = lock.withLock {
         val old = read(id)
-        if (old.deletedAt != null || old.stoppedByUser || !old.sessions.getValue(old.immunityId).acceptsWork) return@withLock old
+        if (old.deletedAt != null || old.stoppedByUser || old.immunityId == null || !old.sessions.getValue(old.immunityId!!).acceptsWork) return@withLock old
         val available = old.limits.queueSize?.let { (it - old.interventions.count { proposal -> proposal.state in setOf(ImmunityInterventionState.PROPOSED, ImmunityInterventionState.ACCEPTED, ImmunityInterventionState.UNKNOWN) }).coerceAtLeast(0) }
         val proposals = old.diagnoses.filter { diagnosis -> diagnosis.evidence.isNotEmpty() &&
             diagnosis.generation == old.sessions[diagnosis.target]?.generation && diagnosis.generation != null &&
@@ -895,8 +902,9 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                 actions, diagnosis.evidence.map(::redact), old.subtree(node.id), clock())
         }
         if (proposals.isEmpty()) return@withLock old
+        val immunityId = old.immunityId ?: return@withLock old
         commit(old.copy(version = old.version + 1, interventions = old.interventions + proposals,
-            audit = old.audit + proposals.map { proposal -> SessionAuditEvent(proposal.id, old.immunityId, "PROPOSE_INTERVENTION",
+            audit = old.audit + proposals.map { proposal -> SessionAuditEvent(proposal.id, immunityId, "PROPOSE_INTERVENTION",
                 proposal.affected, proposal.evidence.joinToString("; "), clock()) }))
     }
 
@@ -911,7 +919,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             require(proposal.action == action && proposal.state != ImmunityInterventionState.REJECTED) { "Предложение уже рассмотрено иначе" }
             return@withLock old
         }
-        require(!old.stoppedByUser && old.sessions.getValue(old.immunityId).acceptsWork) { "Иммунитет остановлен пользователем" }
+        require(!old.stoppedByUser && old.immunityId != null && old.sessions.getValue(old.immunityId!!).acceptsWork) { "Иммунитет остановлен пользователем" }
         val node = old.sessions.getValue(proposal.target)
         require(node.kind != SessionKind.IMMUNITY && node.generation == proposal.generation) { "Предложение другого поколения" }
         val diagnosis = old.diagnoses.single { it.signalId == proposal.signalId }
@@ -928,7 +936,8 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             require(rules != null && node.rules == rules && (parent == null || parent.rules == rules)) { "Правила изменились; требуется новое задание" }
             require(node.task == null || (sourceVersion != null && sourceVersion == node.task.sourceVersion)) { "Исходники задания изменились или не проверены" }
             require(old.limits.retries.hasRoom(node.retryCount) && old.withinDuration()) { "Лимит восстановления исчерпан" }
-            val immunity = old.sessions.getValue(old.immunityId)
+            val immunityId = old.immunityId ?: error("Иммунитет недоступен для этого организма")
+            val immunity = old.sessions.getValue(immunityId)
             val allocation = immunity.remainingTokens / 2
             require(old.hasTokenBudget()) { "Бюджет задачи исчерпан" }
             nodes = nodes + (node.id to node.copy(generation = node.generation + 1, previousGeneration = node.generation,
@@ -952,7 +961,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             operations = old.operations + (operation to OrganismOperation(operation, "IMMUNITY:${proposal.id}:${proposal.generation}:$action", node.id, SessionOperationState.ACCEPTED)),
             outbox = old.outbox.map { delivery -> if (delivery.state != SessionDeliveryState.PROCESSED &&
                 (delivery.sender in affected || delivery.recipient in affected)) delivery.copy(state = SessionDeliveryState.CANCELLED) else delivery },
-            audit = old.audit + SessionAuditEvent(operation, old.immunityId, "IMMUNITY_${action.name}", affected,
+            audit = old.audit + SessionAuditEvent(operation, old.immunityId ?: "IMMUNITY", "IMMUNITY_${action.name}", affected,
                 "Подтверждено пользователем; ${proposal.evidence.joinToString("; ")}", clock())))
     }
 
@@ -977,7 +986,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         commit(old.copy(version = old.version + 1, sessions = nodes,
             interventions = old.interventions.map { if (it.id == proposalId) it.copy(state = if (error == null) ImmunityInterventionState.COMPLETED else ImmunityInterventionState.UNKNOWN, error = error?.let(::redact).orEmpty()) else it },
             operations = old.operations + (operation to old.operations.getValue(operation).copy(state = if (error == null) SessionOperationState.SUCCEEDED else SessionOperationState.UNKNOWN)),
-            audit = old.audit + SessionAuditEvent("$operation-result-${old.version + 1}", old.immunityId,
+            audit = old.audit + SessionAuditEvent("$operation-result-${old.version + 1}", old.immunityId ?: "IMMUNITY",
                 if (error == null) "INTERVENTION_COMPLETED" else "INTERVENTION_UNKNOWN", proposal.affected, error?.let(::redact) ?: "Результат подтверждён сохранённым состоянием", clock())))
     }
 
@@ -992,7 +1001,8 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
     /** A complaint schedules inspection; only saved host observations justify intervention. */
     suspend fun inspectSignals(id: String): SessionOrganism = lock.withLock {
         val old = read(id)
-        val immunity = old.sessions.getValue(old.immunityId)
+        val immunityId = old.immunityId ?: return@withLock old
+        val immunity = old.sessions.getValue(immunityId)
         if (!immunity.acceptsWork || old.stoppedByUser) return@withLock old
         val pending = old.signals.filter { signal -> signal.target !in old.historyDeletedIds && old.diagnoses.none { it.signalId == signal.id } }
         if (pending.isEmpty()) return@withLock old

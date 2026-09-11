@@ -376,7 +376,7 @@ class SessionOrganismService(
             val failures = mutableListOf<Throwable>()
             selected.forEach { organism ->
                 if (organism.deletedAt == null) {
-                    val roots = if (sessionId == null || sessionId == organism.zygoteId) listOf(organism.zygoteId, organism.immunityId) else listOf(sessionId)
+                    val roots = if (sessionId == null || sessionId == organism.zygoteId) listOfNotNull(organism.zygoteId, organism.immunityId) else listOf(sessionId)
                     roots.filterNot { it in organism.historyDeletedIds }.forEach { root ->
                         runCatching { store.requestUserStop(organism.id, root, Id.new(), archive = false) }.exceptionOrNull()?.let(failures::add)
                     }
@@ -661,22 +661,24 @@ class SessionOrganismService(
                 else projects.saveSession(projected)
             }
         }
-        val immunityMessages = projects.messages(organism.projectId, organism.immunityId)
+        // Иммунитет может отсутствовать в обычном режиме — проекция только для режима планирования
+        organism.immunityId?.let { immunityId ->
+        val immunityMessages = projects.messages(organism.projectId, immunityId)
         val missing = organism.signals.filter { signal -> immunityMessages.none { it.id == "signal-${signal.id}" } }.map { signal ->
             CodingMessage("signal-${signal.id}", CodingRole.USER, signal.diagnostic, createdAt = signal.createdAt,
                 origin = MessageOrigin.SESSION, route = MessageRoute(SessionAddress(signal.sender,
-                    organism.sessions.getValue(signal.sender).name, "Сессия"), SessionAddress(organism.immunityId, "Иммунитет", "Иммунитет"), kind = "Диагностический сигнал"))
+                    organism.sessions.getValue(signal.sender).name, "Сессия"), SessionAddress(immunityId, "Иммунитет", "Иммунитет"), kind = "Диагностический сигнал"))
         }
-        if (missing.isNotEmpty() && organism.immunityId !in organism.historyDeletedIds)
-            projects.saveMessages(organism.projectId, organism.immunityId, immunityMessages + missing)
+        if (missing.isNotEmpty() && immunityId !in organism.historyDeletedIds)
+            projects.saveMessages(organism.projectId, immunityId, immunityMessages + missing)
         // Project the exact signal at its source, and repair a crash between saving a research
         // reply and delivering it back. Deterministic IDs never re-run the model.
-        val researched = projects.messages(organism.projectId, organism.immunityId)
+        val researched = projects.messages(organism.projectId, immunityId)
         for (signal in organism.signals) {
             if (signal.sender in organism.historyDeletedIds) continue
             val source = organism.sessions[signal.sender] ?: continue
             val route = MessageRoute(SessionAddress(source.id, source.name, "Сессия"),
-                SessionAddress(organism.immunityId, "Иммунитет", "Иммунитет"), kind = "Диагностический сигнал")
+                SessionAddress(immunityId, "Иммунитет", "Иммунитет"), kind = "Диагностический сигнал")
             var history = projects.messages(organism.projectId, source.id)
             val sentId = "sent-signal-${signal.id}"
             if (history.none { it.id == sentId }) history = history + CodingMessage(sentId, CodingRole.AGENT,
@@ -689,7 +691,7 @@ class SessionOrganismService(
             if (history != projects.messages(organism.projectId, source.id)) projects.saveMessages(organism.projectId, source.id, history)
         }
         organism.diagnoses.forEach { diagnosis ->
-            (diagnosis.affected + organism.immunityId).filterNot { it in organism.historyDeletedIds }.forEach { sessionId ->
+            (diagnosis.affected + immunityId).filterNot { it in organism.historyDeletedIds }.forEach { sessionId ->
                 val history = projects.messages(organism.projectId, sessionId)
                 val messageId = "diagnosis-${diagnosis.signalId}-$sessionId"
                 if (history.none { it.id == messageId }) projects.saveMessages(organism.projectId, sessionId, history + CodingMessage(
@@ -699,6 +701,7 @@ class SessionOrganismService(
                     origin = MessageOrigin.TOOL, systemNotice = true))
             }
         }
+        } // immunityId?.let
         organism.outbox.flatMap { listOf(it.sender, it.recipient) }.distinct().filterNot { it in organism.historyDeletedIds }.forEach { sessionId ->
             val history = projects.messages(organism.projectId, sessionId)
             val updated = history.map { message ->

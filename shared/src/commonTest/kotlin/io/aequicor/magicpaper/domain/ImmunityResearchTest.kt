@@ -5,29 +5,29 @@ import kotlin.test.*
 
 class ImmunityResearchTest {
     @Test fun stoppingActiveImmunityWaitsForRuntimeConfirmationAndLeavesParentUntouched() = runTest {
-        val f = SessionOrganismTestFixture(); f.initialize()
+        val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
         val id = f.root.organismId!!
         val original = f.store.get(id)
-        val running = f.store.beginRun(id, original.immunityId)
-        val stopping = f.store.requestUserStop(id, original.immunityId, "stop-active-immunity", archive = false)
-        assertEquals(SessionObservedState.STOPPING, stopping.sessions.getValue(original.immunityId).observed)
+        val running = f.store.beginRun(id, original.immunityId!!)
+        val stopping = f.store.requestUserStop(id, original.immunityId!!, "stop-active-immunity", archive = false)
+        assertEquals(SessionObservedState.STOPPING, stopping.sessions.getValue(original.immunityId!!).observed)
         assertEquals(original.sessions.getValue(f.root.id), stopping.sessions.getValue(f.root.id))
-        f.store.observe(id, original.immunityId, running.generation, SessionObservedState.STOPPED)
-        assertEquals(SessionObservedState.STOPPED, f.store.get(id).sessions.getValue(original.immunityId).observed)
+        f.store.observe(id, original.immunityId!!, running.generation, SessionObservedState.STOPPED)
+        assertEquals(SessionObservedState.STOPPED, f.store.get(id).sessions.getValue(original.immunityId!!).observed)
         val parentStopping = f.store.requestUserStop(id, f.root.id, "stop-pending-parent", archive = false)
         assertEquals(SessionObservedState.STOPPING, parentStopping.sessions.getValue(f.root.id).observed)
     }
 
     @Test fun passiveImmunityCanStopWithoutInventingAnActiveRuntime() = runTest {
-        val f = SessionOrganismTestFixture(); f.initialize()
+        val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
         val id = f.root.organismId!!
         val original = f.store.get(id)
-        val stopped = f.store.requestUserStop(id, original.immunityId, "stop-passive-immunity", archive = false)
-        assertEquals(SessionObservedState.STOPPED, stopped.sessions.getValue(original.immunityId).observed)
+        val stopped = f.store.requestUserStop(id, original.immunityId!!, "stop-passive-immunity", archive = false)
+        assertEquals(SessionObservedState.STOPPED, stopped.sessions.getValue(original.immunityId!!).observed)
     }
 
     @Test fun onlyNewRequestedSignalsAreQueuedAndFailuresAndStopsDoNotLoop() = runTest {
-        val f = SessionOrganismTestFixture(); f.initialize()
+        val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
         val original = f.store.get(f.root.organismId!!)
         val session = f.projects.sessions(f.project.id).single { it.sessionKind == SessionKind.IMMUNITY }
         val legacy = ImmunitySignal("old", "root", "root", "Old complaint", 1)

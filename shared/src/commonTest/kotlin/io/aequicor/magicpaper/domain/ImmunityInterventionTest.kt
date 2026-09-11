@@ -157,7 +157,7 @@ class ImmunityInterventionTest {
     @Test fun stoppedImmunityStaleGenerationAndRejectedProposalCannotGrantAuthority() = runTest {
         val f = Fixture(); f.initialize(); f.fail()
         val proposal = assertNotNull(f.signal())
-        f.store.requestUserStop(f.id, f.store.get(f.id).immunityId, "stop-immunity", false)
+        f.store.requestUserStop(f.id, f.store.get(f.id).immunityId!!, "stop-immunity", false)
         assertFailsWith<IllegalArgumentException> { f.service.approveImmunityIntervention(f.id, proposal.id, ImmunityAction.RECREATE) }
         f.service.dismissImmunityIntervention(f.id, proposal.id)
         assertFailsWith<IllegalArgumentException> { f.service.approveImmunityIntervention(f.id, proposal.id, ImmunityAction.RECREATE) }

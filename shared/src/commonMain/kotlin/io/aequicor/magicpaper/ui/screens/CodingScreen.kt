@@ -22,6 +22,7 @@ import io.aequicor.magicpaper.ui.components.ToolbarButton
 import io.aequicor.magicpaper.ui.components.ToolbarIcon
 import androidx.compose.runtime.CompositionLocalProvider
 import io.aequicor.magicpaper.domain.CodingInteractionMode
+import io.aequicor.magicpaper.domain.SessionKind
 import io.aequicor.magicpaper.domain.interactionMode
 import io.aequicor.magicpaper.domain.UserInteractionRequest
 import io.aequicor.magicpaper.domain.QuestionnaireDraft
@@ -31,6 +32,8 @@ import io.aequicor.magicpaper.domain.InteractionKind
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -85,7 +88,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import io.aequicor.magicpaper.designsystem.paperChatTopShadow
 import io.aequicor.magicpaper.designsystem.paperTranscriptFade
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -100,16 +106,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.key
@@ -119,7 +124,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -463,14 +467,12 @@ private fun ImmunityDiamondButton(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    headerHovered: Boolean = false,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-    
+    val size = if (selected) 12.dp else 10.dp
     Box(
         modifier = modifier
-            .size(16.dp)
-            .hoverable(interactionSource)
+            .size(size)
             .paperClickable(
                 onClick = onClick,
                 onClickLabel = "Открыть чат иммунитета",
@@ -478,6 +480,12 @@ private fun ImmunityDiamondButton(
             .semantics { contentDescription = "Иммунитет: ${status.label}" },
         contentAlignment = Alignment.Center,
     ) {
+        // Анимация плавного сдвига влево при hover
+        val offsetX by animateDpAsState(
+            targetValue = if (headerHovered) (-4).dp else 0.dp,
+            animationSpec = tween(durationMillis = 200, easing = EaseInOut)
+        )
+        
         // Ромбик с анимацией статуса
         io.aequicor.magicpaper.designsystem.PaperActivityIndicator(
             tone = when (status) {
@@ -489,22 +497,10 @@ private fun ImmunityDiamondButton(
             },
             label = status.label,
             running = status == CodingSessionStatus.WORKING,
-            size = if (selected) 12.dp else 10.dp,
+            size = size,
             shape = io.aequicor.magicpaper.designsystem.PaperActivityShape.DIAMOND,
+            modifier = Modifier.offset(x = offsetX)
         )
-        
-        // Подсветка при selected (чат открыт)
-        if (selected) {
-            Box(
-                modifier = Modifier
-                    .size(14.dp)
-                    .border(
-                        width = 1.dp,
-                        color = LocalPaperColors.current.focus,
-                        shape = RoundedCornerShape(2.dp)
-                    )
-            )
-        }
     }
 }
 
@@ -568,18 +564,38 @@ internal fun ProjectsPanel(
                 val status = task.status
                 val zygoteSession = task.sessions.find { it.session.id == task.rootId }
                 val immunitySession = task.sessions.find { it.session.id == task.immunityId }
+                val immunitySelected = immunitySession?.let { it.session.id == ui.activeSessionIdOf(it.session.projectId) } ?: false
+                var groupMenuOpen by rememberSaveable(task.organismId) { mutableStateOf(false) }
                 // Заголовок задачи: клик открывает зиготу, ромбик иммунитета справа
                 PaperTreeGroupHeader(task.title, group.expanded, toggle,
                     modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
                     active = zygoteSession?.let { it.session.id == ui.activeSessionIdOf(it.session.projectId) } ?: false,
                     leading = { StatusTooltip(status) { ActivityDot(status, size = 8) } },
                     onClick = { task.rootId?.let { onSelectSession(it) } },
+                    childCount = group.children.size,
+                    hoverActions = { isHovered ->
+                        HoverActions(visible = isHovered || groupMenuOpen) {
+                            PaperTooltip("В архив") {
+                                ToolbarButton(ToolbarIcon.Archive, label = "Архивировать задачу", size = 24.dp, 
+                                    onClick = { task.rootId?.let { onArchiveSession(it) } })
+                            }
+                            RowMenu(
+                                open = groupMenuOpen,
+                                onOpenChange = { groupMenuOpen = it },
+                                entries = buildList<Pair<String, () -> Unit>> {
+                                    add("Архивировать задачу" to { task.rootId?.let { onArchiveSession(it) } })
+                                    add("Удалить задачу" to { task.rootId?.let { onDeleteSession(it) } })
+                                },
+                            )
+                        }
+                    },
                     trailing = immunitySession?.let { imm ->
-                        {
+                        { isHovered ->
                             ImmunityDiamondButton(
                                 status = imm.status,
                                 selected = imm.session.id == ui.activeSessionIdOf(imm.session.projectId),
-                                onClick = { onSelectSession(imm.session.id) }
+                                onClick = { onSelectSession(imm.session.id) },
+                                headerHovered = isHovered
                             )
                         }
                     }
@@ -599,13 +615,15 @@ internal fun ProjectsPanel(
                     val selected = project.id == ui.current?.id
                     val expanded = selected && !projectCollapsed
                     val own = ui.sessionsOf(project.id).filterNot { it.session.archived }
+                    // Счётчик сессий должен учитывать только рабочие сессии, без иммунитета
+                    val visibleSessions = own.filterNot { it.session.sessionKind == SessionKind.IMMUNITY }
                     // Only projects participate in the native sticky-header chain. Session
                     // headers occupy a separate level below it and cannot push a project away.
                     stickyHeader(key = "project-${project.id}") { index ->
                         val pinned = listState.firstVisibleItemIndex > index ||
                             (listState.firstVisibleItemIndex == index && listState.firstVisibleItemScrollOffset > 0)
                         ProjectHeaderPaperPanel(pinned) {
-                            ProjectRow(project, selected, expanded, ui.statusOf(project.id), own.count { it.running }, own.size,
+                            ProjectRow(project, selected, expanded, ui.statusOf(project.id), own.count { it.running }, visibleSessions.size,
                                 {
                                     if (selected) projectCollapsed = !projectCollapsed
                                     else onSelectProject(project.id)

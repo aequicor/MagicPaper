@@ -162,7 +162,7 @@ import kotlinx.serialization.Serializable
     val id: String,
     val projectId: String,
     val zygoteId: String,
-    val immunityId: String,
+    val immunityId: String? = null,
     val createdAt: Long,
     val limits: OrganismLimits = OrganismLimits(),
     val version: Long = 0,
