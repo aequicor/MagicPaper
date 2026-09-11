@@ -235,7 +235,7 @@ internal fun parseProviderModels(json: Json, body: String, provider: ProviderTyp
         val supported = (entry["supported_parameters"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet()
             ?: if (provider == ProviderType.GOOGLE) defaults.keys + "max_tokens" else null
         val metadata = ProviderModel(id, str("displayName") ?: str("display_name") ?: str("name")?.takeUnless { it.startsWith("models/") } ?: id,
-            integer("context_length", "context_window", "max_input_tokens", "inputTokenLimit"),
+            integer("max_input_tokens", "context_length", "context_window", "inputTokenLimit"),
             integer("max_output_tokens", "max_tokens", "outputTokenLimit") ?: ((entry["top_provider"] as? JsonObject)?.get("max_completion_tokens") as? JsonPrimitive)?.intOrNull,
             defaults, supported, declared,
             (entry["pricing"] as? JsonObject)?.let { rates ->
