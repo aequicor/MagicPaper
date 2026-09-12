@@ -198,7 +198,7 @@ data class UiState(
     val current: ChatSession? = null,
     /** Выбрана кодинг-сессия (true) или чат-сессия (false). */
     val viewingCoding: Boolean = false,
-    val sessionsPanelOpen: Boolean = false,
+    val sessionsPanelOpen: Boolean = true,
     val settings: AppSettings = AppSettings(),
     val plugins: List<MagicPlugin> = emptyList(),
     val pluginStates: Map<String, PluginState> = emptyMap(),

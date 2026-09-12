@@ -514,6 +514,14 @@ class MagicPaperViewModel(
     fun openEnginesSettings() { _state.update { it.copy(screen = Screen.SETTINGS, enginesSettingsOpen = true) }; refreshCodingEngines() }
     fun closeEnginesSettings() = _state.update { it.copy(enginesSettingsOpen = false) }
     fun requestCodingSession() = _state.update { it.copy(coding = it.coding.copy(creatingSession = true)) }
+
+    /** Выбрать проект и открыть диалог создания сессии (для единой боковой панели). */
+    fun requestCodingSessionInProject(projectId: String) {
+        scope.launch {
+            openCodingProject(projectId)
+            _state.update { it.copy(viewingCoding = true, coding = it.coding.copy(creatingSession = true)) }
+        }
+    }
     fun cancelCodingSessionCreation() = _state.update { it.copy(coding = it.coding.copy(creatingSession = false)) }
     fun refreshCodingEngines() {
         val runtime = codingRuntime ?: return
@@ -599,7 +607,6 @@ class MagicPaperViewModel(
                     sessions = listOf(session) + it.sessions,
                     current = session,
                     viewingCoding = false,
-                    sessionsPanelOpen = false,
                 )
         }
         scope.launch { chats.save(session) }
@@ -608,7 +615,7 @@ class MagicPaperViewModel(
     fun selectSession(id: String) {
         scope.launch {
             val session = chats.session(id) ?: return@launch
-            _state.update { it.copy(current = session, viewingCoding = false, sessionsPanelOpen = false) }
+            _state.update { it.copy(current = session, viewingCoding = false) }
         }
     }
 
@@ -1478,7 +1485,6 @@ class MagicPaperViewModel(
                     st.copy(
                         coding = st.coding.copy(currentSessionId = id),
                         viewingCoding = true,
-                        sessionsPanelOpen = false,
                     )
                 }
             }

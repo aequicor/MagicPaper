@@ -1,5 +1,10 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -7,28 +12,43 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import io.aequicor.magicpaper.designsystem.LocalPaperTypography
+import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
+import io.aequicor.magicpaper.designsystem.PaperActivityShape
+import io.aequicor.magicpaper.designsystem.PaperActivityTone
 import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.PaperText
+import io.aequicor.magicpaper.designsystem.PaperTextAction
 import io.aequicor.magicpaper.designsystem.PaperTextRole
+import io.aequicor.magicpaper.designsystem.PaperTooltip
 import io.aequicor.magicpaper.designsystem.paperClickable
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
+import io.aequicor.magicpaper.domain.SessionKind
+import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 
@@ -39,6 +59,7 @@ internal data class UnifiedSidebarItem(
     val sortTime: Long,
     val isCoding: Boolean,
     val projectName: String? = null,
+    val projectId: String? = null,
     val codingStatus: CodingSessionStatus? = null,
 )
 
@@ -66,6 +87,7 @@ internal fun rememberUnifiedItems(
                 sortTime = sessionUi.session.createdAt,
                 isCoding = true,
                 projectName = project?.name,
+                projectId = sessionUi.session.projectId,
                 codingStatus = sessionUi.status,
             )
         }
@@ -74,7 +96,14 @@ internal fun rememberUnifiedItems(
     }
 }
 
-/** Единая боковая панель: чаты и кодинг-сессии в одном списке. */
+/** Данные об иммунитете для проекта в единой боковой панели. */
+private data class ProjectImmunityInfo(
+    val immunitySessionId: String,
+    val status: CodingSessionStatus,
+    val selected: Boolean,
+)
+
+/** Единая боковая панель: чаты и кодинг-сессии в одном списке с группировкой по проектам. */
 @Composable
 fun UnifiedSidebar(
     vm: MagicPaperViewModel,
@@ -84,6 +113,26 @@ fun UnifiedSidebar(
     viewingCoding: Boolean,
 ) {
     val items = rememberUnifiedItems(chatSessions, coding)
+    val codingByProject = items.filter { it.isCoding }.groupBy { it.projectId }
+    val projectOrder = coding.projects.map { it.id }
+    val chatItems = items.filter { !it.isCoding }
+    val collapsedProjects = remember { mutableSetOf<String>() }
+
+    // Индекс иммунитет-сессий по проектам (для ромбика в заголовке).
+    val immunityByProject = remember(coding.sessions, selectedId, viewingCoding) {
+        coding.sessions
+            .filter { it.session.sessionKind == SessionKind.IMMUNITY }
+            .groupBy { it.session.projectId }
+            .mapValues { (_, sessions) -> sessions.first() }
+            .mapValues { (_, imm) ->
+                ProjectImmunityInfo(
+                    immunitySessionId = imm.session.id,
+                    status = imm.status,
+                    selected = viewingCoding && imm.session.id == selectedId,
+                )
+            }
+    }
+
     Column(Modifier.width(260.dp).fillMaxHeight()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -96,12 +145,54 @@ fun UnifiedSidebar(
             state = rememberLazyListState(),
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
-            items(items, key = { "${if (it.isCoding) "c" else "h"}:${it.id}" }) { item ->
-                val selected = item.id == selectedId &&
-                    (item.isCoding == viewingCoding)
-                UnifiedSessionRow(item, selected, {
-                    vm.selectUnifiedSession(item.id, item.isCoding)
-                })
+            projectOrder.forEach { projectId ->
+                val project = coding.projects.firstOrNull { it.id == projectId } ?: return@forEach
+                val sessions = codingByProject[projectId].orEmpty().sortedByDescending { it.sortTime }
+                if (sessions.isEmpty()) return@forEach
+                val collapsed = projectId in collapsedProjects
+                val immunityInfo = immunityByProject[projectId]
+                item(key = "project:$projectId") {
+                    ProjectSectionHeader(
+                        name = project.name,
+                        collapsed = collapsed,
+                        onToggle = {
+                            if (collapsed) collapsedProjects.remove(projectId)
+                            else collapsedProjects.add(projectId)
+                        },
+                        immunityInfo = immunityInfo,
+                        onImmunityClick = { immunityInfo?.let { vm.selectUnifiedSession(it.immunitySessionId, true) } },
+                        onAddSession = {
+                            vm.requestCodingSessionInProject(projectId)
+                        },
+                    )
+                }
+                if (!collapsed) {
+                    items(sessions, key = { "c:${it.id}" }) { item ->
+                        val selected = item.id == selectedId && viewingCoding
+                        UnifiedSessionRow(
+                            item = item,
+                            selected = selected,
+                            onClick = { vm.selectUnifiedSession(item.id, true) },
+                            onDelete = { vm.deleteCodingSession(item.id) },
+                            onArchive = { vm.archiveCodingSession(item.id) },
+                        )
+                    }
+                }
+            }
+            if (chatItems.isNotEmpty()) {
+                item(key = "section:chats") {
+                    ChatSectionHeader()
+                }
+                items(chatItems, key = { "h:${it.id}" }) { item ->
+                    val selected = item.id == selectedId && !viewingCoding
+                    UnifiedSessionRow(
+                        item = item,
+                        selected = selected,
+                        onClick = { vm.selectUnifiedSession(item.id, false) },
+                        onDelete = { vm.deleteSession(item.id) },
+                        onArchive = null,
+                    )
+                }
             }
         }
         PaperDivider()
@@ -124,16 +215,109 @@ fun UnifiedSidebar(
 }
 
 @Composable
-private fun UnifiedSessionRow(
-    item: UnifiedSidebarItem,
-    selected: Boolean,
-    onClick: () -> Unit,
+private fun ProjectSectionHeader(
+    name: String,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+    immunityInfo: ProjectImmunityInfo?,
+    onImmunityClick: () -> Unit,
+    onAddSession: () -> Unit,
 ) {
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    var menuOpen by rememberSaveable(name) { mutableStateOf(false) }
+    val showActions = hovered || menuOpen
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(6.dp))
+            .hoverable(hoverInteraction)
+            .paperClickable(onClick = onToggle)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PaperText(
+            if (collapsed) "▸" else "▾",
+            style = LocalPaperTypography.current.label,
+            color = LocalPaperColors.current.secondaryText,
+        )
+        Spacer(Modifier.width(6.dp))
+        PaperText(
+            name,
+            style = LocalPaperTypography.current.label,
+            color = LocalPaperColors.current.secondaryText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        // Ромбик иммунитета справа (для проектов с планированием).
+        if (immunityInfo != null) {
+            Spacer(Modifier.width(4.dp))
+            ImmunityDiamond(
+                status = immunityInfo.status,
+                selected = immunityInfo.selected,
+                onClick = onImmunityClick,
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        HoverActions(visible = showActions) {
+            PaperTooltip("Новая сессия") {
+                PaperTextAction(
+                    onClick = onAddSession,
+                    modifier = Modifier.semantics { contentDescription = "Новая сессия" },
+                ) {
+                    PaperText("+", style = LocalPaperTypography.current.label)
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            RowMenu(
+                open = menuOpen,
+                onOpenChange = { menuOpen = it },
+                entries = listOf("Удалить проект" to {}),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatSectionHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PaperText(
+            "Чаты",
+            style = LocalPaperTypography.current.label,
+            color = LocalPaperColors.current.secondaryText,
+        )
+    }
+}
+
+@Composable
+private fun UnifiedSessionRow(
+    item: UnifiedSidebarItem,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+    onArchive: (() -> Unit)?,
+) {
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
+    val showActions = hovered || menuOpen
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                if (selected) LocalPaperColors.current.selected.copy(alpha = 0.55f)
+                else Color.Transparent
+            )
+            .hoverable(hoverInteraction)
             .paperClickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -154,17 +338,61 @@ private fun UnifiedSessionRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (item.projectName != null) {
-                PaperText(
-                    item.projectName,
-                    style = LocalPaperTypography.current.label,
-                    color = LocalPaperColors.current.secondaryText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        }
+        HoverActions(visible = showActions) {
+            if (onArchive != null) {
+                PaperTooltip("В архив") {
+                    io.aequicor.magicpaper.ui.components.ToolbarButton(
+                        icon = io.aequicor.magicpaper.ui.components.ToolbarIcon.Archive,
+                        label = "Архивировать сессию",
+                        size = 24.dp,
+                        onClick = onArchive,
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
             }
+            val entries = buildList<Pair<String, () -> Unit>> {
+                add((if (item.isCoding) "Удалить сессию" else "Удалить чат") to onDelete)
+            }
+            RowMenu(
+                open = menuOpen,
+                onOpenChange = { menuOpen = it },
+                entries = entries,
+            )
         }
     }
 }
 
-
+/** Ромбик иммунитета для UnifiedSidebar (аналог ImmunityDiamondButton из CodingScreen). */
+@Composable
+private fun ImmunityDiamond(
+    status: CodingSessionStatus,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val size = if (selected) 12.dp else 10.dp
+    Box(
+        modifier = Modifier
+            .size(size)
+            .paperClickable(
+                onClick = onClick,
+                onClickLabel = "Открыть чат иммунитета",
+            )
+            .semantics { contentDescription = "Иммунитет: ${status.label}" },
+        contentAlignment = Alignment.Center,
+    ) {
+        PaperActivityIndicator(
+            tone = when (status) {
+                CodingSessionStatus.IDLE -> PaperActivityTone.READY
+                CodingSessionStatus.WORKING -> PaperActivityTone.WORKING
+                CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING,
+                CodingSessionStatus.CONFIRMATION -> PaperActivityTone.ATTENTION
+                CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED -> PaperActivityTone.QUEUED
+            },
+            label = status.label,
+            running = status == CodingSessionStatus.WORKING,
+            size = size,
+            shape = PaperActivityShape.DIAMOND,
+        )
+    }
+}

@@ -451,7 +451,7 @@ private fun SessionTab(label: String, selected: Boolean, onClick: () -> Unit) {
 
 // ---- Кружок активности ----------------------------------------------------
 
-private val CodingSessionStatus.label: String
+internal val CodingSessionStatus.label: String
     get() = when (this) {
         CodingSessionStatus.WORKING -> "работает"
         CodingSessionStatus.WAITING -> "Ждём вашего ответа"
@@ -488,7 +488,7 @@ fun ActivityDot(
  * Анимация и цвет соответствуют состоянию сессии иммунитета.
  */
 @Composable
-private fun ImmunityDiamondButton(
+internal fun ImmunityDiamondButton(
     status: CodingSessionStatus,
     selected: Boolean,
     onClick: () -> Unit,
@@ -897,7 +897,7 @@ private fun SessionRow(
 
 /** Keep row height stable, but let titles use the width of hidden actions. */
 @Composable
-private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
+internal fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
     Layout(
         modifier = if (visible) Modifier else Modifier.clearAndSetSemantics {},
         content = { Row(verticalAlignment = Alignment.CenterVertically) { content() } },
@@ -912,7 +912,7 @@ private fun HoverActions(visible: Boolean, content: @Composable () -> Unit) {
 
 /** Якорь «⋯» с выпадающим меню: общий для строк проекта и кодинг-сессии. */
 @Composable
-private fun RowMenu(open: Boolean, onOpenChange: (Boolean) -> Unit, entries: List<Pair<String, () -> Unit>>) {
+internal fun RowMenu(open: Boolean, onOpenChange: (Boolean) -> Unit, entries: List<Pair<String, () -> Unit>>) {
     Box {
         PaperText(
             "⋯",
