@@ -171,6 +171,9 @@ class SessionTreeRuntime(
                 handle.generation = current.runtimeGeneration
                 currentCoroutineContext()[RunCapture]?.let { it.generation = current.runtimeGeneration; it.entered = true }
                 organisms.project(organisms.store.get(current.organismId!!))
+                // After a crash, children that were RUNNING are now UNKNOWN.
+                // Restart them here so workspace isolation and runtime parents are correct.
+                recoverUnknownChildren(current)
             } else {
                 current = current.copy(planningRulesSnapshot = current.planningRulesSnapshot ?: settings.load().planningRules.snapshot())
                 handle.generation = current.runtimeGeneration
@@ -403,17 +406,36 @@ class SessionTreeRuntime(
                                     if (node.generation == capture.generation)
                                         organisms.project(organisms.store.observe(id, session.id, capture.generation, SessionObservedState.UNKNOWN))
                                 }
-                            } finally { lock.withLock { if (children[session.id] === ownerJob) { children.remove(session.id); runtimeParents.remove(session.id) } } }
+                            } finally {
+                                // Clear the recovery checkpoint so restoreCodingRuns skips completed/failed work.
+                                // A crash before this line leaves the checkpoint on disk — that is the intended signal.
+                                runCatching { projects.updateSession(session.projectId, session.id) { it.copy(pendingRun = null) } }
+                                lock.withLock { if (children[session.id] === ownerJob) { children.remove(session.id); runtimeParents.remove(session.id) } }
+                            }
                         }
                     }
                 }
                 children[session.id] = job
+                // Persist a recovery checkpoint so restoreCodingRuns can resume this child after a crash.
+                // A crash before this point means no recovery; after it the checkpoint survives until the run ends.
+                runCatching {
+                    projects.updateSession(session.projectId, session.id) {
+                        it.copy(pendingRun = CodingRunCheckpoint(
+                            messageId = "${session.id}-task-${capture.generation}",
+                            prompt = "Контекст от сессии ${session.parentSessionId}\n${task.text}\n\nКритерии завершения: ${task.acceptance}",
+                            intent = ExecutionIntent.RUN,
+                            interactionMode = session.interactionMode,
+                        ))
+                    }
+                }
                 job.start()
             }
         } catch (failure: Exception) {
             // The CREATE transaction may precede admission. A never-started child must not
             // retain a reservation or prevent a closing parent from settling indefinitely.
             withContext(NonCancellable) {
+                // Clear the recovery checkpoint if it was saved before the job could start.
+                runCatching { projects.updateSession(session.projectId, session.id) { it.copy(pendingRun = null) } }
                 session.organismId?.let { id ->
                     val node = organisms.store.get(id).sessions.getValue(session.id)
                     if (node.generation == session.runtimeGeneration && node.observed == SessionObservedState.PENDING)
@@ -430,6 +452,30 @@ class SessionTreeRuntime(
         ids.forEach { id ->
             val organism = organisms.store.organisms.value.values.firstOrNull { id in it.sessions } ?: error("Сессия не найдена")
             require(organisms.store.get(organism.id).sessions.getValue(id).settled) { "Выполнение ещё не подтверждено" }
+        }
+    }
+
+    /** Restart UNKNOWN children whose checkpoint survived a crash. Called after beginRun
+     *  so the parent handle is already registered and workspace isolation works correctly. */
+    private suspend fun recoverUnknownChildren(parent: CodingSession) {
+        val organismId = parent.organismId ?: return
+        val organism = organisms.store.get(organismId)
+        val candidates = organism.sessions.values.filter { node ->
+            node.authorityParentId == parent.id && node.kind == SessionKind.SESSION &&
+                node.observed == SessionObservedState.UNKNOWN && node.desired == SessionDesiredState.RUN &&
+                !node.archived && !node.settled && node.task != null
+        }
+        for (child in candidates) {
+            val session = projects.sessions(parent.projectId).firstOrNull { it.id == child.id } ?: continue
+            val pendingRun = session.pendingRun ?: continue
+            if (pendingRun.intent != ExecutionIntent.RUN || session.planningMode || session.stageId != null) continue
+            // Clear the checkpoint so restoreCodingRuns does not duplicate this recovery.
+            runCatching { projects.updateSession(parent.projectId, child.id) { it.copy(pendingRun = null) } }
+            try {
+                startInScope(session.copy(runtimeGeneration = child.generation), child.task!!, parent.id)
+            } catch (_: Exception) {
+                // Recovery failure keeps the child UNKNOWN; the user can retry manually.
+            }
         }
     }
 
@@ -475,6 +521,8 @@ class SessionTreeRuntime(
                     SessionObservedState.STOPPED
                 }
                     catch (_: Exception) { SessionObservedState.UNKNOWN }
+                // A stopped child must not be picked up again by restoreCodingRuns.
+                runCatching { projects.updateSession(organism.projectId, id) { it.copy(pendingRun = null) } }
                 organisms.project(organisms.store.observe(organism.id, id, node.generation, observed))
             }
         }

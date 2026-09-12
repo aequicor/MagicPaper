@@ -476,12 +476,20 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(node.kind != SessionKind.IMMUNITY || node.mode == CodingInteractionMode.RESEARCH) { "Диагностика доступна только в режиме исследования" }
         require(node.desired == SessionDesiredState.RUN) { "Возобновление требует явного восстановления" }
         require(old.withinDuration() && old.hasTokenBudget()) { "Бюджет или время организма исчерпаны" }
-        require(node.observed != SessionObservedState.UNKNOWN && node.observed != SessionObservedState.STOPPING) { "Сначала сверяйте незавершённый запуск" }
+        // UNKNOWN is permitted: after a crash recover() marks interrupted sessions as UNKNOWN,
+        // and the native process is gone by the time the application restarts.
+        require(node.observed != SessionObservedState.STOPPING) { "Сначала сверяйте незавершённый запуск" }
         require(old.auxiliaryRuns.values.none { it.ownerSessionId == sessionId && !it.settled }) { "Сначала остановите вспомогательные запуски владельца" }
-        require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) || node.acceptsWork) { "Восстановите сессию через родителя" }
+        require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) || node.acceptsWork ||
+            (node.observed == SessionObservedState.UNKNOWN && node.desired == SessionDesiredState.RUN && !node.archived)) { "Восстановите сессию через родителя" }
         val lineage = if (node.kind == SessionKind.IMMUNITY) listOf(sessionId) else old.route(sessionId, old.zygoteId)
         require(old.limits.depth.allows(lineage.size)) { "Достигнута глубина дерева" }
-        lineage.drop(1).forEach { require(old.sessions.getValue(it).acceptsWork) { "Рабочая область родителя закрыта" } }
+        lineage.drop(1).forEach {
+            val ancestor = old.sessions.getValue(it)
+            // UNKNOWN ancestors are tolerated after a crash: beginRun will reopen them in turn.
+            require(ancestor.acceptsWork || (ancestor.observed == SessionObservedState.UNKNOWN &&
+                ancestor.desired == SessionDesiredState.RUN && !ancestor.archived)) { "Рабочая область родителя закрыта" }
+        }
         // Legacy history can contain more pending nodes than today's admission limits.
         // Retain that history while reserving each actual runtime slot in this commit.
         val occupied = old.sessions.values.count { other -> other.id != sessionId &&

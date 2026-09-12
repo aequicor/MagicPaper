@@ -192,7 +192,10 @@ class SessionOrganismStoreTest {
         val recovered = f.store.recover(f.organism.id)
         assertEquals(SessionObservedState.UNKNOWN, recovered.sessions.getValue("root").observed)
         assertFailsWith<IllegalArgumentException> { f.store.check(scope) }
-        assertFailsWith<IllegalArgumentException> { f.store.beginRun(f.organism.id, "root") }
+        // After a crash the native process is gone; beginRun reopens UNKNOWN sessions for recovery.
+        val reopened = f.store.beginRun(f.organism.id, "root")
+        assertEquals(SessionObservedState.RUNNING, reopened.observed)
+        assertTrue(reopened.generation > scope.generation)
     }
 
     @Test fun independentFailureIsIsolatedAndExplicitCancelPolicyStopsSiblingSubtrees() = runTest {

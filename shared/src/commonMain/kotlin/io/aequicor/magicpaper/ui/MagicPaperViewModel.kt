@@ -1665,6 +1665,9 @@ class MagicPaperViewModel(
         for (project in projects) for (session in repo.sessions(project.id)) {
             val request = session.pendingRun ?: continue
             if (request.intent != ExecutionIntent.RUN || session.archived || session.planningMode || session.stageId != null) continue
+            // Child sessions (SESSION kind with organism) are recovered by their parent's
+            // recoverUnknownChildren() once the parent's withScope registers its handle.
+            if (session.organismId != null && session.sessionKind == SessionKind.SESSION) continue
             val response = repo.messages(project.id, session.id).firstOrNull { it.id == request.responseId }
             if (response != null) {
                 // The reply may have reached disk just before the checkpoint was cleared.
