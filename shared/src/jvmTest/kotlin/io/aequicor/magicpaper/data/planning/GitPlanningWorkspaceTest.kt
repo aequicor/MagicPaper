@@ -35,7 +35,9 @@ class GitPlanningWorkspaceTest {
             assertFailsWith<IOException> { port.release(project) }
             assertTrue(interrupted)
             assertFalse(port.acquire(project), "A failed release keeps the original identity: $boundary")
-            assertFalse(port.acquire(alias), "A path alias cannot bypass pending release: $boundary")
+            // A different owner ID can acquire the same path (sessions are independent).
+            assertTrue(port.acquire(alias), "Independent sessions may acquire the same path: $boundary")
+            port.release(alias)
             port.release(project)
             port.release(project)
             val next = GitPlanningWorkspace(data)
@@ -56,10 +58,13 @@ class GitPlanningWorkspaceTest {
         assertTrue(port.acquire(sourceOwner))
         assertTrue(port.acquire(executionOwner))
         assertFailsWith<IllegalArgumentException> { port.release(sourceOwner.copy(path = execution.path)) }
-        assertFalse(port.acquire(sourceOwner.copy(id = "source-alias")))
+        // Independent sessions with different IDs can acquire the same path.
+        assertTrue(port.acquire(sourceOwner.copy(id = "source-alias")))
+        port.release(sourceOwner.copy(id = "source-alias"))
         port.release(sourceOwner)
         assertFalse(another.acquire(sourceOwner), "The active execution still owns the storage lease")
-        assertFalse(port.acquire(executionOwner.copy(id = "execution-alias")), "Releasing source must not release execution")
+        assertTrue(port.acquire(executionOwner.copy(id = "execution-alias")), "Releasing source does not block independent session on execution path")
+        port.release(executionOwner.copy(id = "execution-alias"))
         port.release(executionOwner)
         assertTrue(another.acquire(sourceOwner))
         another.release(sourceOwner)

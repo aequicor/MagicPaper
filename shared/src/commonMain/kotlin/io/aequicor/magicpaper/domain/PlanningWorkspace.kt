@@ -28,7 +28,7 @@ class WorkspaceConflict(val workingPath: String, message: String) : IllegalState
 class LocalPlanningWorkspace : PlanningWorkspace {
     private val lock = Mutex()
     private val owners = mutableMapOf<String, String>()
-    private fun workspaceKey(project: CodingProject) = project.path.ifBlank { project.id }.trimEnd('/', '\\')
+    private fun workspaceKey(project: CodingProject) = project.id.trimEnd('/', '\\')
     override suspend fun acquire(project: CodingProject) = lock.withLock {
         val key = workspaceKey(project)
         if (key in owners) false else { owners[key] = project.id; true }

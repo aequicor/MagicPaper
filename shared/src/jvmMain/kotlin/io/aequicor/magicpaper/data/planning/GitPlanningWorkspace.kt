@@ -41,10 +41,13 @@ class GitPlanningWorkspace(
     override suspend fun acquire(project: CodingProject): Boolean = withContext(Dispatchers.IO) {
         synchronized(locks) {
             val path = File(project.path).canonicalPath
-            if (project.id in locks || locks.values.any { it.path == path }) return@synchronized false
-            // A failed close after releasing the storage lock must be reconciled before
-            // this adapter can admit work under an invalid storage-owner handle.
-            if (storeOwner?.second?.isValid == false) return@synchronized false
+            if (project.id in locks) return@synchronized false
+            // A failed close after releasing the storage lock leaves an invalid handle;
+            // close the stale file so a fresh acquisition can proceed.
+            if (storeOwner?.second?.isValid == false) {
+                try { storeOwner?.first?.close() } catch (_: Exception) {}
+                storeOwner = null
+            }
             if (storeOwner == null) {
                 dataRoot.mkdirs()
                 val ownerFile = RandomAccessFile(File(dataRoot, "storage-owner.lock"), "rw")
@@ -53,7 +56,8 @@ class GitPlanningWorkspace(
                 storeOwner = ownerFile to ownerLock
             }
             val dir = root(project).apply { mkdirs() }
-            val file = RandomAccessFile(File(dir, "owner.lock"), "rw")
+            // Each session gets its own lock file so concurrent sessions in the same project are independent.
+            val file = RandomAccessFile(File(dir, "owner-${safe(project.id)}.lock"), "rw")
             val lock = try { file.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
             if (lock == null) {
                 file.close()

@@ -104,13 +104,8 @@ class SessionTreeRuntime(
         val node = session.organismId?.let { organisms.store.get(it).sessions[session.id] }
         if (planningWorkspace != null && node?.kind == SessionKind.ZYGOTE && session.interactionMode == CodingInteractionMode.CODE &&
             session.planId == null && session.stageId == null && handle.directRootLease == null) {
-            require(organisms.store.organisms.value.values.filter { it.projectId == session.projectId }.none { organism ->
-                organism.sessions.values.any { other -> other.id != session.id && other.kind == SessionKind.ZYGOTE &&
-                    other.mode == CodingInteractionMode.CODE && other.observed in setOf(SessionObservedState.RUNNING,
-                        SessionObservedState.WAITING_USER, SessionObservedState.STOPPING, SessionObservedState.UNKNOWN) }
-            }) { "Сначала подтвердите остановку другой сессии этого проекта" }
-            // Ordinary code roots retain their user-selected path, but share the same writer
-            // gate as plans and children. Cancellation cannot lose the acquired handle.
+            // Each session acquires its own workspace lease by unique owner ID;
+            // concurrent sessions in the same project are independent.
             val owner = project.copy(id = "root-${session.id}-${session.runtimeGeneration}")
             withContext(NonCancellable) {
                 check(planningWorkspace.acquire(owner)) { "Рабочая копия уже используется другой сессией" }
