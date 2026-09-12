@@ -226,7 +226,12 @@ class PiCodingRuntime(
         // Кодинг-контур: модель и всё, что из неё выводится (models.json,
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = if (planning) profile.forModel() else profile.forCoding()
-        writePiConfig(codingProfile, sessionHome(session.id), imageInput = !restricted && computerUse?.grant(session.id) != null)
+        // imageInput включается, когда модель умеет принимать изображения (vision)
+        // ИЛИ когда пользователю выдан доступ к компьютеру (скриншоты).
+        // Без этой декларации pi-agent считает модель text-only и заменяет
+        // изображения плейсхолдером — даже если модель в принципе vision.
+        val imageInput = !restricted && (computerUse?.grant(session.id) != null || PiModelsConfig.supportsImageInput(codingProfile.modelId))
+        writePiConfig(codingProfile, sessionHome(session.id), imageInput = imageInput)
         writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).

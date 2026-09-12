@@ -221,6 +221,27 @@ class PlanningChatServiceTest {
         assertTrue(f.projects.messages(project.id, parent.id).any { it.id == current.id + "-declined" })
     }
 
+    @Test fun decliningProposalAfterCompletionClearsItSoStatusTurnsIdle() = runTest {
+        val f = Fixture(this); f.initialize(); runCurrent()
+        val parent = f.session("parent")
+        val base = f.readyPlan("p", parent)
+        f.service.confirm("p"); advanceTimeBy(200); runCurrent()
+        val proposal = PlanProposal("prop", base.runId, base.tree, base.milestones, base.tree,
+            base.milestones + Milestone("followup", "Follow-up"), "Доработка")
+        f.store.update(base.id) { it.copy(phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE,
+            intent = ExecutionIntent.RUN, proposal = proposal,
+            milestones = listOf(base.milestones.single().copy(status = MilestoneStatus.DONE))) }
+        val pending = f.store.planFor("p")!!
+        assertTrue(pending.proposalReadyForConfirmation)
+        val request = f.interactions(parent).single { it.kind == InteractionKind.CONFIRM_PLAN }
+        f.service.submitInteraction(request, listOf(PlanningAnswer("decision", listOf("no")))); runCurrent()
+        val cleared = f.store.planFor("p")!!
+        assertNull(cleared.proposal)
+        assertTrue(f.projects.messages(project.id, parent.id).any { it.id == request.id + "-declined" })
+        // Without a proposal, the CONFIRM_PLAN interaction must not reappear.
+        assertTrue(f.interactions(parent).none { it.kind == InteractionKind.CONFIRM_PLAN })
+    }
+
     @Test fun restartRecoversUnavailableAssignmentsAndCoordinatesCheckpointBeforeStartingAnotherWorkerTurn() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent")

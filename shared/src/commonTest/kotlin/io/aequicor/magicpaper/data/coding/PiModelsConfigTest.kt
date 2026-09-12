@@ -50,6 +50,79 @@ class PiModelsConfigTest {
         assertNull(PiModelsConfig.root(qwen).model()["input"])
     }
 
+    @Test fun visionOpenAiCompatRequiresAssistantAfterToolResult() {
+        // DashScope требует чередования ролей: после tool-сообщения нельзя
+        // сразу ставить user-сообщение (которым pi отправляет image_url из
+        // toolResult). Без флага сервер возвращает 400 «Unexpected item type».
+        // Используем vision-модель (qwen3.7-max), т.к. флаг выставляется
+        // только когда модель реально поддерживает изображения.
+        val visionProfile = profile("qwen3.7-max")
+        val compat = PiModelsConfig.root(visionProfile, imageInput = true).compat()
+        assertEquals(true, compat.bool("requiresAssistantAfterToolResult"),
+            "OpenAI-совместимый с vision — требует assistant между tool и user")
+        // Без imageInput промежуточный assistant не нужен.
+        val noImage = PiModelsConfig.root(visionProfile, imageInput = false).compat()
+        assertNull(noImage["requiresAssistantAfterToolResult"],
+            "Без imageInput — флаг не выставляется")
+        // Text-only модель: флаг не выставляется даже с imageInput=true
+        // (computerUse может включить imageInput, но модель не примет image_url).
+        val textOnly = PiModelsConfig.root(qwen, imageInput = true).compat()
+        assertNull(textOnly["requiresAssistantAfterToolResult"],
+            "Text-only модель — флаг не выставляется")
+    }
+
+    @Test fun nonOpenAiCompatDoesNotRequireAssistantAfterToolResult() {
+        // Anthropic и Google имеют собственные форматы сообщений и не требуют
+        // промежуточного assistant между toolResult и user.
+        val anthropic = profile("claude-sonnet-4-20250514", baseUrl = "https://api.anthropic.com/")
+            .copy(provider = ProviderType.ANTHROPIC)
+        assertNull(PiModelsConfig.root(anthropic, imageInput = true).compat()["requiresAssistantAfterToolResult"])
+        val google = profile("gemini-2.5-pro", baseUrl = "https://generativelanguage.googleapis.com/")
+            .copy(provider = ProviderType.GOOGLE)
+        assertNull(PiModelsConfig.root(google, imageInput = true).compat()["requiresAssistantAfterToolResult"])
+    }
+
+    @Test fun visionModelsDetectedById() {
+        // Qwen-VL ряд
+        assertTrue(PiModelsConfig.supportsImageInput("qwen-vl-max"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen2.5-vl-72b-instruct"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen-vl-plus"))
+        // Qwen флагманы (Qwen 3.5+ — мультимодальные, hybrid-thinking)
+        assertTrue(PiModelsConfig.supportsImageInput("qwen-max"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3-max"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.8-max"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.7-max"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen-plus"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen-turbo"))
+        // Claude 3+
+        assertTrue(PiModelsConfig.supportsImageInput("claude-sonnet-4-20250514"))
+        assertTrue(PiModelsConfig.supportsImageInput("claude-3-opus-20240229"))
+        assertTrue(PiModelsConfig.supportsImageInput("claude-haiku-4-5"))
+        // GPT-4+, o-серия
+        assertTrue(PiModelsConfig.supportsImageInput("gpt-4o"))
+        assertTrue(PiModelsConfig.supportsImageInput("gpt-5.2"))
+        assertTrue(PiModelsConfig.supportsImageInput("o1-preview"))
+        // Gemini
+        assertTrue(PiModelsConfig.supportsImageInput("gemini-2.5-pro"))
+        assertTrue(PiModelsConfig.supportsImageInput("gemini-3.1-flash-lite"))
+        // GLM-4V
+        assertTrue(PiModelsConfig.supportsImageInput("glm-4v-plus"))
+    }
+
+    @Test fun textOnlyModelsNotDetectedAsVision() {
+        // Qwen-flash: лёгкие модели без Visual Understanding
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3.8-flash"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen2.5-coder-32b-instruct"))
+        // DeepSeek (текстовые)
+        assertFalse(PiModelsConfig.supportsImageInput("deepseek-chat"))
+        assertFalse(PiModelsConfig.supportsImageInput("deepseek-reasoner"))
+        // Claude 2 (без цифры поколения = не 3+)
+        assertFalse(PiModelsConfig.supportsImageInput("claude-2"))
+        // Локальные текстовые
+        assertFalse(PiModelsConfig.supportsImageInput("llama3.2:3b"))
+        assertFalse(PiModelsConfig.supportsImageInput("phi4"))
+    }
+
     private fun section(parsed: LlmProfile) =
         PiModelsConfig.reasoning(parsed)
 

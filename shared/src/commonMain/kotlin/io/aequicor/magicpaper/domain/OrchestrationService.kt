@@ -950,8 +950,13 @@ class OrchestrationService(
             InteractionKind.CONFIRM_PLAN -> {
                 require(plan != null && plan.parentSessionId == session.id && plan.revision == request.revision) { "План изменился. Проверьте новую редакцию." }
                 if ("yes" in answer.selected) confirmNow(plan.id, request.sourceId.ifBlank { null }, request.revision)
-                else append(session.projectId, session.id, CodingMessage(request.id + "-declined", CodingRole.USER,
-                    "Запуск предложения отклонён. План сохранён без запуска.", createdAt = clock()))
+                else {
+                    if (plan.proposal != null) {
+                        store.update(plan.id) { it.copy(proposal = null) }
+                    }
+                    append(session.projectId, session.id, CodingMessage(request.id + "-declined", CodingRole.USER,
+                        "Запуск предложения отклонён. План сохранён без запуска.", createdAt = clock()))
+                }
             }
             InteractionKind.RECOVER_PLAN -> {
                 require(plan != null && plan.parentSessionId == session.id) { "План недоступен" }

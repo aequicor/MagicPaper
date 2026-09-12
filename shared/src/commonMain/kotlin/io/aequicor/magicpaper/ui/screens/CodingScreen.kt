@@ -549,7 +549,9 @@ internal fun ProjectsPanel(
         // Selecting another project opens its list; status updates preserve disclosure.
         var projectCollapsed by remember(ui.current?.id) { mutableStateOf(false) }
         val projectIndex = ui.projects.indexOfFirst { it.id == ui.current?.id }
-        val tasks = ui.current?.let { ui.projectSessionTasks(it.id) }.orEmpty()
+        val tasks = remember(ui.sessions, ui.organisms, ui.interactions, ui.current?.id) {
+            ui.current?.let { ui.projectSessionTasks(it.id) }.orEmpty()
+        }
         val groups = buildList {
             var index = projectIndex + 1
             if (!projectCollapsed) tasks.forEach { task ->
