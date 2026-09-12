@@ -5,16 +5,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -72,17 +72,16 @@ fun App(deps: MagicPaperDependencies = remember { createMagicPaperDependencies()
             val state by deps.viewModel.state.collectAsState()
             Box(Modifier.fillMaxSize()) {
                 // Один непрерывный лист под всем интерфейсом, включая прозрачный
-                // системный тайтлбар. Безопасные отступы относятся только к контенту.
+                // системный тайтлбар. Отступы safeDrawing компенсируются компонентами.
                 MagicPaperBackground(state.settings.paperAnimationEnabled, Modifier.matchParentSize())
-                Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Column(Modifier.fillMaxSize()) {
                     if (state.showWelcome) {
-                        Box(Modifier.padding(top = LocalWindowTitleBarInsets.current.calculateTopPadding())) {
+                        Box(Modifier.safeDrawingPadding()) {
                             WelcomeScreen(deps.viewModel, state)
                         }
                     } else {
                         TopBar(deps.viewModel, state)
-                        PaperDivider()
-                        Box(modifier = Modifier.weight(1f)) {
+                        Box(modifier = Modifier.weight(1f).navigationBarsPadding()) {
                             MainArea(deps.viewModel, state)
                             Notice(
                                 state.notice,
@@ -163,7 +162,7 @@ private fun TopBar(vm: MagicPaperViewModel, state: UiState) {
     val nativeEnd = nativeInsets.calculateRightPadding(layoutDirection)
     WindowTitleBarArea(modifier = Modifier.fillMaxWidth().height(toolbarHeight)) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(
+            modifier = Modifier.statusBarsPadding().fillMaxSize().padding(
                 start = nativeStart.coerceAtLeast(8.dp),
                 end = nativeEnd.coerceAtLeast(8.dp),
             ),
