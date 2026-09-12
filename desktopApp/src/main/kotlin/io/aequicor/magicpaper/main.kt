@@ -18,6 +18,8 @@ import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowScope
 import io.aequicor.magicpaper.ui.window.LocalWindowTitleBarInsets
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
+import io.aequicor.magicpaper.ui.window.LocalWindowsTitleBarController
+import io.aequicor.magicpaper.ui.window.WindowsTitleBarController
 import io.aequicor.magicpaper.designsystem.PaperCommandMenu
 import io.aequicor.magicpaper.designsystem.PaperColors
 import io.aequicor.magicpaper.di.createMagicPaperDependencies
@@ -52,7 +54,12 @@ private val MacTitleBarHeight = 28.dp
 private val MacTrafficLightsWidth = 78.dp
 
 fun main() {
-    val mode = desktopWindowMode(System.getProperty("os.name"))
+    val osName = System.getProperty("os.name")
+    val isWindows = osName.lowercase().startsWith("windows")
+    val mode = desktopWindowMode(
+        osName = osName,
+        windowDecorationsSupported = isWindows && WindowsTitleBarController.isSupported(),
+    )
     application {
         val state = rememberWindowState(width = 1000.dp, height = 700.dp)
         Window(
@@ -60,17 +67,34 @@ fun main() {
             title = "MagicPaper — Шалость удалась",
             state = state,
             // macOS: native transparent titlebar (edge-to-edge), system decorations.
-            // Windows & Linux: fully undecorated — Compose draws the entire chrome.
-            undecorated = mode != DesktopWindowMode.MAC_SYSTEM,
+            // Windows + JBR: decorated frame, Compose bar merged via JBR WindowDecorations
+            //   — preserves border, shadow, Aero Snap and native min/max/close buttons.
+            // Windows fallback: decorated frame, standard system title bar.
+            // Linux: fully undecorated — Compose draws the entire chrome.
+            undecorated = mode == DesktopWindowMode.LINUX_CUSTOM,
         ) {
             val dependencies = remember { createMagicPaperDependencies() }
             PaperCommandMenu(onSettings = { dependencies.viewModel.open(Screen.SETTINGS) }, onClose = ::exitApplication)
             setAppIcons()
             val chrome = remember(window, mode) {
-                if (mode != DesktopWindowMode.MAC_SYSTEM) DesktopWindowChrome(window) else null
+                if (mode == DesktopWindowMode.LINUX_CUSTOM) DesktopWindowChrome(window) else null
+            }
+            val windowsTitleBar = remember(window, mode) {
+                if (mode == DesktopWindowMode.WINDOWS_JBR_CUSTOM) {
+                    (window as? Frame)?.let(WindowsTitleBarController::create)
+                } else {
+                    null
+                }
+            }
+            DisposableEffect(windowsTitleBar) {
+                onDispose { windowsTitleBar?.dispose() }
             }
             val titleBarInsets = when (mode) {
                 DesktopWindowMode.MAC_SYSTEM -> rememberMacTitleBarInsets()
+                DesktopWindowMode.WINDOWS_JBR_CUSTOM -> PaddingValues(
+                    start = (windowsTitleBar?.leftInset ?: 0f).dp,
+                    end = (windowsTitleBar?.rightInset ?: 0f).dp,
+                )
                 else -> PaddingValues()
             }
             // Фон окна в цвет приложения — без белой вспышки в углах при ресайзе.
@@ -80,9 +104,9 @@ fun main() {
                 LocalWindowChrome provides chrome,
                 LocalWindowScope provides this,
                 LocalWindowTitleBarInsets provides titleBarInsets,
+                LocalWindowsTitleBarController provides windowsTitleBar,
                 // macOS: одна строка с нативным «светофором», без второго ряда ниже.
                 LocalWindowToolbarHeight provides if (mode == DesktopWindowMode.MAC_SYSTEM) MacTitleBarHeight else 40.dp,
-
             ) {
                 App(dependencies)
             }

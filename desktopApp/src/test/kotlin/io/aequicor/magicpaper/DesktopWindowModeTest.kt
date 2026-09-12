@@ -5,10 +5,18 @@ import kotlin.test.assertEquals
 
 class DesktopWindowModeTest {
     @Test
-    fun windowsUsesComposeChrome() {
+    fun windowsUsesJbrCustomTitleBarWhenAvailable() {
         assertEquals(
-            DesktopWindowMode.LINUX_CUSTOM,
-            desktopWindowMode("Windows 11"),
+            DesktopWindowMode.WINDOWS_JBR_CUSTOM,
+            desktopWindowMode("Windows 11", windowDecorationsSupported = true),
+        )
+    }
+
+    @Test
+    fun windowsFallsBackToSystemTitleBarWithoutJbr() {
+        assertEquals(
+            DesktopWindowMode.WINDOWS_SYSTEM_FALLBACK,
+            desktopWindowMode("Windows 10", windowDecorationsSupported = false),
         )
     }
 
@@ -16,7 +24,7 @@ class DesktopWindowModeTest {
     fun macKeepsSystemDecorations() {
         assertEquals(
             DesktopWindowMode.MAC_SYSTEM,
-            desktopWindowMode("Darwin"),
+            desktopWindowMode("Darwin", windowDecorationsSupported = true),
         )
     }
 
@@ -24,7 +32,7 @@ class DesktopWindowModeTest {
     fun otherDesktopPlatformsKeepComposeChrome() {
         assertEquals(
             DesktopWindowMode.LINUX_CUSTOM,
-            desktopWindowMode("Linux"),
+            desktopWindowMode("Linux", windowDecorationsSupported = false),
         )
     }
 }
