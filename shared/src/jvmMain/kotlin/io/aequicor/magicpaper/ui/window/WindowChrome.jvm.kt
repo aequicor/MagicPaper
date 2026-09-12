@@ -9,9 +9,6 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.isPrimaryPressed
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.window.WindowScope
 
 /**
@@ -20,20 +17,14 @@ import androidx.compose.ui.window.WindowScope
  */
 val LocalWindowScope = staticCompositionLocalOf<WindowScope?> { null }
 
-/** Active only for a Windows frame configured through JBR WindowDecorations. */
-val LocalWindowsTitleBarController = staticCompositionLocalOf<WindowsTitleBarController?> { null }
-
 @Composable
 actual fun WindowDragArea(modifier: Modifier, content: @Composable () -> Unit) {
     val scope = LocalWindowScope.current
-    val nativeTitleBar = LocalWindowsTitleBarController.current
-    if (scope == null || nativeTitleBar != null) {
+    if (scope == null) {
         // Вне окна (например, превью) — просто контейнер.
-        // На Windows переносом управляет вся нативная область тайтлбара.
         Box(modifier, propagateMinConstraints = true) { content() }
     } else {
-        // Compose handles dragging through JBR where supported and AWT elsewhere.
-        // Its macOS fallback needs a separate double-click handler.
+        // Compose WindowDraggableArea + macOS double-click-to-maximize fallback.
         scope.WindowDraggableArea(modifier = if (System.getProperty("os.name").startsWith("Mac")) {
             modifier.titleBarDoubleClick { DesktopWindowChrome(scope.window).toggleMaximize() }
         } else modifier) { content() }
@@ -42,53 +33,10 @@ actual fun WindowDragArea(modifier: Modifier, content: @Composable () -> Unit) {
 
 @Composable
 actual fun WindowTitleBarArea(modifier: Modifier, content: @Composable () -> Unit) {
-    val nativeTitleBar = LocalWindowsTitleBarController.current
-    if (nativeTitleBar == null) {
-        Box(modifier, propagateMinConstraints = true) { content() }
-        return
-    }
-
-    val density = LocalDensity.current
-    Box(
-        modifier = modifier.onGloballyPositioned { coordinates ->
-            // JBR expects the bottom edge relative to the client area's top,
-            // expressed in AWT logical pixels rather than physical pixels.
-            val bottomPx = coordinates.boundsInWindow().bottom
-            nativeTitleBar.updateHeight(bottomPx / density.density)
-        },
-        propagateMinConstraints = true,
-    ) {
-        // The background receives events only where no foreground Compose control
-        // owns them. Those events are handed back to Windows as non-client hits.
-        Box(
-            Modifier
-                .matchParentSize()
-                .nativeTitleBarMouseEvents(nativeTitleBar),
-        )
-        content()
-    }
+    Box(modifier, propagateMinConstraints = true) { content() }
 }
 
-private fun Modifier.nativeTitleBarMouseEvents(
-    titleBar: WindowsTitleBarController,
-): Modifier = pointerInput(titleBar) {
-    awaitPointerEventScope {
-        var inUserControl = false
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Main)
-            val consumed = event.changes.any { it.isConsumed }
-            if (!consumed && !inUserControl) {
-                titleBar.forceClientHitTest(false)
-            } else {
-                if (event.type == PointerEventType.Press) inUserControl = true
-                if (event.type == PointerEventType.Release) inUserControl = false
-                titleBar.forceClientHitTest(true)
-            }
-        }
-    }
-}
-
-/** Observe without consuming: native dragging must continue to receive the gesture. */
+/** macOS: double-click по пустому месту тайтлбара разворачивает окно. */
 private fun Modifier.titleBarDoubleClick(onDoubleClick: () -> Unit): Modifier = pointerInput(Unit) {
     awaitPointerEventScope {
         var lastClickTime = 0L
