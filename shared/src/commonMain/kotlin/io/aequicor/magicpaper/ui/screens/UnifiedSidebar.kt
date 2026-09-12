@@ -134,6 +134,7 @@ fun UnifiedSidebar(
     coding: CodingUi,
     selectedId: String?,
     viewingCoding: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding)
     val codingByProject = items.filter { it.isCoding }.groupBy { it.projectId }
@@ -141,7 +142,7 @@ fun UnifiedSidebar(
     val chatItems = items.filter { !it.isCoding }
     val collapsedProjects = remember { mutableSetOf<String>() }
 
-    Column(Modifier.width(260.dp).fillMaxHeight()) {
+    Column(modifier.fillMaxHeight()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
