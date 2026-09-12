@@ -9,5 +9,5 @@ import kotlinx.serialization.Serializable
     val observed: SessionObservedState = SessionObservedState.RUNNING,
     val usage: Map<String, Long> = emptyMap(), val startedAt: Long = 0, val endedAt: Long = 0,
 ) {
-    val settled: Boolean get() = observed in setOf(SessionObservedState.COMPLETED, SessionObservedState.FAILED, SessionObservedState.STOPPED)
+    val settled: Boolean get() = observed in setOf(SessionObservedState.COMPLETED, SessionObservedState.FAILED, SessionObservedState.STOPPED, SessionObservedState.UNKNOWN)
 }

@@ -246,11 +246,16 @@ internal fun buildDependencies(
     toolHost.search = { context, query ->
         val saved = settingsRepo.load()
         val plan = context.planId?.let { planningStore.planFor(it) }
-        val results = search.search(query, if (plan == null) saved else saved.copy(searchProvider = plan.searchProvider), 5)
-        kotlinx.serialization.json.buildJsonArray { results.forEach { result -> add(kotlinx.serialization.json.buildJsonObject {
-            put("title", kotlinx.serialization.json.JsonPrimitive(result.title))
-            put("snippet", kotlinx.serialization.json.JsonPrimitive(result.snippet))
-            put("url", kotlinx.serialization.json.JsonPrimitive(result.url))
+        val effectiveSettings = if (plan == null) saved else saved.copy(searchProvider = plan.searchProvider)
+        val result = search.searchWithDiagnostics(query, effectiveSettings, 5)
+        if (result.hits.isEmpty()) {
+            val diagnosis = result.issues.ifEmpty { listOf("Поиск не нашёл результатов по запросу «$query».") }
+            error(diagnosis.joinToString("; "))
+        }
+        kotlinx.serialization.json.buildJsonArray { result.hits.forEach { hit -> add(kotlinx.serialization.json.buildJsonObject {
+            put("title", kotlinx.serialization.json.JsonPrimitive(hit.title))
+            put("snippet", kotlinx.serialization.json.JsonPrimitive(hit.snippet))
+            put("url", kotlinx.serialization.json.JsonPrimitive(hit.url))
         }) } }
     }
     val viewModel = MagicPaperViewModel(

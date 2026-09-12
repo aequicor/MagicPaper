@@ -21,6 +21,10 @@ import kotlinx.coroutines.sync.withLock
  * («coding-log:<projectId>») и одна сессия пи на проекте (project.piSessionId).
  * При первом обращении к сессиям такого проекта создаётся «основная» сессия:
  * старый журнал переезжает под её ключ, а piSessionId переносится в сессию.
+ *
+ * Внутренний кэш: allSessions() и all() кэшируются в памяти и инвалидируются
+ * при любой записи. Это устраняет повторный парсинг JSON-файлов при пакетных
+ * чтениях (bootstrap, changes-коллектор, восстановление прогонов).
  */
 class JsonCodingProjectRepository(
     private val store: KeyValueStore,
@@ -33,6 +37,12 @@ class JsonCodingProjectRepository(
     private val projectsSerializer = ListSerializer(CodingProject.serializer())
     private val sessionsSerializer = ListSerializer(CodingSession.serializer())
     private val messagesSerializer = ListSerializer(CodingMessage.serializer())
+
+    // In-memory caches invalidated on write. Eliminate redundant JSON parsing
+    // when multiple readers (bootstrap, changes collector, restoreCodingRuns)
+    // call allSessions()/all() in quick succession.
+    private var _projectsCache: List<CodingProject>? = null
+    private var _sessionsCache: List<CodingSession>? = null
 
     override suspend fun orchestration(sessionId: String): OrchestrationState? {
         val key = "coding-orchestration-$sessionId"
@@ -55,24 +65,30 @@ class JsonCodingProjectRepository(
     // ---- Проекты ----------------------------------------------------------
 
     override suspend fun all(): List<CodingProject> {
+        _projectsCache?.let { return it }
         val raw = store.read(KEY_PROJECTS) ?: return emptyList()
-        return json.decodeFromString(projectsSerializer, raw).sortedByDescending { it.createdAt }
+        val result = json.decodeFromString(projectsSerializer, raw).sortedByDescending { it.createdAt }
+        _projectsCache = result
+        return result
     }
 
     override suspend fun save(project: CodingProject) {
         val projects = all().filterNot { it.id == project.id } + project
         store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects))
+        _projectsCache = null
     }
 
     override suspend fun delete(id: String) {
+        val allSess = allSessions()
         val projects = all().filterNot { it.id == id }
         store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects))
-        allSessions().filter { it.projectId == id }.forEach {
+        _projectsCache = null
+        allSess.filter { it.projectId == id }.forEach {
             store.delete(logKey(id, it.id))
             store.delete("coding-orchestration-${it.id}")
             store.delete("coding-orchestration-${it.id}-backup")
         }
-        saveSessions(allSessions().filterNot { it.projectId == id })
+        saveSessions(allSess.filterNot { it.projectId == id })
         // Журнал легаси-проекта, если миграция ещё не успела произойти.
         store.delete(legacyLogKey(id))
         store.delete(clearedKey(id))
@@ -160,8 +176,12 @@ class JsonCodingProjectRepository(
 
     override suspend fun wipe() {
         store.keys("coding-orchestration-").forEach { store.delete(it) }
-        allSessions().forEach { store.delete(logKey(it.projectId, it.id)) }
-        all().forEach { store.delete(legacyLogKey(it.id)); store.delete(clearedKey(it.id)) } // легаси-журналы немигрированных проектов
+        val allSess = allSessions()
+        val allProjects = all()
+        _sessionsCache = null
+        _projectsCache = null
+        allSess.forEach { store.delete(logKey(it.projectId, it.id)) }
+        allProjects.forEach { store.delete(legacyLogKey(it.id)); store.delete(clearedKey(it.id)) } // легаси-журналы немигрированных проектов
         store.delete(KEY_SESSIONS)
         store.delete(KEY_PROJECTS)
     }
@@ -178,17 +198,27 @@ class JsonCodingProjectRepository(
     }
 
     private suspend fun allSessions(): List<CodingSession> {
-        val raw = store.read(KEY_SESSIONS) ?: return emptyList()
+        _sessionsCache?.let { return it }
+        val raw = store.read(KEY_SESSIONS)
+        if (raw == null) {
+            _sessionsCache = emptyList()
+            return emptyList()
+        }
         val sessions = json.decodeFromString(sessionsSerializer, raw)
-        if (sessions.none { it.engine == null }) return sessions
+        if (sessions.none { it.engine == null }) {
+            _sessionsCache = sessions
+            return sessions
+        }
         val projects = all().associateBy { it.id }
         val migrated = sessions.map { if (it.engine != null) it else it.copy(engine = migrateEngine(it, projects[it.projectId])) }
         saveSessions(migrated)
+        _sessionsCache = migrated
         return migrated
     }
 
     private suspend fun saveSessions(sessions: List<CodingSession>) {
         store.write(KEY_SESSIONS, json.encodeToString(sessionsSerializer, sessions))
+        _sessionsCache = null
     }
 
     private fun logKey(projectId: String, sessionId: String) = "coding-log:$projectId:$sessionId"

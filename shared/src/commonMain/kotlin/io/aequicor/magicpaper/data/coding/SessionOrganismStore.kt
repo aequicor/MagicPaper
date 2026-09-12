@@ -479,6 +479,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         // UNKNOWN is permitted: after a crash recover() marks interrupted sessions as UNKNOWN,
         // and the native process is gone by the time the application restarts.
         require(node.observed != SessionObservedState.STOPPING) { "Сначала сверяйте незавершённый запуск" }
+        require(old.auxiliaryRuns.values.none { it.ownerSessionId == sessionId && it.observed == SessionObservedState.UNKNOWN }) { "Сначала сверьте вспомогательные запуски владельца" }
         require(old.auxiliaryRuns.values.none { it.ownerSessionId == sessionId && !it.settled }) { "Сначала остановите вспомогательные запуски владельца" }
         require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) || node.acceptsWork ||
             (node.observed == SessionObservedState.UNKNOWN && node.desired == SessionDesiredState.RUN && !node.archived)) { "Восстановите сессию через родителя" }

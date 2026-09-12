@@ -44,13 +44,16 @@ fun LlmProfile.providerOptions(key: String): AdvancedLlmOptions {
     val model = modelCatalog.firstOrNull { it.id == sourceModelId(key) }
     val defaults = model?.defaultParameters.orEmpty()
     fun number(vararg names: String): JsonPrimitive? = names.firstNotNullOfOrNull { defaults[it] as? JsonPrimitive }
-    val recommendation = ModelDefaults.recommendation(provider, sourceModelId(key))
+    // Передаём fact из каталога, чтобы recommendation подхватила contextWindow
+    // и maxOutputTokens, объявленные провайдером (DashScope не отдаёт их в /models,
+    // но OpenRouter/Google отдают; без fact Qwen fallback на 1M не срабатывает).
+    val recommendation = ModelDefaults.recommendation(provider, sourceModelId(key), fact = model)
     return AdvancedLlmOptions(
         temperature = number("temperature")?.doubleOrNull,
         topP = number("top_p", "topP")?.doubleOrNull,
         maxTokens = number("max_tokens", "max_output_tokens", "maxOutputTokens")?.intOrNull
             ?: minOf(recommendation.advanced.maxTokens, model?.maxOutputTokens ?: Int.MAX_VALUE),
-        contextLimit = model?.contextWindow ?: recommendation.advanced.contextLimit,
+        contextLimit = model?.contextWindow?.takeIf { it > 0 } ?: recommendation.advanced.contextLimit,
         sendMaxTokens = number("max_tokens", "max_output_tokens", "maxOutputTokens") != null,
         extraParameters = defaults.filterKeys { it in (model?.supportedParameters ?: emptySet()) && it in CUSTOM_MODEL_PARAMETERS },
     )

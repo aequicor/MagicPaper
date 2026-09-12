@@ -107,6 +107,28 @@ class ModelLibraryTest {
             if (provider == ProviderType.OPENROUTER) assertEquals("high", params["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
         }
     }
+    @Test fun dashScopeQwenModelGets1MContextWhenServerOmitsContextWindow() {
+        // DashScope /models returns minimal objects without context_length/context_window.
+        // providerOptions() must fall back to the Qwen 1M default, not the 128K profile default.
+        val dashFact = ProviderModel("qwen3.7-plus", "Qwen3.7 Plus", contextWindow = null, maxOutputTokens = null)
+        val profile = LlmProfile("d", "DashScope", baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            modelId = "qwen3.7-plus", provider = ProviderType.OPENAI_COMPATIBLE,
+            modelCatalog = listOf(dashFact), modelLibraryVersion = 1)
+        val options = profile.providerOptions("qwen3.7-plus")
+        assertEquals(1_000_000, options.contextLimit,
+            "Qwen model without declared contextWindow must get 1M fallback, not the 128K default")
+    }
+
+    @Test fun dashScopeQwenForModelUses1MContext() {
+        val dashFact = ProviderModel("qwen3.7-plus", "Qwen3.7 Plus", contextWindow = null, maxOutputTokens = null)
+        val profile = LlmProfile("d", "DashScope", baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            modelId = "qwen3.7-plus", provider = ProviderType.OPENAI_COMPATIBLE,
+            modelCatalog = listOf(dashFact), modelLibraryVersion = 1)
+        val request = profile.forModel("qwen3.7-plus")
+        assertEquals(1_000_000, request.advanced.contextLimit,
+            "forModel() must propagate the 1M context limit for Qwen models without declared contextWindow")
+    }
+
     @Test fun thinkingBudgetAndCustomOutputRespectTheProviderCeiling() {
         val p = source.copy(provider = ProviderType.ANTHROPIC, variants = listOf(custom.copy(options = custom.options.copy(maxTokens = 90000))))
         val request = p.forModel(custom.id, EffortSelection.of(ReasoningEffort.HIGH))

@@ -316,13 +316,20 @@ class MagicPaperViewModel(
         planningChat?.let { service -> scope.launch {
             service.changes.collect {
                 val repo = codingProjects ?: return@collect
-                val stored = repo.all().flatMap { repo.sessions(it.id) }
+                val projects = repo.all()
+                val stored = projects.flatMap { repo.sessions(it.id) }
+                val storedProjectIds = projects.map { it.id }.toSet()
                 codingRuntime?.computerUse?.let { computer ->
                     val owner = stored.firstOrNull { it.id == computer.state.value.sessionId }
                     if (owner == null || owner.planningMode || owner.researchMode || owner.stageId != null) computer.disable()
                 }
                 val old = _state.value.coding.sessions.associateBy { it.session.id }
-                old.values.filter { item -> stored.none { it.id == item.session.id } }.forEach {
+                // Only clean up sessions that truly disappeared (project deleted),
+                // not sessions that were just created in-memory but haven't reached
+                // the concurrent storage snapshot yet (addCodingSession race).
+                old.values.filter { item ->
+                    stored.none { it.id == item.session.id } && item.session.projectId !in storedProjectIds
+                }.forEach {
                     requestPins?.remove(PinConversation(it.session.id, it.session.projectId))
                     sessionTitles?.forget(it.session.id)
                 }
@@ -335,14 +342,23 @@ class MagicPaperViewModel(
                             put(session.id, repo.messages(session.projectId, session.id))
                     }
                 }
+                val storedIds = stored.map { it.id }.toSet()
                 _state.update { state ->
                     // Repository reads suspend. Merge into the latest draft rather than
                     // overwriting output received while the history was being loaded.
                     val current = state.coding.sessions.associateBy { it.session.id }
-                    state.copy(coding = state.coding.copy(sessions = stored.map { session ->
+                    // Keep sessions that were just created in-memory but haven't been
+                    // captured by the concurrent storage snapshot (addCodingSession race).
+                    val preserved = current.values.filter { it.session.id !in storedIds && it.session.projectId in storedProjectIds }
+                    val merged = stored.map { session ->
                         val previous = current[session.id] ?: CodingSessionUi(session)
                         withPlanningState(previous.copy(session = session, messages = histories[session.id] ?: previous.messages))
-                    }))
+                    } + preserved
+                    // Skip state mutation when no session reference changed —
+                    // prevents unnecessary Compose recomposition.
+                    if (merged.size == state.coding.sessions.size &&
+                        merged.indices.all { i -> merged[i] === state.coding.sessions[i] }) state
+                    else state.copy(coding = state.coding.copy(sessions = merged))
                 }
                 startPendingImmunityDiagnostics()
             }
@@ -352,8 +368,14 @@ class MagicPaperViewModel(
             combine(service.drafts, service.execution.live) { _, _ -> Unit }.sample(50).collect {
                 // Live activity updates statuses using saved history already in memory.
                 // Only service.changes reloads persisted messages.
-                _state.update { state -> state.copy(coding = state.coding.copy(
-                    sessions = state.coding.sessions.map(::withPlanningState))) }
+                _state.update { state ->
+                    val updated = state.coding.sessions.map(::withPlanningState)
+                    // withPlanningState returns the same reference when nothing changed.
+                    // Skip the copy entirely to avoid triggering Compose recomposition
+                    // every 50 ms when no planning state actually changed.
+                    if (updated.indices.all { i -> updated[i] === state.coding.sessions[i] }) state
+                    else state.copy(coding = state.coding.copy(sessions = updated))
+                }
             }
         } }
 

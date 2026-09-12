@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.coding
 
+import io.aequicor.magicpaper.domain.ModelCapabilities
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.LlmProfile
@@ -100,6 +101,8 @@ object PiModelsConfig {
 
     /** То же деревом: тестам удобнее читать поля, чем подстроки. */
     fun root(profile: LlmProfile, providerId: String = PROVIDER_ID, imageInput: Boolean = false) = buildJsonObject {
+        // Единый источник capabilities — vision, reasoning, thinking format, compat.
+        val caps = ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl)
         put("providers", buildJsonObject {
             put(providerId, buildJsonObject {
                 put("baseUrl", if (profile.provider == ProviderType.OPENAI_SUBSCRIPTION) "https://chatgpt.com/backend-api" else profile.baseUrl.trimEnd('/'))
@@ -117,6 +120,12 @@ object PiModelsConfig {
                     put("supportsDeveloperRole", false)
                     put("supportsReasoningEffort", reasoning.enabled)
                     reasoning.thinkingFormat?.let { put("thinkingFormat", it) }
+                    // Compat-флаги из ModelCapabilities: requiresAssistantAfterToolResult
+                    // и т.д. — определяются один раз в resolve(), а не дублируются
+                    // в каждом потребителе.
+                    if (imageInput && caps.requiresAssistantAfterToolResult) {
+                        put("requiresAssistantAfterToolResult", true)
+                    }
                 })
                 put("models", buildJsonArray {
                     add(buildJsonObject {
@@ -161,11 +170,12 @@ object PiModelsConfig {
     fun reasoning(profile: LlmProfile, modelId: String = profile.modelId): Reasoning {
         val controls = controls(profile, modelId)?.takeIf { it.supportsEffort }
         val levelMap = controls?.let { thinkingLevelMap(it) } ?: emptyMap()
+        val caps = ModelCapabilities.resolve(profile.provider, modelId, profile.baseUrl)
         return Reasoning(
             enabled = controls != null,
             maxTokens = maxTokens(profile, modelId),
             thinkingLevel = controls?.let { thinkingLevel(profile, modelId, it, levelMap) },
-            thinkingFormat = if (controls != null) thinkingFormat(profile, modelId) else null,
+            thinkingFormat = if (controls != null) caps.thinkingFormat else null,
             thinkingLevelMap = levelMap,
         )
     }
@@ -221,29 +231,11 @@ object PiModelsConfig {
         }
 
     /**
-     * Диалект переключателей мышления по семейству модели: наружные Qwen-эндпоинты
-     * понимают верхнеуровневый `enable_thinking` (`"qwen"`), локальные серверы —
-     * `chat_template_kwargs` (`"qwen-chat-template"`). Остальным — схема по
-     * умолчанию (`reasoning_effort`), которую выбирает сам pi.
+     * Модель принимает изображения (vision) — делегирование к [ModelCapabilities].
+     * Публичный API для вызовов без полного профиля (тесты, миграции).
      */
-    private fun thinkingFormat(profile: LlmProfile, modelId: String): String? = when {
-        ProviderCatalog.familyOf(modelId) != "qwen" -> null
-        isLocalEndpoint(profile.baseUrl) -> "qwen-chat-template"
-        else -> "qwen"
-    }
-
-    /** Локальный сервер (Ollama, LM Studio, llama.cpp) — по имени хоста. */
-    private fun isLocalEndpoint(baseUrl: String): Boolean {
-        val host = baseUrl.substringAfter("://", baseUrl)
-            .substringBefore('/')
-            .substringBeforeLast(':')
-            .trim('[', ']')
-            .lowercase()
-        return host == "localhost" || host == "::1" || host == "0.0.0.0" ||
-            host == "host.docker.internal" ||
-            // Домашние и офисные сети: там и живут локальные серверы с chat template.
-            host.startsWith("127.") || host.startsWith("192.168.") || host.startsWith("10.")
-    }
+    fun supportsImageInput(modelId: String): Boolean =
+        ModelCapabilities.resolve(ProviderType.OPENAI_COMPATIBLE, modelId).vision
 
     private fun controls(profile: LlmProfile, modelId: String): ReasoningCapability.Controls? =
         ModelDefaults.capability(profile, modelId) as? ReasoningCapability.Controls

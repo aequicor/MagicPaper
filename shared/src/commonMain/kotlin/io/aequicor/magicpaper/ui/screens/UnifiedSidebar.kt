@@ -79,13 +79,15 @@ internal fun rememberUnifiedItems(
     selectedId: String?,
     viewingCoding: Boolean,
 ): List<UnifiedSidebarItem> {
-    val chatItems = chatSessions.map { session ->
-        UnifiedSidebarItem(
-            id = session.id,
-            displayName = session.title,
-            sortTime = session.updatedAt,
-            isCoding = false,
-        )
+    val chatItems = remember(chatSessions) {
+        chatSessions.map { session ->
+            UnifiedSidebarItem(
+                id = session.id,
+                displayName = session.title,
+                sortTime = session.updatedAt,
+                isCoding = false,
+            )
+        }
     }
     // Иммунитет-сессии исключены из списка — они доступны через ромбик на зиготе.
     // Сопоставляем зиготу с иммунитетом через organisms (надёжная привязка).
@@ -102,21 +104,23 @@ internal fun rememberUnifiedItems(
         }
         result
     }
-    val codingItems = coding.sessions
-        .filter { it.session.parentSessionId == null && it.session.sessionKind != SessionKind.IMMUNITY && !it.session.archived }
-        .map { sessionUi ->
-            val project = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }
-            UnifiedSidebarItem(
-                id = sessionUi.session.id,
-                displayName = sessionUi.session.name,
-                sortTime = sessionUi.session.createdAt,
-                isCoding = true,
-                projectName = project?.name,
-                projectId = sessionUi.session.projectId,
-                codingStatus = sessionUi.status,
-                immunity = immunityByZygote[sessionUi.session.id],
-            )
-        }
+    val codingItems = remember(coding.sessions, coding.projects, immunityByZygote) {
+        coding.sessions
+            .filter { it.session.parentSessionId == null && it.session.sessionKind != SessionKind.IMMUNITY && !it.session.archived }
+            .map { sessionUi ->
+                val project = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }
+                UnifiedSidebarItem(
+                    id = sessionUi.session.id,
+                    displayName = sessionUi.session.name,
+                    sortTime = sessionUi.session.createdAt,
+                    isCoding = true,
+                    projectName = project?.name,
+                    projectId = sessionUi.session.projectId,
+                    codingStatus = sessionUi.status,
+                    immunity = immunityByZygote[sessionUi.session.id],
+                )
+            }
+    }
     return remember(chatItems, codingItems) {
         (chatItems + codingItems).sortedByDescending { it.sortTime }
     }
@@ -152,7 +156,6 @@ fun UnifiedSidebar(
             projectOrder.forEach { projectId ->
                 val project = coding.projects.firstOrNull { it.id == projectId } ?: return@forEach
                 val sessions = codingByProject[projectId].orEmpty().sortedByDescending { it.sortTime }
-                if (sessions.isEmpty()) return@forEach
                 val collapsed = projectId in collapsedProjects
                 item(key = "project:$projectId") {
                     ProjectSectionHeader(
