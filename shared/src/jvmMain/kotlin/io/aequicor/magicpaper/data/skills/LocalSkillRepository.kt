@@ -445,7 +445,13 @@ class LocalSkillRepository(
         internal fun readLimited(path: Path, limit: Int): ByteArray = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use {
             it.readNBytes(limit + 1).also { bytes -> require(bytes.size <= limit) { "Input too large" } }
         }
-        private fun syncDirectory(path: Path) { FileChannel.open(path, READ).use { it.force(true) } }
+        /** Directory fsync ensures entries survive power loss on POSIX. Windows does not support
+         *  FileChannel on a directory path; ignore AccessDeniedException there — the NTFS journal
+         *  already provides metadata ordering guarantees sufficient for our atomic-move pattern. */
+        private fun syncDirectory(path: Path) {
+            try { FileChannel.open(path, READ).use { it.force(true) } }
+            catch (_: java.nio.file.AccessDeniedException) { /* Windows: cannot fsync a directory */ }
+        }
         private fun atomicWrite(path: Path, bytes: ByteArray) {
             val parent = path.toAbsolutePath().parent
             val tmp = Files.createTempFile(parent, ".skill-snapshot-", ".tmp")

@@ -116,7 +116,7 @@ class LocalSkillExperience(
         require(bytes.size <= 8 * 1024 * 1024)
         val temp = root.resolve("experience.tmp")
         try {
-            FileChannel.open(temp, CREATE, TRUNCATE_EXISTING, WRITE, LinkOption.NOFOLLOW_LINKS).use {
+            FileChannel.open(temp, CREATE, TRUNCATE_EXISTING, WRITE).use {
                 val buffer = java.nio.ByteBuffer.wrap(bytes)
                 while (buffer.hasRemaining()) it.write(buffer)
                 it.force(true)
@@ -124,7 +124,9 @@ class LocalSkillExperience(
             Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             state = next
             revision.value++
-            FileChannel.open(root, READ).use { it.force(true) }
+            // Directory fsync: Windows does not support FileChannel on a directory path.
+            try { FileChannel.open(root, READ).use { it.force(true) } }
+            catch (_: java.nio.file.AccessDeniedException) { /* Windows */ }
         } finally { Files.deleteIfExists(temp) }
     }
     private fun invalidate() {
