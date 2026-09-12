@@ -34,6 +34,7 @@ import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.PaperIconButton
+import io.aequicor.magicpaper.designsystem.PaperVerticalDivider
 import io.aequicor.magicpaper.designsystem.PaperPanel
 import io.aequicor.magicpaper.designsystem.PaperSurface
 import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
@@ -51,6 +52,7 @@ import io.aequicor.magicpaper.ui.screens.ChatScreen
 import io.aequicor.magicpaper.ui.screens.CodingScreen
 import io.aequicor.magicpaper.ui.screens.DocsScreen
 import io.aequicor.magicpaper.ui.screens.PluginsScreen
+import io.aequicor.magicpaper.ui.screens.ResizableProjectPanels
 import io.aequicor.magicpaper.ui.screens.UnifiedSidebar
 import io.aequicor.magicpaper.ui.screens.SettingsScreen
 import io.aequicor.magicpaper.ui.screens.WelcomeScreen
@@ -112,35 +114,38 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
     Box(Modifier.fillMaxSize()) {
         Row(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen != Screen.SETTINGS) {
-                Row {
-                    UnifiedSidebar(
-                        vm = vm,
-                        chatSessions = state.sessions,
-                        coding = state.coding,
-                        selectedId = state.activeSessionId,
-                        viewingCoding = state.viewingCoding,
-                    )
-                    PaperDivider(Modifier.fillMaxHeight().width(1.dp))
-                }
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                when {
-                    state.screen == Screen.CHAT && state.viewingCoding -> {
-                        CodingScreen(
+                ResizableProjectPanels(
+                    sidebar = { panelModifier ->
+                        UnifiedSidebar(
                             vm = vm,
-                            ui = state.coding,
-                            panelPlugin = state.codingPanelPlugin,
-                            profiles = state.availableLlmProfiles,
-                            activeProfileId = state.settings.activeLlmProfileId,
-                            showProjectsPanel = false,
+                            chatSessions = state.sessions,
+                            coding = state.coding,
+                            selectedId = state.activeSessionId,
+                            viewingCoding = state.viewingCoding,
+                            modifier = panelModifier,
                         )
                     }
-                    state.screen == Screen.CHAT -> ChatScreen(vm, state)
-                    state.screen == Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
-                        ActivePlugins(state.plugins, state.pluginStates, vm::openPlanningChat)
+                ) {
+                    Box {
+                        when {
+                            state.screen == Screen.CHAT && state.viewingCoding -> {
+                                CodingScreen(
+                                    vm = vm,
+                                    ui = state.coding,
+                                    panelPlugin = state.codingPanelPlugin,
+                                    profiles = state.availableLlmProfiles,
+                                    activeProfileId = state.settings.activeLlmProfileId,
+                                    showProjectsPanel = false,
+                                )
+                            }
+                            state.screen == Screen.CHAT -> ChatScreen(vm, state)
+                            state.screen == Screen.PLUGINS -> PluginsScreen(vm, state.plugins, state.pluginStates) {
+                                ActivePlugins(state.plugins, state.pluginStates, vm::openPlanningChat)
+                            }
+                            state.screen == Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
+                            state.screen == Screen.SETTINGS -> SettingsScreen(vm, state)
+                        }
                     }
-                    state.screen == Screen.DOCS -> DocsScreen(vm, state.docsArticles, state.docsQuery)
-                    state.screen == Screen.SETTINGS -> SettingsScreen(vm, state)
                 }
             }
         }
