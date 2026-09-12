@@ -70,12 +70,18 @@ object PiEventParser {
             "agent_end" -> CodingEvent.AgentEnd
             "magicpaper_request" -> CodingEvent.ModelRequest(obj.primitive("id").orEmpty())
             "magicpaper_context" -> CodingEvent.ContextUpdated(obj.count("tokens"), obj.count("contextWindow"), approximate = true)
-            "compaction_start" -> CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED, obj.primitive("reason").orEmpty()))
-            "compaction_end" -> CodingEvent.Compaction(CompactionStatus("", when {
-                obj["aborted"] == JsonPrimitive(true) || obj["cancelled"] == JsonPrimitive(true) -> CompactionPhase.CANCELLED
-                !obj.primitive("errorMessage").isNullOrBlank() || obj["error"]?.let { it != JsonNull } == true -> CompactionPhase.FAILED
-                else -> CompactionPhase.COMPLETED
-            }, obj.primitive("reason").orEmpty()))
+            "compaction_start" -> {
+                println("[DEBUG] compaction_start event received: ${obj}")
+                CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED, obj.primitive("reason").orEmpty()))
+            }
+            "compaction_end" -> {
+                println("[DEBUG] compaction_end event received: ${obj}")
+                CodingEvent.Compaction(CompactionStatus("", when {
+                    obj["aborted"] == JsonPrimitive(true) || obj["cancelled"] == JsonPrimitive(true) -> CompactionPhase.CANCELLED
+                    !obj.primitive("errorMessage").isNullOrBlank() || obj["error"]?.let { it != JsonNull } == true -> CompactionPhase.FAILED
+                    else -> CompactionPhase.COMPLETED
+                }, obj.primitive("reason").orEmpty()))
+            }
             "auto_retry_start" -> CodingEvent.Notice(
                 "Сбой у провайдера, автоповтор №${obj.primitive("attempt") ?: "?"}…"
             )

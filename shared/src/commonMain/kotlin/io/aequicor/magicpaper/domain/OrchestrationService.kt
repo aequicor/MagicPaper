@@ -33,7 +33,8 @@ class OrchestrationService(
     private val _unsavedInputs = MutableStateFlow<Map<String, List<OrchestrationInput>>>(emptyMap())
     val unsavedInputs: StateFlow<Map<String, List<OrchestrationInput>>> = _unsavedInputs.asStateFlow()
     private val stateLock = Mutex()
-    private val sessionLock = Mutex()
+    private val sessionLocks = mutableMapOf<String, Mutex>()
+    private fun sessionLock(sessionId: String): Mutex = sessionLocks.getOrPut(sessionId) { Mutex() }
     private val _states = MutableStateFlow<Map<String, OrchestrationState>>(emptyMap())
     val states: StateFlow<Map<String, OrchestrationState>> = _states.asStateFlow()
     private val _sessions = MutableStateFlow<List<CodingSession>>(emptyList())
@@ -536,7 +537,7 @@ class OrchestrationService(
     }
 
     suspend fun deleteSessionTree(projectId: String, sessionId: String): Set<String> = historyDeletionLock.withLock {
-        var ids = sessionLock.withLock {
+        var ids = sessionLock(sessionId).withLock {
             projects.sessions(projectId).sessionTreeIds(sessionId).also { deletedSessions.addAll(it) }
         }
         val remainingSessions = projects.sessions(projectId)
@@ -908,7 +909,7 @@ class OrchestrationService(
         launch {
             if (session.id in deletedSessions) return@launch
             organisms?.prepareUserTurn(session, input.id)
-            sessionLock.withLock {
+            sessionLock(session.id).withLock {
                 val latest = projects.sessions(session.projectId).firstOrNull { it.id == session.id } ?: return@launch
                 projects.saveSession(latest.namedFromPrompt(text))
             }
@@ -1807,7 +1808,7 @@ class OrchestrationService(
             // Legacy workers can outlive their parent or plan. Their local actions
             // must remain available without routing commands to a missing owner.
             if (kind == SessionCommandKind.ARCHIVE && plan != null) execution.stopAndJoin(plan.id)
-            sessionLock.withLock {
+            sessionLock(sessionId).withLock {
                 val latest = projects.sessions(session.projectId).firstOrNull { it.id == sessionId } ?: return@withLock
                 val updated = when (kind) {
                     SessionCommandKind.ARCHIVE -> latest.copy(archived = true)
@@ -1827,7 +1828,7 @@ class OrchestrationService(
         performSessionCommand(plan, SessionCommand(Id.new(), kind, sessionId, plan.id, session.stageId.orEmpty(), name.trim()))
     }
 
-    private suspend fun performSessionCommand(plan: Plan, command: SessionCommand, publishNotice: Boolean = true) = sessionLock.withLock {
+    private suspend fun performSessionCommand(plan: Plan, command: SessionCommand, publishNotice: Boolean = true) = sessionLock(command.sessionId).withLock {
         if (plan.id in deletedPlans || plan.parentSessionId in deletedSessions) return@withLock
         requireTool(plan.parentSessionId.isNotBlank()) { "Не задан оркестратор" }
         val saved = updateState(plan.parentSessionId, plan.projectId) { old ->

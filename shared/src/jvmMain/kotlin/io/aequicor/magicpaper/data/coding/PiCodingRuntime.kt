@@ -413,14 +413,21 @@ class PiCodingRuntime(
                         streamBroken = e.message
                         break
                     } ?: break
+                    
+                    // Логируем все события для диагностики
+                    println("[PI-EVENT] Raw line: ${line.take(200)}")
+                    
                     for (event in PiEventParser.parseEvents(line,
                         summaryOnly = profile.provider in setOf(ProviderType.OPENAI_SUBSCRIPTION, ProviderType.GOOGLE))) {
+                        println("[PI-EVENT] Parsed: ${event::class.simpleName}")
                         when (event) {
                             is CodingEvent.SessionStarted ->
                                 if (event.sessionId.isNotBlank()) capturedId = event.sessionId
                             is CodingEvent.FinalText -> answerSeen = true
                             is CodingEvent.Failed -> answerSeen = true
                             is CodingEvent.OutputTruncated -> truncated = event
+                            is CodingEvent.Compaction -> println("[PI-EVENT] Compaction: phase=${event.status.phase}, reason=${event.status.reason}")
+                            is CodingEvent.ContextUpdated -> println("[PI-EVENT] Context: used=${event.used}, limit=${event.limit}")
                             else -> Unit
                         }
                         emit(event)
