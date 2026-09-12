@@ -205,7 +205,13 @@ class DesktopCodingRuntime(
                 emit(CodingEvent.Finished)
                 return@flow
             }
-            recordSkillRun(CodingSkillRunRecord(runId, project.id, session.id, adapter, selection))
+            try {
+                recordSkillRun(CodingSkillRunRecord(runId, project.id, session.id, adapter, selection))
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                // Audit record failure must not block the coding run — the engine
+                // and skill selection are still valid; only the on-disk journal entry is missing.
+                emit(CodingEvent.Notice("SKILLS run=$runId: аудит не сохранён (${e.message}); запуск продолжается без записи."))
+            }
             val selected = selection.instructions
             if (selected.isNotEmpty() && (!selection.trustedText || !selection.freshSession)) {
                 emit(CodingEvent.Notice("SKILLS run=$runId project=${project.id} session=${session.id} adapter=$adapter\n" +
