@@ -12,12 +12,12 @@ def violations(root):
     errors = []
     for build in root.glob('*/build.gradle.kts'):
         if build.parent.name == 'designSystem':
-            if 'project(":shared")' in build.read_text():
+            if 'project(":shared")' in build.read_text(encoding='utf-8'):
                 errors.append(':designSystem must not depend on :shared')
             continue
         # Remove only explicit test dependency scopes. Scan all remaining build
         # syntax, including top-level dependencies and fully qualified artifacts.
-        build_text = build.read_text()
+        build_text = build.read_text(encoding='utf-8')
         for match in reversed(list(re.finditer(r'\w*[Tt]est\.dependencies\s*\{', build_text))):
             depth, end = 1, match.end()
             while depth and end < len(build_text):
@@ -30,7 +30,7 @@ def violations(root):
             if any('test' in part.lower() for part in source.relative_to(build.parent / 'src').parts[:-1]):
                 continue
             # Strip comments, but keep qualified calls, aliases and wildcard imports.
-            text = re.sub(r'/\*.*?\*/|//[^\n]*', '', source.read_text(), flags=re.S)
+            text = re.sub(r'/\*.*?\*/|//[^\n]*', '', source.read_text(encoding='utf-8'), flags=re.S)
             for line, value in enumerate(text.splitlines(), 1):
                 if FORBIDDEN.search(value):
                     errors.append(f'{source.relative_to(root)}:{line}: use Paper API')
