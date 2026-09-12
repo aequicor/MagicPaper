@@ -103,7 +103,7 @@ internal fun rememberUnifiedItems(
         result
     }
     val codingItems = coding.sessions
-        .filter { it.session.parentSessionId == null && it.session.sessionKind != SessionKind.IMMUNITY }
+        .filter { it.session.parentSessionId == null && it.session.sessionKind != SessionKind.IMMUNITY && !it.session.archived }
         .map { sessionUi ->
             val project = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }
             UnifiedSidebarItem(

@@ -153,7 +153,7 @@ data class CodingUi(
         if (organisms.values.any { it.projectId == projectId && it.deletedAt == null &&
                 it.interventions.any { proposal -> proposal.state == io.aequicor.magicpaper.domain.ImmunityInterventionState.PROPOSED } })
             return CodingSessionStatus.WAITING
-        val own = sessions.filter { it.session.projectId == projectId }
+        val own = sessions.filter { it.session.projectId == projectId && !it.session.archived }
         return if (own.isNotEmpty()) {
             aggregateCodingStatus(own.map { it.status })
         } else {
@@ -177,8 +177,8 @@ data class CodingUi(
      * правой части (какой журнал показывать).
      */
     fun activeSessionIdOf(projectId: String): String? {
-        return (sessions.firstOrNull { it.session.projectId == projectId && it.session.id == currentSessionId }
-            ?: sessions.firstOrNull { it.session.projectId == projectId })?.session?.id
+        return (sessions.firstOrNull { it.session.projectId == projectId && !it.session.archived && it.session.id == currentSessionId }
+            ?: sessions.firstOrNull { it.session.projectId == projectId && !it.session.archived })?.session?.id
     }
 }
 
