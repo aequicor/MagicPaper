@@ -48,7 +48,6 @@ import io.aequicor.magicpaper.designsystem.paperClickable
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.SessionKind
-import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.MagicPaperViewModel
 
@@ -61,6 +60,15 @@ internal data class UnifiedSidebarItem(
     val projectName: String? = null,
     val projectId: String? = null,
     val codingStatus: CodingSessionStatus? = null,
+    /** Иммунитет, привязанный к этой зиготе (если есть). */
+    val immunity: ImmunityInfo? = null,
+)
+
+/** Данные об иммунитете, привязанном к зиготе. */
+internal data class ImmunityInfo(
+    val sessionId: String,
+    val status: CodingSessionStatus,
+    val selected: Boolean,
 )
 
 /** Элементы единого списка: чаты и кодинг-сессии, отсортированные по обновлению. */
@@ -68,6 +76,8 @@ internal data class UnifiedSidebarItem(
 internal fun rememberUnifiedItems(
     chatSessions: List<ChatSession>,
     coding: CodingUi,
+    selectedId: String?,
+    viewingCoding: Boolean,
 ): List<UnifiedSidebarItem> {
     val chatItems = chatSessions.map { session ->
         UnifiedSidebarItem(
@@ -77,8 +87,23 @@ internal fun rememberUnifiedItems(
             isCoding = false,
         )
     }
+    // Иммунитет-сессии исключены из списка — они доступны через ромбик на зиготе.
+    // Сопоставляем зиготу с иммунитетом через organisms (надёжная привязка).
+    val immunityByZygote = remember(coding.organisms, coding.sessions, selectedId, viewingCoding) {
+        val result = mutableMapOf<String, ImmunityInfo>()
+        coding.organisms.values.forEach { organism ->
+            val immId = organism.immunityId ?: return@forEach
+            val immSession = coding.sessions.firstOrNull { it.session.id == immId } ?: return@forEach
+            result[organism.zygoteId] = ImmunityInfo(
+                sessionId = immId,
+                status = immSession.status,
+                selected = viewingCoding && immId == selectedId,
+            )
+        }
+        result
+    }
     val codingItems = coding.sessions
-        .filter { it.session.parentSessionId == null }
+        .filter { it.session.parentSessionId == null && it.session.sessionKind != SessionKind.IMMUNITY }
         .map { sessionUi ->
             val project = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }
             UnifiedSidebarItem(
@@ -89,19 +114,13 @@ internal fun rememberUnifiedItems(
                 projectName = project?.name,
                 projectId = sessionUi.session.projectId,
                 codingStatus = sessionUi.status,
+                immunity = immunityByZygote[sessionUi.session.id],
             )
         }
     return remember(chatItems, codingItems) {
         (chatItems + codingItems).sortedByDescending { it.sortTime }
     }
 }
-
-/** Данные об иммунитете для проекта в единой боковой панели. */
-private data class ProjectImmunityInfo(
-    val immunitySessionId: String,
-    val status: CodingSessionStatus,
-    val selected: Boolean,
-)
 
 /** Единая боковая панель: чаты и кодинг-сессии в одном списке с группировкой по проектам. */
 @Composable
@@ -112,26 +131,11 @@ fun UnifiedSidebar(
     selectedId: String?,
     viewingCoding: Boolean,
 ) {
-    val items = rememberUnifiedItems(chatSessions, coding)
+    val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding)
     val codingByProject = items.filter { it.isCoding }.groupBy { it.projectId }
     val projectOrder = coding.projects.map { it.id }
     val chatItems = items.filter { !it.isCoding }
     val collapsedProjects = remember { mutableSetOf<String>() }
-
-    // Индекс иммунитет-сессий по проектам (для ромбика в заголовке).
-    val immunityByProject = remember(coding.sessions, selectedId, viewingCoding) {
-        coding.sessions
-            .filter { it.session.sessionKind == SessionKind.IMMUNITY }
-            .groupBy { it.session.projectId }
-            .mapValues { (_, sessions) -> sessions.first() }
-            .mapValues { (_, imm) ->
-                ProjectImmunityInfo(
-                    immunitySessionId = imm.session.id,
-                    status = imm.status,
-                    selected = viewingCoding && imm.session.id == selectedId,
-                )
-            }
-    }
 
     Column(Modifier.width(260.dp).fillMaxHeight()) {
         Row(
@@ -150,7 +154,6 @@ fun UnifiedSidebar(
                 val sessions = codingByProject[projectId].orEmpty().sortedByDescending { it.sortTime }
                 if (sessions.isEmpty()) return@forEach
                 val collapsed = projectId in collapsedProjects
-                val immunityInfo = immunityByProject[projectId]
                 item(key = "project:$projectId") {
                     ProjectSectionHeader(
                         name = project.name,
@@ -159,11 +162,7 @@ fun UnifiedSidebar(
                             if (collapsed) collapsedProjects.remove(projectId)
                             else collapsedProjects.add(projectId)
                         },
-                        immunityInfo = immunityInfo,
-                        onImmunityClick = { immunityInfo?.let { vm.selectUnifiedSession(it.immunitySessionId, true) } },
-                        onAddSession = {
-                            vm.requestCodingSessionInProject(projectId)
-                        },
+                        onAddSession = { vm.requestCodingSessionInProject(projectId) },
                     )
                 }
                 if (!collapsed) {
@@ -175,6 +174,7 @@ fun UnifiedSidebar(
                             onClick = { vm.selectUnifiedSession(item.id, true) },
                             onDelete = { vm.deleteCodingSession(item.id) },
                             onArchive = { vm.archiveCodingSession(item.id) },
+                            onImmunityClick = { item.immunity?.let { vm.selectUnifiedSession(it.sessionId, true) } },
                         )
                     }
                 }
@@ -191,6 +191,7 @@ fun UnifiedSidebar(
                         onClick = { vm.selectUnifiedSession(item.id, false) },
                         onDelete = { vm.deleteSession(item.id) },
                         onArchive = null,
+                        onImmunityClick = null,
                     )
                 }
             }
@@ -219,8 +220,6 @@ private fun ProjectSectionHeader(
     name: String,
     collapsed: Boolean,
     onToggle: () -> Unit,
-    immunityInfo: ProjectImmunityInfo?,
-    onImmunityClick: () -> Unit,
     onAddSession: () -> Unit,
 ) {
     val hoverInteraction = remember { MutableInteractionSource() }
@@ -251,16 +250,6 @@ private fun ProjectSectionHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        // Ромбик иммунитета справа (для проектов с планированием).
-        if (immunityInfo != null) {
-            Spacer(Modifier.width(4.dp))
-            ImmunityDiamond(
-                status = immunityInfo.status,
-                selected = immunityInfo.selected,
-                onClick = onImmunityClick,
-            )
-        }
-        Spacer(Modifier.width(4.dp))
         HoverActions(visible = showActions) {
             PaperTooltip("Новая сессия") {
                 PaperTextAction(
@@ -303,6 +292,7 @@ private fun UnifiedSessionRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onArchive: (() -> Unit)?,
+    onImmunityClick: (() -> Unit)? = null,
 ) {
     val hoverInteraction = remember { MutableInteractionSource() }
     val hovered by hoverInteraction.collectIsHoveredAsState()
@@ -339,6 +329,16 @@ private fun UnifiedSessionRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // Ромбик иммунитета на строке зиготы.
+        val immunity = item.immunity
+        if (immunity != null && onImmunityClick != null) {
+            Spacer(Modifier.width(4.dp))
+            ImmunityDiamond(
+                status = immunity.status,
+                selected = immunity.selected,
+                onClick = onImmunityClick,
+            )
+        }
         HoverActions(visible = showActions) {
             if (onArchive != null) {
                 PaperTooltip("В архив") {
@@ -363,7 +363,7 @@ private fun UnifiedSessionRow(
     }
 }
 
-/** Ромбик иммунитета для UnifiedSidebar (аналог ImmunityDiamondButton из CodingScreen). */
+/** Ромбик иммунитета на строке зиготы (аналог ImmunityDiamondButton из CodingScreen). */
 @Composable
 private fun ImmunityDiamond(
     status: CodingSessionStatus,
