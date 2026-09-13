@@ -649,11 +649,16 @@ class SessionOrganismService(
         val root = existing[organism.zygoteId] ?: return@withLock
         organism.sessions.values.filterNot { it.id in organism.historyDeletedIds }.forEach { node ->
             val old = existing[node.id]
+            // Preserve auto-generated names written by namedFromPrompt between projections.
+            // The organism node is authoritative for manually set names; for auto-names the
+            // repository may already carry a prompt-derived title that must survive projection.
+            val projectedName = if (!node.nameManuallySet && old != null && !old.nameManuallySet && !old.name.isDefaultSessionName())
+                old.name else node.name
             val projected = (old ?: CodingSession(node.id, organism.projectId, node.name, organism.createdAt,
                 parentSessionId = node.originParentId, engine = root.engine,
                 planningMode = node.mode == CodingInteractionMode.PLANNING, researchMode = node.mode == CodingInteractionMode.RESEARCH,
                 modelSelection = root.modelSelection)).copy(
-                name = node.name, nameManuallySet = node.nameManuallySet || old?.nameManuallySet == true,
+                name = projectedName, nameManuallySet = node.nameManuallySet || old?.nameManuallySet == true,
                 parentSessionId = node.originParentId, organismId = organism.id,
                 runtimeGeneration = node.generation, sessionKind = node.kind, observedState = node.observed,
                 desiredState = node.desired, archived = node.archived, planningRulesSnapshot = node.rules,

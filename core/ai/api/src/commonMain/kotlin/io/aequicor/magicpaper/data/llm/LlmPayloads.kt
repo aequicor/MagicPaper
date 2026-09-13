@@ -6,6 +6,7 @@ import io.aequicor.magicpaper.domain.AttachmentKind
 import io.aequicor.magicpaper.domain.LlmChatRole
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelCapabilities
 import io.aequicor.magicpaper.domain.ReasoningCapability
 import io.aequicor.magicpaper.domain.ReasoningEffort
 import io.aequicor.magicpaper.domain.ResolvedEffort
@@ -44,6 +45,7 @@ object LlmPayloads {
         capability: ReasoningCapability = ReasoningCapability.None,
     ): JsonObject {
         val resolved = profile.resolveEffort(capability)
+        val supportsVision = ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision
         val a = profile.advanced
         return buildJsonObject {
             a.extraParameters.filterKeys { it in io.aequicor.magicpaper.domain.CUSTOM_MODEL_PARAMETERS }.forEach { (key, value) -> put(key, value) }
@@ -54,7 +56,7 @@ object LlmPayloads {
                     add(buildJsonObject {
                         put("role", wireRole(m.role))
                         if (m.role == LlmChatRole.USER && m.attachments.isNotEmpty()) {
-                            if (hasImageAttachments(m.attachments)) {
+                            if (hasImageAttachments(m.attachments) && supportsVision) {
                                 put("content", openAiContent(m))
                             } else {
                                 put("content", finalText(m))
@@ -86,6 +88,7 @@ object LlmPayloads {
         val resolved = profile.resolveEffort(capability)
         val controls = capability as? ReasoningCapability.Controls
         val a = profile.advanced
+        val supportsVision = ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision
         val system = messages.filter { it.role == LlmChatRole.SYSTEM }.joinToString("\n\n") { it.content }
         val baseMax = a.safeMaxTokens
 
@@ -120,7 +123,7 @@ object LlmPayloads {
                     add(buildJsonObject {
                         put("role", if (m.role == LlmChatRole.ASSISTANT) "assistant" else "user")
                         if (m.role == LlmChatRole.USER && m.attachments.isNotEmpty()) {
-                            if (hasImageAttachments(m.attachments)) {
+                            if (hasImageAttachments(m.attachments) && supportsVision) {
                                 put("content", anthropicContent(m))
                             } else {
                                 put("content", finalText(m))
@@ -160,6 +163,7 @@ object LlmPayloads {
         val resolved = profile.resolveEffort(capability)
         val controls = capability as? ReasoningCapability.Controls
         val a = profile.advanced
+        val supportsVision = ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision
         val system = messages.filter { it.role == LlmChatRole.SYSTEM }.joinToString("\n\n") { it.content }
         val baseMax = a.safeMaxTokens
 
@@ -174,7 +178,7 @@ object LlmPayloads {
                     add(buildJsonObject {
                         put("role", if (m.role == LlmChatRole.ASSISTANT) "model" else "user")
                         if (m.role == LlmChatRole.USER && m.attachments.isNotEmpty()) {
-                            if (hasImageAttachments(m.attachments)) {
+                            if (hasImageAttachments(m.attachments) && supportsVision) {
                                 put("parts", googleParts(m))
                             } else {
                                 put("parts", buildJsonArray { add(buildJsonObject { put("text", finalText(m)) }) })

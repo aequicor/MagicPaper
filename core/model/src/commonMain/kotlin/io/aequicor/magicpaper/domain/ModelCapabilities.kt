@@ -75,9 +75,8 @@ data class ModelCapabilities(
          * Модель принимает изображения — эвристика по id и провайдеру.
          *
          * Покрываемые семейства:
-         *  - Qwen: VL-ряд (`qwen-vl-*`, `qwen2-vl-*`, `qwen2.5-vl-*`),
-         *    а также флагманские модели (`-max`, `-plus`, `-turbo`) — Qwen 3.5+
-         *    флагманы являются мультимодальными (hybrid-thinking);
+         *  - Qwen: VL-ряд и мультимодальный снимок `qwen3.7-max-2026-06-08`.
+         *    Возможности снимка нельзя переносить на текстовый alias `qwen3.7-max`;
          *  - Claude 3+ (Haiku 3, Sonnet 3/4/5, Opus 3/4);
          *  - GPT-4 и новее (gpt-4*, gpt-5*, o-серия);
          *  - Gemini (все поколения мультимодальные);
@@ -85,12 +84,11 @@ data class ModelCapabilities(
          *  - Grok с vision.
          */
         private fun resolveVision(provider: ProviderType, family: String, id: String): Boolean = when {
-            // Qwen: VL-ряд и флагманские модели (Qwen 3.5+ multimodal)
-            family == "qwen" && (
-                id.contains("-vl") ||
-                    id.endsWith("-max") || id.endsWith("-plus") || id.endsWith("-turbo") ||
-                    id.contains("-max-") || id.contains("-plus-") || id.contains("-turbo-")
-                ) -> true
+            // Alibaba documents vision for this snapshot, while the unversioned alias
+            // still targets the text-only May 20 snapshot. Do not infer from "-max".
+            // https://www.alibabacloud.com/help/en/model-studio/qwen3-7-max
+            id == "qwen3.7-max-2026-06-08" -> true
+            family == "qwen" && id.contains("-vl") -> true
             // Claude 3+ (haiku-3, sonnet-3/4/5, opus-3/4)
             family == "claude" && id.any { it.isDigit() && it >= '3' } -> true
             // GPT-4+, o-серия

@@ -9,6 +9,15 @@ import kotlinx.serialization.json.*
 import io.aequicor.magicpaper.util.Id
 
 interface CodingRuntime {
+    /**
+     * Глобальные фича-флаги из [AppSettings.featureFlags].
+     * Обновляются приложением при смене настроек; per-session override берётся
+     * из [CodingSession.featureFlags]. Итоговые флаги: `session.featureFlags.resolve(globalFeatureFlags)`.
+     */
+    var globalFeatureFlags: FeatureFlagState
+        get() = FeatureFlagState()
+        set(_) {}
+
     suspend fun sessionContext(project: CodingProject, session: CodingSession, profile: LlmProfile?): String =
         sessionContextReport(profile, "Проект: ${project.path}\nДвижок: ${session.engine}", "Промпт недоступен для этого движка.", "Сведения о навыках недоступны.")
 

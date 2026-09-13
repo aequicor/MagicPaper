@@ -16,7 +16,11 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 
 /** Per-run authenticated local endpoint. Human deliberation has no short HTTP/tool deadline. */
-internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
+internal class AgentToolBridge(
+    private val tools: ToolSession,
+    /** Optimization 6 (AGENT_SPEED_BOOST): cache tools/list JSON response. */
+    private val cacheToolDefinitions: Boolean = false,
+) : AutoCloseable {
     // JSON-RPC IDs belong to this transport, not to the durable worker turn. A resumed
     // turn opens a new bridge and Codex restarts its counter; those are new calls.
     // Keep retries within this bridge stable, including the JSON ID's string/number type.
@@ -30,6 +34,11 @@ internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
     private val jobs = ConcurrentHashMap<JsonElement, Job>()
     private val requestBodies = ConcurrentHashMap<JsonElement, JsonObject>()
     private val results = ConcurrentHashMap<JsonElement, CompletableDeferred<JsonObject>>()
+    // Optimization 6 (AGENT_SPEED_BOOST): lazily cached tools/list response.
+    // Tool definitions are stable per bridge instance (one bridge per run),
+    // so computing the JSON once avoids repeated protocolDefinition() calls.
+    @Volatile
+    private var cachedToolsList: JsonObject? = null
     val token = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
     val url = "http://127.0.0.1:${server.address.port}/mcp"
     init {
@@ -74,7 +83,15 @@ internal class AgentToolBridge(private val tools: ToolSession) : AutoCloseable {
                         put("instructions", "Use the available tools for application actions. Tool results describe committed operations; plain text does not execute actions.")
                     }
                     "ping" -> buildJsonObject {}
-                    "tools/list" -> buildJsonObject { put("tools", JsonArray(tools.definitions.map { it.protocolDefinition() })) }
+                    "tools/list" -> {
+                        if (cacheToolDefinitions) {
+                            cachedToolsList ?: run {
+                                val built = buildJsonObject { put("tools", JsonArray(tools.definitions.map { it.protocolDefinition() })) }
+                                cachedToolsList = built
+                                built
+                            }
+                        } else buildJsonObject { put("tools", JsonArray(tools.definitions.map { it.protocolDefinition() })) }
+                    }
                     "tools/call" -> {
                         val name = params["name"]?.jsonPrimitive?.content ?: error("Нет имени инструмента")
                         val args = params["arguments"] as? JsonObject ?: error("Нет аргументов инструмента")

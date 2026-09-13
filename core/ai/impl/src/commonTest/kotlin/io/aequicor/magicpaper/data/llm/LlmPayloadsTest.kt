@@ -267,7 +267,7 @@ class LlmPayloadsTest {
 
     @Test
     fun openAiImageBecomesDataUrlBlock() {
-        val payload = LlmPayloads.openAi(profile(), userWith(imageAttachment))
+        val payload = LlmPayloads.openAi(profile(modelId = "qwen-vl-max"), userWith(imageAttachment))
         val blocks = openAiUserContent(payload) as? JsonArray
         assertNotNull(blocks, "с картинкой контент — массив блоков")
         assertEquals("text", (blocks[0] as JsonObject).str("type"))
@@ -291,7 +291,7 @@ class LlmPayloadsTest {
 
     @Test
     fun anthropicImageBecomesBase64Block() {
-        val payload = LlmPayloads.anthropic(profile(provider = ProviderType.ANTHROPIC), userWith(imageAttachment))
+        val payload = LlmPayloads.anthropic(profile(provider = ProviderType.ANTHROPIC, modelId = "claude-sonnet-4-20250514"), userWith(imageAttachment))
         val blocks = (payload["messages"] as? JsonArray)?.last()?.let { (it as? JsonObject)?.get("content") } as? JsonArray
         assertNotNull(blocks, "с картинкой контент — массив блоков")
         assertEquals("text", (blocks[0] as JsonObject).str("type"))
@@ -305,7 +305,7 @@ class LlmPayloadsTest {
 
     @Test
     fun googleImageBecomesInlineData() {
-        val payload = LlmPayloads.google(profile(provider = ProviderType.GOOGLE), userWith(imageAttachment))
+        val payload = LlmPayloads.google(profile(provider = ProviderType.GOOGLE, modelId = "gemini-2.5-pro"), userWith(imageAttachment))
         val parts = (payload["contents"] as? JsonArray)?.last()?.let { (it as? JsonObject)?.get("parts") } as? JsonArray
         assertNotNull(parts)
         assertTrue((parts[0] as JsonObject).str("text")!!.contains("что на картинке?"))
@@ -324,5 +324,31 @@ class LlmPayloadsTest {
         val text = (content as JsonPrimitive).content
         assertTrue(text.contains("архив.zip"), "бинарный файл упоминается в примечании")
         assertTrue(text.contains("без передачи содержимого"))
+    }
+
+    @Test
+    fun qwenMultimodalSnapshotPreservesImageBytesInPayload() {
+        val payload = LlmPayloads.openAi(
+            profile(modelId = "qwen3.7-max-2026-06-08"), userWith(imageAttachment),
+        )
+        assertEquals("qwen3.7-max-2026-06-08", payload.str("model"))
+        val blocks = openAiUserContent(payload) as? JsonArray
+        assertNotNull(blocks)
+        val image = blocks.last() as JsonObject
+        assertEquals("image_url", image.str("type"))
+        assertEquals("data:${imageAttachment.mimeType};base64,${imageAttachment.dataBase64}", image.obj("image_url")?.str("url"))
+    }
+
+    @Test
+    fun textOnlyModelStripsImagesFromPayload() {
+        // Alias qwen3.7-max пока указывает на текстовый снимок 2026-05-20;
+        // мультимодальный снимок 2026-06-08 проверяется отдельно выше.
+        val textOnly = profile(modelId = "qwen3.7-max")
+        val payload = LlmPayloads.openAi(textOnly, userWith(imageAttachment))
+        val content = openAiUserContent(payload)
+        assertTrue(content is JsonPrimitive, "текстовая модель получает строку, а не массив")
+        val text = (content as JsonPrimitive).content
+        assertTrue(text.contains("что на картинке?"), "текст запроса сохранён")
+        assertFalse(text.contains("data:image"), "base64-картинка не уходит")
     }
 }

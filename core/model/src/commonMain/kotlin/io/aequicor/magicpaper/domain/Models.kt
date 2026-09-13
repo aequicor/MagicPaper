@@ -74,6 +74,8 @@ data class AppSettings(
     val paperAnimationEnabled: Boolean = true,
     /** Скрывать служебные информационные шаги в ленте агента. */
     val hideSystemSteps: Boolean = true,
+    /** Экспериментальные возможности, включённые глобально для всех сессий. */
+    val featureFlags: FeatureFlagState = FeatureFlagState(),
     // ---- Легаси-поля «одной модели» -------------------------------------
     // Сохраняются для совместимости со старыми файлами настроек; при первом
     // запуске переносятся в профиль подключением (см. ProfileMigrator).

@@ -78,6 +78,8 @@ data class CodingSession(
     val sessionKind: SessionKind? = null,
     val observedState: SessionObservedState? = null,
     val desiredState: SessionDesiredState? = null,
+    /** Per-session фича-флаги; пустой override наследует глобальные из [AppSettings.featureFlags]. */
+    val featureFlags: FeatureFlagOverride = FeatureFlagOverride.INHERIT,
     /**
      * Короткое название списка, 2–3 слова, один раз суммированное из запроса. Пусто — пока
      * суммаризация не готова или не нужна; тогда список показывает [name].

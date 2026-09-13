@@ -19,3 +19,5 @@ captures
 node_modules/
 kotlin-js-store/
 .magicpaper/skill-packages/
+*.log
+*.mjs

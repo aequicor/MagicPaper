@@ -70,18 +70,14 @@ object PiEventParser {
             "agent_end" -> CodingEvent.AgentEnd
             "magicpaper_request" -> CodingEvent.ModelRequest(obj.primitive("id").orEmpty())
             "magicpaper_context" -> CodingEvent.ContextUpdated(obj.count("tokens"), obj.count("contextWindow"), approximate = true)
-            "compaction_start" -> {
-                println("[DEBUG] compaction_start event received: ${obj}")
+            "compaction_start" ->
                 CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED, obj.primitive("reason").orEmpty()))
-            }
-            "compaction_end" -> {
-                println("[DEBUG] compaction_end event received: ${obj}")
+            "compaction_end" ->
                 CodingEvent.Compaction(CompactionStatus("", when {
                     obj["aborted"] == JsonPrimitive(true) || obj["cancelled"] == JsonPrimitive(true) -> CompactionPhase.CANCELLED
                     !obj.primitive("errorMessage").isNullOrBlank() || obj["error"]?.let { it != JsonNull } == true -> CompactionPhase.FAILED
                     else -> CompactionPhase.COMPLETED
                 }, obj.primitive("reason").orEmpty()))
-            }
             "auto_retry_start" -> CodingEvent.Notice(
                 "Сбой у провайдера, автоповтор №${obj.primitive("attempt") ?: "?"}…"
             )
@@ -236,7 +232,6 @@ object PiEventParser {
                 ?: element.primitive("errorMessage")
             is JsonArray -> blocksText(element)
             is JsonPrimitive -> if (element.isString) element.contentOrNull else null
-            else -> null
         }
             ?: runCatching { element.toString() }.getOrDefault("")
         return text.trim().take(MAX_PREVIEW).let {

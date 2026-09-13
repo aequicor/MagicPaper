@@ -91,6 +91,8 @@ class DefaultCodingService(
         SessionTitleService(codingProjects, profileRepo, settingsRepo, gateway, scope) else null
     override fun updateConfiguration(settings: AppSettings, profiles: List<LlmProfile>, subscriptionAvailable: Boolean, subscriptionSignedIn: Boolean) {
         _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn) }
+        // Sync global feature flags to the coding runtime for optimization decisions.
+        codingRuntime?.globalFeatureFlags = settings.featureFlags
     }
     private val visible = MutableStateFlow(false)
     private var pinObserver: Job? = null
@@ -361,6 +363,8 @@ class DefaultCodingService(
         val projects = codingProjects?.all().orEmpty()
         _state.update { it.copy(settings = settings, llmProfiles = profiles,
             coding = it.coding.copy(projects = projects, sessions = loadCodingSessions(projects), projectStatuses = codingStatusSnapshot(projects))) }
+        // Sync global feature flags to the coding runtime.
+        codingRuntime?.globalFeatureFlags = settings.featureFlags
         observeRuntime()
         refreshCodingEngines()
         restoreCodingRuns(projects)
@@ -995,6 +999,25 @@ class DefaultCodingService(
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { AppLog.error("coding", "mode.change.failed", e); _state.update { it.copy(notice = "Не удалось изменить режим. Проверьте состояние и повторите попытку.") } }
+        }
+    }
+
+    override fun toggleSessionFeatureFlag(sessionId: String, flag: FeatureFlag) {
+        val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        scope.launch {
+            try {
+                val updated = updateStoredCodingSession(selected.session) { latest ->
+                    latest.copy(featureFlags = latest.featureFlags.with(flag, !latest.featureFlags.resolve(_state.value.settings.featureFlags).isEnabled(flag)))
+                }
+                // Sync to runtime if this is the active session
+                codingRuntime?.globalFeatureFlags = _state.value.settings.featureFlags
+                val flagEnabled = updated.featureFlags.resolve(_state.value.settings.featureFlags).isEnabled(flag)
+                appendCodingMessage(updated, CodingMessage(Id.new(), CodingRole.AGENT,
+                    if (flagEnabled) "⚡ ${flag.title}: включено для этой сессии. Оптимизации применяются к следующему запросу."
+                    else "${flag.title}: выключено для этой сессии.",
+                    createdAt = Id.now(), systemNotice = true))
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { AppLog.error("coding", "feature-flag.toggle.failed", e) }
         }
     }
 

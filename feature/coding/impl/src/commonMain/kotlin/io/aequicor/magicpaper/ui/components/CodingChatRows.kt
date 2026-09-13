@@ -24,18 +24,17 @@ internal data class CodingHistoryItem(val row: CodingChatRow, val stepIndex: Int
 }
 
 internal fun codingHistoryItems(rows: List<CodingChatRow>): List<CodingHistoryItem> = buildList {
-    val toolPositions = mutableMapOf<String, Int>()
+    val stepPositions = mutableMapOf<String, Int>()
     rows.forEach { row ->
         if (row.message.role == CodingRole.AGENT && row.message.steps.isNotEmpty()) {
             row.message.steps.indices.forEach { index ->
                 val item = CodingHistoryItem(row, index)
-                val identity = item.step?.toolIdentity
-                val position = identity?.let { toolPositions[it] }
+                val position = stepPositions[item.key]
                 if (position == null) {
-                    if (identity != null) toolPositions[identity] = size
+                    stepPositions[item.key] = size
                     add(item)
                 } else {
-                    // Parent/child snapshots can persist the same scoped call. Keep its
+                    // Saved/merged snapshots can repeat any source step, not just a tool call. Keep its
                     // first position and latest result, never replacing completion with a live copy.
                     if (this[position].step!!.running || !item.step!!.running) this[position] = item
                 }

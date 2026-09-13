@@ -5,6 +5,35 @@ import io.aequicor.magicpaper.domain.tools.ToolCategory
 import kotlin.test.*
 
 class CodingChatRowsTest {
+    @Test fun repeatedTimelineStepsHaveOneItemWithStablePositionAndLatestContent() {
+        val answer = CodingStep(CodingStepKind.ANSWER, "Partial", id = "response:0",
+            sourceTimelineId = "response")
+        val completed = answer.copy(title = "Complete")
+        val other = answer.copy(sourceTimelineId = "parallel")
+        fun message(id: String, steps: List<CodingStep>) =
+            CodingMessage(id, CodingRole.AGENT, "", createdAt = 0, steps = steps)
+        for (messages in listOf(
+            listOf(message("first", listOf(answer, other)), message("snapshot", listOf(completed))),
+            listOf(message("merged", listOf(answer, other, completed))),
+        )) {
+            val items = codingHistoryItems(codingChatRows(messages))
+            assertEquals(listOf(completed, other), items.map { it.step })
+            assertEquals(2, items.map { it.key }.distinct().size)
+            assertEquals("response:step:response:0", items.first().key)
+            assertEquals(3, messages.sumOf { it.steps.size })
+        }
+    }
+
+    @Test fun repeatedUnscopedStepIdsInDifferentResponsesRemainSeparate() {
+        val step = CodingStep(CodingStepKind.ANSWER, "Same answer", id = "0")
+        val messages = listOf("first", "second").map {
+            CodingMessage(it, CodingRole.AGENT, "", createdAt = 0, steps = listOf(step))
+        }
+        val items = codingHistoryItems(codingChatRows(messages))
+        assertEquals(2, items.size)
+        assertEquals(2, items.map { it.key }.distinct().size)
+    }
+
     @Test fun repeatedScopedCallsHaveOneCardWithTheCompletedResult() {
         val started = CodingStep(CodingStepKind.EXEC, "Check", tool = "command", callId = "p/s/request/2",
             running = true, id = "parent-step", toolCategory = ToolCategory.EXEC)

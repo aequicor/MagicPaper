@@ -8,3 +8,7 @@ private external fun nowMillis(): Double
 private external fun writeConsole(line: String, error: Boolean)
 internal actual fun platformEpochMillis(): Long = nowMillis().toLong()
 internal actual fun platformWriteLog(line: String, error: Boolean) = writeConsole(line, error)
+
+/** Browser consoles are already per-session diagnostics; TRACE stays an explicit opt-in. */
+internal actual fun defaultLogLevel(): LogLevel = LogLevel.DEBUG
+

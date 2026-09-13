@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.runtimePlanningRules
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.LogLevel
 
 import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.data.tools.*
@@ -15,8 +17,12 @@ import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRuntime
 import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.EffortSelection
+import io.aequicor.magicpaper.domain.FeatureFlag
+import io.aequicor.magicpaper.domain.FeatureFlagState
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
+import io.aequicor.magicpaper.domain.ReasoningEffort
 import io.aequicor.magicpaper.domain.RuntimePhase
 import io.aequicor.magicpaper.domain.RuntimeStatus
 import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
@@ -58,6 +64,8 @@ class PiCodingRuntime(
     override val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
     private val subscriptionToken: (suspend () -> String)? = null,
 ) : CodingRuntime {
+    override var globalFeatureFlags: FeatureFlagState = FeatureFlagState()
+
     private val questionnaireRegistry = RuntimeQuestionnaires(FileRuntimeQuestionnaireStore(
         // Uninstalling the execution engine must not delete confirmed user answers or their audit.
         File(rootDir.absoluteFile.parentFile, "${rootDir.name}-questionnaires")))
@@ -71,7 +79,8 @@ class PiCodingRuntime(
             .firstOrNull { File(it, "index.js").isFile } ?: error("Подготовьте зависимости движков в настройках")
     }
     @Synchronized internal fun resourceScript(name: String): File {
-        val content = checkNotNull(javaClass.getResourceAsStream("/coding/$name")) { "Нет адаптера $name" }.use { it.readBytes() }
+        val resource = checkNotNull(javaClass.getResource("/coding/$name")) { "Нет адаптера $name" }
+        val content = readCodingResource(resource)
         val digest = java.security.MessageDigest.getInstance("SHA-256").digest(content).take(8).joinToString("") { "%02x".format(it) }
         val target = File(root, "adapters/$digest/$name")
         target.parentFile.mkdirs()
@@ -232,6 +241,10 @@ class PiCodingRuntime(
             return@flow
         }
 
+        // Resolve feature flags: session override wins over global settings.
+        val flags = session.featureFlags.resolve(globalFeatureFlags)
+        val speedBoost = flags.isEnabled(FeatureFlag.AGENT_SPEED_BOOST)
+
         // Кодинг-контур: модель и всё, что из неё выводится (models.json,
         // effort, maxTokens), берётся из codingModelId профиля, если задана.
         val codingProfile = if (planning) profile.forModel() else profile.forCoding()
@@ -240,8 +253,8 @@ class PiCodingRuntime(
         // Без этой декларации pi-agent считает модель text-only и заменяет
         // изображения плейсхолдером — даже если модель в принципе vision.
         val imageInput = !restricted && (computerUse?.grant(session.id) != null || PiModelsConfig.supportsImageInput(codingProfile.modelId))
-        writePiConfig(codingProfile, sessionHome(session.id), imageInput = imageInput)
-        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules))
+        writePiConfig(codingProfile, sessionHome(session.id), imageInput = imageInput, speedBoost = speedBoost, planning = planning)
+        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, flags))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
@@ -269,7 +282,7 @@ class PiCodingRuntime(
         val computerBridge = if (restricted) null else computerUse?.bridge(session.id)
         val researchBridge = if (research) ResearchCheckBridge(session, project) else null
         val agentTools = currentCoroutineContext()[ToolSession]
-        val agentBridge = agentTools?.let { AgentToolBridge(it) }
+        val agentBridge = agentTools?.let { AgentToolBridge(it, cacheToolDefinitions = speedBoost) }
         val questionnaireBridge = if (planning || agentTools != null) null else io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
         try {
             if (agentTools != null) writeAtomically(File(sessionHome(session.id), "agent-tools.mjs"), PiAgentToolExtension.source(agentTools))
@@ -278,18 +291,22 @@ class PiCodingRuntime(
             if (computerBridge != null) {
                 writeAtomically(File(sessionHome(session.id), "computer-use.mjs"), io.aequicor.magicpaper.data.computer.PiComputerExtension.source)
             }
+            // Optimization 2 (AGENT_SPEED_BOOST): raise continuation limit from 2 to 3.
+            // Each extra continuation is more expensive due to growing context,
+            // so the boost allows one more attempt before giving up.
+            val maxContinues = if (speedBoost) MAX_OUTPUT_CONTINUES + 1 else MAX_OUTPUT_CONTINUES
             while (true) {
                 outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge, agentBridge, agentTools)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
-                    continues < MAX_OUTPUT_CONTINUES && !abortedSessions.contains(session.id)
+                    continues < maxContinues && !abortedSessions.contains(session.id)
                 if (!canContinue) break
                 continues++
                 piSessionId = outcome.piSessionId
                 promptText = CONTINUATION_PROMPT
                 emit(
                     CodingEvent.Notice(
-                        "$TRUNCATED_HEADLINE — продолжаю прогон, попытка $continues из $MAX_OUTPUT_CONTINUES…"
+                        "$TRUNCATED_HEADLINE — продолжаю прогон, попытка $continues из $maxContinues…"
                     )
                 )
             }
@@ -349,6 +366,7 @@ class PiCodingRuntime(
         if (research) args += listOf("--extension", File(sessionHome(session.id), "research.mjs").absolutePath)
         args += listOf("--extension", File(sessionHome(session.id), "model-options.mjs").absolutePath)
         args += listOf("--extension", resourceScript("usage-context.mjs").absolutePath)
+        args += listOf("--extension", resourceScript("shell-timeout.mjs").absolutePath)
         if (agentBridge != null) args += listOf("--extension", File(sessionHome(session.id), "agent-tools.mjs").absolutePath)
         if (questionnaireBridge != null) args += listOf("--extension", File(sessionHome(session.id), "questionnaire.mjs").absolutePath)
         if (computerBridge != null) args += listOf("--extension", File(sessionHome(session.id), "computer-use.mjs").absolutePath)
@@ -430,20 +448,29 @@ class PiCodingRuntime(
                         break
                     } ?: break
                     
-                    // Логируем все события для диагностики
-                    println("[PI-EVENT] Raw line: ${line.take(200)}")
-                    
+                    // Поток pi содержит по дельте на каждый токен: сырые строки и
+                    // разобранные дельты идут только в TRACE (лениво, при включённом
+                    // уровне). Значимые переходы логируются ниже по типам событий.
+                    val traceRaw = AppLog.isEnabled(LogLevel.TRACE)
                     for (event in PiEventParser.parseEvents(line,
                         summaryOnly = profile.provider in setOf(ProviderType.OPENAI_SUBSCRIPTION, ProviderType.GOOGLE))) {
-                        println("[PI-EVENT] Parsed: ${event::class.simpleName}")
+                        if (traceRaw) {
+                            AppLog.trace("coding.pi", "event.parsed",
+                                mapOf("type" to (event::class.simpleName ?: "unknown"))) { line }
+                        }
                         when (event) {
                             is CodingEvent.SessionStarted ->
                                 if (event.sessionId.isNotBlank()) capturedId = event.sessionId
                             is CodingEvent.FinalText -> answerSeen = true
                             is CodingEvent.Failed -> answerSeen = true
                             is CodingEvent.OutputTruncated -> truncated = event
-                            is CodingEvent.Compaction -> println("[PI-EVENT] Compaction: phase=${event.status.phase}, reason=${event.status.reason}")
-                            is CodingEvent.ContextUpdated -> println("[PI-EVENT] Context: used=${event.used}, limit=${event.limit}")
+                            is CodingEvent.Compaction -> AppLog.info(
+                                "coding.pi", "compaction",
+                                mapOf("phase" to event.status.phase.name, "reason" to event.status.reason),
+                            )
+                            // Frequent context samples are already covered by event.parsed at TRACE.
+                            // Keep forwarding every sample to consumers without flooding DEBUG.
+                            is CodingEvent.ContextUpdated -> Unit
                             else -> Unit
                         }
                         emit(event)
@@ -451,6 +478,24 @@ class PiCodingRuntime(
                 }
             }
             val exit = process.waitFor()
+            // Значимый переход прогона: без этой записи нельзя восстановить путь
+            // «запуск → процесс завершился», если поток молча оборвался.
+            AppLog.info(
+                "coding.pi", "attempt.finished",
+                mapOf(
+                    "sessionId" to session.id,
+                  //  "projectId" to project?.id.orEmpty(),
+                    "operationId" to session.id,
+                    "status" to if (exit == 0) "ok" else "failed",
+                 //   "attempt" to attempt.toString(),
+                    "result" to when {
+                        answerSeen -> "answered"
+                        truncated != null -> "truncated"
+                        streamBroken != null -> "stream_broken"
+                        else -> "no_answer"
+                    },
+                ),
+            )
             return AttemptOutcome(
                 answerSeen = answerSeen,
                 truncated = truncated,
@@ -926,10 +971,10 @@ class PiCodingRuntime(
 
     private fun writePiHomeDefaults(home: File = pihome) {
         home.mkdirs()
-        // На Windows без bash агент не может выполнять команды вообще:
-        // переключаем набор инструментов на powershell (нативный, есть в каждой Windows).
+        // Используем штатный PowerShell на Windows даже при наличии Bash:
+        // вложенные cmd /c и powershell -Command теряют quoting и exit code.
         val bash = windowsBashProbe()
-        val toolsField = if (onWindows() && bash == null) {
+        val toolsField = if (onWindows()) {
             "\"defaultTools\":[\"read\",\"powershell\",\"edit\",\"write\",\"grep\",\"find\",\"ls\"],"
         } else {
             ""
@@ -961,18 +1006,38 @@ class PiCodingRuntime(
             kotlinx.serialization.json.JsonObject(providers + (PiModelsConfig.PROVIDER_ID to replaced)))).toString())
     }
 
-    /** Модель из профиля подключения мостится в конфиг пи изолированно. */
-    private fun writePiConfig(profile: LlmProfile, home: File, imageInput: Boolean = false) {
+    /**
+     * Модель из профиля подключения мостится в конфиг пи изолированно.
+     * При `speedBoost` применяются оптимизации 3 (maxTokens) и 4 (effort routing).
+     */
+    private fun writePiConfig(profile: LlmProfile, home: File, imageInput: Boolean = false, speedBoost: Boolean = false, planning: Boolean = false) {
         home.mkdirs()
         writePiHomeDefaults(home)
         sessionsDir.mkdirs()
+        // Build effective profile with speed boost optimizations applied.
+        val effectiveProfile = if (!speedBoost) profile else run {
+            var p = profile
+            // Optimization 3 (AGENT_SPEED_BOOST): raise maxTokens ceiling to reduce
+            // continuation loop triggers. Cap at half the context window to leave
+            // room for input.
+            val boostedMaxTokens = (profile.advanced.maxTokens * 2).coerceAtMost(profile.advanced.contextLimit / 2)
+            if (boostedMaxTokens > profile.advanced.maxTokens) {
+                p = p.copy(advanced = p.advanced.copy(maxTokens = boostedMaxTokens))
+            }
+            // Optimization 4 (AGENT_SPEED_BOOST): planning doesn't need deep reasoning,
+            // only task decomposition. Lower effort saves latency and cost.
+            if (planning) {
+                p = p.copy(effort = EffortSelection.of(ReasoningEffort.LOW))
+            }
+            p
+        }
         // Сборка конфига — в общем коде (PiModelsConfig: лимиты из профиля,
         // reasoning и thinkingLevelMap согласованы с возможностями модели), там же
         // и тестируется. Атомарная замена (tmp+rename): параллельные прогоны сессий
         // не должны прочитать наполовину записанный models.json.
-        writeAtomically(File(home, "models.json"), PiModelsConfig.json(profile, imageInput = imageInput))
-        writeAtomically(File(home, "model-options.mjs"), PiModelOptions.extension(profile))
-        File(home, HINTS_FILE).writeText(codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, false, profile.advanced.systemPromptOverride))
+        writeAtomically(File(home, "models.json"), PiModelsConfig.json(effectiveProfile, imageInput = imageInput))
+        writeAtomically(File(home, "model-options.mjs"), PiModelOptions.extension(effectiveProfile))
+        File(home, HINTS_FILE).writeText(codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, false, effectiveProfile.advanced.systemPromptOverride))
 
     }
 

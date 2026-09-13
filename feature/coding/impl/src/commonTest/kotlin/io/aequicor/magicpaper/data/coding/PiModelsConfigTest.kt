@@ -54,9 +54,9 @@ class PiModelsConfigTest {
         // DashScope требует чередования ролей: после tool-сообщения нельзя
         // сразу ставить user-сообщение (которым pi отправляет image_url из
         // toolResult). Без флага сервер возвращает 400 «Unexpected item type».
-        // Используем vision-модель (qwen3.7-max), т.к. флаг выставляется
+        // Используем vision-модель (qwen-vl-max), т.к. флаг выставляется
         // только когда модель реально поддерживает изображения.
-        val visionProfile = profile("qwen3.7-max")
+        val visionProfile = profile("qwen-vl-max")
         val compat = PiModelsConfig.root(visionProfile, imageInput = true).compat()
         assertEquals(true, compat.bool("requiresAssistantAfterToolResult"),
             "OpenAI-совместимый с vision — требует assistant между tool и user")
@@ -83,17 +83,12 @@ class PiModelsConfigTest {
     }
 
     @Test fun visionModelsDetectedById() {
-        // Qwen-VL ряд
+        // Qwen-VL ряд (DashScope: только -vl модели принимают изображения)
         assertTrue(PiModelsConfig.supportsImageInput("qwen-vl-max"))
         assertTrue(PiModelsConfig.supportsImageInput("qwen2.5-vl-72b-instruct"))
         assertTrue(PiModelsConfig.supportsImageInput("qwen-vl-plus"))
-        // Qwen флагманы (Qwen 3.5+ — мультимодальные, hybrid-thinking)
-        assertTrue(PiModelsConfig.supportsImageInput("qwen-max"))
-        assertTrue(PiModelsConfig.supportsImageInput("qwen3-max"))
-        assertTrue(PiModelsConfig.supportsImageInput("qwen3.8-max"))
-        assertTrue(PiModelsConfig.supportsImageInput("qwen3.7-max"))
-        assertTrue(PiModelsConfig.supportsImageInput("qwen-plus"))
-        assertTrue(PiModelsConfig.supportsImageInput("qwen-turbo"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3-vl-plus"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3-vl-flash"))
         // Claude 3+
         assertTrue(PiModelsConfig.supportsImageInput("claude-sonnet-4-20250514"))
         assertTrue(PiModelsConfig.supportsImageInput("claude-3-opus-20240229"))
@@ -110,7 +105,15 @@ class PiModelsConfigTest {
     }
 
     @Test fun textOnlyModelsNotDetectedAsVision() {
-        // Qwen-flash: лёгкие модели без Visual Understanding
+        // Qwen: текстовые флагманы и лёгкие модели без Visual Understanding.
+        // DashScope отвергает image_url для моделей без суффикса -vl
+        // с ошибкой «Unexpected item type in content».
+        assertFalse(PiModelsConfig.supportsImageInput("qwen-max"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3-max"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3.8-max"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3.7-max"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen-plus"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen-turbo"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen3.8-flash"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen2.5-coder-32b-instruct"))
         // DeepSeek (текстовые)

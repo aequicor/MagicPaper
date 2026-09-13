@@ -21,6 +21,25 @@ import kotlin.test.*
 /** Exercise the actual draft -> saved transition, including independently published snapshots. */
 @OptIn(ExperimentalComposeUiApi::class)
 class CodingChatCommitTest {
+    @Test fun repeatedSavedAnswerSnapshotsRenderOnceAlongsideTheLiveDraft() = Chat().use { chat ->
+        val answer = CodingStep(CodingStepKind.ANSWER, "Completed response", id = "response:0",
+            sourceTimelineId = "response")
+        onUi {
+            chat.value.value = chat.value.value.copy(
+                messages = listOf("partial", "saved").mapIndexed { index, id ->
+                    CodingMessage(id, CodingRole.AGENT, "", createdAt = index.toLong(),
+                        timelineId = "response", steps = listOf(answer))
+                },
+                draft = CodingDraft(active = true, timelineId = "response", steps = listOf(answer)),
+            )
+        }
+        chat.render()
+        assertEquals(1, chat.textCount("Completed response"))
+        onUi { chat.value.value = chat.value.value.copy(draft = CodingDraft(), running = false) }
+        chat.render()
+        assertEquals(1, chat.textCount("Completed response"))
+    }
+
     @Test fun duplicatedSavedToolSnapshotsRenderOnceAlongsideTheLiveDraft() = Chat().use { chat ->
         val started = CodingStep(CodingStepKind.EXEC, "Duplicate command", tool = "command", callId = "p/s/request/2",
             id = "parent-step", running = true, toolCategory = io.aequicor.magicpaper.domain.tools.ToolCategory.EXEC)

@@ -40,7 +40,7 @@ fun interface AppLogSink { fun write(entry: AppLogEntry) }
 
 /** Synchronous, bounded diagnostics. Each instance has independent level, sinks and retention. */
 class AppLogger(
-    initialLevel: LogLevel = LogLevel.INFO,
+    initialLevel: LogLevel = defaultLogLevel(),
     private val sink: AppLogSink = platformSink,
     private val fallbackSink: AppLogSink = platformSink,
     retention: Int = 128,
@@ -135,6 +135,13 @@ object AppLog {
 }
 
 private val platformSink = AppLogSink { platformWriteLog(it.line(), it.level == LogLevel.ERROR) }
+
+/**
+ * Diagnostics must not be lost because a caller forgot to raise the level, so normal builds
+ * record up to DEBUG. Per-token stream payloads stay behind explicit TRACE; an unparseable or
+ * unsanitized field degrades to `[redacted]` rather than dropping the whole entry.
+ */
+internal expect fun defaultLogLevel(): LogLevel
 internal expect class LogLock() { fun <T> locked(block: () -> T): T }
 internal expect fun platformEpochMillis(): Long
 internal expect fun platformWriteLog(line: String, error: Boolean)

@@ -58,7 +58,7 @@ tasks.withType<Test>().configureEach {
 val nodeProtocolTest by tasks.registering(Exec::class) {
     group = "verification"
     description = "Check the native provider and planning wire protocols with local fixtures."
-    commandLine("node", "--test", "src/jvmTest/resources/coding/planning-tools.test.mjs", "src/jvmTest/resources/coding/provider-bridge.test.mjs")
+    commandLine("node", "--test", "src/jvmTest/resources/coding/planning-tools.test.mjs", "src/jvmTest/resources/coding/provider-bridge.test.mjs", "src/jvmTest/resources/coding/shell-timeout.test.mjs")
     workingDir(projectDir)
     inputs.dir("src/jvmMain/resources/coding")
     inputs.dir("src/jvmTest/resources/coding")

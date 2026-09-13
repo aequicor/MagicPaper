@@ -16,21 +16,53 @@ class DesktopCodingRuntime(
     private val recordSkillRun: suspend (CodingSkillRunRecord) -> Unit = {},
     private val runObserver: CodingRunObserver = CodingRunObserver { _, events, _ -> events },
 ) : CodingRuntime {
+    override var globalFeatureFlags: FeatureFlagState = FeatureFlagState()
+        set(value) {
+            field = value
+            // Propagate to child runtime so runAgent() reads the same flags.
+            pi.globalFeatureFlags = value
+        }
+
+    // Optimization 1 (AGENT_SPEED_BOOST): in-memory cache for skill selection.
+    // Key: projectId. Value: Pair(lastModifiedApprox, cached selection).
+    // Invalidated by TTL (~5s) or when selection changes (bind/unbind/install).
+    private val skillCache = ConcurrentHashMap<String, Pair<Long, CodingSkillSelection>>()
+    private val SKILL_CACHE_TTL_MS = 5_000L
+
+    private suspend fun cachedSkillSelection(projectId: String, flags: FeatureFlagState): CodingSkillSelection {
+        if (!flags.isEnabled(FeatureFlag.AGENT_SPEED_BOOST)) return skillSelection(projectId)
+        val now = System.currentTimeMillis()
+        val cached = skillCache[projectId]
+        if (cached != null && now - cached.first < SKILL_CACHE_TTL_MS) return cached.second
+        val fresh = skillSelection(projectId)
+        skillCache[projectId] = now to fresh
+        return fresh
+    }
     override suspend fun sessionContext(project: CodingProject, session: CodingSession, profile: LlmProfile?): String = withContext(Dispatchers.IO) {
         val effective = profile?.let { if (session.planningMode) it.forModel() else it.forCoding() }
+        val flags = session.featureFlags.resolve(globalFeatureFlags)
         val skills = if (session.planningMode) "Пакеты проекта не передаются в режим изучения проекта." else try {
-            val selection = skillSelection(project.id)
+            val selection = cachedSkillSelection(project.id, flags)
             buildString {
                 if (selection.instructions.isEmpty()) appendLine("Пакеты проекта не подключены.")
+                // Optimization 8 (AGENT_SPEED_BOOST): when ≥3 skills, inject only summaries
+                // to save 2000+ tokens of system prompt. Full SKILL.md available on demand.
+                val useSummaries = flags.isEnabled(FeatureFlag.AGENT_SPEED_BOOST) && selection.instructions.size >= 3
                 selection.instructions.forEach { skill ->
                     appendLine("${skill.name} · ${skill.id}@${skill.version}")
                     appendLine("SHA-256: ${skill.checksum}")
                     appendLine("Заявленные разрешения: ${skill.permissions.joinToString().ifBlank { "нет" }}")
-                    appendLine("Инструкция SKILL.md:")
-                    appendLine(skill.text)
+                    if (useSummaries) {
+                        val summary = skill.description.ifBlank { skill.text.lineSequence().take(3).joinToString(" ") }
+                        appendLine("Описание: $summary")
+                        appendLine("(Полный SKILL.md доступен по запросу: прочитай навык ${skill.id})")
+                    } else {
+                        appendLine("Инструкция SKILL.md:")
+                        appendLine(skill.text)
+                    }
                     appendLine()
                 }
-                appendLine("Передача как доверенного пользовательского текста: ${if (selection.trustedText) "включена" else "выключена"}.")
+                appendLine("Передача как доверенного пользовательского текста: ${if (selection.trustedText) "включена" else "выключана"}.")
                 if (selection.freshSession) appendLine("Каждый запуск использует новую сессию движка без прежней истории.")
             }
         } catch (e: CancellationException) { throw e } catch (_: Exception) {
@@ -49,7 +81,7 @@ class DesktopCodingRuntime(
             }}.")
         }
         sessionContextReport(effective, environment,
-            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode, session.runtimePlanningRules), skills)
+            codingSystemPrompt(session.engine, session.planningMode, effective?.advanced?.systemPromptOverride.orEmpty(), session.researchMode, session.runtimePlanningRules, flags), skills)
     }
 
     override val computerUse get() = subscription.computerUse
@@ -197,7 +229,8 @@ class DesktopCodingRuntime(
         val grant = if (session.researchMode) null else computerUse?.grant(session.id)
         try {
             val adapter = if (engine == CodingEngine.CODEX) "Codex" else "Pi"
-            val selection = try { skillSelection(project.id).let { it.copy(instructions = it.instructions.map { s -> s.copy(permissions = s.permissions.toSet()) }) } } catch (e: CancellationException) { throw e } catch (_: Exception) {
+            val runFlags = session.featureFlags.resolve(globalFeatureFlags)
+            val selection = try { cachedSkillSelection(project.id, runFlags).let { it.copy(instructions = it.instructions.map { s -> s.copy(permissions = s.permissions.toSet()) }) } } catch (e: CancellationException) { throw e } catch (_: Exception) {
                 emit(CodingEvent.Failed("SKILLS $runId: привязки или пакеты повреждены; запуск заблокирован."))
                 emit(CodingEvent.Finished)
                 return@flow

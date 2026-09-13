@@ -419,7 +419,14 @@ class CodexAppServerOpenAiSubscription(
             abortCoding(session.id)
             throw error
         } catch (error: Throwable) {
-            send(CodingEvent.Failed(error.message ?: "Codex coding завершился с ошибкой."))
+            io.aequicor.magicpaper.logging.AppLog.error("coding.codex", "run.failed", error,
+                mapOf("projectId" to project.id, "sessionId" to session.id))
+            val message = if (error is io.aequicor.magicpaper.data.coding.CodingResourceException) {
+                checkNotNull(error.message)
+            } else {
+                "Не удалось выполнить запрос. Проверьте подключение и состояние движка, затем продолжите сессию."
+            }
+            send(CodingEvent.Failed(message))
             send(CodingEvent.Finished)
         } finally {
             researchBridge?.close()

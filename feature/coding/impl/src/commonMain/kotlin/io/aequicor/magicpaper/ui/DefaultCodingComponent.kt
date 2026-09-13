@@ -70,7 +70,7 @@ class DefaultCodingComponent(
             !ready -> PaperText("Загрузка…")
             input.projectId != null && current.coding.projects.none { it.id == input.projectId } -> PaperText("Проект не найден")
             input.sessionId != null && current.coding.sessions.none { it.session.id == input.sessionId && it.session.projectId == input.projectId } -> PaperText("Сессия не найдена")
-            else -> CodingScreen(this, current.coding, profiles = current.availableLlmProfiles, activeProfileId = current.settings.activeLlmProfileId, showProjectsPanel = false)
+            else -> CodingScreen(this, current.coding, profiles = current.availableLlmProfiles, activeProfileId = current.settings.activeLlmProfileId, showProjectsPanel = false, globalFeatureFlags = current.settings.featureFlags)
         }
     }
 }

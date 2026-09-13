@@ -4,7 +4,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.*
 
 class AppLoggerTest {
-    @Test fun defaultInfoIncludesFailuresButDoesNotConstructTracePayloads() {
+    @Test fun defaultLevelKeepsDebugButRefusesTokenStreamTracePayloads() {
         val output = mutableListOf<AppLogEntry>()
         val log = AppLogger(sink = AppLogSink { output += it })
         var payloads = 0
@@ -12,9 +12,21 @@ class AppLoggerTest {
         log.trace("runtime", "payload") { payloads++; "private request" }
         log.info("runtime", "started")
         log.error("runtime", "failed", IllegalStateException("raw body"))
-        assertEquals(LogLevel.INFO, log.level)
-        assertEquals(listOf(LogLevel.INFO, LogLevel.ERROR), output.map { it.level })
+        assertEquals(defaultLogLevel(), log.level)
+        assertTrue(log.isEnabled(LogLevel.DEBUG), "Navigation and strategy events must not be silent by default")
+        assertFalse(log.isEnabled(LogLevel.TRACE), "Per-token stream logging stays an explicit opt-in")
+        assertEquals(listOf(LogLevel.DEBUG, LogLevel.INFO, LogLevel.ERROR), output.map { it.level })
         assertEquals(0, payloads)
+    }
+
+    @Test fun infoAndErrorRemainRecordedAtEveryDefaultLevel() {
+        val log = AppLogger(sink = AppLogSink {})
+        for (level in LogLevel.entries.filter { it != LogLevel.TRACE }) {
+            log.level = level
+            log.info("runtime", "started")
+            log.error("runtime", "failed", IllegalStateException("raw body"))
+            assertTrue(log.isEnabled(LogLevel.INFO) && log.isEnabled(LogLevel.ERROR))
+        }
     }
 
     @Test fun eachVerbosityIncludesEarlierLevelsAndTraceRemainsExplicit() {

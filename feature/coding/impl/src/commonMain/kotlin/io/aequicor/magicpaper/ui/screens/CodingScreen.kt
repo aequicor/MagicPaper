@@ -214,6 +214,7 @@ fun CodingScreen(
     profiles: List<LlmProfile> = emptyList(),
     activeProfileId: String = "",
     showProjectsPanel: Boolean = true,
+    globalFeatureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
 ) {
 
     var skillsProject by rememberSaveable(ui.current?.id) { mutableStateOf<String?>(null) }
@@ -259,6 +260,7 @@ fun CodingScreen(
                         panelPlugin = panelPlugin,
                         profiles = profiles,
                         activeProfileId = activeProfileId,
+                        globalFeatureFlags = globalFeatureFlags,
                     )
                 }
         }
@@ -282,6 +284,7 @@ fun CodingScreen(
                         panelPlugin = panelPlugin,
                         profiles = profiles,
                         activeProfileId = activeProfileId,
+                        globalFeatureFlags = globalFeatureFlags,
                     )
                 }
             }
@@ -300,6 +303,7 @@ private fun SessionArea(
     panelPlugin: CodingSessionPanel?,
     profiles: List<LlmProfile>,
     activeProfileId: String,
+    globalFeatureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
 ) {
     val sessionInfo = active.session
     // Переключатель источника/модели/усилия активной сессии.
@@ -372,6 +376,8 @@ private fun SessionArea(
                         onClick = { switcherOpen = true },
                     )
                 },
+                featureFlags = sessionInfo.featureFlags.resolve(globalFeatureFlags),
+                onToggleFeatureFlag = { flag -> vm.toggleSessionFeatureFlag(sessionInfo.id, flag) },
             )
     }
     if (switcherOpen) {
@@ -858,6 +864,8 @@ internal fun CodingChat(
     composerDraft: CodingComposerDraft = remember(session.session.id) { CodingComposerDraft() },
     pins: List<RequestPinGroup> = emptyList(),
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
+    featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
+    onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
     listState: LazyListState = key(session.session.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
@@ -1017,6 +1025,8 @@ internal fun CodingChat(
                     onSkills = onSkills,
                     onPickAttachments = onPickAttachments,
                     onPasteAttachments = onPasteAttachments,
+                    featureFlags = featureFlags,
+                    onToggleFeatureFlag = onToggleFeatureFlag,
                 )
             }
     }
@@ -1563,6 +1573,8 @@ internal fun CodingComposer(
     onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
+    featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
+    onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
 ) {
     var text by state.text
     var attachments by state.attachments
@@ -1661,6 +1673,24 @@ internal fun CodingComposer(
                                         if (!planning) onPlanning()
                                     },
                                 )
+                            }
+                            // Feature flags toggle section
+                            if (onToggleFeatureFlag != null) {
+                                if (onSearchProvider != null || engine != null || onInteractionMode != null || onPlanning != null) PaperDivider()
+                                io.aequicor.magicpaper.domain.FeatureFlag.entries.forEach { flag ->
+                                    val isEnabled = featureFlags.isEnabled(flag)
+                                    PaperRichMenuAction(
+                                        text = {
+                                            Column {
+                                                PaperText("⚡ ${flag.title}")
+                                                PaperText(flag.description, style = LocalPaperTypography.current.body,
+                                                    color = LocalPaperColors.current.secondaryText)
+                                            }
+                                        },
+                                        trailingIcon = if (isEnabled) { { PaperText("✓") } } else null,
+                                        onClick = { closeMenu(); onToggleFeatureFlag(flag) },
+                                    )
+                                }
                             }
                             if (onSearchProvider != null || engine != null) PaperDivider()
                             if (onSearchProvider != null) {
