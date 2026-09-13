@@ -18,6 +18,7 @@ STAGES = {
     '5': '21417b79-d79e-4b17-a51f-763b483863b9',
     '6': '1c1bef7f-a975-4183-9220-cf925d24dec2',
     '7': 'e3995487-9da9-419d-ac67-e5774675cc1e',
+    'tools': 'paper-editor-integration',
 }
 COMPONENTS = set('''PaperAppShell PaperTheme PaperTokens PaperTypography
 PaperBackground PaperWindowHost PaperWindowInsets PaperCommandMenu PaperNavigation
@@ -36,6 +37,7 @@ PATTERN = re.compile(
 GETTER = re.compile(r'\bval\s+(\w+)[^\n]*\n\s*(@Composable\s+get\s*\()')
 LAMBDA = re.compile(r'\bval\s+(\w+)\s*:\s*(@Composable[^\n]*=\s*\{)')
 ENTRIES = {
+    ('tools/paper-editor/src/main/kotlin/io/aequicor/magicpaper/tools/editor/Main.kt', 'main', None),
     ('desktopApp/src/main/kotlin/io/aequicor/magicpaper/main.kt', 'main', None),
     ('androidApp/src/main/kotlin/io/aequicor/magicpaper/MainActivity.kt', 'onCreate', None),
     ('webApp/src/webMain/kotlin/io/aequicor/magicpaper/main.kt', 'main', None),

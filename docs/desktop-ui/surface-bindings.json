@@ -2620,6 +2620,78 @@
     "kind": "surface"
   },
   {
+    "path": "tools/paper-editor/src/main/kotlin/io/aequicor/magicpaper/tools/editor/Main.kt",
+    "symbol": "main",
+    "annotationLine": null,
+    "targets": [
+      "PaperTheme"
+    ],
+    "stage": "tools",
+    "kind": "entry"
+  },
+  {
+    "path": "tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperDesignPlugin.kt",
+    "symbol": "Preview",
+    "annotationLine": 60,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel"
+    ],
+    "stage": "tools",
+    "kind": "surface"
+  },
+  {
+    "path": "tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperDesignPlugin.kt",
+    "symbol": "PaperFixturePreview",
+    "annotationLine": 77,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel"
+    ],
+    "stage": "tools",
+    "kind": "surface"
+  },
+  {
+    "path": "tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt",
+    "symbol": "PaperButtonPreview",
+    "annotationLine": 10,
+    "targets": [
+      "PaperButton"
+    ],
+    "stage": "tools",
+    "kind": "surface"
+  },
+  {
+    "path": "tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt",
+    "symbol": "PaperFieldErrorPreview",
+    "annotationLine": 14,
+    "targets": [
+      "PaperField"
+    ],
+    "stage": "tools",
+    "kind": "surface"
+  },
+  {
+    "path": "tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt",
+    "symbol": "PaperComposerNarrowPreview",
+    "annotationLine": 18,
+    "targets": [
+      "PaperWorkspaceComposer"
+    ],
+    "stage": "tools",
+    "kind": "surface"
+  },
+  {
+    "path": "tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt",
+    "symbol": "PaperEmptyFieldPreview",
+    "annotationLine": 22,
+    "targets": [
+      "PaperField"
+    ],
+    "stage": "tools",
+    "kind": "surface"
+  },
+  {
     "path": "webApp/src/webMain/kotlin/io/aequicor/magicpaper/main.kt",
     "symbol": "main",
     "annotationLine": null,

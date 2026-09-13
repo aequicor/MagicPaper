@@ -44,6 +44,7 @@ class DefaultChatService(
     private val onOpenSession: (String) -> Unit = {},
     private val draftRepository: io.aequicor.magicpaper.data.storage.DraftRepository = io.aequicor.magicpaper.data.storage.InMemoryDraftRepository(),
     private val draftBlobs: io.aequicor.magicpaper.data.storage.DraftBlobStore = io.aequicor.magicpaper.data.storage.InMemoryDraftBlobStore(),
+    private val layoutProject: (String?) -> CodingProject? = { null },
 ) : ChatService {
     private val _state = MutableStateFlow(ChatState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -192,10 +193,15 @@ class DefaultChatService(
             createdAt = Id.now(),
             attachments = visible,
         )
+        val wantsLayout = isLayoutRequest(trimmed, session.layoutProjectId != null)
+        // Capture both identity and path before launching work: changing sidebar selection cannot redirect it.
+        val capturedProject = if (wantsLayout) layoutProject(session.layoutProjectId) else null
+        val layoutRequest = if (wantsLayout) LayoutChatRequest(capturedProject, session.id, userMessage.id) else null
         val creation = pendingCreations[session.id]
         val historyBefore = session.messages
         val updated = session.copy(
             messages = session.messages + userMessage,
+            layoutProjectId = session.layoutProjectId ?: capturedProject?.id,
             title = if (session.messages.isEmpty()) trimmed.take(40) else session.title,
             updatedAt = Id.now(),
         )
@@ -221,13 +227,14 @@ class DefaultChatService(
                     logPersistenceFailure("chat", "draft.clear.failed", error, mapOf("sessionId" to session.id, "requestId" to userMessage.id))
                     _state.update { it.copy(notice = if (error.committed) "Сообщение сохранено. Не удалось удалить временные данные." else "Сообщение сохранено. Не удалось очистить черновик.") }
                 }
-                val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile)
+                val answer = agent.answer(historyBefore, trimmed, settings, requestProfile, attachments = visible, operationalProfile = operationalProfile, layoutRequest = layoutRequest)
                 val agentMessage = ChatMessage(
                     id = Id.new(),
                     role = ChatRole.AGENT,
                     text = answer.text,
                     createdAt = Id.now(),
                     sources = answer.sources,
+                    attachments = answer.attachments,
                 )
                 val latest = _state.value.sessions.firstOrNull { it.id == updated.id } ?: updated
                 val final = updated.copy(

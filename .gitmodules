@@ -1,0 +1,3 @@
+[submodule "tools/mission-visualization"]
+	path = tools/mission-visualization
+	url = https://github.com/aequicor/mission-visualization.git

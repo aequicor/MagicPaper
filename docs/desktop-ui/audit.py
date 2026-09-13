@@ -31,9 +31,10 @@ def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 def sources():
-    return sorted(p for area in ('app', 'desktopApp', 'androidApp', 'webApp', 'core', 'feature')
+    return sorted(p for area in ('app', 'desktopApp', 'androidApp', 'webApp', 'core', 'feature', 'tools')
                   for p in (ROOT / area).rglob('*.kt')
-                  if 'src' in p.relative_to(ROOT).parts
+                  if p.relative_to(ROOT).parts[:2] != ('tools', 'mission-visualization')
+                  and 'src' in p.relative_to(ROOT).parts
                   and not any(part in ('build', '.gradle') or 'test' in part.lower()
                               for part in p.relative_to(ROOT).parts))
 

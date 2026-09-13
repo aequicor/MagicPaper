@@ -15,6 +15,8 @@ APPLICATION_DEPENDENCY = re.compile(
 def violations(root):
     errors = []
     for build in root.rglob('build.gradle.kts'):
+        if build.relative_to(root).parts[:2] == ('tools', 'mission-visualization'):
+            continue  # Independent Git submodule, not a Paper consumer.
         if any(part in {'build', '.gradle', '.git', 'node_modules', '.magicpaper'} for part in build.relative_to(root).parts):
             continue
         if build.parent.name == 'designSystem':
@@ -66,6 +68,18 @@ if '--self-test' in sys.argv:
         for dependency in ['project(":app")', 'project(path = ":feature:chat:api")', 'projects.feature.coding.impl']:
             (design_system / 'build.gradle.kts').write_text(f'implementation({dependency})')
             assert len(violations(root)) == 3, dependency
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        for name in ('mission-visualization', 'paper-plugin', 'mission-visualization-copy'):
+            module = root / 'tools' / name
+            (module / 'src/main').mkdir(parents=True)
+            (module / 'build.gradle.kts').write_text('implementation(libs.compose.material3)')
+            (module / 'src/main/Bad.kt').write_text('import androidx.compose.material3.Text')
+        found = violations(root)
+        assert len(found) == 4, found
+        assert all('tools/mission-visualization/' not in error for error in found)
 errors = violations(ROOT)
 if errors:
     raise SystemExit('FAIL\n' + '\n'.join(errors))

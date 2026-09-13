@@ -26,6 +26,12 @@ public data class PaperPlatformPolicy(
     public val supportsNativeMenuBar: Boolean,
 ) {
     public companion object {
+        /** The same desktop metrics are used by native hosts and isolated design previews. */
+        public fun desktop(platform: PaperPlatform): PaperPlatformPolicy = when (platform) {
+            PaperPlatform.MACOS -> PaperPlatformPolicy(platform, PaperDensity(28.dp, 28.dp, 30.dp, 16.dp), "⌘", "⌘,", true)
+            PaperPlatform.WINDOWS -> PaperPlatformPolicy(platform, PaperDensity(32.dp, 32.dp, 32.dp, 16.dp), "Ctrl", "Ctrl+,", false)
+            else -> error("A desktop preview must select macOS or Windows")
+        }
         public val Fallback: PaperPlatformPolicy = PaperPlatformPolicy(
             platform = PaperPlatform.OTHER,
             density = PaperDensity(40.dp, 40.dp, 40.dp, 20.dp),
