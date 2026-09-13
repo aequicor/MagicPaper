@@ -113,7 +113,7 @@ private fun MainArea(vm: MagicPaperViewModel, state: UiState) = CompositionLocal
 ) {
     Box(Modifier.fillMaxSize()) {
         Row(modifier = Modifier.fillMaxSize()) {
-            AnimatedVisibility(visible = state.sessionsPanelOpen && state.screen != Screen.SETTINGS) {
+            AnimatedVisibility(visible = state.sessionsPanelOpen) {
                 ResizableProjectPanels(
                     sidebar = { panelModifier ->
                         UnifiedSidebar(
@@ -203,8 +203,13 @@ private fun TopBar(vm: MagicPaperViewModel, state: UiState) {
                 label = if (screen == Screen.SETTINGS) "Вернуться в чат" else "Настройки",
                 selected = screen == Screen.SETTINGS,
                 onClick = {
-                    vm.open(if (screen == Screen.SETTINGS) Screen.CHAT else Screen.SETTINGS)
-                    if (screen == Screen.SETTINGS) vm.setViewingCoding(false)
+                    if (screen == Screen.SETTINGS) {
+                        vm.open(Screen.CHAT)
+                        vm.setViewingCoding(false)
+                    } else {
+                        vm.open(Screen.SETTINGS)
+                        if (!state.sessionsPanelOpen) vm.toggleSessionsPanel()
+                    }
                 },
             ) { PaperText("⚙", role = PaperTextRole.CHROME) }
             if (chrome != null) WindowButtons(chrome)

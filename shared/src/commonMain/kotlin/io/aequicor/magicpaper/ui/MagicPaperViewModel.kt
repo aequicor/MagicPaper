@@ -533,7 +533,7 @@ class MagicPaperViewModel(
 
     // ---- Навигация -------------------------------------------------------
 
-    fun openEnginesSettings() { _state.update { it.copy(screen = Screen.SETTINGS, enginesSettingsOpen = true) }; refreshCodingEngines() }
+    fun openEnginesSettings() { _state.update { it.copy(screen = Screen.SETTINGS, sessionsPanelOpen = true, enginesSettingsOpen = true) }; refreshCodingEngines() }
     fun closeEnginesSettings() = _state.update { it.copy(enginesSettingsOpen = false) }
     fun requestCodingSession() = _state.update { it.copy(coding = it.coding.copy(creatingSession = true)) }
 
@@ -557,7 +557,7 @@ class MagicPaperViewModel(
         }
     }
 
-    fun openModelsSettings() = _state.update { it.copy(screen = Screen.SETTINGS, modelsSettingsOpen = true) }
+    fun openModelsSettings() = _state.update { it.copy(screen = Screen.SETTINGS, sessionsPanelOpen = true, modelsSettingsOpen = true) }
     fun closeModelsSettings() = _state.update { it.copy(modelsSettingsOpen = false) }
 
     fun open(screen: Screen) = _state.update { it.copy(screen = screen) }
@@ -957,6 +957,7 @@ class MagicPaperViewModel(
         _state.update {
             it.copy(
                 screen = Screen.SETTINGS,
+                sessionsPanelOpen = true,
                 editingLlmProfileId = id,
                 modelSwitcherOpen = false,
                 editorModels = emptyList(),
