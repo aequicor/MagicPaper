@@ -19,6 +19,10 @@ dependencies {
     implementation(libs.kotlinx.coroutinesSwing)
 
     implementation(libs.compose.uiToolingPreview)
+    // JBR WindowDecorations API: designSystem declares it as compileOnly so the
+    // KMP module doesn't force JBR on web/android. The desktop host needs the
+    // classes at runtime for WindowsTitleBarController.
+    implementation(libs.jbr.api)
 
     testImplementation(libs.kotlin.testJunit)
 }
