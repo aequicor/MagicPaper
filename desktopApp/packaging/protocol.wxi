@@ -1,0 +1,14 @@
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="MagicPaperProtocol" Guid="84387F0E-E87C-45AF-B34A-9BDF1A68D9F0">
+        <RegistryKey Root="HKLM" Key="Software\Classes\magicpaper">
+          <RegistryValue Type="string" Value="URL:MagicPaper Protocol"/>
+          <RegistryValue Name="URL Protocol" Type="string" Value="" KeyPath="yes"/>
+          <RegistryKey Key="DefaultIcon">
+            <RegistryValue Type="string" Value="&quot;[INSTALLDIR]MagicPaper.exe&quot;,0"/>
+          </RegistryKey>
+          <RegistryKey Key="shell\open\command">
+            <RegistryValue Type="string" Value="&quot;[INSTALLDIR]MagicPaper.exe&quot; &quot;%1&quot;"/>
+          </RegistryKey>
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>

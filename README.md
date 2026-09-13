@@ -122,8 +122,8 @@ Desktop выполняет независимые этапы Git-проекта 
 неисправимой ошибке проверки или конфликте граф показывает требуемое действие.
 Временные сетевые ошибки имеют ограниченные повторы; счётчики сохраняются.
 
-Проверки восстановления и графа: `./gradlew :shared:jvmTest`. Изображения реального
-Compose-графа генерируются тестом в `shared/build/reports/planning/`.
+Проверки восстановления и графа: `./gradlew checkMigrationJvm`. Изображения реального
+Compose-графа генерируются тестом в `feature/coding/impl/build/reports/planning/`.
 Архитектура, восстановление и сценарии проверки: [Планирование](docs/PLANNING.md).
 
 ## Платформы
@@ -141,14 +141,16 @@ Compose-графа генерируются тестом в `shared/build/report
 ./gradlew :androidApp:assembleDebug            # android
 ```
 
-Тесты: `./gradlew :shared:jvmTest`
+Архитектура: [модули](docs/MODULES.md), [навигация и состояние](docs/NAVIGATION-AND-STATE.md).
+
+Тесты всех модулей: `./gradlew checkMigrationJvm`. Компиляция платформ: `./gradlew compileMigrationTargets`
 (интеграционный тест пи-агента с реальной установкой:
-`./gradlew :shared:jvmTest --tests "*PiCodingRuntimeIntegrationTest" -Pmagicpaper.pi.it=true`)
+`./gradlew :feature:coding:impl:jvmTest --tests "*PiCodingRuntimeIntegrationTest" -Pmagicpaper.pi.it=true`)
 
 ## Типографика
 
 Фирменный шрифтовой стек встроен через Compose Resources
-(`shared/src/commonMain/composeResources/font/`) и одинаков на десктопе,
+(`designSystem/src/commonMain/composeResources/font/`) и одинаков на десктопе,
 Android и в браузере:
 
 - **Дисплейная** — *Cormorant Garamond* (бренд, крупные заголовки);
@@ -160,28 +162,24 @@ Android и в браузере:
 фолбэк платформы. Все гарнитуры — SIL Open Font License 1.1, тексты лицензий
 и атрибуция — в `font/OFL_ALL.txt`. План и обоснование — `docs/PLAN-typography-i18n.md`.
 
-## Архитектура (Clean + SOLID)
+## Архитектура
 
-```
-shared/
-  domain/    — ядро: модели, порты (интерфейсы), оркестратор агента,
-               модели кодинг-агента (проекты, события протокола, порт рантайма).
-               Ноль зависимостей от фреймворков.
-  data/      — адаптеры портов: репозитории поверх хранилища, поисковые движки,
-               LLM-шлюз (OpenAI-совместимый), встроенная документация,
-               парсер протокола пи-агента, хранилище проектов.
-  plugins/   — SPI плагинов и реестр; встроенные плагины.
-  ui/        — Compose Multiplatform: тема «магической бумаги», экраны, ViewModel.
-  di/        — корень композиции (ручная сборка графа — без тяжёлых фреймворков).
-  jvmMain    — кодинг-рантайм пи-агента (изоляция зависимостей, процессы).
-  webMain/jsMain/wasmJsMain/androidMain — платформенные актуалы.
-```
+Функции разделены на API и реализации: `feature/{chat,coding,settings,docs,plugins,skills}/{api,impl}`.
+API содержит контракт компонента, состояние и порты функции; реализация — экран,
+сервис и адаптеры. Функции обращаются друг к другу через API.
 
-Принципы: домен не знает о Ktor/Compose/файлах (DIP), экраны получают состояние
-неизменяемым снапшотом, плагины подключаются без изменения ядра (OCP).
+`:app` собирает приложение через Koin и управляет навигацией Decompose.
+`core/model` содержит общие значения и чистые правила, `core/ai` — контракты и
+адаптеры моделей, `core/storage` — контракты и платформенное хранение,
+`core/platform` — выбор файлов, обмен профилями и общие платформенные мосты.
+`designSystem` предоставляет независимый Paper API для всех экранов.
+
+Направление зависимостей, владельцы ресурсов и проверки описаны в
+[архитектуре модулей](docs/MODULES.md). `./gradlew verifyMigration` проверяет
+границы модулей, JVM-тесты, локальные протоколы движков и компиляцию платформ.
 
 ### Добавление плагина
 
-1. Реализуйте `MagicPlugin` (id, title, description, icon, `Content()`).
-2. Зарегистрируйте в `di/Dependencies.kt` (`registry.register(...)`).
-Всё остальное (экран плагинов, переключатели, панели) работает автоматически.
+1. Реализуйте `MagicPlugin` из `feature/plugins/api` (id, title, description, icon, `Content()`).
+2. Поместите реализацию в модуль функции, которой принадлежит поведение; общие встроенные плагины находятся в `feature/plugins/impl`.
+3. Зарегистрируйте плагин в корне композиции `app/src/commonMain/kotlin/io/aequicor/magicpaper/di`. Экраны используют Paper API из `designSystem`.

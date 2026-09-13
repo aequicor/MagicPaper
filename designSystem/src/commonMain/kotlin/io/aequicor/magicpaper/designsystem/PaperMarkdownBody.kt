@@ -144,7 +144,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
             success = { state, markdownComponents, contentModifier ->
                 if (listState != null) {
                     LazyColumn(state = listState, modifier = contentModifier) {
-                        items(nodes.size, contentType = { nodes[it].type }) { index ->
+                        items(nodes.size, key = { it }, contentType = { nodes[it].type }) { index ->
                             MarkdownElement(nodes[index], markdownComponents, state.content)
                         }
                     }

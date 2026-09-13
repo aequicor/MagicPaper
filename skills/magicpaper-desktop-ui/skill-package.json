@@ -13,8 +13,8 @@
     },
     {
       "path": "SKILL.md",
-      "sha256": "be89510b5b826f047062240de952469ae9d43d4869fc83b7bee1155f99c20880",
-      "size": 5811
+      "sha256": "668b70293ab1f76c58bb783784551258105bbacef24f851f98ace820eee9468d",
+      "size": 7659
     },
     {
       "path": "agents/openai.yaml",
@@ -22,19 +22,34 @@
       "size": 281
     },
     {
+      "path": "references/compose-previews.md",
+      "sha256": "707e3199ba1c6d1d086c12754ae83fc248efdc8b8d07ce0c507fba05107be99b",
+      "size": 4192
+    },
+    {
       "path": "references/design-system.md",
-      "sha256": "3a113c35aaa572c62bec53ebf9f9e95e5336443603d94ed278df4e3170a052c1",
-      "size": 2854
+      "sha256": "7cfb407a3e8921a716e1ab6fad6e166b2c9150caf1cc01900bafc624c095310a",
+      "size": 3134
+    },
+    {
+      "path": "references/interaction-quality.md",
+      "sha256": "cb73b4e5ab4785a638b2dd69d31d970f2b169fd7768350e2b83347a1fcb3c51a",
+      "size": 4587
     },
     {
       "path": "references/platform-behavior.md",
-      "sha256": "719fb8e377983e8273e002f692a16737ac8c74c90b08e684e9ea474401fb4832",
-      "size": 3235
+      "sha256": "92cf5bf98aba0dcc756c8b060c1a81f98a46761118ba1152cd7426bb9b56125f",
+      "size": 4317
     },
     {
       "path": "references/verification.md",
-      "sha256": "8bdf590133841345873b9fc48e6fc60ff11464145d8fa4f5d46deadd39dabf9a",
-      "size": 1765
+      "sha256": "85fd05ffc7cd54cd5846467fd75afe02858606200a58986ca5438d2e57813d49",
+      "size": 4408
+    },
+    {
+      "path": "references/visual-design.md",
+      "sha256": "7fa55c15dbaed895a01c986e63528d85e5e39f56baef1a58351c74c10d79e700",
+      "size": 5600
     }
   ],
   "dependencies": [],

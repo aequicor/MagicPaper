@@ -9,6 +9,7 @@ import copy
 import json
 import re
 import sys
+from audit import sources
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'docs/desktop-ui'
@@ -42,15 +43,13 @@ ENTRIES = {
 
 def discover():
     found = set(ENTRIES)
-    for module in ('shared', 'desktopApp', 'androidApp', 'webApp'):
-        for p in (ROOT/module/'src').rglob('*.kt'):
-            if any('test' in x.lower() for x in p.relative_to(ROOT).parts): continue
-            text = p.read_text()
-            for m in PATTERN.finditer(text):
-                found.add((p.relative_to(ROOT).as_posix(), m.group(1), text.count('\n', 0, m.start())+1))
-            for pattern in (GETTER, LAMBDA):
-                for m in pattern.finditer(text):
-                    found.add((p.relative_to(ROOT).as_posix(), m.group(1), text.count('\n',0,m.start(2))+1))
+    for p in sources():
+        text = p.read_text()
+        for m in PATTERN.finditer(text):
+            found.add((p.relative_to(ROOT).as_posix(), m.group(1), text.count('\n', 0, m.start())+1))
+        for pattern in (GETTER, LAMBDA):
+            for m in pattern.finditer(text):
+                found.add((p.relative_to(ROOT).as_posix(), m.group(1), text.count('\n',0,m.start(2))+1))
     return found
 
 def validate(rows, expected):
@@ -69,13 +68,13 @@ def validate(rows, expected):
     assert {'WelcomeScreen','ChatScreen','CodingScreen','PluginsScreen','DocsScreen','SettingsScreen',
             'ProjectsPanel','SessionsPanel','ProfileEditor','Questionnaire','CodingComposer',
             'StageDetailsDialog','SkillCatalogPanel','ProjectSkillRollback'} <= names
-    for basename in ('ProjectSkills.kt','ProjectSkillsPanel.kt','LocalSkillsPlugin.kt','LocalExperiencePlugin.kt'):
+    for basename in ('ProjectSkillsPanel.kt','LocalSkillsPlugin.kt','LocalExperiencePlugin.kt'):
         assert any(Path(r['path']).name == basename and r['symbol']=='Content' for r in rows), basename
 
 def render(rows):
     lines = ['# Экран/панель → DS-компоненты → этап', '',
              'Основное доказательство ac-research-map. Каждое объявление @Composable, включая полное имя аннотации, имеет отдельную явную запись в [surface-bindings.json](surface-bindings.json). Отсутствующее назначение — ошибка; компоненты не наследуются от файла и не подставляются проверкой автоматически.', '',
-             'Paper* — конкретные планируемые API, а не уже реализованные компоненты. Общие layout helpers могут остаться в feature; список показывает обязательные DS API для визуальной композиции. Строка указывает аннотацию. Два Content в LocalExperiencePlugin различаются строкой: рабочая панель и unavailable fallback. Невизуальные composition helpers и SPI помечены отдельно.', '',
+             'Текущие владельцы: оболочка и сборка в :app, экраны в feature/*/impl, контракты в feature/*/api, платформенные entry в соответствующих host-модулях. Реализация Paper API принадлежит :designSystem и не входит в карту его потребителей. Paper* обозначает назначение компонентов дизайн-системы; исторические номера этапов сохранены. Общие layout helpers могут остаться в feature. Строка указывает аннотацию. Два Content в LocalExperiencePlugin различаются строкой: рабочая панель и unavailable fallback. Невизуальные composition helpers и SPI помечены отдельно.', '',
              'Проверка: `python3 docs/desktop-ui/verify-map.py --self-test`. Исходные токены и поведение — [CONTRACT.md](CONTRACT.md); полный файл-level реестр с невизуальными функциями — [MIGRATION.md](MIGRATION.md).', '',
              '| Source set / файл | Экран, панель или entry | Вид | Конкретные DS API | Этап |',
              '|---|---|---|---|---|']

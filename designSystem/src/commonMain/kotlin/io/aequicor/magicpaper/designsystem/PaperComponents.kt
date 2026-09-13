@@ -416,6 +416,8 @@ public fun PaperDialog(
     confirmEnabled: Boolean = true,
     dismissLabel: String = "Закрыть",
     focusRestorer: PaperFocusRestorer? = null,
+    onDismissAction: (() -> Unit)? = null,
+    dismissEnabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val dismiss = {
@@ -423,9 +425,10 @@ public fun PaperDialog(
         focusRestorer?.restore()
         Unit
     }
+    PaperDialogRegistration(dismiss)
     AlertDialog(dismiss, modifier = modifier, title = { PaperText(title, role = PaperTextRole.TITLE) }, text = { Column { content() } },
         confirmButton = { if (confirmLabel != null && onConfirm != null) PaperButton(confirmLabel, onConfirm, enabled = confirmEnabled) },
-        dismissButton = { PaperButton(dismissLabel, dismiss, kind = PaperButtonKind.QUIET) })
+        dismissButton = { PaperButton(dismissLabel, onDismissAction ?: dismiss, kind = PaperButtonKind.QUIET, enabled = dismissEnabled) })
 }
 
 @Composable

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MagicPaper: диагностика"
+  short_description: "Поиск причины ошибки и проверка регрессии"
+  default_prompt: "Используй $magicpaper-debug для воспроизведения и исправления этой ошибки."

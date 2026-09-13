@@ -6,10 +6,17 @@ Read this reference for interaction, navigation, keyboard, focus, windows, menus
 
 Retain the parchment surfaces, ink-like hierarchy, MagicPaper typography, product wording, and calm motion. Platform adaptation changes conventions and behavior; it does not replace the product with a generic Material, AppKit, or WinUI clone.
 
+Use learned interaction habits as the starting point. Resolve control placement,
+standard input behavior, focus, Back/dismissal, context menus, selection and window
+commands for the actual target platform. Material Design principles inform shared
+hierarchy, components and feedback; the target OS/browser conventions determine
+interaction details. Do not add tutorial prose to explain an avoidable departure
+from those conventions. Keep short labels and accessible names where needed.
+
 ## macOS profile
 
 - Prefer system window controls, menu bar commands, resizable/full-screen behavior, precise pointer input, and comfortable desktop information density.
-- Use Command-based standard shortcuts where applicable; Settings uses Command-comma, close uses Command-W, and quit remains an application command.
+- Expose settings, close and quit through visible, conventional controls or menus. Preserve OS-owned commands and input behavior; do not add shortcuts as a way to simplify the visible action path.
 - Make Full Keyboard Access practical: stable order, visible focus, standard activation, and no pointer-only actions.
 - Treat a sheet-like flow as behavior that must be verified; a Compose dialog is not automatically a native AppKit sheet.
 
@@ -17,7 +24,7 @@ Primary sources: [Designing for macOS](https://developer.apple.com/design/human-
 
 ## Windows profile
 
-- Maintain predictable Tab order; use arrow keys inside composite controls; show keyboard focus; expose standard activation and accelerators.
+- Maintain predictable Tab order; use arrow keys inside composite controls; show keyboard focus and expose standard activation. Keep actions visibly available without requiring memorized combinations.
 - A modal blocks its owner, offers a safe close/cancel path, and keeps contextual validation near the invalid input. Confirm destructive actions explicitly.
 - Custom title bars preserve caption-button insets, drag regions, resize, non-client behavior, inactive state, and Snap. Use system fallback when JBR integration is unavailable.
 - Verify text scaling separately from display scaling and retain controls/actions at 100%, 125%, 150%, and 200%.
@@ -25,6 +32,13 @@ Primary sources: [Designing for macOS](https://developer.apple.com/design/human-
 Primary sources: [Keyboard interactions](https://learn.microsoft.com/en-us/windows/apps/develop/input/keyboard-interactions), [Dialogs](https://learn.microsoft.com/en-us/windows/apps/develop/ui/controls/dialogs-and-flyouts/dialogs), [Title bar customization](https://learn.microsoft.com/en-us/windows/apps/develop/title-bar), and [Make text and apps bigger](https://support.microsoft.com/en-us/accessibility/windows/make-text-and-apps-bigger).
 
 ## Cross-platform acceptance
+
+When the task affects Linux, Android or Web, name the actual environment instead
+of assuming the Windows/macOS profile proves it. Linux behavior can vary by desktop
+environment/window manager. Android needs system Back, touch and IME/inset behavior;
+Web needs browser history and standard browser/input expectations. Verify the
+applicable platform adapter and preserve its conventions. Shared visual principles
+do not require identical input, dialog or window behavior on every platform.
 
 Exercise normal, maximized/full-screen, inactive, narrow, long-content, keyboard-only, pointer, and cancellation paths. Test macOS at 1x/2x and Windows at 100/125/150/200% when those environments are available. Check VoiceOver on macOS and NVDA/Java Access Bridge on Windows; automated semantics tests supplement but do not replace these runs.
 

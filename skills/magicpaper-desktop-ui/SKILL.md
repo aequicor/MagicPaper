@@ -18,6 +18,28 @@ Preserve MagicPaper's warm paper identity while making behavior, density, naviga
 3. Read [design-system.md](references/design-system.md). For platform behavior, window chrome, menus, keyboard, focus, dialogs, or accessibility, also read [platform-behavior.md](references/platform-behavior.md). For completion evidence, read [verification.md](references/verification.md).
 4. Record pre-existing working-tree changes and preserve them. Do not treat unrelated recovery or parallel-session edits as yours.
 
+## Visual design and recognition
+
+For screens, layout, typography, color or visual hierarchy, read
+[visual-design.md](references/visual-design.md). Form a visible composition with
+shared alignment guidelines and intentional proportions before a substantial
+implementation. Use golden-section relationships where they fit the content;
+readability, usable controls and platform behavior take priority over a fixed ratio.
+Apply modern Material Design principles through Paper while preserving familiar
+OS/browser interactions. The user should recognize how to act from the controls
+and their behavior, with concise labels rather than an explanatory walkthrough.
+
+Actively use [Compose previews](references/compose-previews.md) to design and accept
+new or meaningfully changed components. Maintain named, isolated previews of the
+real composable across applicable states and constraints; inspect their output.
+Include the preview entry and state matrix in the review handoff. Interactive
+preview and render/semantics tests complement actual platform checks.
+
+Minimize the full path to the user's goal and keep interactions responsive and
+smooth. For action flows, scrolling, streaming or animation changes, use
+[interaction-quality.md](references/interaction-quality.md) to check step count,
+input response, frame pacing and motion without removing necessary safeguards.
+
 ## Non-negotiable boundary
 
 - Feature and app modules use only the public `Paper*` design-system API for visual or interactive components, semantic tokens, focus indication, control sizing, menus, dialogs, Markdown rendering, and window UI.
@@ -40,13 +62,18 @@ Preserve MagicPaper's warm paper identity while making behavior, density, naviga
 - Keep shared state and domain logic platform-neutral. Put macOS/Windows differences behind a platform policy or adapter selected once, with safe common fallbacks for Android, JS, and Wasm.
 - Follow established project state patterns. Do not impose WebView, React, Node, Rust, MVI, Hilt, Navigation 3, or another architecture as a prerequisite.
 - Prefer OS-owned window controls and standard commands. Never draw imitations of system caption buttons when the OS owns them.
-- Define interaction by semantics: primary/destructive intent, shortcut, focus order, default/cancel action, selection, disabled/busy/error state, and restoration behavior. Avoid platform checks scattered through feature composables.
-- Keep pointer and keyboard paths equivalent. Provide visible focus, predictable Tab order, arrow-key behavior within composite controls, Escape cancellation where safe, and platform command modifiers.
+- Define interaction by semantics: primary/destructive intent, focus order, default/cancel action, selection, disabled/busy/error state, and restoration behavior. Avoid platform checks scattered through feature composables.
+- Make actions visibly available and preserve keyboard accessibility: visible focus, predictable Tab order, arrow-key behavior within composite controls, standard activation, and Escape cancellation where safe. Do not add keyboard shortcuts as a substitute for a short, understandable action path or require memorized combinations; preserve OS/browser-owned input behavior.
 - Make asynchronous completion identity-safe: an old task must not close or mutate a newer dialog, screen, or selection.
 - For narrow windows, scaling, inactive windows, and long/localized content, adapt layout without losing actions or data. Do not solve overflow by silently clipping essential controls.
 
 ## Completion
 
 Implement the smallest coherent public API and migrate every in-scope call site from its surface-map row. Run the focused tests plus the architectural boundary check and relevant target compilations. Report what was actually exercised on macOS and Windows separately; never infer Windows native behavior from a macOS screenshot or JVM unit test.
+
+Inspect an actual render for visual changes. Give the reviewer a focused acceptance
+route to the affected screen/state and identify the regions and interactions to
+check, following [verification.md](references/verification.md). A wireframe explains
+the proposal; evidence of completion comes from the implemented UI.
 
 If the task requires a new design-system capability, finish the DS API, behavior, and tests before calling the feature migration complete. If platform evidence is unavailable, leave it explicitly `NOT_RUN` with a concrete follow-up rather than weakening the requirement.

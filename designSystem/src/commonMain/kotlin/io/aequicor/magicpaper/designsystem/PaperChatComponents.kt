@@ -218,17 +218,21 @@ public fun PaperModal(
     text: @Composable (() -> Unit)? = null,
     confirmButton: @Composable () -> Unit,
     dismissButton: @Composable (() -> Unit)? = null,
-) = AlertDialog(
+) {
+    PaperDialogRegistration(onDismissRequest)
+    AlertDialog(
     onDismissRequest = onDismissRequest,
     title = title,
     text = text,
     confirmButton = confirmButton,
     dismissButton = dismissButton,
 )
+}
 
 /** Wide desktop dialog shell; features retain their domain content and state. */
 @Composable
 public fun PaperWideDialog(onDismissRequest: () -> Unit, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    PaperDialogRegistration(onDismissRequest)
     Dialog(onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         PaperPanel(modifier, PaperSurfaceKind.PANEL) { Column(Modifier.padding(20.dp), content = content) }
     }

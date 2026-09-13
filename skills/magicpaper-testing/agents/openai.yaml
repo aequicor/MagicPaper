@@ -1,0 +1,4 @@
+interface:
+  display_name: "MagicPaper: тестирование"
+  short_description: "Выбор проверок поведения и поддерживаемых платформ"
+  default_prompt: "Используй $magicpaper-testing для проверки изменённого поведения MagicPaper."

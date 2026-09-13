@@ -4,7 +4,9 @@ Read this reference whenever a task creates, changes, or consumes MagicPaper UI.
 
 ## Ownership
 
-`:designSystem` owns semantic visual tokens, typography, icons, interactive controls, focus visuals, component state presentation, overlays, menus, dialogs, Markdown rendering, and platform UI policy. It supports JVM, Android, JS, and Wasm and must not depend on `:shared`, features, ViewModels, repositories, or plugin domain models.
+`:designSystem` owns semantic visual tokens, typography, icons, interactive controls, focus visuals, component state presentation, overlays, menus, dialogs, Markdown rendering, and platform UI policy. It supports JVM, Android, JS, and Wasm and must not depend on `:app`, platform hosts, features, ViewModels, repositories, or plugin domain models.
+
+`:app` assembles feature renderers and the application shell. Screens belong to their feature implementation; reusable Paper components belong to `:designSystem`. A component requiring a feature implementation is application assembly, not a design-system primitive.
 
 Feature code owns domain state, validation decisions, loading operations, navigation intent, and composition of public Paper components. Basic Compose layout/Foundation APIs are permitted for composition, scrolling containers, and positioning, provided they do not recreate an interactive or branded component.
 

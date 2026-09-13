@@ -1,0 +1,4 @@
+interface:
+  display_name: "MagicPaper: архитектура кода"
+  short_description: "Контракты модулей и владение состоянием и ресурсами"
+  default_prompt: "Используй $magicpaper-code-design для проектирования этого изменения MagicPaper."

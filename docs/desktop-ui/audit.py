@@ -31,9 +31,11 @@ def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 def sources():
-    return sorted(p for module in ('shared', 'desktopApp', 'androidApp', 'webApp')
-                  for p in (ROOT / module / 'src').rglob('*.kt')
-                  if not any('test' in part.lower() for part in p.relative_to(ROOT).parts))
+    return sorted(p for area in ('app', 'desktopApp', 'androidApp', 'webApp', 'core', 'feature')
+                  for p in (ROOT / area).rglob('*.kt')
+                  if 'src' in p.relative_to(ROOT).parts
+                  and not any(part in ('build', '.gradle') or 'test' in part.lower()
+                              for part in p.relative_to(ROOT).parts))
 
 def assignment(p):
     name, path = p.name, p.as_posix()
@@ -146,9 +148,11 @@ def main():
         (OUT/'MIGRATION.md').write_text(render(data))
     saved = json.loads((OUT/'inventory.json').read_text())
     assert data == saved, 'Inventory drift: inspect concurrent changes before regeneration'
-    baseline = json.loads((OUT/'baseline.json').read_text())
+    # The earlier desktop UI recovery hashes remain archived in baseline.json.
+    # The authorized module migration moves those owners and removes UiState.
+    baseline = json.loads((OUT/'module-migration-baseline.json').read_text())
     changed = [p for p,h in baseline['trackedFileHashes'].items() if not (ROOT/p).is_file() or sha(ROOT/p)!=h]
-    protected = [r['path'] for r in baseline['foreignChanges'] if sha(ROOT/r['path'])!=r['sha256']]
+    protected = [r['path'] for r in baseline['foreignChanges'] if not (ROOT/r['path']).is_file() or sha(ROOT/r['path'])!=r['sha256']]
     assert not protected, f'Foreign session recovery files changed: {protected}'
     assert all(r['targets'] and r['stage'] in ('3','5','6','7') for r in data['files'])
     covered = {r['path'] for r in data['files']}

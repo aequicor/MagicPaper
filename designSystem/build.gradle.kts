@@ -10,7 +10,7 @@ plugins {
 
 /**
  * The visual boundary for every MagicPaper client.  In particular, this
- * project deliberately has no dependency on :shared: it is safe for features
+ * project deliberately has no dependency on :app: it is safe for features
  * and host applications to depend on it without creating a module cycle.
  */
 kotlin {
@@ -33,10 +33,16 @@ kotlin {
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
             implementation(libs.compose.components.resources)
+            implementation(libs.androidx.lifecycle.runtimeCompose)
+            implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.markdownRenderer.m3)
             implementation(libs.markdownRenderer.code)
         }
         commonTest.dependencies { implementation(libs.kotlin.test) }
+        jvmMain.dependencies {
+            compileOnly(libs.jbr.api)
+            implementation(libs.oshi.core)
+        }
         jvmTest.dependencies { implementation(compose.desktop.currentOs) }
     }
 }

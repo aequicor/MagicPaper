@@ -1,0 +1,11 @@
+# SPA rewrites for static hosts supporting _redirects; existing assets remain files.
+/chat /index.html 200
+/chat/* /index.html 200
+/projects /index.html 200
+/projects/* /index.html 200
+/settings /index.html 200
+/settings/* /index.html 200
+/docs /index.html 200
+/docs/* /index.html 200
+/plugins /index.html 200
+/plugins/* /index.html 200

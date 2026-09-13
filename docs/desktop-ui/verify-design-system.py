@@ -5,15 +5,21 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-FORBIDDEN = re.compile(r'androidx\s*\.\s*compose\s*\.\s*material(?:3)?\b|com\s*\.\s*mikepenz\s*\.\s*markdown\b|androidx\.compose\.foundation\.(?:clickable|combinedClickable|text\.BasicTextField|selection\.(?:selectable|toggleable))\b')
+FORBIDDEN = re.compile(r'androidx\s*\.\s*compose\s*\.\s*material(?:3)?\b|com\s*\.\s*mikepenz\s*\.\s*markdown\b|androidx\.compose\.ui\.window\.(?:Dialog|Popup)\b|androidx\.compose\.foundation\.(?:clickable|combinedClickable|text\.BasicTextField|selection\.(?:selectable|toggleable))\b')
+APPLICATION_DEPENDENCY = re.compile(
+    r'project\s*\(\s*(?:path\s*=\s*)?["\']:(?:app|desktopApp|androidApp|webApp|feature)(?::[^"\']*)?["\']'
+    r'|\bprojects\.(?:app|desktopApp|androidApp|webApp|feature)\b'
+)
 
 
 def violations(root):
     errors = []
-    for build in root.glob('*/build.gradle.kts'):
+    for build in root.rglob('build.gradle.kts'):
+        if any(part in {'build', '.gradle', '.git', 'node_modules', '.magicpaper'} for part in build.relative_to(root).parts):
+            continue
         if build.parent.name == 'designSystem':
-            if 'project(":shared")' in build.read_text(encoding='utf-8'):
-                errors.append(':designSystem must not depend on :shared')
+            if APPLICATION_DEPENDENCY.search(build.read_text(encoding='utf-8')):
+                errors.append(':designSystem must not depend on :app, platform hosts or feature modules')
             continue
         # Remove only explicit test dependency scopes. Scan all remaining build
         # syntax, including top-level dependencies and fully qualified artifacts.
@@ -44,12 +50,22 @@ if '--self-test' in sys.argv:
         (root / 'feature/src/commonMain').mkdir(parents=True)
         (root / 'feature/build.gradle.kts').write_text('commonMain.dependencies { implementation(libs.compose.material3) }')
         file = root / 'feature/src/commonMain/Bad.kt'
-        for bad in ['import androidx.compose.material3.Text as Hidden', 'androidx.compose.material.Text("x")', 'import androidx.compose.material3.*', 'import com.mikepenz.markdown.m3.Markdown', 'import androidx.compose.foundation.clickable', 'import androidx.compose.foundation.text.BasicTextField']:
+        for bad in ['import androidx.compose.material3.Text as Hidden', 'androidx.compose.material.Text("x")', 'import androidx.compose.material3.*', 'import com.mikepenz.markdown.m3.Markdown', 'import androidx.compose.foundation.clickable', 'import androidx.compose.foundation.text.BasicTextField', 'androidx.compose.ui.window.Dialog(onDismissRequest = {}) {}', 'import androidx.compose.ui.window.Popup as Hidden']:
             file.write_text(bad)
             assert len(violations(root)) == 2, bad
         (root / 'feature/build.gradle.kts').write_text('commonMain.dependencies { implementation(project(":designSystem")) }')
         file.write_text('import io.aequicor.magicpaper.designsystem.PaperText')
         assert violations(root) == []
+        nested = root / 'feature/nested/impl'
+        (nested / 'src/commonMain').mkdir(parents=True)
+        (nested / 'build.gradle.kts').write_text('commonMain.dependencies { implementation(libs.compose.material3) }')
+        (nested / 'src/commonMain/Bad.kt').write_text('import androidx.compose.material3.Text')
+        assert len(violations(root)) == 2, 'nested feature modules must be checked'
+        design_system = root / 'designSystem'
+        design_system.mkdir()
+        for dependency in ['project(":app")', 'project(path = ":feature:chat:api")', 'projects.feature.coding.impl']:
+            (design_system / 'build.gradle.kts').write_text(f'implementation({dependency})')
+            assert len(violations(root)) == 3, dependency
 errors = violations(ROOT)
 if errors:
     raise SystemExit('FAIL\n' + '\n'.join(errors))

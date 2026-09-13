@@ -24,6 +24,32 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperSemanticsTest {
+    @Test fun explicitDialogDismissActionIsSeparateFromNativeDismissal() {
+        var cancelled = 0
+        var dismissed = 0
+        var nativeDismiss: (() -> Unit)? = null
+        val lifecycle = object : PaperDialogLifecycle {
+            override fun register(id: String, onDismiss: () -> Unit) { nativeDismiss = onDismiss }
+            override fun unregister(id: String) = Unit
+        }
+        ImageComposeScene(420, 300) { PaperTheme {
+            androidx.compose.runtime.CompositionLocalProvider(LocalPaperDialogLifecycle provides lifecycle) {
+                PaperDialog("Черновик", { dismissed++ }, dismissLabel = "Отмена", onDismissAction = { cancelled++ }) {
+                    PaperText("Выбор сохранён")
+                }
+            }
+        } }.use { scene ->
+            repeat(4) { scene.render((it + 1) * 16_000_000L).close() }
+            val cancel = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Отмена") }
+            assertTrue(cancel.config[SemanticsActions.OnClick].action?.invoke() == true)
+            assertEquals(1, cancelled)
+            assertEquals(0, dismissed)
+            assertNotNull(nativeDismiss).invoke()
+            assertEquals(1, cancelled)
+            assertEquals(1, dismissed)
+        }
+    }
+
     @Test fun attachmentThumbnailPublishesLoadingReadyAndErrorStates() {
         ImageComposeScene(320, 180) { PaperTheme {
             androidx.compose.foundation.layout.Column {

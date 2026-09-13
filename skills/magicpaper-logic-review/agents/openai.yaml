@@ -1,0 +1,4 @@
+interface:
+  display_name: "MagicPaper: проверка логики"
+  short_description: "Проверка состояний, гонок, сохранения и эффектов"
+  default_prompt: "Используй $magicpaper-logic-review для проверки логической корректности изменения."

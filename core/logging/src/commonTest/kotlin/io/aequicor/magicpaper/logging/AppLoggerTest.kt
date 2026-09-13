@@ -1,0 +1,181 @@
+package io.aequicor.magicpaper.logging
+
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.test.*
+
+class AppLoggerTest {
+    @Test fun defaultInfoIncludesFailuresButDoesNotConstructTracePayloads() {
+        val output = mutableListOf<AppLogEntry>()
+        val log = AppLogger(sink = AppLogSink { output += it })
+        var payloads = 0
+        log.debug("runtime", "branch")
+        log.trace("runtime", "payload") { payloads++; "private request" }
+        log.info("runtime", "started")
+        log.error("runtime", "failed", IllegalStateException("raw body"))
+        assertEquals(LogLevel.INFO, log.level)
+        assertEquals(listOf(LogLevel.INFO, LogLevel.ERROR), output.map { it.level })
+        assertEquals(0, payloads)
+    }
+
+    @Test fun eachVerbosityIncludesEarlierLevelsAndTraceRemainsExplicit() {
+        val log = AppLogger(sink = AppLogSink {})
+        for (level in LogLevel.entries) {
+            log.level = level
+            LogLevel.entries.forEach { candidate -> assertEquals(candidate.ordinal <= level.ordinal, log.isEnabled(candidate)) }
+        }
+        log.trace("runtime", "trace_enabled") { "selected strategy" }
+        assertEquals("selected strategy", log.history().single().detail)
+        log.level = LogLevel.ERROR
+        log.info("runtime", "not_recorded")
+        assertEquals(1, log.history().size)
+    }
+
+    @Test fun normalEventsKeepOnlySafeMetadataAndOpaqueCorrelation() {
+        val log = AppLogger(sink = AppLogSink {})
+        val sensitiveId = "questionnaire:password is private"
+        val fields = mapOf("requestId" to sensitiveId, "status" to "failed", "provider" to "openai",
+            "generation" to "4", "model" to "sk-1234567890abcdef", "reason" to "user entered secret words",
+            "message" to "secret message", "url" to "https://example.com/?token=secret", "apiKey" to "secret")
+        log.info("drafts", "save_failed", fields)
+        log.info("drafts", "retry", mapOf("requestId" to sensitiveId))
+        val first = log.history().first()
+        assertEquals(setOf("requestId", "status", "provider", "generation", "model", "reason"), first.fields.keys)
+        assertEquals(first.fields["requestId"], log.history().last().fields["requestId"])
+        assertTrue(first.fields.getValue("requestId").startsWith("id-"))
+        assertEquals("failed", first.fields["status"])
+        assertEquals("4", first.fields["generation"])
+        listOf(sensitiveId, "sk-1234567890abcdef", "secret words", "secret message", "example.com").forEach {
+            assertFalse(it in first.line(), it)
+        }
+    }
+
+    @Test fun exceptionTypesRemainCorrelatedWithoutMessagesOrStacks() {
+        val original = IllegalArgumentException("api_key=private-value")
+        val failure = IllegalStateException("https://example.com?access_token=private", original)
+        val log = AppLogger(sink = AppLogSink {})
+        log.error("settings", "save_failed", failure, mapOf("operationId" to "op-1", "recovery" to "retry"))
+        val entry = log.history().single()
+        assertEquals(listOf("IllegalStateException", "IllegalArgumentException"), entry.causeTypes)
+        assertSame(original, failure.cause)
+        assertFalse("private" in entry.line())
+        assertFalse("example.com" in entry.line())
+        assertEquals("retry", entry.fields["recovery"])
+    }
+
+    @Test fun traceRedactsCredentialFieldsHeadersTokensAndKnownSecretAnswers() {
+        val secrets = listOf("strange-value-123", "json-secret-123", "answer-value-123", "bearer-value-123",
+            "cookie-value-123", "sk-secret123456789", "url-value-123")
+        val log = AppLogger(initialLevel = LogLevel.TRACE, sink = AppLogSink {})
+        log.trace("http", "response", knownSecrets = setOf(secrets.first())) {
+            """{"password":"json-secret-123","answer":"answer-value-123","safe":"visible"}
+Authorization: Bearer bearer-value-123
+Cookie: session=cookie-value-123
+strange-value-123 sk-secret123456789 https://example.com?token=url-value-123"""
+        }
+        val detail = log.history().single().detail!!
+        secrets.forEach { assertFalse(it in detail, it) }
+        assertTrue("visible" in detail)
+        assertTrue("redacted" in detail)
+        assertFalse('\n' in log.history().single().line(), "One entry must remain one physical line")
+    }
+
+    @Test fun payloadCauseChainAndRetentionAreBounded() {
+        val log = AppLogger(initialLevel = LogLevel.TRACE, sink = AppLogSink {}, retention = 3, payloadLimit = 64)
+        repeat(8) { index -> log.trace("runtime", "detail", mapOf("count" to "$index")) { "safe ".repeat(50_000) } }
+        val entries = log.history()
+        assertEquals(3, entries.size)
+        assertEquals(listOf("5", "6", "7"), entries.map { it.fields["count"] })
+        assertTrue(entries.all { it.detail!!.length <= 64 && it.detail.endsWith("[truncated]") })
+        var cause: Throwable = IllegalStateException("secret")
+        repeat(20) { cause = IllegalStateException("secret", cause) }
+        log.error("runtime", "chain", cause)
+        assertEquals(6, log.history().last().causeTypes.size)
+    }
+
+    @Test fun failingSinkUsesFallbackWithoutReplacingTheOriginalFailure() {
+        val fallback = mutableListOf<AppLogEntry>()
+        val log = AppLogger(sink = AppLogSink { throw IllegalArgumentException("token=private-sink-secret") },
+            fallbackSink = AppLogSink { fallback += it })
+        val original = IllegalStateException("token=private-original-secret")
+        log.error("drafts", "persist_failed", original)
+        assertEquals("sink_failed", fallback.single().event)
+        assertEquals(listOf("IllegalArgumentException"), fallback.single().causeTypes)
+        assertEquals(listOf("persist_failed", "sink_failed"), log.history().map { it.event })
+        assertFalse(log.history().any { "private" in it.line() })
+        assertEquals("token=private-original-secret", original.message)
+    }
+
+    @Test fun doubleSinkFailureRemainsDiscoverableInBoundedMemory() {
+        val fail = AppLogSink { throw IllegalStateException("password=private") }
+        val log = AppLogger(sink = fail, fallbackSink = fail)
+        log.info("runtime", "started")
+        assertEquals(listOf("started", "sink_failed", "fallback_sink_failed"), log.history().map { it.event })
+        assertFalse(log.history().any { "private" in it.line() })
+    }
+
+    @Test fun failureWhileConstructingTraceIsOwnedByDiagnostics() {
+        val log = AppLogger(initialLevel = LogLevel.TRACE, sink = AppLogSink {})
+        log.trace("http", "request") { error("password=private") }
+        val entry = log.history().single()
+        assertEquals("trace_payload_failed", entry.event)
+        assertEquals("request", entry.fields["operation"])
+        assertEquals(LogLevel.ERROR, entry.level)
+        assertFalse("private" in entry.line())
+    }
+
+    @Test fun traceConstructionPropagatesCancellation() {
+        val log = AppLogger(initialLevel = LogLevel.TRACE, sink = AppLogSink {})
+        val cancellation = CancellationException("cancelled")
+        assertSame(cancellation, assertFailsWith<CancellationException> {
+            log.trace("http", "request") { throw cancellation }
+        })
+        assertTrue(log.history().isEmpty())
+    }
+
+    @Test fun oversizedKnownSecretsCannotEscapeThroughTheScanBoundary() {
+        val secret = "opaque-" + "a".repeat(70_000)
+        val log = AppLogger(initialLevel = LogLevel.TRACE, sink = AppLogSink {})
+        log.trace("http", "response", knownSecrets = setOf(secret)) { "prefix $secret" }
+        assertEquals("[redacted oversized secret]", log.history().single().detail)
+    }
+
+    @Test fun excessKnownSecretsRefuseDetailInsteadOfLeavingUnexaminedCredentials() {
+        val secrets = (0..128).map { "opaque-value-$it" }.toSet()
+        val log = AppLogger(initialLevel = LogLevel.TRACE, sink = AppLogSink {})
+        log.trace("http", "response", knownSecrets = secrets) { secrets.last() }
+        assertEquals("[redacted secret set exceeds limit]", log.history().single().detail)
+    }
+
+    @Test fun sharedFacadeInitializesAndRedactsQuotedCredentialsOnEveryPlatform() {
+        val previous = AppLog.level
+        try {
+            AppLog.level = LogLevel.TRACE
+            AppLog.trace("logging_test", "facade_ready") {
+                """{"apiKey":"private-api-value","answer":"private-answer-value","url":"https://private.example"}"""
+            }
+            val entry = AppLog.history().last()
+            assertEquals("facade_ready", entry.event)
+            assertEquals(LogLevel.TRACE, entry.level)
+            assertFalse("private" in entry.line())
+            assertTrue("redacted" in entry.detail.orEmpty())
+        } finally { AppLog.level = previous }
+    }
+
+    @Test fun failedEntryPreparationProducesSafeDiagnosticsWithoutInterruptingTheOwner() {
+        val output = mutableListOf<AppLogEntry>()
+        val log = AppLogger(sink = AppLogSink { output += it })
+        val brokenFields = object : Map<String, String> by emptyMap() {
+            override val entries: Set<Map.Entry<String, String>>
+                get() = error("password=private-metadata")
+        }
+        val original = IllegalArgumentException("password=private-original")
+        log.error("drafts", "persist_failed", original, brokenFields)
+        val entry = output.single()
+        assertEquals("entry_preparation_failed", entry.event)
+        assertEquals(listOf("IllegalStateException"), entry.causeTypes)
+        assertFalse("private" in entry.line())
+        assertEquals("password=private-original", original.message)
+        log.info("drafts", "next_command")
+        assertEquals("next_command", output.last().event)
+    }
+}

@@ -1,18 +1,18 @@
 {
   "criterion": "4aa76be6-198a-4448-8af5-69bd0c97e7f2/ac-research-map",
   "status": "PASS",
-  "explicitBindings": 191,
-  "composableDeclarations": 188,
+  "explicitBindings": 229,
+  "composableDeclarations": 226,
   "entries": 3,
   "missingBindings": [],
   "staleBindings": [],
   "unknownTargets": [],
   "unknownStages": [],
   "byStage": {
-    "3": 14,
-    "5": 48,
-    "6": 101,
-    "7": 28
+    "3": 0,
+    "5": 61,
+    "6": 133,
+    "7": 35
   },
   "negativeControlsRejected": [
     "missing-binding",

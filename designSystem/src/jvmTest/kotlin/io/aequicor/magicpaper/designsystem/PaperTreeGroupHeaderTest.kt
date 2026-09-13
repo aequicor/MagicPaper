@@ -51,6 +51,8 @@ class PaperTreeGroupHeaderTest {
                     expanded.value,
                     { expanded.value = !expanded.value; toggles++ },
                     Modifier.focusRequester(focus),
+                    active = true,
+                    childCount = 1,
                 )
             }
         }.use { scene ->
@@ -121,6 +123,7 @@ class PaperTreeGroupHeaderTest {
                                             onToggle = {},
                                             modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
                                             active = true,
+                                            childCount = 1,
                                             leading = {
                                                 Box(Modifier.size(10.dp).onGloballyPositioned { status = it.boundsInRoot() })
                                             },
@@ -148,6 +151,9 @@ class PaperTreeGroupHeaderTest {
                     val bounds = control.boundsInRoot
                     assertEquals(true, control.config[SemanticsProperties.Selected])
                     val text = titleNode.boundsInRoot
+                    val disclosure = nodes.single {
+                        it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Свернуть задачу")
+                    }.boundsInRoot
                     val layouts = mutableListOf<TextLayoutResult>()
                     assertTrue(titleNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(layouts) == true)
                     val layout = layouts.single()
@@ -172,7 +178,9 @@ class PaperTreeGroupHeaderTest {
                         "The rendered title line must fit inside its allocated width; $geometry")
                     assertTrue(bounds.height >= rowHeight.value)
                     assertTrue(bounds.left >= 20f && bounds.right <= 192f)
-                    assertTrue(status.left >= bounds.left + 24f, "Disclosure must retain space before the status")
+                    assertTrue(status.left >= bounds.left + 6f, "Status follows the tree's leading guide")
+                    assertTrue(text.right <= disclosure.left && disclosure.right <= bounds.right,
+                        "Trailing disclosure retains its hit area beside the title; $geometry")
                     assertTrue(status.right < text.left && text.right <= bounds.right)
                     assertTrue(text.top >= bounds.top && text.bottom <= bounds.bottom)
                     assertTrue(abs(text.center.y - status.center.y) <= 1f, "Title and status share the vertical centre")

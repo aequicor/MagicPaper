@@ -1,0 +1,4 @@
+interface:
+  display_name: "MagicPaper: код"
+  short_description: "Реализация Kotlin/KMP в границах владельца фичи"
+  default_prompt: "Используй $magicpaper-code для реализации запрошенного изменения MagicPaper."
