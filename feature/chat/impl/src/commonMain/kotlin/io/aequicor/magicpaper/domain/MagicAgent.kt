@@ -17,10 +17,11 @@ class MagicAgent(
     private val skillLibrary: SkillLibrary = EmptySkillLibrary,
     private val skillSelector: SkillSelector = SkillSelector(),
     private val packageRuntime: SkillInstructionRuntime? = null,
+    private val layoutEditor: LayoutEditor = UnavailableLayoutEditor,
 ) {
 
     /** Результат ответа: текст и источники (для отображения в чате). */
-    data class Answer(val text: String, val sources: List<SearchHit> = emptyList())
+    data class Answer(val text: String, val sources: List<SearchHit> = emptyList(), val attachments: List<Attachment> = emptyList())
 
     suspend fun answer(
         history: List<ChatMessage>,
@@ -29,8 +30,13 @@ class MagicAgent(
         profile: LlmProfile?,
         attachments: List<Attachment> = emptyList(),
         operationalProfile: LlmProfile? = profile,
+        layoutRequest: LayoutChatRequest? = null,
     ): Answer {
         val trimmed = userText.trim()
+        layoutRequest?.let { request ->
+            return LayoutChatAgent(gateway, layoutEditor).answer(request.project, request.conversationId, request.requestId,
+                trimmed, history, profile, attachments)
+        }
         packageRuntime?.answer(trimmed, history, profile, attachments)?.let { return Answer(it) }
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
         // они усиливают любую ветку (доки, поиск, свободный диалог).

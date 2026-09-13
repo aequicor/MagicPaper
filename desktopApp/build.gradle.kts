@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import java.util.zip.ZipFile
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
@@ -69,6 +70,36 @@ compose.desktop {
             }
             linux {
                 iconFile.set(project.file("../assets/icon/dist/magicpaper_512.png"))
+            }
+        }
+    }
+}
+
+// Optional distribution includes the editor executable; the app never links its implementation.
+if (providers.gradleProperty("paperEditor").orNull == "true") {
+    val editorResources = layout.buildDirectory.dir("paper-editor-resources")
+    val bundlePaperEditor by tasks.registering(Sync::class) {
+        dependsOn(":tools:paper-editor:createDistributable")
+        from(project(":tools:paper-editor").layout.buildDirectory.dir("compose/binaries/main/app"))
+        into(editorResources.map { it.dir("common/paper-editor") })
+        eachFile { if (file.canExecute()) permissions { unix("755") } }
+    }
+    compose.desktop.application.nativeDistributions.appResourcesRootDir.set(editorResources)
+    tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(bundlePaperEditor) }
+    // Compose 1.11 copies app resources with File.copyTo, dropping executable bits.
+    // Restore the source permissions in the final image so the nested launcher can run.
+    val resourcesPrefix = when {
+        System.getProperty("os.name").startsWith("Mac") -> ".app/Contents/app/resources/paper-editor"
+        System.getProperty("os.name").startsWith("Windows") -> "/app/resources/paper-editor"
+        else -> "/lib/app/resources/paper-editor"
+    }
+    tasks.withType<AbstractJPackageTask>().configureEach {
+        if (targetFormat == TargetFormat.AppImage) doLast {
+            val source = editorResources.get().dir("common/paper-editor").asFile
+            val destination = destinationDir.get().asFile.resolve(packageName.get() + resourcesPrefix)
+            source.walkTopDown().filter { it.isFile && it.canExecute() }.forEach { original ->
+                val copied = destination.resolve(original.relativeTo(source))
+                check(copied.isFile && copied.setExecutable(true, false)) { "Cannot preserve Paper Editor executable permissions" }
             }
         }
     }

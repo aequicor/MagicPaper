@@ -58,3 +58,17 @@ include(":feature:plugins:api")
 include(":feature:plugins:impl")
 include(":feature:skills:api")
 include(":feature:skills:impl")
+
+// Development tool only: ordinary application builds never configure the external build.
+if (providers.gradleProperty("paperEditor").orNull == "true") {
+    check(file("tools/mission-visualization/settings.gradle.kts").isFile) {
+        "Paper editor requires: git submodule update --init --recursive"
+    }
+    includeBuild("tools/mission-visualization") {
+        dependencySubstitution {
+            substitute(module("io.aequicor.visualization:editor")).using(project(":shared"))
+            substitute(module("io.aequicor.visualization:backend-compose")).using(project(":engine:backend-compose"))
+        }
+    }
+    include(":tools:paper-plugin", ":tools:paper-editor")
+}

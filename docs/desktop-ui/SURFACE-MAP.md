@@ -236,6 +236,13 @@
 | [feature/skills/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/ProjectSkillRollback.kt](../../feature/skills/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/ProjectSkillRollback.kt) | `ProjectSkillRollback:15` | surface | PaperDialog, PaperListRow, PaperButton, PaperStatus | 7 |
 | [feature/skills/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/ProjectSkillsPanel.kt](../../feature/skills/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/ProjectSkillsPanel.kt) | `Content:20` | surface | PaperPanel, PaperListRow, PaperChoice, PaperButton, PaperStatus | 7 |
 | [feature/skills/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/SkillCatalogPanel.kt](../../feature/skills/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/plugins/builtin/SkillCatalogPanel.kt) | `SkillCatalogPanel:16` | surface | PaperPanel, PaperField, PaperListRow, PaperButton | 7 |
+| [tools/paper-editor/src/main/kotlin/io/aequicor/magicpaper/tools/editor/Main.kt](../../tools/paper-editor/src/main/kotlin/io/aequicor/magicpaper/tools/editor/Main.kt) | `main` | entry | PaperTheme | tools |
+| [tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperDesignPlugin.kt](../../tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperDesignPlugin.kt) | `Preview:60` | surface | PaperTheme, PaperPanel | tools |
+| [tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperDesignPlugin.kt](../../tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperDesignPlugin.kt) | `PaperFixturePreview:77` | surface | PaperTheme, PaperPanel | tools |
+| [tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt](../../tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt) | `PaperButtonPreview:10` | surface | PaperButton | tools |
+| [tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt](../../tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt) | `PaperFieldErrorPreview:14` | surface | PaperField | tools |
+| [tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt](../../tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt) | `PaperComposerNarrowPreview:18` | surface | PaperWorkspaceComposer | tools |
+| [tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt](../../tools/paper-plugin/src/main/kotlin/io/aequicor/magicpaper/tools/paper/PaperPreviews.kt) | `PaperEmptyFieldPreview:22` | surface | PaperField | tools |
 | [webApp/src/webMain/kotlin/io/aequicor/magicpaper/main.kt](../../webApp/src/webMain/kotlin/io/aequicor/magicpaper/main.kt) | `main` | entry | PaperWindowHost, PaperTheme, PaperCommandMenu | 5 |
 
 ## Постоянные ID этапов
@@ -246,6 +253,7 @@
 | 5 | `21417b79-d79e-4b17-a51f-763b483863b9` |
 | 6 | `1c1bef7f-a975-4183-9220-cf925d24dec2` |
 | 7 | `e3995487-9da9-419d-ac67-e5774675cc1e` |
+| tools | `paper-editor-integration` |
 
 ## Граница новых составных API
 

@@ -21,6 +21,10 @@
 | Android host | `./gradlew :androidApp:assembleDebug :app:testAndroidHostTest :androidApp:testDebugUnitTest` |
 | JS / Wasm common API или зависимости | `./gradlew :webApp:compileKotlinJs :webApp:compileKotlinWasmJs :webApp:compileDevelopmentExecutableKotlinJs :webApp:compileDevelopmentExecutableKotlinWasmJs` |
 | IndexedDB | `./gradlew :core:storage:impl:jsBrowserTest`; нужен поддерживаемый установленный браузер; при изменении Wasm interop также `:core:storage:impl:wasmJsBrowserTest` |
+| Paper editor / каталог | `./gradlew -PpaperEditor=true :tools:paper-plugin:test :tools:paper-editor:compileKotlin`; PNG в `tools/paper-plugin/build/reports/paper-plugin/` |
+| Макеты из чата | `:feature:chat:impl:jvmTest`, `:app:jvmTest --tests '*ChatLayoutWorkflowTest' --tests '*ChatServiceLifecycleTest'`; модель в тестах заменена фикстурой |
+| Чат → native Paper Editor | Сначала `./gradlew -PpaperEditor=true :desktopApp:createDistributable`, затем `./gradlew -PpaperEditor=true -Pmagicpaper.paperEditor.it=true :feature:chat:impl:jvmTest --tests '*DesktopLayoutEditorIntegrationTest'`; отдельный временный проект, настоящий редактор, без LLM-запросов; PNG `feature/chat/impl/build/reports/layout-chat/generated.png`. `-Pmagicpaper.paperEditor.testExecutable=…` проверяет конкретный вложенный executable |
+| SPI редактора / запись экземпляров | `./gradlew -PpaperEditor=true :mission-visualization:shared:jvmTest :mission-visualization:engine:frontend:jvmTest :mission-visualization:engine:ir:jvmTest :mission-visualization:engine:backend-compose:jvmTest` |
 | Полная интеграция | `./gradlew verifyMigration` — команды и состав задачи проверять в корневом `build.gradle.kts` |
 
 ## Значимые сценарии

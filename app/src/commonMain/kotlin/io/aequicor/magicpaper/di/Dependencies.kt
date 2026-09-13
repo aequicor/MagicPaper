@@ -38,6 +38,7 @@ internal fun buildRuntime(
     experiencePlugin: ((LlmGateway, LlmProfileRepository) -> MagicPlugin)? = null,
     onPlatformStarted: () -> Unit = {},
     onPlatformClosed: suspend () -> Unit = {},
+    layoutEditor: LayoutEditor = UnavailableLayoutEditor,
 ): MagicPaperRuntime = MagicPaperRuntime(navigationSession, onPlatformStarted, onPlatformClosed) { applicationScope ->
     var resetting = false
     module {
@@ -91,7 +92,7 @@ internal fun buildRuntime(
         packageInstructions?.let { source ->
             single<SkillInstructionRuntime> { DefaultSkillInstructionRuntime(source, get()) }
         }
-        single { MagicAgent(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull()) }
+        single { MagicAgent(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(), layoutEditor = layoutEditor) }
         single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
         single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
             planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get()) }
@@ -121,7 +122,11 @@ internal fun buildRuntime(
         single<PluginService> { DefaultPluginService(get(), get()) }
         single { DefaultChatService(get(), get(), get(), get(), get(),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
-            draftRepository = get(), draftBlobs = get()) }
+            draftRepository = get(), draftBlobs = get(),
+            layoutProject = { boundId ->
+                val coding = get<CodingService>().state.value.coding
+                if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }
+            }) }
         single { DefaultCodingService(get(), get(), get(), get(), get(), get(), dirPicker,
             get(), get<CodingRuntimeGraph>().planningChat, get(), get(),
             onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },

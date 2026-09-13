@@ -43,6 +43,14 @@ kotlin {
 }
 
 tasks.withType<Test>().configureEach {
+    systemProperty("magicpaper.paperEditor.it", providers.gradleProperty("magicpaper.paperEditor.it").getOrElse("false"))
+    val launcher = when {
+        System.getProperty("os.name").startsWith("Mac") -> "PaperEditor.app/Contents/MacOS/PaperEditor"
+        System.getProperty("os.name").startsWith("Windows") -> "PaperEditor/PaperEditor.exe"
+        else -> "PaperEditor/bin/PaperEditor"
+    }
+    systemProperty("magicpaper.paperEditor.testExecutable", providers.gradleProperty("magicpaper.paperEditor.testExecutable")
+        .getOrElse(rootProject.file("tools/paper-editor/build/compose/binaries/main/app/$launcher").absolutePath))
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))

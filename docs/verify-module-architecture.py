@@ -21,13 +21,25 @@ def production_build(text):
         text = text[:match.start()] + text[end:]
     return text
 
+def local_settings(text):
+    # Composite-build substitution refers to the external build's project paths. Its
+    # :shared is unrelated to MagicPaper's retired module. Never exempt local aliases.
+    pattern = r'includeBuild\(\s*["\']tools/mission-visualization["\']\s*\)\s*\{'
+    for match in reversed(list(re.finditer(pattern, text))):
+        depth, end = 1, match.end()
+        while depth and end < len(text):
+            depth += (text[end] == '{') - (text[end] == '}')
+            end += 1
+        text = text[:match.start()] + text[end:]
+    return text
+
 def violations(root):
     errors, graph = [], {}
     for name in ('settings.gradle.kts', 'settings.gradle'):
         settings = root / name
         if not settings.is_file():
             continue
-        text = settings.read_text()
+        text = local_settings(settings.read_text())
         for declaration in re.findall(r'\binclude\s*\((.*?)\)', text, re.S):
             for included in re.findall(r'["\']([^"\']+)["\']', declaration):
                 if is_retired_module(':' + included.lstrip(':')):
@@ -41,6 +53,8 @@ def violations(root):
             errors.append(f'{convention.relative_to(root)}: declare project dependencies in the consuming module')
     for build in root.rglob('build.gradle.kts'):
         relative = build.relative_to(root)
+        if relative.parts[:2] == ('tools', 'mission-visualization'):
+            continue  # Separate build and ownership graph.
         if any(part in IGNORED for part in relative.parts):
             continue
         raw = build.read_text()
@@ -70,6 +84,8 @@ def violations(root):
     facades = {}
     for source in root.rglob('*.kt'):
         relative = source.relative_to(root)
+        if relative.parts[:2] == ('tools', 'mission-visualization'):
+            continue
         if any(part in IGNORED for part in relative.parts) or 'src' not in relative.parts:
             continue
         index = relative.parts.index('src')
@@ -148,6 +164,20 @@ if '--self-test' in sys.argv:
         retired.parent.mkdir()
         retired.write_text('')
         assert any('retired module directory' in error for error in violations(root))
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        for name in ('mission-visualization', 'paper-plugin', 'mission-visualization-copy'):
+            module = root / 'tools' / name
+            module.mkdir(parents=True)
+            (module / 'build.gradle.kts').write_text('implementation(project(":shared"))')
+        (root / 'settings.gradle.kts').write_text('includeBuild("tools/mission-visualization") { dependencySubstitution { substitute(module("x")).using(project(":shared")) } }')
+        found = violations(root)
+        assert len(found) == 2, found
+        (root / 'settings.gradle.kts').write_text('project(":shared").projectDir = file("app")')
+        assert len(violations(root)) == 3, 'Local aliases must still fail'
+        assert all('tools/mission-visualization/' not in error for error in found)
 errors = violations(ROOT)
 if errors:
     raise SystemExit('FAIL\n' + '\n'.join(errors))

@@ -16,6 +16,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
     val skills = DesktopSkills(draftRepository = persistence.drafts)
     val engine = createDesktopCodingRuntime(computer, subscription, skills::selection, skills::recordRun, skills.runObserver)
     return buildRuntime(
+        layoutEditor = io.aequicor.magicpaper.data.layout.DesktopLayoutEditor(),
         store = FileKeyValueStore(),
         persistence = persistence,
         navigationSession = navigationSession,

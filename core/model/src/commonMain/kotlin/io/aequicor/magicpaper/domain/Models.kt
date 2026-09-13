@@ -41,6 +41,8 @@ data class ChatSession(
      */
     val llmProfileId: String? = null,
     val modelSelection: ModelSelection? = null,
+    /** Project identity captured by an explicit layout request; restoration never opens the editor. */
+    val layoutProjectId: String? = null,
 )
 
 /** Доступные поисковые движки. */
