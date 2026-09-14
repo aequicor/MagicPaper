@@ -4,6 +4,9 @@ import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arkivanov.essenty.lifecycle.destroy
 import io.aequicor.magicpaper.data.storage.NavigationSnapshotStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -20,6 +23,126 @@ class RootComponentTest {
         override suspend fun save(snapshot: String) { this.snapshot = snapshot }
     }
     private data class Child(val route: AppRoute)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun slowPresentationSaveDoesNotDelayNavigationAndFlushKeepsLatestCompleteJournal() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val writes = mutableListOf<String>()
+        val store = object : NavigationSnapshotStore {
+            override suspend fun load(): String? = null
+            override suspend fun save(snapshot: String) {
+                release.await()
+                writes += snapshot
+            }
+        }
+        val lifecycle = LifecycleRegistry()
+        val root = DefaultRootComponent(DefaultComponentContext(lifecycle), store,
+            FeatureComponentFactory { visit, _, _ -> Child(visit.route) }, initialWelcomeRequired = false,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            persistenceDispatcher = StandardTestDispatcher(testScheduler))
+        try {
+            runCurrent()
+            val first = root.navigationState.value.journal.current.id
+            root.savePresentationEntry(first, "compose", "scroll=0")
+            runCurrent() // Hold the first write while scrolling and selecting other sessions.
+            repeat(300) { root.savePresentationEntry(first, "compose", "scroll=$it") }
+            root.savePresentationEntry(first, "shell", "sidebar=hidden")
+            root.navigate(AppRoute.Chat("a"))
+            root.navigate(AppRoute.Chat("b"))
+            root.back()
+            runCurrent()
+            assertEquals(AppRoute.Chat("a"), root.stack.value.active.instance.route)
+            assertTrue(root.navigationState.value.canGoForward)
+            val flush = launch { root.awaitIdle() }
+            runCurrent()
+            assertFalse(flush.isCompleted)
+            root.forward()
+            runCurrent()
+            assertEquals(AppRoute.Chat("b"), root.stack.value.active.instance.route)
+            release.complete(Unit)
+            flush.join()
+            val saved = kotlinx.serialization.json.Json.decodeFromString<NavigationJournal>(writes.last())
+            assertEquals(root.navigationState.value.journal, saved)
+            assertEquals("scroll=299", presentationEntry(saved.presentation[first], "compose"))
+            assertEquals("sidebar=hidden", presentationEntry(saved.presentation[first], "shell"))
+            assertTrue(writes.size <= 2, "Obsolete snapshots must not accumulate behind a slow write")
+        } finally {
+            release.complete(Unit)
+            lifecycle.destroy()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun resetDuringSlowSaveKeepsNewJournalAndIgnoresOldSaveFailure() = runTest {
+        val release = CompletableDeferred<Unit>()
+        var attempts = 0
+        var saved: String? = null
+        val store = object : NavigationSnapshotStore {
+            override suspend fun load(): String? = null
+            override suspend fun save(snapshot: String) {
+                if (++attempts == 1) {
+                    release.await()
+                    error("old journal unavailable")
+                }
+                saved = snapshot
+            }
+        }
+        val lifecycle = LifecycleRegistry()
+        val root = DefaultRootComponent(DefaultComponentContext(lifecycle), store,
+            FeatureComponentFactory { visit, _, _ -> Child(visit.route) }, initialWelcomeRequired = false,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            persistenceDispatcher = StandardTestDispatcher(testScheduler))
+        try {
+            runCurrent()
+            val oldId = root.navigationState.value.journal.current.id
+            root.savePresentation(oldId, "old scroll")
+            runCurrent()
+            assertEquals(1, attempts)
+            root.navigate(AppRoute.Chat("old"))
+            root.reset(AppRoute.Docs())
+            runCurrent()
+            assertEquals(AppRoute.Docs(), root.stack.value.active.instance.route)
+            release.complete(Unit)
+            root.awaitIdle()
+            val journal = root.navigationState.value.journal
+            assertNull(root.navigationState.value.error)
+            assertTrue(journal.presentation.isEmpty())
+            assertEquals(listOf(AppRoute.Docs()), journal.visits.map { it.route })
+            assertEquals(journal, kotlinx.serialization.json.Json.decodeFromString<NavigationJournal>(requireNotNull(saved)))
+            assertEquals(2, attempts)
+        } finally {
+            release.complete(Unit)
+            lifecycle.destroy()
+        }
+    }
+
+    @Test fun saveFailureIsVisibleAndDoesNotStopSubsequentNavigationOrPersistence() = runTest {
+        var fail = true
+        var saved: String? = null
+        val store = object : NavigationSnapshotStore {
+            override suspend fun load(): String? = null
+            override suspend fun save(snapshot: String) {
+                if (fail) error("disk unavailable")
+                saved = snapshot
+            }
+        }
+        val lifecycle = LifecycleRegistry()
+        val root = DefaultRootComponent(DefaultComponentContext(lifecycle), store,
+            FeatureComponentFactory { visit, _, _ -> Child(visit.route) }, initialWelcomeRequired = false,
+            dispatcher = StandardTestDispatcher(testScheduler),
+            persistenceDispatcher = StandardTestDispatcher(testScheduler))
+        try {
+            root.navigate(AppRoute.Chat("a")); root.awaitIdle()
+            assertEquals(AppRoute.Chat("a"), root.stack.value.active.instance.route)
+            assertEquals("Не удалось сохранить историю переходов.", root.navigationState.value.error)
+            fail = false
+            root.dismissNavigationError()
+            root.navigate(AppRoute.Chat("b")); root.awaitIdle()
+            assertNull(root.navigationState.value.error)
+            assertEquals(root.navigationState.value.journal,
+                kotlinx.serialization.json.Json.decodeFromString<NavigationJournal>(requireNotNull(saved)))
+        } finally { lifecycle.destroy() }
+    }
 
     @Test fun failedTransitionRetainsHistoryAndDoesNotStopLaterCommands() = runTest {
         val lifecycle = LifecycleRegistry()

@@ -45,6 +45,8 @@ fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
 
 @Composable
 private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
+    val settings = runtime.koin.get<SettingsService>()
+    val config by settings.state.collectAsState()
     val navigation by root.navigationState.collectAsState()
     val visit = navigation.journal.current
     val presentation = remember(visit.id) {
@@ -53,7 +55,12 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
         }
     }
     SideEffect { (root as ApplicationRoot).shellPresentation = presentation }
-    key(visit.id) { presentation.Content { AppShellContent(runtime, root) } }
+    Box(Modifier.fillMaxSize()) {
+        // The animation belongs to the window, not a visit: recreating it resets
+        // its clock and shader and makes the entire window flash on navigation.
+        PaperBackground(config.settings.paperAnimationEnabled, Modifier.matchParentSize())
+        key(visit.id) { presentation.Content { AppShellContent(runtime, root) } }
+    }
 }
 
 @Composable
@@ -81,7 +88,6 @@ private fun AppShellContent(runtime: MagicPaperRuntime, root: RootComponent<AppC
     CompositionLocalProvider(LocalPaperHideSystemSteps provides config.settings.hideSystemSteps,
         LocalPaperDialogLifecycle provides dialogLifecycle) {
         Box(Modifier.fillMaxSize()) {
-            PaperBackground(config.settings.paperAnimationEnabled, Modifier.matchParentSize())
             Column(Modifier.fillMaxSize()) {
                 if (config.showWelcome) {
                     Box(Modifier.safeDrawingPadding()) { (root as ApplicationRoot).welcome.Content() }

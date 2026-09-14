@@ -88,7 +88,7 @@ class BrowserHistoryBridgeTest {
         bridge.close(); lifecycle.destroy()
     }
 
-    @Test fun queuedPresentationCannotReverseBrowserBackBeforeRootAcknowledgesTheVisit() = runTest {
+    @Test fun queuedPresentationCannotDelayOrReverseBrowserBack() = runTest {
         val lifecycle = LifecycleRegistry()
         val store = Store()
         val root = DefaultRootComponent(DefaultComponentContext(lifecycle), store,
@@ -103,13 +103,16 @@ class BrowserHistoryBridgeTest {
         root.savePresentation(settings, "first"); runCurrent()
         root.savePresentation(settings, "later")
         browser.userBack()
-        store.permits.trySend(Unit); runCurrent()
+        // The browser has committed Back, before the root processes its command.
         assertEquals(AppRoute.Settings(), root.navigationState.value.route)
         assertEquals("/docs", browser.path)
         assertEquals(null, browser.pendingDelta, "A queued old-cursor autosave must not undo Back")
-        store.permits.trySend(Unit); runCurrent()
+        runCurrent()
         assertEquals(AppRoute.Docs(), root.navigationState.value.route)
         assertEquals(null, root.dialogSlot.value.child)
+        assertEquals(null, browser.pendingDelta)
+        // Releasing obsolete persistence must not move either cursor backwards.
+        store.blockSaves = false
         store.permits.trySend(Unit); root.awaitIdle(); runCurrent()
         assertEquals(null, browser.pendingDelta)
         assertEquals(root.navigationState.value.journal.current.id,
@@ -132,12 +135,10 @@ class BrowserHistoryBridgeTest {
         root.savePresentation(root.navigationState.value.journal.current.id, "pending"); runCurrent()
         browser.userBack(); browser.userBack()
         assertEquals("/chat/a", browser.path)
-        store.permits.trySend(Unit); runCurrent()
-        assertEquals(AppRoute.Docs(), root.navigationState.value.route)
-        assertEquals(null, browser.pendingDelta, "Intermediate root acknowledgement must not reverse the second Back")
-        store.permits.trySend(Unit); runCurrent()
+        runCurrent()
         assertEquals(AppRoute.Chat("a"), root.navigationState.value.route)
-        assertEquals(null, browser.pendingDelta)
+        assertEquals(null, browser.pendingDelta, "Root acknowledgement must not reverse the second Back")
+        store.blockSaves = false
         store.permits.trySend(Unit); root.awaitIdle(); runCurrent()
         assertEquals("/chat/a", browser.path)
         assertEquals(null, browser.pendingDelta)
