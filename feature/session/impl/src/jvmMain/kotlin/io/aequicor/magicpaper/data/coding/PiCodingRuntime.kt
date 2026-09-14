@@ -367,7 +367,7 @@ class PiCodingRuntime(
         // изображения плейсхолдером — даже если модель в принципе vision.
         val imageInput = !restricted && (computerUse?.grant(session.id) != null || PiModelsConfig.supportsImageInput(codingProfile.modelId))
         writePiConfig(codingProfile, sessionHome(session.id), imageInput = imageInput, speedBoost = speedBoost, planning = planning)
-        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, flags))
+        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, flags, session))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)

@@ -6,11 +6,40 @@ import io.aequicor.magicpaper.domain.PLANNING_INSTRUCTIONS
 import io.aequicor.magicpaper.domain.CodingSession
 import io.aequicor.magicpaper.domain.SessionKind
 import io.aequicor.magicpaper.domain.runtimePlanningRules
+import io.aequicor.magicpaper.domain.CodingRunCheckpoint
+import io.aequicor.magicpaper.domain.TaskWorktree
+import io.aequicor.magicpaper.domain.TaskWorktreePhase
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CodingSystemPromptsTest {
+    @Test fun activeWorktreePolicyReachesBothEnginesAndRefreshesForNextTask() {
+        val task = TaskWorktree("task", "/source", "feature/current", "base", "/pool/session", "codex/task")
+        val session = CodingSession("session", "project", "Task", 1,
+            piSessionId = "existing-native-history", taskWorktree = task,
+            pendingRun = CodingRunCheckpoint("input", "Task", responseId = "response", runId = task.taskId, worktreeEnabled = true))
+        for (engine in CodingEngine.entries) {
+            val prompt = codingSystemPrompt(engine, false, "PROJECT RULES", session = session)
+            assertTrue("task.handoff" in prompt)
+            assertTrue("outcome=RESULT" in prompt)
+            assertTrue("отдельное\nподтверждение пользователя" in prompt)
+            assertTrue(task.path in prompt && task.targetBranch in prompt)
+            val next = session.copy(taskWorktree = task.copy(taskId = "next", targetBranch = "feature/next"),
+                pendingRun = session.pendingRun!!.copy(runId = "next"))
+            val resumed = codingSystemPrompt(engine, false, "", session = next)
+            assertTrue("feature/next" in resumed)
+            assertFalse(task.targetBranch in resumed)
+            for (inactive in listOf(session.copy(taskWorktree = null), session.copy(pendingRun = null),
+                session.copy(taskWorktree = task.copy(phase = TaskWorktreePhase.COMPLETE)),
+                session.copy(pendingRun = session.pendingRun!!.copy(runId = "another")), session.copy(stageId = "stage"))) {
+                assertFalse("task.handoff" in codingSystemPrompt(engine, false, "", session = inactive))
+            }
+            assertFalse("task.handoff" in codingSystemPrompt(engine, true, "", session = session))
+            assertFalse("task.handoff" in codingSystemPrompt(engine, false, "", research = true, session = session))
+        }
+    }
+
     @Test fun ordinarySessionDoesNotInheritPlannerMethodologyFromLifecycleAdoption() {
         val rules = PlanningRulesSettings().edited("Create milestones and wait for plan approval").snapshot()
         val ordinary = CodingSession("root", "project", "New session", 1,

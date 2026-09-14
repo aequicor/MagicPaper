@@ -40,8 +40,16 @@ class ToolHost(val receipts: ToolReceiptStore, val questions: RuntimeQuestionnai
                 else when (definition.id) {
                     "questionnaire" -> askQuestionnaire(ctx, id, args)
                     "task.handoff" -> {
-                        checkNotNull(taskHandoff) { "Worktree недоступен" }(ctx, json.decodeFromJsonElement<TaskHandoff>(args))
-                        buildJsonObject { put("accepted", true) }
+                        val handoff = json.decodeFromJsonElement<TaskHandoff>(args)
+                        checkNotNull(taskHandoff) { "Worktree недоступен" }(ctx, handoff)
+                        buildJsonObject {
+                            put("accepted", true)
+                            put("outcome", handoff.outcome.name)
+                            put("nextAction", "finish_response")
+                            put("message", if (handoff.outcome == TaskHandoffOutcome.RESULT)
+                                "Результат принят. Заверши ответ: приложение дождётся остановки исполнителей, выполнит проверки и автоматическое слияние. Не открывай опросник для подтверждения слияния или паузы. Слияние ещё не подтверждено."
+                            else "Блокировка сохранена, рабочая копия сохранена. Сообщи причину блокировки и заверши ответ; автоматическое слияние не разрешено.")
+                        }
                     }
                     "web.search" -> search!!(ctx, json.decodeFromJsonElement<ToolSearch>(args).query.also { require(it.isNotBlank()) })
                     else -> if (definition.orchestration && orchestration != null) orchestration!!.execute(ctx, id, definition.id, args)
