@@ -19,6 +19,11 @@ source HEAD. Each session has one directory slot; only a clean, completed slot
 whose branch and commit match the recorded receipt may be reused.
 
 Ordinary coding must submit `task.handoff` through the normal tool/receipt path.
+Both native engines receive the active task's delivery policy in their system
+instructions, including when resuming history. Worktree mode authorizes automatic
+delivery; the agent must not ask for merge/finish/pause confirmation. A successful
+handoff explicitly tells it to finish its response, without claiming delivery has
+already happened. Genuine missing requirements still use the questionnaire.
 The tool is available only for an isolated CODE task, and validates task and
 generation at persistence. RESULT is necessary but not sufficient: runtime and
 child writers must have stopped, questions must be answered and checks must pass.

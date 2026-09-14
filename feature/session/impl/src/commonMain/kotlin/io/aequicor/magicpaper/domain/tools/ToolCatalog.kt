@@ -49,7 +49,7 @@ object ToolCatalog {
         ToolDefinition("context.get", "Актуальное состояние проекта, плана и сессий", empty, ToolCategory.READ),
         app<ToolSearch>("web.search", "Поиск источников в интернете", category = ToolCategory.SEARCH),
         ToolDefinition("questionnaire", QuestionnaireContract.description, QuestionnaireContract.schema, ToolCategory.ACTION),
-        app<TaskHandoff>("task.handoff", "Завершить worktree-задачу результатом RESULT либо сообщить BLOCKED. checks — команды проверок как массивы аргументов без shell. После RESULT закончи ответ; приложение проверит результат и выполнит слияние", setOf(ToolRole.CHAT), true),
+        app<TaskHandoff>("task.handoff", "Обязательная передача завершённой worktree-задачи: outcome=RESULT; при реальной блокировке — BLOCKED. checks — команды проверок как массивы аргументов без shell. После успешного RESULT закончи ответ: приложение проверит результат и автоматически выполнит слияние. Подтверждение слияния через опросник не требуется", setOf(ToolRole.CHAT), true),
         app<PlanToolProposal>("plan.propose", "Передать проект плана с объяснением, деревом решений и этапами. Не запускает исполнителей", setOf(ToolRole.PLANNER), true, true),
         app<ToolMessage>("plan.refine", "Разработать или доработать план. newPlan=true по поручению пользователя создаёт отдельный план взамен старого, сохраняя его историю; запуск требует отдельного подтверждения", coordinator, true, true),
         app<ToolRecalculate>("plan.recalculate", "Пересчитать часть плана по идентификатору узла", coordinator, true, true),

@@ -166,7 +166,10 @@ class CodingWorktreeTest {
                     emit(CodingEvent.SessionStarted("native"))
                     val tools = checkNotNull(currentCoroutineContext()[ToolSession])
                     assertTrue(tools.definitions.any { it.id == "task.handoff" })
-                    tools.call("handoff", "task.handoff", buildJsonObject { put("outcome", "RESULT") })
+                    val receipt = tools.call("handoff", "task.handoff", buildJsonObject { put("outcome", "RESULT") }).jsonObject
+                    assertEquals("RESULT", receipt["outcome"]?.jsonPrimitive?.content)
+                    assertEquals("finish_response", receipt["nextAction"]?.jsonPrimitive?.content)
+                    assertTrue(tools.results.value.containsKey("task.handoff"))
                     emit(CodingEvent.FinalText("Done")); emit(CodingEvent.Finished)
                 }
             }
@@ -183,6 +186,7 @@ class CodingWorktreeTest {
                 result.coding.sessions.first { it.session.id == "s" }.messages.lastOrNull()?.text)
             assertEquals(listOf("/isolated"), paths)
             assertEquals(1, port.deliveries)
+            assertTrue(graph.runtime!!.questionnaires.value.isEmpty())
         } finally { service?.close(); graph?.close(); Dispatchers.resetMain() }
     }
 

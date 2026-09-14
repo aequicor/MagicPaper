@@ -56,7 +56,7 @@ internal val MINIMIZE_TOOL_CALLS_INSTRUCTIONS = """
             """.trimIndent()
 
 internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, override: String, research: Boolean = false,
-    planningRules: PlanningRulesSnapshot? = null, featureFlags: FeatureFlagState = FeatureFlagState()): String {
+    planningRules: PlanningRulesSnapshot? = null, featureFlags: FeatureFlagState = FeatureFlagState(), session: CodingSession? = null): String {
     val methodology = (planningRules ?: if (planning) PlanningRulesSettings().snapshot() else null)?.effectivePrompt().orEmpty()
     val speedBoost = featureFlags.isEnabled(FeatureFlag.AGENT_SPEED_BOOST)
     return (if (planning) listOf(override, methodology, PLANNING_INSTRUCTIONS, QuestionnaireTool.instructions)
@@ -84,5 +84,5 @@ internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, overri
             listOf(CODING_FILE_TOOL_INSTRUCTIONS, PI_CODING_INSTRUCTIONS, QuestionnaireTool.instructions, override)
         }
         null -> listOf("Движок не выбран", override)
-    }.let { if (!planning && !research) it + methodology else it }).filter { it.isNotBlank() }.joinToString("\n\n")
+    }.let { if (!planning && !research) it + methodology + session?.taskWorktreeInstructions().orEmpty() else it }).filter { it.isNotBlank() }.joinToString("\n\n")
 }
