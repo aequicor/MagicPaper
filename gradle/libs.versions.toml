@@ -25,6 +25,10 @@ material3 = "1.11.0-alpha07"
 multiplatformMarkdownRenderer = "0.41.0"
 oshi = "6.10.0"
 jbr-api = "1.9.0"
+# Переносимые бинарники поиска для нативных инструментов pi: find работает через fd,
+# grep — через rg (см. :feature:session:impl task bundleCodingSearchTools).
+coding-fd = "10.5.0"
+coding-ripgrep = "15.2.0"
 
 [libraries]
 decompose = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }

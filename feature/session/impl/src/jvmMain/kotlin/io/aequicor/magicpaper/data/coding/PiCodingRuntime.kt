@@ -87,6 +87,102 @@ class PiCodingRuntime(
         if (!target.isFile) target.writeBytes(content)
         return target
     }
+
+    // ---- Бинарники поиска (fd, rg) ---------------------------------------
+
+    /**
+     * Инструменты движка, которым нужен внешний бинарник: `find` вызывает `fd`,
+     * `grep` — `rg`. Pi запускается с `PI_OFFLINE=1` и сам докачать их не может,
+     * поэтому бинарники входят в дистрибутив (Gradle-задача bundleCodingSearchTools).
+     */
+    internal val searchToolNames = listOf("fd", "rg")
+
+    internal fun searchToolFileName(name: String): String = name + if (onWindows()) ".exe" else ""
+
+    /** Каталог ресурсов с бинарниками под машину сборки: имя пишет Gradle-задача. */
+    private val toolsResourceTarget: String by lazy {
+        val bundled = runCatching {
+            javaClass.getResource("/coding/tools/$TOOLS_TARGET_FILE")?.let {
+                readCodingResource(it).toString(StandardCharsets.UTF_8).trim()
+            }
+        }.getOrNull()
+        bundled?.takeIf { it.matches(Regex("[a-z0-9][a-z0-9-]*")) } ?: nodeTarget()
+    }
+
+    /**
+     * Раскладывает бинарники поиска из ресурсов дистрибутива в общий [toolsBinDir].
+     * Не фатально: нет ресурса или не удалось записать — остаётся системный PATH, а
+     * [searchToolsNotice] честно сообщает, чего не хватает.
+     * Возвращает имена инструментов, чьи бинарники лежат в [toolsBinDir].
+     */
+    @Synchronized
+    internal fun installBundledSearchTools(
+        resource: (String) -> URL? = { name ->
+            javaClass.getResource("/coding/tools/$toolsResourceTarget/$name")
+        },
+    ): List<String> {
+        copyBundledTool(resource(TOOLS_NOTICES_FILE), File(toolsBinDir, TOOLS_NOTICES_FILE))
+        return searchToolNames.filter { name ->
+            copyBundledTool(resource(searchToolFileName(name)), File(toolsBinDir, searchToolFileName(name)))
+        }
+    }
+
+    /** Одна запись: перезаписывает только изменённое содержимое, возвращает наличие файла. */
+    private fun copyBundledTool(resource: URL?, target: File): Boolean {
+        if (resource == null) return target.isFile
+        val content = runCatching { readCodingResource(resource) }.getOrElse { failure ->
+            AppLog.error("coding.pi", "search_tools.read_failed", failure,
+                mapOf("file" to target.name, "result" to "system_path"))
+            return target.isFile
+        }
+        return runCatching {
+            target.parentFile.mkdirs()
+            if (!target.isFile || !content.contentEquals(sha256(target.readBytes()))) writeAtomically(target, content)
+            // Compose и jpackage теряют бит исполнения — восстанавливаем на месте.
+            if (!onWindows()) target.setExecutable(true, false)
+            true
+        }.getOrElse { failure ->
+            AppLog.error("coding.pi", "search_tools.install_failed", failure,
+                mapOf("file" to target.name, "result" to "system_path"))
+            target.isFile
+        }
+    }
+
+    private fun sha256(content: ByteArray): ByteArray =
+        java.security.MessageDigest.getInstance("SHA-256").digest(content)
+
+    /**
+     * Есть ли бинарь там, где его ищет pi: общий каталог дистрибутива или системный
+     * PATH (pi проверяет `fd` и `fdfind`). Смотрим файлы, не запуская процессов.
+     */
+    internal fun searchToolAvailable(name: String): Boolean {
+        val aliases = if (name == "fd") listOf("fd", "fdfind") else listOf(name)
+        val suffix = if (onWindows()) ".exe" else ""
+        if (aliases.any { File(toolsBinDir, it + suffix).isFile }) return true
+        return (System.getenv("PATH") ?: "").split(File.pathSeparator)
+            .filter { it.isNotBlank() }
+            .any { dir -> aliases.any { File(dir, it + suffix).isFile } }
+    }
+
+    /** Пустая строка, если нативным инструментам поиска хватает бинарников. */
+    internal fun searchToolsNotice(): String {
+        val missing = listOf(
+            "fd" to "поиск по именам файлов",
+            "rg" to "поиск по содержимому",
+        ).filterNot { searchToolAvailable(it.first) }
+            .joinToString(" и ") { "${it.first} (${it.second})" }
+        if (missing.isEmpty()) return ""
+        return "Не найдены $missing — «Поиск в проекте» будет завершаться ошибкой. " +
+            "Установите эти утилиты в PATH или переустановите движок."
+    }
+
+    /** Один раз на процесс приложения: раскладка бинарников из дистрибутива. */
+    private fun ensureSearchTools() {
+        if (searchToolsReady) return
+        installBundledSearchTools()
+        searchToolsReady = true
+    }
+
     internal suspend fun startProviderBridge(profile: LlmProfile): CodexProviderBridge {
         val state = ensureReady().last()
         check(state.ready) { state.detail }
@@ -106,6 +202,12 @@ class PiCodingRuntime(
     private val uploadsDir = File(root, "uploads")
     /** Автономный MinGit для bash-инструмента агента на Windows (см. [ensureWindowsShell]). */
     private val shellDir = File(root, "shell")
+    /**
+     * Общий каталог бинарников поиска из дистрибутива (см. [installBundledSearchTools]).
+     * Pi ищет `fd`/`rg` в `$PI_CODING_AGENT_DIR/bin`, а конфиг отдельный у каждой сессии,
+     * поэтому переиспользуемое место даёт только PATH процесса.
+     */
+    private val toolsBinDir = File(root, "bin")
     private val piCli = File(prefix, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
 
     private val installLock = Mutex()
@@ -122,6 +224,9 @@ class PiCodingRuntime(
     }
     private fun sessionHome(id: String) = File(root, "session-configs/" + id.replace(Regex("[^a-zA-Z0-9_-]"), "_"))
     private var cachedNode: File? = null
+
+    /** Бинарники поиска из дистрибутива уже разложены (см. [ensureSearchTools]). */
+    @Volatile private var searchToolsReady = false
 
     /**
      * Процессы агентов по идентификаторам кодинг-сессий: прогоны разных
@@ -167,6 +272,7 @@ class PiCodingRuntime(
                 if (piCli.isFile) {
                     // Установка старше защиты кодировки — дупатчим на месте (идемпотентно).
                     patchBundleFuzzySafety()
+                    ensureSearchTools()
                     emit(readyStatus())
                     return@flow
                 }
@@ -178,6 +284,8 @@ class PiCodingRuntime(
                     emit(RuntimeStatus(RuntimePhase.INSTALLING, "Проверяю bash для команд агента…"))
                     ensureWindowsShell { detail -> emit(RuntimeStatus(RuntimePhase.INSTALLING, detail)) }
                 }
+                emit(RuntimeStatus(RuntimePhase.INSTALLING, "Проверяю инструменты поиска…"))
+                ensureSearchTools()
                 emit(readyStatus())
             } catch (e: Exception) {
                 emit(
@@ -193,6 +301,7 @@ class PiCodingRuntime(
         cachedNode = null
         resetWindowsShellProbe()
         fuzzySafetyDone = false
+        searchToolsReady = false
         root.deleteRecursively()
     }
 
@@ -240,6 +349,10 @@ class PiCodingRuntime(
             emit(CodingEvent.Finished)
             return@flow
         }
+        // Прогон продолжится и без бинарников поиска, но будущие ошибки «Поиска в
+        // проекте» должны быть объяснены заранее, а не выглядеть сбоем приложения.
+        ensureSearchTools()
+        searchToolsNotice().takeIf { it.isNotBlank() }?.let { emit(CodingEvent.Notice(it)) }
 
         // Resolve feature flags: session override wins over global settings.
         val flags = session.featureFlags.resolve(globalFeatureFlags)
@@ -729,7 +842,8 @@ class PiCodingRuntime(
         }
         return RuntimeStatus(
             phase = RuntimePhase.READY,
-            detail = "Пи-агент готов. Изоляция: $rootPath.$shellNote",
+            detail = "Пи-агент готов. Изоляция: $rootPath.$shellNote" +
+                searchToolsNotice().takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty(),
             version = version.trim(),
         )
     }
@@ -1056,7 +1170,22 @@ class PiCodingRuntime(
         }
     }
 
-    private fun piEnv(node: File, home: File = pihome): Map<String, String> = mapOf(
+    private fun writeAtomically(target: File, content: ByteArray) {
+        val tmp = File(target.parentFile, "${target.name}.tmp-${System.nanoTime()}")
+        tmp.writeBytes(content)
+        runCatching {
+            java.nio.file.Files.move(
+                tmp.toPath(), target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+        }.getOrElse {
+            // rename между томами или антивирусная блокировка — обычная перезапись.
+            target.writeBytes(content)
+            tmp.delete()
+        }
+    }
+
+    internal fun piEnv(node: File, home: File = pihome): Map<String, String> = mapOf(
         "PI_CODING_AGENT_DIR" to home.absolutePath,
         "PI_OFFLINE" to "1",
         "PI_SKIP_VERSION_CHECK" to "1",
@@ -1064,7 +1193,7 @@ class PiCodingRuntime(
         // На Windows в PATH добавляем бинарники автономного MinGit: подстраховка
         // для «where bash.exe» и unix-утилит, если shellPath когда-то разъедется.
         "PATH" to pathWithAll(
-            listOfNotNull(node.parentFile) +
+            listOf(toolsBinDir) + listOfNotNull(node.parentFile) +
                 if (onWindows()) listOf(File(shellDir, "usr/bin"), File(shellDir, "mingw64/bin"))
                 else emptyList()
         ),
@@ -1244,6 +1373,10 @@ class PiCodingRuntime(
 
         /** Пользовательский escape hatch: явный путь к bash.exe для пи. */
         const val WINDOWS_SHELL_ENV = "MAGICPAPER_SHELL_PATH"
+
+        /** Как дистрибутив описывает бинарники поиска: каталог и тексты лицензий. */
+        const val TOOLS_TARGET_FILE = "target.txt"
+        const val TOOLS_NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
 
         /** Подсказка модели в пи-доме (уходит в --append-system-prompt как файл). */
         const val HINTS_FILE = "agent-hints.md"
