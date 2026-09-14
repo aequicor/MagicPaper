@@ -25,6 +25,8 @@ data class CodingSessionUi(
     val failedRequest: Boolean = false,
     val interactions: List<UserInteractionRequest> = emptyList(),
     val immunityProposalPending: Boolean = false,
+    /** True when an agent replied while this session was not focused. */
+    val unread: Boolean = false,
 ) {
     val canResume: Boolean
         get() {

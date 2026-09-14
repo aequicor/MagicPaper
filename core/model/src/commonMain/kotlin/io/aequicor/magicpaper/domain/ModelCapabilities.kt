@@ -75,8 +75,8 @@ data class ModelCapabilities(
          * Модель принимает изображения — эвристика по id и провайдеру.
          *
          * Покрываемые семейства:
-         *  - Qwen: VL-ряд и мультимодальный снимок `qwen3.7-max-2026-06-08`.
-         *    Возможности снимка нельзя переносить на текстовый alias `qwen3.7-max`;
+         *  - Qwen: VL-ряд, мультимодальный снимок `qwen3.7-max-2026-06-08`,
+         *    Plus/Flash и новые мультимодальные Max;
          *  - Claude 3+ (Haiku 3, Sonnet 3/4/5, Opus 3/4);
          *  - GPT-4 и новее (gpt-4*, gpt-5*, o-серия);
          *  - Gemini (все поколения мультимодальные);
@@ -84,11 +84,8 @@ data class ModelCapabilities(
          *  - Grok с vision.
          */
         private fun resolveVision(provider: ProviderType, family: String, id: String): Boolean = when {
-            // Alibaba documents vision for this snapshot, while the unversioned alias
-            // still targets the text-only May 20 snapshot. Do not infer from "-max".
-            // https://www.alibabacloud.com/help/en/model-studio/qwen3-7-max
-            id == "qwen3.7-max-2026-06-08" -> true
             family == "qwen" && id.contains("-vl") -> true
+            family == "qwen" && isQwenMultimodal(id) -> true
             // Claude 3+ (haiku-3, sonnet-3/4/5, opus-3/4)
             family == "claude" && id.any { it.isDigit() && it >= '3' } -> true
             // GPT-4+, o-серия
@@ -101,6 +98,22 @@ data class ModelCapabilities(
             // Grok vision
             id.contains("grok") && id.contains("vision") -> true
             else -> false
+        }
+
+        /**
+         * The qwen3.7-max alias still resolves to the text-only May 20 snapshot,
+         * including on Token Plan. Only the June 8 Max snapshot accepts images.
+         * Do not infer a snapshot's modalities from another member of its family.
+         * https://www.alibabacloud.com/help/en/model-studio/qwen3-7-max
+         * https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview
+         */
+        private fun isQwenMultimodal(id: String): Boolean {
+            if (id == "qwen3.7-max" || id.startsWith("qwen3.7-max-")) {
+                return id == "qwen3.7-max-2026-06-08"
+            }
+            if (!id.startsWith("qwen3.") || id.startsWith("qwen3-vl") || id.startsWith("qwen3.0")) return false
+            if (id.contains("-preview") || id.contains("2026-05-20")) return false
+            return id.contains("-max") || id.contains("-plus") || id.contains("-flash")
         }
 
         // ---- Thinking format ---------------------------------------------------------

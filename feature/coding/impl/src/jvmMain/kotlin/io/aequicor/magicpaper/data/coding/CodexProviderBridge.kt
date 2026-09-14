@@ -23,7 +23,8 @@ internal class CodexProviderBridge private constructor(private val process: Proc
         suspend fun start(node: File, script: File, library: File, profile: LlmProfile): CodexProviderBridge = withContext(Dispatchers.IO) {
             val key = UUID.randomUUID().toString()
             val providerId = "magicpaper-api"
-            val provider = PiModelsConfig.root(profile)["providers"]!!.jsonObject[PiModelsConfig.PROVIDER_ID]!!.jsonObject
+            val imageInput = PiModelsConfig.supportsImageInput(profile.modelId)
+            val provider = PiModelsConfig.root(profile, imageInput = imageInput)["providers"]!!.jsonObject[PiModelsConfig.PROVIDER_ID]!!.jsonObject
             val model = JsonObject(provider["models"]!!.jsonArray.first().jsonObject + mapOf(
                 // pi's registry fills these defaults; the direct library bridge must do the same.
                 "input" to (provider["models"]!!.jsonArray.first().jsonObject["input"] ?: buildJsonArray { add("text") }),

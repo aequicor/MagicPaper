@@ -66,7 +66,9 @@ class PiModelsConfigTest {
             "Без imageInput — флаг не выставляется")
         // Text-only модель: флаг не выставляется даже с imageInput=true
         // (computerUse может включить imageInput, но модель не примет image_url).
-        val textOnly = PiModelsConfig.root(qwen, imageInput = true).compat()
+        // qwen3.7-max-preview — текстовый preview-снимок без vision.
+        val textOnlyProfile = profile("qwen3.7-max-preview")
+        val textOnly = PiModelsConfig.root(textOnlyProfile, imageInput = true).compat()
         assertNull(textOnly["requiresAssistantAfterToolResult"],
             "Text-only модель — флаг не выставляется")
     }
@@ -83,12 +85,18 @@ class PiModelsConfigTest {
     }
 
     @Test fun visionModelsDetectedById() {
-        // Qwen-VL ряд (DashScope: только -vl модели принимают изображения)
+        // Qwen-VL ряд
         assertTrue(PiModelsConfig.supportsImageInput("qwen-vl-max"))
         assertTrue(PiModelsConfig.supportsImageInput("qwen2.5-vl-72b-instruct"))
         assertTrue(PiModelsConfig.supportsImageInput("qwen-vl-plus"))
         assertTrue(PiModelsConfig.supportsImageInput("qwen3-vl-plus"))
         assertTrue(PiModelsConfig.supportsImageInput("qwen3-vl-flash"))
+        // Only the multimodal Max snapshot accepts images; the alias is text-only.
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.7-max-2026-06-08"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.7-plus"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.8-max"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.8-flash"))
+        assertTrue(PiModelsConfig.supportsImageInput("qwen3.5-flash"))
         // Claude 3+
         assertTrue(PiModelsConfig.supportsImageInput("claude-sonnet-4-20250514"))
         assertTrue(PiModelsConfig.supportsImageInput("claude-3-opus-20240229"))
@@ -105,16 +113,17 @@ class PiModelsConfigTest {
     }
 
     @Test fun textOnlyModelsNotDetectedAsVision() {
-        // Qwen: текстовые флагманы и лёгкие модели без Visual Understanding.
-        // DashScope отвергает image_url для моделей без суффикса -vl
-        // с ошибкой «Unexpected item type in content».
+        // Qwen: текстовые preview-снимки и старые модели без Visual Understanding.
+        // DashScope отвергает image_url для них с ошибкой
+        // «Unexpected item type in content».
         assertFalse(PiModelsConfig.supportsImageInput("qwen-max"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen3-max"))
-        assertFalse(PiModelsConfig.supportsImageInput("qwen3.8-max"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen3.7-max"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3.7-max-preview"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3.7-max-2026-05-20"))
+        assertFalse(PiModelsConfig.supportsImageInput("qwen3.7-max-2026-05-17"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen-plus"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen-turbo"))
-        assertFalse(PiModelsConfig.supportsImageInput("qwen3.8-flash"))
         assertFalse(PiModelsConfig.supportsImageInput("qwen2.5-coder-32b-instruct"))
         // DeepSeek (текстовые)
         assertFalse(PiModelsConfig.supportsImageInput("deepseek-chat"))

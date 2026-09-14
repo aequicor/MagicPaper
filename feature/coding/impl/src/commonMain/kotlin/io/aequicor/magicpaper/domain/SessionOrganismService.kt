@@ -663,6 +663,11 @@ class SessionOrganismService(
                 runtimeGeneration = node.generation, sessionKind = node.kind, observedState = node.observed,
                 desiredState = node.desired, archived = node.archived, planningRulesSnapshot = node.rules,
                 planningMode = node.mode == CodingInteractionMode.PLANNING, researchMode = node.mode == CodingInteractionMode.RESEARCH,
+                role = when {
+                    node.mode == CodingInteractionMode.PLANNING -> CodingSessionRole.ORCHESTRATOR
+                    old?.role == CodingSessionRole.WORKER -> CodingSessionRole.WORKER
+                    else -> CodingSessionRole.CHAT
+                },
                 piSessionId = if (node.previousGeneration != null && old?.runtimeGeneration != node.generation) "" else old?.piSessionId.orEmpty(),
                 pendingRun = if (node.previousGeneration != null && old?.runtimeGeneration != node.generation) null else old?.pendingRun,
                 needsHistorySeed = old?.needsHistorySeed == true || (node.previousGeneration != null && old?.runtimeGeneration != node.generation),

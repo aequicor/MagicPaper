@@ -769,6 +769,16 @@ private fun SessionRow(
             fontWeight = FontWeight.Normal,
             color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
         )
+        if (item.unread) {
+            Spacer(Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(LocalPaperColors.current.action)
+                    .semantics { contentDescription = "Непрочитанное сообщение" },
+            )
+        }
         PaperHoverActions(visible = showActions) {
             if (childCount > 0) {
                 Box(Modifier.size(24.dp)

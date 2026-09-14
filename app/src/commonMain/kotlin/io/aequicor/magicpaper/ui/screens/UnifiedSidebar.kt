@@ -73,6 +73,8 @@ internal data class UnifiedSidebarItem(
     val children: List<UnifiedSidebarItem> = emptyList(),
     /** Признак группы организма: заголовок раскрывает дерево дочерних сессий. */
     val isOrganism: Boolean = false,
+    /** Агент ответил, пока сессия не была в фокусе. */
+    val unread: Boolean = false,
 )
 
 /** Данные об иммунитете, привязанном к зиготе. */
@@ -166,6 +168,7 @@ internal fun rememberUnifiedItems(
                     isCoding = true,
                     projectId = childUi.session.projectId,
                     codingStatus = childUi.status,
+                    unread = childUi.unread,
                 )
                 result.add(childItem)
                 // Рекурсивно добавляем потомков этого ребёнка.
@@ -209,6 +212,7 @@ internal fun rememberUnifiedItems(
                         immunity = immunityByZygote[sessionUi.session.id],
                         children = children,
                         isOrganism = true,
+                        unread = sessionUi.unread,
                     )
                 } else {
                     UnifiedSidebarItem(
@@ -219,6 +223,7 @@ internal fun rememberUnifiedItems(
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
                         projectId = sessionUi.session.projectId,
                         codingStatus = sessionUi.status,
+                        unread = sessionUi.unread,
                     )
                 }
             }
@@ -516,6 +521,10 @@ private fun UnifiedSessionRow(
                 onClick = onImmunityClick,
             )
         }
+        if (item.unread) {
+            Spacer(Modifier.width(6.dp))
+            UnreadDot()
+        }
         PaperHoverActions(visible = showActions) {
             if (onArchive != null) {
                 PaperTooltip("В архив") {
@@ -588,6 +597,10 @@ private fun UnifiedChildSessionRow(
             overflow = TextOverflow.Ellipsis,
             color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
         )
+        if (item.unread) {
+            Spacer(Modifier.width(6.dp))
+            UnreadDot()
+        }
         PaperHoverActions(visible = showActions) {
             if (item.children.isNotEmpty()) {
                 Box(
@@ -665,4 +678,16 @@ private fun ImmunityDiamond(
             shape = PaperActivityShape.DIAMOND,
         )
     }
+}
+
+/** Маленькая точка-индикатор непрочитанного сообщения. */
+@Composable
+private fun UnreadDot() {
+    Box(
+        modifier = Modifier
+            .size(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(LocalPaperColors.current.action)
+            .semantics { contentDescription = "Непрочитанное сообщение" },
+    )
 }

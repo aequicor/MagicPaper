@@ -12,6 +12,72 @@ import kotlin.test.*
 class CodingResumeTest {
     private val project = CodingProject("project", "Project", "/fake", 1)
     private val session = CodingSession("session", project.id, "Task", 1, engine = CodingEngine.CODEX)
+    private val image = Attachment.fromBytes("clipboard.png", "image/png", byteArrayOf(1, 2, 3))
+    private val qwen = LlmProfile("qwen", "Token Plan", modelId = "qwen3.7-plus",
+        codingModelId = "qwen3.7-max", baseUrl = "https://token-intl.aliyuncs.com/compatible-mode/v1",
+        provider = ProviderType.OPENAI_COMPATIBLE, modelLibraryVersion = 1)
+
+    @Test fun unsupportedImageKeepsDraftAndCanBeSentAfterSelectingVisionModel() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); f.seed(); f.profiles.save(qwen)
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project); repo.saveSession(session.copy(engine = CodingEngine.PI, llmProfileId = qwen.id))
+            val runtime = Runtime().apply { gate.complete(Unit) }
+            val first = f.prepareCoding(runtime, repo); service = first; runCurrent()
+            val draft = first.composerDraft(session.id); draft.awaitSaved()
+            draft.text.value = "Что изображено?"; draft.attachments.value = listOf(image)
+            draft.awaitSaved()
+            first.sendCodingPromptTo(session.id, draft.text.value, draft.attachments.value); runCurrent()
+
+            assertTrue(runtime.calls.isEmpty(), "Reject before starting an agent or sending provider requests")
+            assertTrue(repo.messages(project.id, session.id).isEmpty())
+            assertNull(repo.sessions(project.id).single().pendingRun)
+            assertContains(assertNotNull(first.state.value.notice), "модель с поддержкой изображений")
+            first.close()
+
+            val next = f.prepareCoding(runtime, JsonCodingProjectRepository(f.kv, f.json)); service = next; runCurrent()
+            val restored = next.composerDraft(session.id); restored.awaitSaved(); runCurrent()
+            assertEquals("Что изображено?", restored.text.value)
+            assertEquals(listOf(image), restored.attachments.value)
+            next.selectCodingModel(session.id, ModelSelection(qwen.id, "qwen3.7-plus")); runCurrent()
+            next.sendCodingPromptTo(session.id, restored.text.value, restored.attachments.value); runCurrent()
+
+            assertEquals(1, runtime.calls.size)
+            assertEquals(listOf(image), runtime.attachments.single())
+            assertEquals("", restored.text.value)
+            assertTrue(restored.attachments.value.isEmpty())
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun continuingUnsupportedImagePreservesCheckpointAndNativeIdentity() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); f.seed(); f.profiles.save(qwen)
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            val request = CodingRunCheckpoint("request", "Что изображено?", listOf(image),
+                intent = ExecutionIntent.STOP, stoppedByUser = true)
+            val stopped = session.copy(llmProfileId = qwen.id, pendingRun = request, piSessionId = "existing-native")
+            repo.save(project); repo.saveSession(stopped)
+            val runtime = Runtime().apply { gate.complete(Unit) }
+            val model = f.prepareCoding(runtime, repo); service = model; runCurrent()
+            assertTrue(model.state.value.coding.currentSession!!.canResume)
+            model.resumeCodingSession(session.id); runCurrent()
+
+            assertTrue(runtime.calls.isEmpty())
+            assertTrue(runtime.reconciled.isEmpty())
+            assertEquals(request, repo.sessions(project.id).single().pendingRun)
+            assertEquals("existing-native", repo.sessions(project.id).single().piSessionId)
+            assertContains(assertNotNull(model.state.value.notice), "модель с поддержкой изображений")
+            model.selectCodingModel(session.id, ModelSelection(qwen.id, "qwen3.7-plus")); runCurrent()
+            model.resumeCodingSession(session.id); runCurrent()
+            assertEquals("existing-native", runtime.calls.single().first.piSessionId)
+            assertEquals(listOf(image), runtime.attachments.single())
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
     private class Runtime : CodingRuntime {
         val calls = mutableListOf<Pair<CodingSession, String>>()
         val attachments = mutableListOf<List<Attachment>>()

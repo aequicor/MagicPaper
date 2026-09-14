@@ -89,6 +89,7 @@ class DefaultCodingService(
     override val state: StateFlow<CodingState> = _state.asStateFlow()
     val sessionTitles = if (codingProjects != null && gateway != null)
         SessionTitleService(codingProjects, profileRepo, settingsRepo, gateway, scope) else null
+    val unreadTracker = UnreadTracker(store, json)
     override fun updateConfiguration(settings: AppSettings, profiles: List<LlmProfile>, subscriptionAvailable: Boolean, subscriptionSignedIn: Boolean) {
         _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn) }
         // Sync global feature flags to the coding runtime for optimization decisions.
@@ -413,6 +414,7 @@ class DefaultCodingService(
                 }.forEach {
                     requestPins?.remove(PinConversation(it.session.id, it.session.projectId))
                     sessionTitles?.forget(it.session.id)
+                    unreadTracker.forget(it.session.id)
                 }
                 // Список подписывает начатые задачи плана; сервис сам пропускает названные.
                 stored.forEach { session -> sessionTitles?.sync(session) }
@@ -433,7 +435,7 @@ class DefaultCodingService(
                     val preserved = current.values.filter { it.session.id !in storedIds && it.session.projectId in storedProjectIds }
                     val merged = stored.map { session ->
                         val previous = current[session.id] ?: CodingSessionUi(session)
-                        withPlanningState(previous.copy(session = session, messages = histories[session.id] ?: previous.messages))
+                        withUnread(withPlanningState(previous.copy(session = session, messages = histories[session.id] ?: previous.messages)))
                     } + preserved
                     // Skip state mutation when no session reference changed —
                     // prevents unnecessary Compose recomposition.
@@ -450,7 +452,7 @@ class DefaultCodingService(
                 // Live activity updates statuses using saved history already in memory.
                 // Only service.changes reloads persisted messages.
                 _state.update { state ->
-                    val updated = state.coding.sessions.map(::withPlanningState)
+                    val updated = state.coding.sessions.map { withUnread(withPlanningState(it)) }
                     // withPlanningState returns the same reference when nothing changed.
                     // Skip the copy entirely to avoid triggering Compose recomposition
                     // every 50 ms when no planning state actually changed.
@@ -461,6 +463,11 @@ class DefaultCodingService(
         } }
 
     }
+    private fun withUnread(item: CodingSessionUi): CodingSessionUi {
+        val unread = unreadTracker.hasUnread(item.session.id, item.messages, _state.value.coding.currentSessionId)
+        return if (item.unread == unread) item else item.copy(unread = unread)
+    }
+
     private fun withPlanningState(item: CodingSessionUi): CodingSessionUi {
         val service = planningChat ?: return item
         val session = item.session
@@ -491,7 +498,7 @@ class DefaultCodingService(
     private suspend fun loadCodingSessions(projects: List<CodingProject>): List<CodingSessionUi> {
         val repo = codingProjects ?: return emptyList()
         return projects.flatMap { project -> repo.sessions(project.id).map { session ->
-            withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id)))
+            withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id))))
         } }
     }
 
@@ -657,10 +664,15 @@ class DefaultCodingService(
     private suspend fun openCodingProject(projectId: String) {
         val repo = codingProjects ?: return
         val project = repo.all().firstOrNull { it.id == projectId } ?: return
-        val loaded = repo.sessions(projectId).map { session ->
+        val sessions = repo.sessions(projectId)
+        // Determine which session should have messages loaded: prefer current, else first.
+        val currentId = _state.value.coding.currentSessionId
+        val activeSessionId = sessions.firstOrNull { it.id == currentId }?.id ?: sessions.firstOrNull()?.id
+        val loaded = sessions.map { session ->
+            val messages = if (session.id == activeSessionId) repo.messages(projectId, session.id) else emptyList()
             withPlanningState(CodingSessionUi(
                 session = session,
-                messages = repo.messages(projectId, session.id),
+                messages = messages,
                 running = codingJobs.value[session.id]?.isActive == true,
             ))
         }
@@ -712,7 +724,7 @@ class DefaultCodingService(
                     ids.addAll(planningChat.deleteSessionTree(projectId, target))
                     removeSessionDrafts(ids)
                     removePlanningDrafts(projectId, planIds)
-                    ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it) }
+                    ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it); unreadTracker.forget(it) }
                     _state.update { state ->
                         val rest = state.coding.sessions.filterNot { it.session.id in ids }
                         state.copy(coding = state.coding.copy(sessions = rest,
@@ -879,7 +891,23 @@ class DefaultCodingService(
 
     override fun selectCodingSession(id: String) {
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == id } ?: return
+        // Load messages on-demand if not already loaded (optimization: openCodingProject only loads active session).
+        if (selected.messages.isEmpty() && !selected.running) {
+            scope.launch {
+                val repo = codingProjects ?: return@launch
+                val messages = repo.messages(selected.session.projectId, id)
+                updateCodingSession(id) { it.copy(messages = messages) }
+            }
+        }
+        markSessionRead(id)
         onOpenSession(selected.session.projectId, id)
+    }
+
+    override fun markSessionRead(sessionId: String) {
+        val session = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        val lastAgent = session.messages.lastOrNull { it.role == CodingRole.AGENT && !it.systemContext && !it.systemNotice }
+            ?: return
+        unreadTracker.markRead(sessionId, lastAgent.id)
     }
 
     override fun deleteAllCodingSessions(projectId: String) {
@@ -936,10 +964,6 @@ class DefaultCodingService(
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
         scope.launch {
             try {
-                if (target.session.stageId != null && planningChat != null && planningChat.hasLiveOrchestrator(target.session)) {
-                    planningChat.archiveSession(id)
-                    return@launch
-                }
                 val projectId = target.session.projectId
                 val ids = repo.sessions(projectId).sessionTreeIds(id).toMutableSet()
                 val planIds = planningChat?.store?.plans?.value.orEmpty().filter { it.projectId == projectId && it.parentSessionId in ids }.map { it.id }.toSet()
@@ -953,7 +977,7 @@ class DefaultCodingService(
                     ids.forEach { codingRuntime?.reconcile(it) }
                     ids.forEach { repo.deleteSession(projectId, it) }
                 }
-                ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it) }
+                ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it); unreadTracker.forget(it) }
                 removeSessionDrafts(ids)
                 removePlanningDrafts(projectId, planIds)
                 _state.update { state ->
@@ -1149,6 +1173,17 @@ class DefaultCodingService(
         // A cancelled job still owns the session while its runtime and saved output
         // are being cleaned up. Its finally block releases this entry.
         if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value) return
+        // Validate before accepting the draft or modifying a stopped run's checkpoint.
+        if (userInitiated && checkpoint.attachments.any { it.kind == AttachmentKind.IMAGE }) {
+            val profile = codingProfileOf(session)?.forCoding()
+            if (profile != null && !ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision) {
+                AppLog.info("coding", "run.input.rejected", mapOf(
+                    "sessionId" to session.id, "requestId" to checkpoint.messageId,
+                    "model" to profile.modelId, "reason" to "image-input-unsupported"))
+                _state.update { it.copy(notice = "Выбранная модель не поддерживает изображения. Выберите модель с поддержкой изображений и повторите отправку.") }
+                return
+            }
+        }
         var request = checkpoint.copy(
             responseId = checkpoint.responseId.ifBlank { Id.new() },
             responseTimelineId = checkpoint.responseTimelineId.ifBlank { Id.new() },
@@ -1284,6 +1319,12 @@ class DefaultCodingService(
             ui.plan?.let { planningChat.control(it.id, "stop") }
             return
         }
+        // Mark as stopped in the UI state immediately (before the async persistence)
+        // so that refreshInteractions() cannot create a RECOVER_RUN interaction in the
+        // window between the run job clearing `running` and the stored session update.
+        updateCodingSession(sessionId) {
+            it.copy(session = it.session.copy(pendingRun = it.session.pendingRun?.copy(intent = ExecutionIntent.STOP, stoppedByUser = true)))
+        }
         scope.launch {
             updateStoredCodingSession(ui.session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP, stoppedByUser = true)) }
             codingRuntime?.abort(sessionId)
@@ -1325,7 +1366,7 @@ class DefaultCodingService(
             st.copy(
                 coding = st.coding.copy(
                     sessions = st.coding.sessions.map {
-                        if (it.session.id == sessionId) transform(it) else it
+                        if (it.session.id == sessionId) withUnread(transform(it)) else it
                     },
                 ),
             )

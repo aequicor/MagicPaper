@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -341,14 +342,27 @@ class LlmPayloadsTest {
 
     @Test
     fun textOnlyModelStripsImagesFromPayload() {
-        // Alias qwen3.7-max пока указывает на текстовый снимок 2026-05-20;
-        // мультимодальный снимок 2026-06-08 проверяется отдельно выше.
-        val textOnly = profile(modelId = "qwen3.7-max")
+        // Текстовый preview-снимок qwen3.7-max-2026-05-20 не принимает изображения;
+        // alias qwen3.7-max и мультимодальный снимок 2026-06-08 проверяются отдельно.
+        val textOnly = profile(modelId = "qwen3.7-max-2026-05-20")
         val payload = LlmPayloads.openAi(textOnly, userWith(imageAttachment))
         val content = openAiUserContent(payload)
         assertTrue(content is JsonPrimitive, "текстовая модель получает строку, а не массив")
         val text = (content as JsonPrimitive).content
         assertTrue(text.contains("что на картинке?"), "текст запроса сохранён")
         assertFalse(text.contains("data:image"), "base64-картинка не уходит")
+    }
+
+    @Test
+    fun qwen37MaxAliasDoesNotSendUnsupportedImageContent() {
+        // Token Plan and DashScope expose the text-only May 20 snapshot under this alias.
+        val payload = LlmPayloads.openAi(
+            profile(modelId = "qwen3.7-max"), userWith(imageAttachment),
+        )
+        assertEquals("qwen3.7-max", payload.str("model"))
+        val content = openAiUserContent(payload)
+        assertTrue(content is JsonPrimitive)
+        assertContains(content.content, "что на картинке?")
+        assertFalse(content.content.contains(imageAttachment.dataBase64))
     }
 }
