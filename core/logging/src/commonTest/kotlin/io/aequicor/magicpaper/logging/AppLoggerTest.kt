@@ -73,6 +73,21 @@ class AppLoggerTest {
         }
     }
 
+    @Test fun timingAndCounterMetricsKeepTheirNameWithoutListingEveryMetric() {
+        val output = mutableListOf<AppLogEntry>()
+        val log = AppLogger(sink = AppLogSink { output += it })
+        log.info("coding.llm", "run.summary", mapOf("wallMs" to "919276", "firstResponseMs" to "508",
+            "contextTokens" to "59969", "toolCalls" to "38", "requestCount" to "3", "modelSharePercent" to "64",
+            "contextLimit" to "128000", "slowestCalls" to "claude thinks a lot"))
+        val fields = output.single().fields
+        assertEquals(setOf("wallMs", "firstResponseMs", "contextTokens", "toolCalls", "requestCount",
+            "modelSharePercent", "contextLimit", "slowestCalls"), fields.keys,
+            "A metric added by its owner must not silently disappear from the journal")
+        assertEquals("919276", fields["wallMs"])
+        assertEquals("[redacted]", fields["slowestCalls"],
+            "A metric name carrying free text is refused, not published")
+    }
+
     @Test fun exceptionTypesRemainCorrelatedWithoutMessagesOrStacks() {
         val original = IllegalArgumentException("api_key=private-value")
         val failure = IllegalStateException("https://example.com?access_token=private", original)

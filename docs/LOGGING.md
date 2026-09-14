@@ -12,7 +12,10 @@
 в неё данные секретных полей без этого контекста.
 
 Обычные события содержат machine codes, а не названия, сообщения, prompts, bodies,
-URLs, headers, пути или ключи хранилищ. Неизвестные поля исключаются. ID-поля
+URLs, headers, пути или ключи хранилищ. Числовые метрики распознаются по имени
+(суффиксы `…Ms`, `…Tokens`, `…Calls`, `…Count`, `…Percent`, `…Limit`), поэтому владелец
+операции добавляет измерение без правки общего списка; значение под таким именем,
+не являющееся числом, остаётся `[redacted]`. Прочие неизвестные поля исключаются. ID-поля
 (`operationId`, `correlationId`, `visitId`, `sessionId`, `projectId`, `requestId`,
 `profileId`, `entityId`, `journalId`, `windowId`, `tabId`, `planId`, `draftId`)
 становятся стабильными непрозрачными значениями для корреляции; это не
@@ -36,6 +39,20 @@ error/retry; распространённую ошибку не следует �
 квитанции вызова для UI, а в диагностику идут только как `TRACE`-полезная нагрузка
 с маскированием и ограничением размера. Отказ транспорта MCP логируется отдельно в
 `coding.tools` и `coding.questionnaire`.
+
+Время ответа модели пишет владелец хронометража прогона (`CodingRunLatency` →
+`CodingLatencyDiagnostics`): компонент `coding.llm`, события `call.completed` (одно
+обращение к модели или к суммаризатору уплотнения) и `run.summary` (разделение стены
+прогона на запуск движка, ответы модели, уплотнение, инструменты и остальное).
+Границы берутся из момента прибытия событий потока, то есть измеряется задержка,
+видимая пользователю, а не только потраченные токены. Поля: `durationMs`,
+`firstResponseMs`, `wallMs`, `startupMs`, `modelMs`, `compactionMs`, `toolMs`,
+`otherMs`, `modelCalls`, `toolCalls`, `contextTokens`, `contextLimit`,
+`peakContextTokens`, `slowestModelMs`, `slowestToolMs`, `modelSharePercent`,
+ machine-коды `kind`, `result`, `reason` (`slow_model_response`) и непрозрачный
+`requestId`. Вызовы инструментов здесь не дублируются: их уже логирует `coding.tool`,
+в сводку попадают только суммарные длительности. Промпты, ответы модели и хосты
+провайдера в эти записи не попадают.
 
 TRACE маскирует известные секреты, credential assignments, auth/cookie headers,
 типовые ключи, JWT и URLs до ограничения размера. Это дополнительная защита:

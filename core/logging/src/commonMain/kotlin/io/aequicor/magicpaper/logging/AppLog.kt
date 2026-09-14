@@ -156,15 +156,26 @@ internal expect fun platformWriteLog(line: String, error: Boolean)
 private const val MAX_SCAN = 65_536
 private val ids = setOf("operationId", "correlationId", "visitId", "sessionId", "projectId", "requestId", "profileId", "entityId", "journalId", "windowId", "tabId", "planId", "draftId")
 private val numeric = setOf("attempt", "generation", "count", "durationMs", "elapsedMs", "bytes", "version", "limit", "entries", "index", "cursor", "epoch")
+/**
+ * Числовые метрики без перечисления по имени: длительности (`…Ms`), счётчики токенов
+ * и вызовов (`…Tokens`, `…Calls`, `…Count`), доли и пределы (`…Percent`, `…Limit`).
+ * Владелец операции добавляет метрику вместе с именем, а не правкой общего allowlist,
+ * поэтому имя попадает в журнал, а его значение всё равно проходит проверку на число:
+ * не-число под метрическим именем остаётся `[redacted]`.
+ */
+private val numericMetricSuffixes = listOf("Ms", "Tokens", "Calls", "Count", "Percent", "Limit")
+
+private fun isNumericKey(key: String): Boolean =
+    key in numeric || (key.length <= 40 && numericMetricSuffixes.any { suffix -> key.endsWith(suffix) && key != suffix })
 private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure")
 private val machineCode by lazy { Regex("[A-Za-z0-9_./:+-]{1,160}") }
 private val eventCode by lazy { Regex("[A-Za-z][A-Za-z0-9_.-]{0,79}") }
 
 private fun safeFields(fields: Map<String, String>): Map<String, String> = buildMap {
-    fields.entries.asSequence().filter { it.key in ids || it.key in numeric || it.key in metadata }.take(24).forEach { (key, value) ->
+    fields.entries.asSequence().filter { it.key in ids || isNumericKey(it.key) || it.key in metadata }.take(24).forEach { (key, value) ->
         put(key, when {
             key in ids -> opaqueId(value)
-            key in numeric -> value.takeIf { it.length <= 20 && it.all { c -> c in '0'..'9' || c == '-' } } ?: "[redacted]"
+            isNumericKey(key) -> value.takeIf { it.length <= 20 && it.all { c -> c in '0'..'9' || c == '-' } } ?: "[redacted]"
             value.length > 160 || !machineCode.matches(value) -> "[redacted]"
             else -> redact(value, emptySet()).bounded(160)
         })

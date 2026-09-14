@@ -383,6 +383,18 @@ class PiCodingRuntime(
         // Один запуск pi — один процесс с одним промптом. Ответ, сгоревший в лимите
         // вывода, лечится продолжением ТОЙ ЖЕ pi-сессии: контекст уже набран, и агент
         // просит «продолжай» ровно то, что пользователь иначе дописывает руками.
+        // Хронометраж ведётся на всём прогоне, включая автопродолжения: «агент долго
+        // думает» — это вопрос о фазе (модель, инструмент, уплотнение, запуск движка),
+        // а не о токенах; без разделения причина остаётся догадкой.
+        val latencyFields = mapOf(
+            "projectId" to project.id,
+            "sessionId" to session.id,
+            "model" to codingProfile.modelId,
+            "provider" to profile.provider.name,
+            "mode" to (if (planning) "PLANNING" else if (research) "RESEARCH" else "CODE"),
+            "strategy" to (PiModelsConfig.thinkingLevel(codingProfile) ?: "provider-default"),
+        )
+        val latency = CodingRunLatency()
         var promptText = effectivePrompt
         var piSessionId = session.piSessionId.ifBlank { null }
         var continues = 0
@@ -406,7 +418,7 @@ class PiCodingRuntime(
             // so the boost allows one more attempt before giving up.
             val maxContinues = if (speedBoost) MAX_OUTPUT_CONTINUES + 1 else MAX_OUTPUT_CONTINUES
             while (true) {
-                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge, agentBridge, agentTools)
+                outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge, agentBridge, agentTools, latency, latencyFields)
                 val canContinue = outcome.truncated != null && !outcome.answerSeen &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < maxContinues && !abortedSessions.contains(session.id)
@@ -427,6 +439,13 @@ class PiCodingRuntime(
             computerBridge?.close()
             abortedSessions.remove(session.id)
         }
+        // Итог прогона: одна запись с разделением вместо ручного сравнения меток
+        // в журнале. Долгий прогон получает ту же расшифровку пользователю — иначе
+        // «что делает агент» неотличимо от «агент завис».
+        val (lateCalls, timing) = latency.finish()
+        lateCalls.forEach { call -> CodingLatencyDiagnostics.log(call, latencyFields) }
+        CodingLatencyDiagnostics.log(timing, latencyFields)
+        if (!outcome.aborted && timing.wallMs >= SLOW_RUN_NOTICE_MS) emit(CodingEvent.Notice(timing.describe()))
         if (!outcome.answerSeen) {
             emit(CodingEvent.Failed(failureReason(codingProfile, outcome, continues)))
         }
@@ -452,6 +471,8 @@ class PiCodingRuntime(
         researchBridge: ResearchCheckBridge? = null,
         agentBridge: AgentToolBridge? = null,
         agentTools: ToolSession? = null,
+        latency: CodingRunLatency? = null,
+        latencyFields: Map<String, String> = emptyMap(),
     ): AttemptOutcome {
         val research = researchBridge != null
         val restricted = planning || research
@@ -583,6 +604,10 @@ class PiCodingRuntime(
                             is CodingEvent.ContextUpdated -> Unit
                             else -> Unit
                         }
+                        // Фаза «модель думает» видна только по границам событий потока: она
+                        // фиксируется в момент прибытия, то есть вместе с задержкой, которую
+                        // реально видел пользователь.
+                        latency?.apply(event)?.forEach { call -> CodingLatencyDiagnostics.log(call, latencyFields) }
                         emit(event)
                     }
                 }
@@ -1350,6 +1375,12 @@ class PiCodingRuntime(
          * просто ещё один счёт за токены.
          */
         const val MAX_OUTPUT_CONTINUES = 2
+
+        /**
+         * С какой длительности прогона стоит показывать пользователю расшифровку паузы.
+         * Ниже двух минут «долго» — субъективно, а строка в ленте была бы шумом.
+         */
+        const val SLOW_RUN_NOTICE_MS = 120_000L
 
         /**
          * Что отправляем pi-сессии при автопродолжении. Коротко и без извинений:
