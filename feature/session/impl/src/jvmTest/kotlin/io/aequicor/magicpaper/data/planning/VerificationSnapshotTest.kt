@@ -14,6 +14,78 @@ class VerificationSnapshotTest {
         check(process.waitFor() == 0) { output }; return output
     }
 
+    private class GitlinkFixture : AutoCloseable {
+        val root = Files.createTempDirectory("magicpaper-gitlink-snapshot-").toFile()
+        val module = root.resolve("tools/mission-visualization").apply { mkdirs() }
+        init {
+            git(root, "init")
+            git(module, "init")
+            module.resolve("source.txt").writeText("base")
+            module.resolve(".gitignore").writeText("build/\n")
+            git(module, "add", "."); git(module, "commit", "-m", "base")
+            root.resolve(".gitmodules").writeText("[submodule \"visualization\"]\n\tpath = tools/mission-visualization\n\turl = ./fixture\n")
+            git(root, "add", "tools/mission-visualization", ".gitmodules")
+            git(root, "commit", "-m", "gitlink")
+            git(root, "submodule", "absorbgitdirs")
+        }
+        override fun close() { root.deleteRecursively() }
+        fun git(dir: File, vararg args: String): String {
+            val process = ProcessBuilder(listOf("git", "-c", "user.name=Test", "-c", "user.email=test@localhost",
+                "-c", "commit.gpgSign=false", "-C", dir.path) + args).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            check(process.waitFor() == 0) { output }
+            return output.trim()
+        }
+    }
+
+    @Test fun uninitializedGitlinkIsAValidSnapshotWithoutChangingIndex() = runTest {
+        GitlinkFixture().use { f ->
+            f.module.deleteRecursively(); f.module.mkdirs()
+            val index = f.git(f.root, "ls-files", "--stage")
+            val empty = verificationSnapshot(f.root.path)
+            assertEquals(empty, verificationSnapshot(f.root.path))
+            assertEquals(index, f.git(f.root, "ls-files", "--stage"))
+            f.module.resolve("unexpected.txt").writeText("must be observed")
+            assertNotEquals(empty, verificationSnapshot(f.root.path))
+        }
+    }
+
+    @Test fun initializedGitlinkIncludesHeadIndexAndActualBytes() = runTest {
+        GitlinkFixture().use { f ->
+            assertTrue(f.module.resolve(".git").isFile)
+            f.git(f.root, "config", "submodule.visualization.ignore", "all")
+            val index = f.git(f.root, "ls-files", "--stage")
+            val baseline = verificationSnapshot(f.root.path)
+            f.module.resolve("source.txt").writeText("modified")
+            val dirty = verificationSnapshot(f.root.path)
+            assertNotEquals(baseline, dirty)
+            f.git(f.module, "add", "source.txt")
+            val staged = verificationSnapshot(f.root.path)
+            assertNotEquals(dirty, staged)
+            f.module.resolve("new.txt").writeText("untracked")
+            val untracked = verificationSnapshot(f.root.path)
+            assertNotEquals(staged, untracked)
+            f.module.resolve("build").mkdirs()
+            f.module.resolve("build/output.txt").writeText("ignored")
+            assertEquals(untracked, verificationSnapshot(f.root.path))
+            f.git(f.module, "commit", "-m", "changed")
+            val committed = verificationSnapshot(f.root.path)
+            f.git(f.module, "commit", "--allow-empty", "-m", "same tree new commit")
+            assertNotEquals(committed, verificationSnapshot(f.root.path))
+            assertEquals(index, f.git(f.root, "ls-files", "--stage"))
+        }
+    }
+
+    @Test fun aDirectoryReplacingAnOrdinaryTrackedFileIsStillRejected() = runTest {
+        GitlinkFixture().use { f ->
+            f.root.resolve("ordinary.txt").writeText("tracked")
+            f.git(f.root, "add", "ordinary.txt")
+            f.root.resolve("ordinary.txt").delete()
+            f.root.resolve("ordinary.txt").mkdirs()
+            assertFailsWith<IllegalStateException> { verificationSnapshot(f.root.path) }
+        }
+    }
+
     @Test fun hashesIndexWorkingTreeAndUntrackedWithoutChangingUserIndex() = runTest {
         val root = Files.createTempDirectory("magicpaper-snapshot-").toFile()
         fun git(vararg args: String) = gitAt(root, *args)
@@ -39,40 +111,6 @@ class VerificationSnapshotTest {
             assertEquals(untracked, verificationSnapshot(root.path))
             root.resolve("source.txt").delete()
             assertNotEquals(untracked, verificationSnapshot(root.path))
-        } finally { root.deleteRecursively() }
-    }
-
-    @Test fun hashesSubmodulePointerInsteadOfItsWorkingTree() = runTest {
-        val root = Files.createTempDirectory("magicpaper-snapshot-submodule-").toFile()
-        val nested = root.resolve("vendor/lib")
-        fun git(vararg args: String) = gitAt(root, *args)
-        try {
-            git("init")
-            root.resolve("source.txt").writeText("source")
-            git("add", "source.txt")
-            git("commit", "-m", "base")
-            nested.mkdirs()
-            gitAt(nested, "init")
-            nested.resolve("dependency.txt").writeText("dependency")
-            gitAt(nested, "add", "dependency.txt")
-            gitAt(nested, "commit", "-m", "dependency")
-            git("update-index", "--add", "--cacheinfo", "160000,${gitAt(nested, "rev-parse", "HEAD").trim()},vendor/lib")
-            git("commit", "-m", "Record the dependency as a submodule")
-            // GitTaskWorkspace.clean() demands this; only the snapshot stood in the way of the delivery.
-            assertEquals("", git("status", "--porcelain", "--untracked-files=all").trim())
-            val indexBefore = git("ls-files", "--stage")
-            val recorded = verificationSnapshot(root.path)
-            // A managed worktree starts a submodule absent or empty; the delivered pointer must not depend on those bytes.
-            nested.deleteRecursively()
-            assertEquals(recorded, verificationSnapshot(root.path))
-            nested.mkdirs()
-            gitAt(nested, "init")
-            gitAt(nested, "commit", "-m", "foreign history", "--allow-empty")
-            assertEquals(recorded, verificationSnapshot(root.path))
-            assertEquals(indexBefore, git("ls-files", "--stage"))
-            // Advancing the recorded commit is the only submodule change this project carries.
-            git("update-index", "--cacheinfo", "160000,${"1".repeat(40)},vendor/lib")
-            assertNotEquals(recorded, verificationSnapshot(root.path))
         } finally { root.deleteRecursively() }
     }
 

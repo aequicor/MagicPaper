@@ -89,7 +89,9 @@ class TaskWorktreeService(
         }
         if (record.phase in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY, TaskWorktreePhase.CAPTURING)) {
             check(planAccepted || record.phase == TaskWorktreePhase.CAPTURING ||
-                (record.phase == TaskWorktreePhase.READY && record.handoffGeneration == session(project.id, sessionId).runtimeGeneration)) { "Агент не подтвердил завершение задачи через task.handoff" }
+                (record.phase == TaskWorktreePhase.READY && record.handoffGeneration == session(project.id, sessionId).runtimeGeneration)) {
+                record.error ?: "Агент не подтвердил завершение задачи через task.handoff"
+            }
             record = save(project.id, sessionId, taskId, guard = { latest ->
                 if (!planAccepted) {
                     check(latest.pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
