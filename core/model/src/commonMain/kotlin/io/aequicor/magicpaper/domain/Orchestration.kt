@@ -201,10 +201,37 @@ fun List<Milestone>.specification(): List<Milestone> = map {
     it.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", updatedAt = 0)
 }
 
-fun List<PlanningQuestion>.validQuestions(): Boolean = size <= 3 && map { it.id }.distinct().size == size && all { q ->
-    q.id.isNotBlank() && q.title.isNotBlank() && (q.kind == QuestionKind.TEXT || q.options.size >= 2) &&
-        q.options.all { it.id.isNotBlank() && it.label.isNotBlank() } && q.options.map { it.id }.distinct().size == q.options.size
+/** One questionnaire is a short wizard: the dock shows a single question at a time. */
+const val MAX_QUESTIONS_PER_REQUEST = 3
+
+/**
+ * Structural rules shared by every questionnaire surface. The text goes back to the model, so it
+ * names the broken question and the correction. Free text (titles, labels) is unrestricted: any
+ * language, punctuation and length are acceptable, only identifiers have structural requirements.
+ * An empty list is not a problem here — the caller decides whether questions are required.
+ */
+fun List<PlanningQuestion>.questionnaireProblem(): String? {
+    if (size > MAX_QUESTIONS_PER_REQUEST) return "Опросник содержит $size вопросов; за один вызов допускается не более " +
+        "$MAX_QUESTIONS_PER_REQUEST. Разбейте их на несколько вызовов по $MAX_QUESTIONS_PER_REQUEST вопроса."
+    val identities = mutableSetOf<String>()
+    forEachIndexed { index, question ->
+        if (question.id.isBlank()) return "Вопрос №${index + 1}: заполните короткий уникальный id, например signing_key."
+        val label = question.id
+        if (!identities.add(label)) return "Вопрос №${index + 1}: id «$label» повторяется; идентификаторы вопросов должны быть уникальны."
+        if (question.title.isBlank()) return "Вопрос «$label»: заполните title — текст вопроса, который увидит пользователь."
+        val options = mutableSetOf<String>()
+        question.options.forEachIndexed { optionIndex, option ->
+            if (option.id.isBlank()) return "Вопрос «$label»: у варианта №${optionIndex + 1} пустой id."
+            if (!options.add(option.id)) return "Вопрос «$label»: id варианта «${option.id}» повторяется в этом вопросе."
+            if (option.label.isBlank()) return "Вопрос «$label»: у варианта «${option.id}» пустой label."
+        }
+    }
+    return null
 }
+
+/** A plan question must offer a real choice; the runtime questionnaire normalizes lonely options. */
+fun List<PlanningQuestion>.validQuestions(): Boolean =
+    questionnaireProblem() == null && all { it.kind == QuestionKind.TEXT || it.options.size >= 2 }
 
 class OrchestrationPersistenceException(message: String, cause: Throwable) : IllegalStateException(message, cause)
 

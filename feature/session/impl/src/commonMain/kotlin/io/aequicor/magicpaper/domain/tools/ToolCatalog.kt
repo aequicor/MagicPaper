@@ -46,7 +46,7 @@ object ToolCatalog {
         ToolDefinition("research_check", "Защищённая проверка", empty, ToolCategory.EXEC, workers, native = true),
         ToolDefinition("context.get", "Актуальное состояние проекта, плана и сессий", empty, ToolCategory.READ),
         app<ToolSearch>("web.search", "Поиск источников в интернете", category = ToolCategory.SEARCH),
-        app<ToolQuestions>("questionnaire", "Уточнение у пользователя. Ожидает подтверждённых ответов; не выдаёт разрешений"),
+        ToolDefinition("questionnaire", QuestionnaireContract.description, QuestionnaireContract.schema, ToolCategory.ACTION),
         app<PlanToolProposal>("plan.propose", "Передать проект плана с объяснением, деревом решений и этапами. Не запускает исполнителей", setOf(ToolRole.PLANNER), true, true),
         app<ToolMessage>("plan.refine", "Разработать или доработать план. newPlan=true по поручению пользователя создаёт отдельный план взамен старого, сохраняя его историю; запуск требует отдельного подтверждения", coordinator, true, true),
         app<ToolRecalculate>("plan.recalculate", "Пересчитать часть плана по идентификатору узла", coordinator, true, true),
@@ -70,6 +70,6 @@ object ToolCatalog {
         "edit", "apply_patch" -> "file.edit"
         "write", "write_file" -> "file.write"
         "bash", "shell", "exec", "command", "exec_command" -> "shell.exec"
-        else -> if (isExec) "shell.exec" else definitions.firstOrNull { name.endsWith(it.wireName) }?.id ?: name
+        else -> if (isExec) "shell.exec" else definitions.firstOrNull { name.endsWith(it.wireName) || name.equals(it.id, ignoreCase = true) }?.id ?: name
     }
 }

@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.questionnaire
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.domain.tools.QuestionnaireContract
 import java.net.URI
 import java.net.HttpURLConnection
 import kotlinx.coroutines.*
@@ -48,6 +49,20 @@ class QuestionnaireBridgeTest {
         response.await()
         val questions = QuestionnaireTool.decode(Json.parseToJsonElement(args).jsonObject)
         assertTrue(questions.single().allowCustomInput && questions.single().canSkip)
+    }
+
+    @Test fun bridgeAndApplicationToolExposeTheSameQuestionnaireContract() {
+        assertEquals(QuestionnaireContract.schema, QuestionnaireTool.schema)
+        assertEquals(QuestionnaireContract.instructions, QuestionnaireTool.instructions)
+        val prepared = QuestionnaireTool.decode(Json.parseToJsonElement(
+            """{"questions":[{"id":"q","title":"Формат?","kind":"SINGLE","options":[{"id":"pdf","label":"PDF"}]}]}""").jsonObject)
+        assertEquals(QuestionKind.SINGLE, prepared.single().kind)
+        assertTrue(prepared.single().canSkip && prepared.single().allowCustomInput && !prepared.single().secret)
+        val failure = assertFailsWith<IllegalArgumentException> {
+            QuestionnaireTool.decode(Json.parseToJsonElement(
+                """{"questions":[{"id":"q","title":"  ","kind":"TEXT","options":[]},{"id":"q","title":"Повтор?","kind":"TEXT","options":[]}]}""").jsonObject)
+        }
+        assertContains(failure.message.orEmpty(), "q")
     }
 
     @Test fun oldEndpointsAreReplacedOnEveryCodexResumeAndNormalTimeoutIsNotUsed() = runBlocking {

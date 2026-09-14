@@ -157,6 +157,9 @@ class ToolExecutor(
                 result = if (event.result.isNotBlank()) JsonPrimitive(event.result) else previous?.result ?: JsonNull,
             ).forPersistence(knownSecrets())
             receipts.save(receipt)
+            ToolCallDiagnostics.log(context, event, native = true,
+                durationMs = if (receipt.phase == ToolPhase.STARTED) null else now - receipt.recordedAt,
+                cause = null, secrets = knownSecrets())
             if (receipt.phase == ToolPhase.UNKNOWN && receipt.mutating) unknownOutcome(context, receipt)
             true
         }
@@ -176,7 +179,14 @@ class ToolExecutor(
                 PlanningDiagnostics.redact(result, knownSecrets()).let {
                     if (it.length <= 64_000) it else it.take(64_000) + "\n… Вывод сокращён; полный результат сохранён: $key"
                 })
-            session.events.publish(event(ToolPhase.STARTED))
+            val startedAt = Id.now()
+            suspend fun report(event: ToolEvent, cause: Throwable? = null) {
+                ToolCallDiagnostics.log(context, event, native = false,
+                    durationMs = if (event.phase == ToolPhase.STARTED) null else Id.now() - startedAt,
+                    cause = cause, secrets = knownSecrets())
+                session.events.publish(event)
+            }
+            report(event(ToolPhase.STARTED))
             var claimed: ToolReceipt? = null
             var executing = false
             var failurePhase: ToolPhase? = null
@@ -238,14 +248,14 @@ class ToolExecutor(
                         checkScope(context)
                         receipts.save(receipt.copy(phase = ToolPhase.SUCCEEDED, result = recovered, error = "", updatedAt = Id.now()))
                     }
-                    session.events.publish(event(ToolPhase.SUCCEEDED, recovered.toString()))
+                    report(event(ToolPhase.SUCCEEDED, recovered.toString()))
                     session.completed(key, definition.id, intent.arguments, recovered)
                     return@withLock recovered
                 }
                 if (definition.id == "questionnaire") {
                     claimed = intent.copy(phase = ToolPhase.WAITING, updatedAt = Id.now())
                     receipts.save(claimed)
-                    session.events.publish(event(ToolPhase.WAITING, "Ожидается ответ пользователя"))
+                    report(event(ToolPhase.WAITING, "Ожидается ответ пользователя"))
                 }
                 authorizeTool(context, definition)
                 authorizeCommand(context, definition, arguments)
@@ -259,7 +269,7 @@ class ToolExecutor(
                 withContext(NonCancellable) { receipts.save(intent.copy(phase = ToolPhase.SUCCEEDED, result = result, updatedAt = Id.now())) }
                 claimed = null
                 session.completed(key, definition.id, intent.arguments, result)
-                session.events.publish(event(ToolPhase.SUCCEEDED, result.toString()))
+                report(event(ToolPhase.SUCCEEDED, result.toString()))
                 result
             } catch (error: Exception) {
                 // Cancellation of an awaiter is not proof that an external effect was cancelled.
@@ -280,7 +290,7 @@ class ToolExecutor(
                         runCatching { receipts.save(updated) }
                         if (phase == ToolPhase.UNKNOWN && intent.mutating) runCatching { unknownOutcome(context, updated) }
                     }
-                    runCatching { session.events.publish(event(phase, message)) }
+                    runCatching { report(event(phase, message), error) }
                 }
                 if (message != error.message) throw when (error) {
                     is CancellationException -> CancellationException(message)
@@ -407,6 +417,7 @@ fun validateToolArguments(schema: JsonObject, value: JsonElement, path: String =
     }
     if (value is JsonArray) {
         schema["minItems"]?.jsonPrimitive?.intOrNull?.let { require(value.size >= it) { "$path: пустой список" } }
+        schema["maxItems"]?.jsonPrimitive?.intOrNull?.let { require(value.size <= it) { "$path: слишком много элементов (максимум $it)" } }
         (schema["items"] as? JsonObject)?.let { spec -> value.forEach { validateToolArguments(spec, it, path) } }
     }
 }

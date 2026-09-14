@@ -69,7 +69,12 @@ export default function (pi) {
       return { content: [{ type: 'text', text: result.text + (result.note ? '\n' + result.note : '') }], details: result };
     }
   });
-  // Even a fabricated call to a tool absent from the advertised schema cannot execute it.
-  pi.on('tool_call', event => allowed.includes(event.toolName) ? undefined :
-    { block: true, reason: research ? 'При исследовании доступны чтение, поиск, опросник и защищённые проверки.' : 'При планировании доступны только чтение, поиск и просмотр Git.' });
+  // Even a fabricated call to a tool absent from the advertised schema cannot execute it. The reason
+  // names the exact callable ids, because a model that guesses a shorter name otherwise reads an
+  // unrelated refusal and starts changing the question text instead of the tool name.
+  const refusal = (research
+    ? 'При исследовании доступны чтение, поиск, опросник и защищённые проверки.'
+    : 'При планировании доступны только чтение, поиск и просмотр Git.') +
+    (applicationTools.length ? ' Инструменты приложения вызываются только по точным именам: ' + applicationTools.join(', ') + '.' : '');
+  pi.on('tool_call', event => allowed.includes(event.toolName) ? undefined : { block: true, reason: refusal });
 }

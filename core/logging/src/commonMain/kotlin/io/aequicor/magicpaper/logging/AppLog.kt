@@ -68,6 +68,10 @@ class AppLogger(
     fun error(component: String, event: String, cause: Throwable, fields: Map<String, String> = emptyMap()) =
         record(LogLevel.ERROR, component, event, fields, cause)
 
+    /** A refused or failed operation without an exception: the outcome is the whole evidence. */
+    fun error(component: String, event: String, fields: Map<String, String>) =
+        record(LogLevel.ERROR, component, event, fields)
+
     /**
      * Payload is evaluated only at TRACE. Supply known credentials for free-form diagnostics;
      * standard credential fields/headers/token formats are redacted at every level as well.
@@ -130,6 +134,9 @@ object AppLog {
     fun debug(component: String, event: String, fields: Map<String, String> = emptyMap()) = logger.debug(component, event, fields)
     fun error(component: String, event: String, cause: Throwable, fields: Map<String, String> = emptyMap()) =
         logger.error(component, event, cause, fields)
+
+    fun error(component: String, event: String, fields: Map<String, String>) =
+        logger.error(component, event, fields)
     fun trace(component: String, event: String, fields: Map<String, String> = emptyMap(),
               knownSecrets: Set<String> = emptySet(), payload: () -> String) = logger.trace(component, event, fields, knownSecrets, payload)
 }
@@ -149,7 +156,7 @@ internal expect fun platformWriteLog(line: String, error: Boolean)
 private const val MAX_SCAN = 65_536
 private val ids = setOf("operationId", "correlationId", "visitId", "sessionId", "projectId", "requestId", "profileId", "entityId", "journalId", "windowId", "tabId", "planId", "draftId")
 private val numeric = setOf("attempt", "generation", "count", "durationMs", "elapsedMs", "bytes", "version", "limit", "entries", "index", "cursor", "epoch")
-private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope")
+private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure")
 private val machineCode by lazy { Regex("[A-Za-z0-9_./:+-]{1,160}") }
 private val eventCode by lazy { Regex("[A-Za-z][A-Za-z0-9_.-]{0,79}") }
 

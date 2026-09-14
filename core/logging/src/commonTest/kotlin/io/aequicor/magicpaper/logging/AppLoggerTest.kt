@@ -19,6 +19,18 @@ class AppLoggerTest {
         assertEquals(0, payloads)
     }
 
+    @Test fun refusedOperationIsRecordedWithoutAnException() {
+        val output = mutableListOf<AppLogEntry>()
+        val log = AppLogger(sink = AppLogSink { output += it })
+        log.error("coding.tool", "call.failed", mapOf("tool" to "questionnaire", "category" to "ACTION",
+            "failure" to "validation", "kind" to "application"))
+        val entry = output.single()
+        assertEquals(LogLevel.ERROR, entry.level)
+        assertEquals(emptyList(), entry.causeTypes, "A refusal has no local cause chain")
+        assertEquals(mapOf("tool" to "questionnaire", "category" to "ACTION", "failure" to "validation", "kind" to "application"),
+            entry.fields, "Tool identity and outcome are machine codes and remain readable")
+    }
+
     @Test fun infoAndErrorRemainRecordedAtInfoAndHigherVerbosity() {
         val log = AppLogger(sink = AppLogSink {})
         for (level in LogLevel.entries.filter { it.ordinal >= LogLevel.INFO.ordinal }) {

@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.domain.tools.*
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import io.aequicor.magicpaper.logging.AppLog
 import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -44,21 +45,31 @@ internal class AgentToolBridge(
     init {
         server.executor = executor
         server.createContext("/mcp") { exchange ->
-            try { handle(exchange) } catch (_: Exception) { runCatching { reply(exchange, 500) } }
+            try { handle(exchange) }
+            catch (failure: Exception) {
+                // A refused transport must stay discoverable after the run; the response body never enters the log.
+                AppLog.error("coding.tools", "request.crashed", failure, mapOf("outcome" to "handler"))
+                runCatching { reply(exchange, 500) }
+            }
             finally { exchange.close() }
         }
         server.start()
+        AppLog.info("coding.tools", "endpoint.started", mapOf("count" to tools.definitions.size.toString(), "backend" to "mcp"))
+    }
+    private fun reject(exchange: HttpExchange, status: Int, outcome: String) {
+        AppLog.error("coding.tools", "request.rejected", mapOf("outcome" to outcome, "phase" to "transport"))
+        reply(exchange, status)
     }
     private fun handle(exchange: HttpExchange) {
-        if (closed.get()) { reply(exchange, 410); return }
-        if (exchange.requestURI.path != "/mcp") { reply(exchange, 404); return }
+        if (closed.get()) { reject(exchange, 410, "endpoint_closed"); return }
+        if (exchange.requestURI.path != "/mcp") { reject(exchange, 404, "unknown_path"); return }
         if (exchange.requestHeaders.containsKey("Origin") || !MessageDigest.isEqual(
-                exchange.requestHeaders.getFirst("Authorization").orEmpty().toByteArray(), "Bearer $token".toByteArray())) { reply(exchange, 403); return }
-        if (exchange.requestMethod != "POST") { reply(exchange, 405); return }
+                exchange.requestHeaders.getFirst("Authorization").orEmpty().toByteArray(), "Bearer $token".toByteArray())) { reject(exchange, 403, "unauthorized"); return }
+        if (exchange.requestMethod != "POST") { reject(exchange, 405, "unsupported_method"); return }
         val bytes = exchange.requestBody.readNBytes(1_048_577)
-        if (bytes.size > 1_048_576) { reply(exchange, 413); return }
+        if (bytes.size > 1_048_576) { reject(exchange, 413, "payload_too_large"); return }
         val request = runCatching { Json.parseToJsonElement(bytes.decodeToString()).jsonObject }.getOrNull()
-        if (request == null || request["jsonrpc"] != JsonPrimitive("2.0")) { reply(exchange, 400); return }
+        if (request == null || request["jsonrpc"] != JsonPrimitive("2.0")) { reject(exchange, 400, "invalid_request"); return }
         val id = request["id"]
         val params = request["params"] as? JsonObject ?: buildJsonObject { }
         val method = request["method"]?.jsonPrimitive?.content
@@ -66,9 +77,9 @@ internal class AgentToolBridge(
             if (method == "notifications/cancelled") params["requestId"]?.let { jobs[it]?.cancel() }
             reply(exchange, 202); return
         }
-        if (id !is JsonPrimitive || id == JsonNull) { reply(exchange, 400); return }
+        if (id !is JsonPrimitive || id == JsonNull) { reject(exchange, 400, "invalid_request_id"); return }
         val previousRequest = requestBodies.putIfAbsent(id, request)
-        if (previousRequest != null && previousRequest != request) { reply(exchange, 400); return }
+        if (previousRequest != null && previousRequest != request) { reject(exchange, 400, "reused_request_id"); return }
         respondJson(exchange, heartbeat = method == "tools/call") {
             val response = CompletableDeferred<JsonObject>()
             val previous = results.putIfAbsent(id, response)
@@ -112,6 +123,8 @@ internal class AgentToolBridge(
                 }
                 buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("result", payload) }
             } catch (e: Exception) {
+                // Protocol-level refusal: the call never reached the executor, so nothing else reports it.
+                AppLog.error("coding.tools", "request.failed", e, mapOf("operation" to method.orEmpty(), "outcome" to "rejected"))
                 buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("error", buildJsonObject {
                     put("code", -32602); put("message", if (e is CancellationException) "Обращение отменено" else e.message ?: "Не удалось выполнить инструмент")
                 }) }

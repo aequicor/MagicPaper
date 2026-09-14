@@ -23,9 +23,7 @@ class ToolHost(val receipts: ToolReceiptStore, val questions: RuntimeQuestionnai
     private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
     internal suspend fun askQuestionnaire(ctx: ToolExecutionContext, id: String, args: JsonObject): JsonElement {
         val request = json.decodeFromJsonElement<ToolQuestions>(args)
-        require(request.questions.validQuestions() && request.questions.isNotEmpty()) { "Некорректные вопросы" }
-        val safe = request.questions.map { it.copy(secret = false, allowCustomInput = true, canSkip = true,
-            options = it.options.map { o -> o.copy(enabled = true) }) }
+        val safe = QuestionnaireContract.ready(request.questions)
         val answers = questions.ask(UserInteractionRequest("tool:$id", ctx.projectId, ctx.ownerSessionId,
             InteractionKind.RUNTIME, safe, ownerSessionId = ctx.ownerSessionId, createdAt = Id.now(),
             runtimeGeneration = ctx.runtimeGeneration, runId = ctx.runId ?: ctx.requestId))

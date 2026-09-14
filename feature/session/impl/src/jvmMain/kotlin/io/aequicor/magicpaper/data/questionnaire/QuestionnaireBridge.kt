@@ -4,6 +4,9 @@ import io.aequicor.magicpaper.data.tools.respondJson
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.domain.tools.QuestionnaireContract
+import io.aequicor.magicpaper.domain.tools.ToolArgumentRejection
+import io.aequicor.magicpaper.logging.AppLog
 import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -17,27 +20,17 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
 
 internal object QuestionnaireTool {
-    const val instructions = "When you need a clarification or a decision from the user, call questionnaire instead of asking only in prose. Supply concise questions with answer options when useful. The user may add text or skip a clarification. Wait for the confirmed answers; never interpret silence as consent. This tool cannot authorize commands or grant permissions. If exec returns Script running with cell ID, the questionnaire is still pending: keep calling wait for that cell until confirmed answers arrive. Do not send a final response while any questionnaire or application tool call is pending; ending the turn cancels pending tool calls."
-    val schema = Json.parseToJsonElement("""{
-      "type":"object","additionalProperties":false,"required":["questions"],"properties":{"questions":{
-        "type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,
-        "required":["id","title","kind","options"],"properties":{
-          "id":{"type":"string"},"title":{"type":"string"},"kind":{"type":"string","enum":["SINGLE","MULTIPLE","TEXT"]},
-          "options":{"type":"array","items":{"type":"object","additionalProperties":false,
-            "required":["id","label"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"description":{"type":"string"}}}}
-        }}}}}
-    """).jsonObject
+    /** Schema, limits and answer policy are shared with the application tool surface. */
+    val instructions: String get() = QuestionnaireContract.instructions
+    val schema: JsonObject get() = QuestionnaireContract.schema
     val definition = buildJsonObject {
         put("name", "questionnaire"); put("description", instructions); put("inputSchema", schema)
         put("annotations", buildJsonObject { put("readOnlyHint", true); put("destructiveHint", false); put("openWorldHint", false) })
     }
     fun decode(args: JsonObject): List<PlanningQuestion> {
-        val questions = Json.decodeFromJsonElement(ListSerializer(PlanningQuestion.serializer()), args["questions"] ?: error("Нет вопросов"))
-        require(questions.isNotEmpty() && questions.all { it.id.isNotBlank() && it.title.isNotBlank() } && questions.distinctBy { it.id }.size == questions.size) { "Некорректные вопросы" }
-        require(questions.all { q -> q.options.all { it.id.isNotBlank() && it.label.isNotBlank() } && q.options.distinctBy { it.id }.size == q.options.size }) { "Некорректные варианты ответа" }
-        // Host-owned restrictions for approvals cannot be requested by an ordinary model tool.
-        return questions.map { it.copy(kind = if (it.options.isEmpty()) QuestionKind.TEXT else it.kind,
-            allowCustomInput = true, canSkip = true, secret = false, options = it.options.map { o -> o.copy(enabled = true) }) }
+        val questions = Json.decodeFromJsonElement(ListSerializer(PlanningQuestion.serializer()), args["questions"]
+            ?: throw ToolArgumentRejection(QuestionnaireContract.problem(emptyList())!!))
+        return QuestionnaireContract.ready(questions)
     }
     fun result(answers: List<PlanningAnswer>) = buildJsonObject {
         put("content", buildJsonArray { add(buildJsonObject {
@@ -60,21 +53,30 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
     init {
         server.executor = executor
         server.createContext("/mcp") { exchange ->
-            try { handle(exchange) } catch (_: Exception) { runCatching { reply(exchange, 500) } }
+            try { handle(exchange) }
+            catch (failure: Exception) {
+                AppLog.error("coding.questionnaire", "request.crashed", failure, mapOf("outcome" to "handler"))
+                runCatching { reply(exchange, 500) }
+            }
             finally { exchange.close() }
         }
         server.start()
+        AppLog.info("coding.questionnaire", "endpoint.started", mapOf("backend" to "mcp", "count" to "1"))
+    }
+    private fun reject(exchange: HttpExchange, status: Int, outcome: String, body: JsonObject? = null) {
+        AppLog.error("coding.questionnaire", "request.rejected", mapOf("outcome" to outcome, "phase" to "transport"))
+        reply(exchange, status, body)
     }
     private fun handle(exchange: HttpExchange) {
-        if (closed.get()) { reply(exchange, 410); return }
-        if (exchange.requestURI.path != "/mcp") { reply(exchange, 404); return }
+        if (closed.get()) { reject(exchange, 410, "endpoint_closed"); return }
+        if (exchange.requestURI.path != "/mcp") { reject(exchange, 404, "unknown_path"); return }
         if (exchange.requestHeaders.containsKey("Origin") || !MessageDigest.isEqual(
-                exchange.requestHeaders.getFirst("Authorization").orEmpty().toByteArray(), "Bearer $token".toByteArray())) { reply(exchange, 403); return }
-        if (exchange.requestMethod != "POST") { reply(exchange, 405); return }
+                exchange.requestHeaders.getFirst("Authorization").orEmpty().toByteArray(), "Bearer $token".toByteArray())) { reject(exchange, 403, "unauthorized"); return }
+        if (exchange.requestMethod != "POST") { reject(exchange, 405, "unsupported_method"); return }
         val bytes = exchange.requestBody.readNBytes(65_537)
-        if (bytes.size > 65_536) { reply(exchange, 413); return }
+        if (bytes.size > 65_536) { reject(exchange, 413, "payload_too_large"); return }
         val request = runCatching { Json.parseToJsonElement(bytes.decodeToString()).jsonObject }.getOrNull()
-        if (request == null || request["jsonrpc"] != JsonPrimitive("2.0")) { reply(exchange, 400); return }
+        if (request == null || request["jsonrpc"] != JsonPrimitive("2.0")) { reject(exchange, 400, "invalid_request"); return }
         val id = request["id"]
         val params = request["params"] as? JsonObject ?: buildJsonObject { }
         val method = request["method"]?.jsonPrimitive?.content
@@ -82,11 +84,12 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
             if (method == "notifications/cancelled") params["requestId"]?.let { jobs[it]?.cancel() }
             reply(exchange, 202); return
         }
-        if (id !is JsonPrimitive || id == JsonNull) { reply(exchange, 400); return }
+        if (id !is JsonPrimitive || id == JsonNull) { reject(exchange, 400, "invalid_request_id"); return }
         val signature = method to params
         val original = signatures.putIfAbsent(id, signature)
         if (original != null && original != signature) {
-            reply(exchange, 409, buildJsonObject { put("error", "Идентификатор запроса уже использован с другими аргументами") })
+            reject(exchange, 409, "reused_request_id",
+                buildJsonObject { put("error", "Идентификатор запроса уже использован с другими аргументами") })
             return
         }
         respondJson(exchange, heartbeat = method == "tools/call") {
@@ -117,6 +120,7 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaires, 
                 }
                 buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("result", payload) }
             } catch (e: Exception) {
+                AppLog.error("coding.questionnaire", "request.failed", e, mapOf("operation" to method.orEmpty(), "outcome" to "rejected"))
                 buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("error", buildJsonObject {
                     put("code", -32602); put("message", if (e is CancellationException) "Обращение отменено" else e.message ?: "Не удалось показать вопрос")
                 }) }
