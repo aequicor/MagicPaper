@@ -2,9 +2,82 @@ package io.aequicor.magicpaper.data.planning
 
 import kotlinx.coroutines.test.runTest
 import java.nio.file.Files
+import java.io.File
 import kotlin.test.*
 
 class VerificationSnapshotTest {
+    private class GitlinkFixture : AutoCloseable {
+        val root = Files.createTempDirectory("magicpaper-gitlink-snapshot-").toFile()
+        val module = root.resolve("tools/mission-visualization").apply { mkdirs() }
+        init {
+            git(root, "init")
+            git(module, "init")
+            module.resolve("source.txt").writeText("base")
+            module.resolve(".gitignore").writeText("build/\n")
+            git(module, "add", "."); git(module, "commit", "-m", "base")
+            root.resolve(".gitmodules").writeText("[submodule \"visualization\"]\n\tpath = tools/mission-visualization\n\turl = ./fixture\n")
+            git(root, "add", "tools/mission-visualization", ".gitmodules")
+            git(root, "commit", "-m", "gitlink")
+            git(root, "submodule", "absorbgitdirs")
+        }
+        override fun close() { root.deleteRecursively() }
+        fun git(dir: File, vararg args: String): String {
+            val process = ProcessBuilder(listOf("git", "-c", "user.name=Test", "-c", "user.email=test@localhost",
+                "-c", "commit.gpgSign=false", "-C", dir.path) + args).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            check(process.waitFor() == 0) { output }
+            return output.trim()
+        }
+    }
+
+    @Test fun uninitializedGitlinkIsAValidSnapshotWithoutChangingIndex() = runTest {
+        GitlinkFixture().use { f ->
+            f.module.deleteRecursively(); f.module.mkdirs()
+            val index = f.git(f.root, "ls-files", "--stage")
+            val empty = verificationSnapshot(f.root.path)
+            assertEquals(empty, verificationSnapshot(f.root.path))
+            assertEquals(index, f.git(f.root, "ls-files", "--stage"))
+            f.module.resolve("unexpected.txt").writeText("must be observed")
+            assertNotEquals(empty, verificationSnapshot(f.root.path))
+        }
+    }
+
+    @Test fun initializedGitlinkIncludesHeadIndexAndActualBytes() = runTest {
+        GitlinkFixture().use { f ->
+            assertTrue(f.module.resolve(".git").isFile)
+            f.git(f.root, "config", "submodule.visualization.ignore", "all")
+            val index = f.git(f.root, "ls-files", "--stage")
+            val baseline = verificationSnapshot(f.root.path)
+            f.module.resolve("source.txt").writeText("modified")
+            val dirty = verificationSnapshot(f.root.path)
+            assertNotEquals(baseline, dirty)
+            f.git(f.module, "add", "source.txt")
+            val staged = verificationSnapshot(f.root.path)
+            assertNotEquals(dirty, staged)
+            f.module.resolve("new.txt").writeText("untracked")
+            val untracked = verificationSnapshot(f.root.path)
+            assertNotEquals(staged, untracked)
+            f.module.resolve("build").mkdirs()
+            f.module.resolve("build/output.txt").writeText("ignored")
+            assertEquals(untracked, verificationSnapshot(f.root.path))
+            f.git(f.module, "commit", "-m", "changed")
+            val committed = verificationSnapshot(f.root.path)
+            f.git(f.module, "commit", "--allow-empty", "-m", "same tree new commit")
+            assertNotEquals(committed, verificationSnapshot(f.root.path))
+            assertEquals(index, f.git(f.root, "ls-files", "--stage"))
+        }
+    }
+
+    @Test fun aDirectoryReplacingAnOrdinaryTrackedFileIsStillRejected() = runTest {
+        GitlinkFixture().use { f ->
+            f.root.resolve("ordinary.txt").writeText("tracked")
+            f.git(f.root, "add", "ordinary.txt")
+            f.root.resolve("ordinary.txt").delete()
+            f.root.resolve("ordinary.txt").mkdirs()
+            assertFailsWith<IllegalStateException> { verificationSnapshot(f.root.path) }
+        }
+    }
+
     @Test fun hashesIndexWorkingTreeAndUntrackedWithoutChangingUserIndex() = runTest {
         val root = Files.createTempDirectory("magicpaper-snapshot-").toFile()
         fun git(vararg args: String): String {

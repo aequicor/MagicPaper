@@ -9,9 +9,13 @@ import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
-/** Hashes the index and actual tracked/untracked bytes. Never stages files or runs Git filters. */
+/** Hashes the index and actual tracked/untracked bytes, including gitlinks. Never stages files or runs Git filters. */
 internal suspend fun verificationSnapshot(path: String): String = withContext(Dispatchers.IO) {
-    val root = Path.of(path).toRealPath()
+    snapshot(Path.of(path).toRealPath(), depth = 0).joinToString("") { "%02x".format(it) }
+}
+
+private fun snapshot(root: Path, depth: Int): ByteArray {
+    require(depth <= 32) { "Слишком большая вложенность подмодулей для снимка" }
     require(Files.isDirectory(root)) { "Нет папки для проверяемого снимка" }
     fun git(vararg args: String): ByteArray {
         val builder = ProcessBuilder(listOf("git", "-c", "core.fsmonitor=false", "-C", root.toString()) + args)
@@ -34,9 +38,16 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
     fun field(text: String) = field(text.toByteArray())
     field("magicpaper-verification-v1")
     val repository = Files.exists(root.resolve(".git"))
+    var gitlinks = emptySet<String>()
     val names = if (repository) {
         require(Path.of(git("rev-parse", "--show-toplevel").decodeToString().trim()).toRealPath() == root) { "Нужен корень репозитория" }
-        field(git("ls-files", "--stage", "-z"))
+        val index = git("ls-files", "--stage", "-z")
+        field(index)
+        gitlinks = index.decodeToString().split('\u0000').filter { it.startsWith("160000 ") }
+            .map { it.substringAfter('\t') }.toSet()
+        // The parent index identifies the expected commit; the submodule's HEAD may differ
+        // even when its index and file bytes are identical (e.g. an empty commit).
+        if (depth > 0) field(git("rev-parse", "--verify", "HEAD"))
         git("ls-files", "--cached", "--others", "--exclude-standard", "-z").decodeToString()
             .split('\u0000').filter { it.isNotEmpty() }.distinct().sorted()
     } else Files.walk(root).use { stream -> stream.filter { !Files.isDirectory(it, NOFOLLOW_LINKS) }
@@ -52,6 +63,12 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
         when {
             Files.isSymbolicLink(file) -> { field("symlink"); field(Files.readSymbolicLink(file).toString()) }
             !Files.exists(file, NOFOLLOW_LINKS) -> field("deleted")
+            name in gitlinks && Files.isDirectory(file, NOFOLLOW_LINKS) -> {
+                field("gitlink")
+                // Worktree creation leaves an uninitialized gitlink as an empty directory.
+                // Hash populated copies recursively so submodule edits cannot evade verification.
+                field(snapshot(file.toRealPath(), depth + 1))
+            }
             Files.isRegularFile(file, NOFOLLOW_LINKS) -> {
                 field(if (Files.isExecutable(file)) "executable" else "file")
                 val hash = MessageDigest.getInstance("SHA-256")
@@ -64,5 +81,5 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
             else -> error("Неподдерживаемый файл снимка: $name")
         }
     }
-    digest.digest().joinToString("") { "%02x".format(it) }
+    return digest.digest()
 }

@@ -58,6 +58,13 @@ fallback. Plan acceptance additionally verifies the merged tree through the
 existing acceptance machinery. A model cannot replace registered acceptance
 checks with its own declaration.
 
+Verification snapshots recognize index mode `160000` as a gitlink. Empty,
+uninitialized submodule directories are valid; initialized submodules include
+their HEAD, index and actual tracked/untracked bytes recursively. An ignored
+submodule status does not hide its changes from verification. Snapshot failures
+retain the merge phase and the saved response; retrying recovery or continuing
+after a restart completes delivery without repeating native execution.
+
 The existing `GitPlanningWorkspace.apply` remains a file transfer for legacy
 plans. New isolated plans transfer accepted stage output into the task worktree,
 then use branch delivery once for the whole task. Explicitly disabling worktree
