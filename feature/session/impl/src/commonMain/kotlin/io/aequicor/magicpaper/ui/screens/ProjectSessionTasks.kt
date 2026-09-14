@@ -7,6 +7,7 @@ import io.aequicor.magicpaper.domain.SessionKind
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
+import io.aequicor.magicpaper.domain.sidebarTitle
 
 /** A sidebar task is a presentation group; immunity remains an independent runtime root. */
 internal data class ProjectSessionTask(
@@ -101,7 +102,7 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
             val immunityId = organism?.immunityId
                 ?: allMembers.firstOrNull { it.session.sessionKind == SessionKind.IMMUNITY }?.session?.id
             val root = byId[rootId]
-            val title = root?.session?.name ?: organism?.sessions?.get(rootId)?.name ?: "Задача"
+            val title = root?.session?.sidebarTitle() ?: organism?.sessions?.get(rootId)?.name ?: "Задача"
             val immunity = byId[immunityId]
             // Automatic lifecycle adoption is invisible for a standalone conversation.
             // Keep real plans, delegated work and diagnostic history reachable.
@@ -155,7 +156,7 @@ internal fun CodingUi.projectSessionTasks(projectId: String): List<ProjectSessio
                 legacyChildren[item.session.id].orEmpty().asReversed().forEach { pending.addLast(it) }
             }
         }
-        tasks += OrderedTask(ProjectSessionTask("session-${root.session.id}", root.session.name,
+        tasks += OrderedTask(ProjectSessionTask("session-${root.session.id}", root.session.sidebarTitle(),
             null, root.session.id, members, parentIds = legacyParents), root.session.createdAt,
             inputOrder.getValue(root.session.id))
     }

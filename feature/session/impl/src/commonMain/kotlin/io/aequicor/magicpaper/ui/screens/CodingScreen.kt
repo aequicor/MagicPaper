@@ -160,6 +160,7 @@ import io.aequicor.magicpaper.domain.PlanningChatService
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.MilestoneStatus
+import io.aequicor.magicpaper.domain.sidebarTitle
 import io.aequicor.magicpaper.ui.components.UserInteractionDock
 import io.aequicor.magicpaper.ui.components.LocalOpenQuestionnaire
 import io.aequicor.magicpaper.ui.components.CodingComposerDraft
@@ -562,7 +563,7 @@ internal fun ProjectsPanel(
                                         { onAbortSession(child.session.id) },
                                         onArchive = { onArchiveSession(child.session.id) }, nested = true,
                                         nestedDepth = row.depth + if (group.task.organismId != null) 1 else 0,
-                                        displayName = if (group.task.organismId != null && child.session.id == group.task.rootId) "Зигота" else child.session.name,
+                                        displayName = if (group.task.organismId != null && child.session.id == group.task.rootId) "Зигота" else child.session.sidebarTitle(),
                                         childCount = row.childCount,
                                         expanded = collapsed[child.session.id] != true,
                                         onToggleChildren = { collapsed = collapsed + (child.session.id to (collapsed[child.session.id] != true)) })
@@ -725,7 +726,7 @@ private fun SessionRow(
     onDelete: () -> Unit,
     onAbort: () -> Unit,
     onArchive: () -> Unit,
-    displayName: String = item.session.name,
+    displayName: String = item.session.sidebarTitle(),
     nested: Boolean = false,
     nestedDepth: Int = if (nested) 1 else 0,
     childCount: Int = 0,
@@ -953,7 +954,7 @@ internal fun CodingChat(
                 verticalArrangement = Arrangement.Top,
             ) {
                 item(key = "project-header", contentType = "header") {
-                    PaperWorkspaceHeading(session.session.name,
+                    PaperWorkspaceHeading(session.session.sidebarTitle(),
                         "${project.name}  /  ${session.session.interactionMode.title}")
                 }
                 items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->

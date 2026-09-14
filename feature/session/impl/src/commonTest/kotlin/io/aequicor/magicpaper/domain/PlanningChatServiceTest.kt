@@ -404,15 +404,19 @@ class PlanningChatServiceTest {
         assertTrue(f.projects.sessions(project.id).any { it.id == sibling.id })
     }
 
-    @Test fun firstDiscussionNamesSessionBeforePlanConfirmation() = runTest {
+    @Test fun firstDiscussionLeavesTheNameToTheTitleServiceAndKeepsTheRequest() = runTest {
         val f = Fixture(this); f.initialize(); runCurrent()
         val parent = f.session("parent").copy(name = "Сессия 2")
         f.projects.saveSession(parent)
         f.gateway.userDecision = """{"intent":"DISCUSS","reply":"Обсудим"}"""
         f.service.send(parent, "Добавить поиск по файлам"); runCurrent()
-        assertEquals("🗓️ Добавить поиск файлам", f.projects.sessions(project.id).first { it.id == parent.id }.name)
+        // Название задачи даёт модель по полному запросу, поэтому локального обрещка первой строки здесь нет.
+        assertEquals("Сессия 2", f.projects.sessions(project.id).first { it.id == parent.id }.name)
+        assertTrue(f.projects.messages(project.id, parent.id).any {
+            it.role == CodingRole.USER && it.text.contains("Добавить поиск по файлам")
+        }, "Запрос остаётся в журнале — его и получает суммаризация")
         f.service.send(parent, "Ещё один запрос"); runCurrent()
-        assertEquals("🗓️ Добавить поиск файлам", f.projects.sessions(project.id).first { it.id == parent.id }.name)
+        assertEquals("Сессия 2", f.projects.sessions(project.id).first { it.id == parent.id }.name)
     }
 
     @Test fun deletingAllSessionsStopsPlansAndPreservesOtherProjects() = runTest {

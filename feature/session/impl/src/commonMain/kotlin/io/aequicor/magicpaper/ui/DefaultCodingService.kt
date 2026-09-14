@@ -92,6 +92,23 @@ class DefaultCodingService(
         SessionTitleService(codingProjects, profileRepo, settingsRepo, gateway, scope) else null
     val unreadTracker = UnreadTracker(store, json)
     init {
+        // Готовое название задачи появляется в списке сразу, а не после следующей перезагрузки журналов.
+        sessionTitles?.let { titles -> scope.launch {
+            titles.titles.collect { ready ->
+                if (ready.isEmpty()) return@collect
+                _state.update { state ->
+                    val current = state.coding.sessions
+                    val updated = current.map { item ->
+                        val title = ready[item.session.id] ?: return@map item
+                        if (item.session.shortTitle == title) item else item.copy(session = item.session.copy(shortTitle = title))
+                    }
+                    // Список меняет ссылку всегда, поэтому сравнивают элементы: иначе каждая публикация
+                    // названия вызвала бы лишнюю реконпозицию всего журнала.
+                    if (updated.indices.all { updated[it] === current[it] }) state
+                    else state.copy(coding = state.coding.copy(sessions = updated))
+                }
+            }
+        } }
         planningChat?.organisms?.beforeDeleteSession = { projectId, sessionId ->
             withContext(Dispatchers.Main.immediate) {
                 requestPins?.remove(PinConversation(sessionId, projectId))
@@ -1279,9 +1296,12 @@ class DefaultCodingService(
                 var current = updateStoredCodingSession(session) { latest ->
                     require(latest.interactionMode == session.interactionMode) { "Режим сессии изменился. Отправьте запрос повторно." }
                     request = request.copy(interactionMode = request.interactionMode ?: latest.interactionMode)
-                    latest.namedFromPrompt(request.prompt).copy(pendingRun = request,
+                    // Название по всему запросу даёт модель; локальная свёртка остаётся, только если её нет.
+                    latest.namedFromPrompt(request.prompt, localSummaryAllowed = sessionTitles == null)
+                        .copy(pendingRun = request,
                         queuedPrompts = latest.queuedPrompts.filterNot { it.messageId == request.messageId }).forPendingRun()
                 }
+                sessionTitles?.sync(current)
                 if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
                     appendCodingMessage(session, CodingMessage(request.messageId, CodingRole.USER,
                         request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() },

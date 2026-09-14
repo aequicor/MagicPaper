@@ -1026,7 +1026,7 @@ class OrchestrationService(
             organisms?.prepareUserTurn(session, input.id)
             sessionLock(session.id).withLock {
                 val latest = projects.sessions(session.projectId).firstOrNull { it.id == session.id } ?: return@launch
-                projects.saveSession(latest.namedFromPrompt(text))
+                projects.saveSession(latest.namedFromPrompt(text, localSummaryAllowed = false))
             }
             refreshSessions()
             try {

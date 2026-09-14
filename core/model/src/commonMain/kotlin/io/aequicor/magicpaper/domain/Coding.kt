@@ -711,26 +711,80 @@ data class CodingMessage(
 val CodingStep.isVisibleActivity: Boolean
     get() = kind != CodingStepKind.INFO || title.isNotBlank()
 
-/** Assign a useful title once, preserving explicit and worker names. */
-fun CodingSession.namedFromPrompt(prompt: String): CodingSession {
-    val defaultName = name == "Новая сессия" || name == "Основная" || name.startsWith("Сессия ") || name.startsWith("План:")
-    val title = prompt.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(60)
-    return if (!nameManuallySet && parentSessionId == null && defaultName && title.isNotBlank()) {
-        // Суммаризация запроса до 2-3 слов с префиксом календаря
-        val summary = title.split("\\s+".toRegex())
-            .filter { it.length > 3 }
-            .take(3)
-            .joinToString(" ")
-            .ifBlank { title.take(40) }
-        copy(name = "🗓️ $summary")
-    } else this
+/** A placeholder never describes a task, so it is neither named nor summarised from itself. */
+fun String.isDefaultSessionName(): Boolean =
+    this == "Новая сессия" || this == "Основная" || startsWith("Сессия ") || startsWith("План:")
+
+/**
+ * Название задачи даёт модель по полному первому запросу ([CodingSession.needsShortTitle]);
+ * до её ответа список показывает прежнее имя, а не выдуманный обрезок запроса.
+ * Локальная свёртка остаётся запасным путём, когда модели нет ([localSummaryAllowed]):
+ * она берёт первую строку-текст и пропускает вставленные данные.
+ * Ручные и рабочие названия не меняются.
+ */
+fun CodingSession.namedFromPrompt(prompt: String, localSummaryAllowed: Boolean = true): CodingSession {
+    if (nameManuallySet || parentSessionId != null || !name.isDefaultSessionName() || !localSummaryAllowed) return this
+    val summary = localSessionSummary(prompt) ?: return this
+    return copy(name = "🗓️ $summary")
 }
 
-/** A started planning session is listed by its short request, never by its placeholder name. */
+/**
+ * Первая строка запроса, которая действительно что-то утверждает: не JSON, не журнал, не код.
+ * Режется по границе предложения и слова, поэтому название не обрывается на полуслове.
+ */
+fun localSessionSummary(prompt: String, maxLength: Int = 48): String? {
+    val raw = prompt.lineSequence().map(String::trim).firstOrNull { !it.looksLikePastedData() } ?: return null
+    val line = raw.trimStart('#', '*', '-', '+', '>').trim().trim('"', '\'', '«', '»')
+    if (line.looksLikePastedData()) return null
+    val head = line.substringBefore(" — ").split(Regex("[.!?;:]\\s")).first().trim().trimEnd('.', ',', ':', ';', '—', '-')
+    if (head.length < 2) return null
+    val clipped = if (head.length <= maxLength) head
+    else head.take(maxLength).substringBeforeLast(' ').trim().ifBlank { head.take(maxLength) }
+    return clipped.trimTrailingFiller().trimEnd('.', ',', ':', ';', '—', '-').takeIf { it.length >= 2 }
+}
+
+/** Обрезка по длине не должна оставлять висячий служебный союз или частицу. */
+private fun String.trimTrailingFiller(): String {
+    var words = split(' ')
+    while (words.size > 2 && words.last().lowercase().trim('.', ',', ':', ';', '—', '-') in TRAILING_FILLER_WORDS) {
+        words = words.dropLast(1)
+    }
+    return words.joinToString(" ")
+}
+
+private val TRAILING_FILLER_WORDS = setOf(
+    "не", "ни", "и", "но", "а", "к", "о", "об", "для", "с", "со", "в", "во", "у", "от", "до", "по", "из", "без",
+    "через", "что", "как", "это", "или", "же", "бы", "ли", "the", "a", "an", "of", "to", "in", "on", "and", "or",
+    "is", "for", "with", "that", "this", "are", "be",
+)
+
+/** Вставленные данные описывают вывод, а не намерение: из них название не складывают. */
+private fun String.looksLikePastedData(): Boolean {
+    if (isBlank()) return true
+    val text = trim()
+    if (text.first() in "{}[<|>`\\\"'" || text.startsWith("---") || text.startsWith("+++") ||
+        text.startsWith("@@") || text.startsWith("```") || text.startsWith("diff ") || text.startsWith("index ") ||
+        text.startsWith("https://") || text.startsWith("http://") || text.startsWith("\\\\") || text.startsWith("/")
+    ) return true
+    if (PASTED_TIMESTAMP.containsMatchIn(text)) return true
+    // Одно слово может быть задачей («Рефакторинг»), а одно слово-структура — уже нет.
+    if (!text.any(Char::isWhitespace) && text.any { it in "{}[]<>|\\=~;:\"'" }) return true
+    val letters = text.count(Char::isLetterOrDigit)
+    val structural = text.count { it in "{}[<>|\\=~;" }
+    return letters == 0 || structural * 100 > letters * 12 || text.endsWith(";") || text.endsWith("{")
+}
+
+private val PASTED_TIMESTAMP = Regex("""^(\(?\d{4}[-/]\d{2}[-/]|\d{9,}|\d{2}:\d{2}:\d{2}|\[\d{2,})""")
+
+/** A started session is listed by its short request, never by its placeholder name. */
 fun CodingSession.sidebarTitle(): String = if (shortTitle.isBlank()) name else "\ud83d\uddd3\ufe0f $shortTitle"
 
-/** A planning root owns a task in the list; only it is worth a model call to name shortly. */
-fun CodingSession.needsShortTitle(): Boolean = planningMode && parentSessionId == null &&
+/**
+ * Корневая сессия владеет задачей в списке, поэтому только она стоит одного модельного вызова
+ * на название. Рабочие дети названы заданием, иммунитет обслуживает организм, а ручное имя и
+ * готовое суммаризированное не перезаписываются.
+ */
+fun CodingSession.needsShortTitle(): Boolean = parentSessionId == null &&
     sessionKind != SessionKind.IMMUNITY && shortTitle.isBlank() && !nameManuallySet && !archived
 
 /**
@@ -739,12 +793,13 @@ fun CodingSession.needsShortTitle(): Boolean = planningMode && parentSessionId =
  */
 fun compactSessionTitle(answer: String): String? {
     val text = answer.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
-        .removeSurrounding("\"").removeSurrounding("'").trim()
+        // Эмодзи-префикс списка, кавычки и разметка не относятся к названию задачи.
+        .trim { !it.isLetterOrDigit() && it != ' ' }
         .replace(Regex("^[#*\\-\\s]+"), "")
         .replace(Regex("[*_`#]"), "")
         .replace(Regex("^\\s*(\\d+[.)]|[-*])\\s*"), "")
         .replace(Regex("(?i)^(пользователь просит|запрос|цель|нужно|необходимо|требуется)[:\\s-]*"), "")
-        .replace(Regex("\\s+"), " ").trim()
+        .replace(Regex("\\s+"), " ").trim().trim { !it.isLetterOrDigit() }
     if (text.isBlank()) return null
     val words = text.split(' ')
     val short = if (words.size <= 3) text else words.take(3).joinToString(" ")

@@ -39,7 +39,7 @@ def violations(root):
         settings = root / name
         if not settings.is_file():
             continue
-        text = local_settings(settings.read_text())
+        text = local_settings(settings.read_text(encoding="utf-8"))
         for declaration in re.findall(r'\binclude\s*\((.*?)\)', text, re.S):
             for included in re.findall(r'["\']([^"\']+)["\']', declaration):
                 if is_retired_module(':' + included.lstrip(':')):
@@ -49,7 +49,7 @@ def violations(root):
     # Convention plugins configure targets only. Keeping project edges in module
     # builds makes this source-level graph complete and easy to audit.
     for convention in (root / 'build-logic/src').rglob('*.gradle.kts'):
-        if re.search(r'project\(\s*["\']:', convention.read_text()):
+        if re.search(r'project\(\s*["\']:', convention.read_text(encoding="utf-8")):
             errors.append(f'{convention.relative_to(root)}: declare project dependencies in the consuming module')
     for build in root.rglob('build.gradle.kts'):
         relative = build.relative_to(root)
@@ -57,7 +57,7 @@ def violations(root):
             continue  # Separate build and ownership graph.
         if any(part in IGNORED for part in relative.parts):
             continue
-        raw = build.read_text()
+        raw = build.read_text(encoding="utf-8")
         # A test dependency or root-level wiring must not resurrect the retired module either.
         if re.search(r'project\(\s*["\']:shared(?::[^"\']*)?["\']', raw):
             errors.append(f'{relative}: :shared is retired; depend on the owning feature API or :app')
@@ -92,7 +92,7 @@ def violations(root):
         if index + 1 >= len(relative.parts) or not relative.parts[index + 1].endswith('Main'):
             continue
         module = relative.parts[:index]
-        content = source.read_text()
+        content = source.read_text(encoding="utf-8")
         package = re.search(r'^package ([\w.]+)', content, re.M)
         if not package or not re.search(r'^(?:(?:public|internal|private|suspend|inline|expect|actual) )*(?:fun|val|var)\b', content, re.M):
             continue

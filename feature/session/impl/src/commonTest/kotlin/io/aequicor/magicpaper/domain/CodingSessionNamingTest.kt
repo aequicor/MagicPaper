@@ -22,6 +22,49 @@ class CodingSessionNamingTest {
         assertEquals(manual, manual.namedFromPrompt("Исправить меню"))
     }
 
+    @Test fun modelNamingOwnsTheTitleWhileALocalSummaryIsOnlyAFallback() {
+        val session = CodingSession("s", "p", "Новая сессия", 1)
+        // Пока модель может озаглавить запрос, список ждёт её ответа, а не обрезка первой строки.
+        assertEquals(session, session.namedFromPrompt("Исправить меню", localSummaryAllowed = false))
+    }
+
+    @Test fun pastedLogsAndCodeNeverBecomeSessionNames() {
+        val session = CodingSession("s", "p", "Новая сессия", 1)
+        assertEquals(session, session.namedFromPrompt("""{"time":1789370239679,"level":"ERROR","msg":"boom"}"""))
+        assertEquals("🗓️ Автонейминг создаёт названия сессий",
+            session.namedFromPrompt("""{"time":1789370239679,"level":"ERROR"}
+                |Автонейминг создаёт названия сессий, не закрывающие задачу
+                |""".trimMargin()).name)
+    }
+
+    @Test fun localSummaryKeepsWholeWordsAndOneSentence() {
+        assertEquals("Найти причину падения сбора",
+            localSessionSummary("Найти причину падения сбора \nподробный лог ниже"))
+        assertEquals("Почему тест падает", localSessionSummary("Почему тест падает. Потому что"))
+        assertEquals("Рефакторинг", localSessionSummary("Рефакторинг"))
+        assertNull(localSessionSummary("val x = foo();"))
+        assertNull(localSessionSummary("""[{"a":1}]"""))
+        assertNull(localSessionSummary("/home/user/project/build.log"))
+    }
+
+    @Test fun everyStartedRootIsWorthOneTitleButWorkersAreNot() {
+        val root = CodingSession("s", "p", "Новая сессия", 1)
+        assertTrue(root.needsShortTitle())
+        assertTrue(root.copy(planningMode = true).needsShortTitle())
+        assertFalse(root.copy(parentSessionId = "parent").needsShortTitle())
+        assertFalse(root.copy(shortTitle = "Готово").needsShortTitle())
+        assertFalse(root.copy(nameManuallySet = true).needsShortTitle())
+        assertFalse(root.copy(sessionKind = SessionKind.IMMUNITY).needsShortTitle())
+        assertFalse(root.copy(archived = true).needsShortTitle())
+        assertEquals("🗓️ Найти ошибку", root.copy(shortTitle = "Найти ошибку").sidebarTitle())
+    }
+
+    @Test fun modelAnswerIsStrippedToItsTaskWords() {
+        assertEquals("Найти ошибку", compactSessionTitle("🗓️ «Найти ошибку»"))
+        assertEquals("Исправить меню", compactSessionTitle("- **Исправить меню**"))
+        assertNull(compactSessionTitle("   "))
+    }
+
     @Test fun sidebarPlacesNewSessionsFirstRegardlessOfInsertionOrder() {
         val older = CodingSession("older", "p", "Older", 1)
         val newer = older.copy(id = "newer", createdAt = 2)
