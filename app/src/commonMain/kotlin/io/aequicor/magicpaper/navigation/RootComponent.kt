@@ -26,7 +26,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 fun interface FeatureComponentFactory<C : Any> {
@@ -81,10 +83,16 @@ class DefaultRootComponent<C : Any>(
     initialDeepLink: String? = null,
     initialWelcomeRequired: Boolean? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val persistenceDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : RootComponent<C>, ComponentContext by componentContext {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val commands = Channel<Command>(Channel.UNLIMITED)
+    // A complete snapshot supersedes earlier pending snapshots, including their
+    // presentation entries and Forward branch. Never cancel an in-flight commit.
+    private val saves = Channel<SaveRequest>(Channel.CONFLATED)
+    private var saveSequence = 0L
+    private val completedSave = MutableStateFlow(0L)
     private var journal = NavigationJournal()
     private var persistenceBlocked = false
     private var restoreError: String? = null
@@ -122,7 +130,20 @@ class DefaultRootComponent<C : Any>(
 
     init {
         backHandler.register(backCallback)
-        lifecycle.doOnDestroy { commands.close(); scope.cancel() }
+        lifecycle.doOnDestroy { commands.close(); saves.close(); scope.cancel() }
+        scope.launch {
+            for (request in saves) {
+                try {
+                    withContext(persistenceDispatcher) { store.save(json.encodeToString(request.journal)) }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    AppLog.error("navigation", "save_failed", failure, mapOf("visitId" to request.journal.current.id,
+                        "result" to "memory_retained"))
+                    if (request.journal.id == journal.id) publish(error = "Не удалось сохранить историю переходов.")
+                }
+                completedSave.value = request.sequence
+            }
+        }
         scope.launch {
             val restored = runCatching { store.load()?.let { json.decodeFromString<NavigationJournal>(it) } }
             (restored.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
@@ -237,7 +258,14 @@ class DefaultRootComponent<C : Any>(
             }
             Command.ClearError -> publish(error = null)
             is Command.Error -> publish(error = command.message)
-            is Command.Barrier -> command.done.complete(Unit)
+            is Command.Barrier -> {
+                val target = saveSequence
+                // Flush waits for the writer without holding up later UI commands.
+                scope.launch {
+                    completedSave.first { it >= target }
+                    command.done.complete(Unit)
+                }
+            }
         }
     }
 
@@ -283,12 +311,7 @@ class DefaultRootComponent<C : Any>(
             "count" to journal.visits.size.toString()))
         publish()
         if (persistenceBlocked) return
-        try { store.save(json.encodeToString(journal)) }
-        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (failure: Exception) {
-            AppLog.error("navigation", "save_failed", failure, mapOf("visitId" to journal.current.id, "result" to "memory_retained"))
-            publish(error = "Не удалось сохранить историю переходов.")
-        }
+        check(saves.trySend(SaveRequest(++saveSequence, journal)).isSuccess)
     }
 
     private fun project(candidate: NavigationJournal) {
@@ -314,6 +337,7 @@ class DefaultRootComponent<C : Any>(
     }
 
     private data class ChildCreation<C : Any>(val component: C?, val failure: Exception?)
+    private data class SaveRequest(val sequence: Long, val journal: NavigationJournal)
 
     private fun publish(error: String? = mutableState.value.error, loaded: Boolean = mutableState.value.loaded) {
         mutableState.value = mutableState.value.copy(journal = journal, loaded = loaded, error = restoreError ?: error)
