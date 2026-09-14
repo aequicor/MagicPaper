@@ -63,6 +63,8 @@ class CodingRunLatency(
         val failedToolCalls: Int,
         val failedModelCalls: Int,
         val truncatedModelCalls: Int,
+        /** Последний измеренный объём контекста: он ушёл в модель следующим запросом. */
+        val contextTokens: Long?,
         val peakContextTokens: Long?,
         val contextLimit: Long?,
         val slowestModelMs: Long,
@@ -73,10 +75,36 @@ class CodingRunLatency(
             get() = if (wallMs <= 0) 0
             else ((modelMs + compactionMs) * 100 / wallMs).toInt().coerceIn(0, 100)
 
+        /** Насколько заполнен контекст сейчас; null — предел или объём неизвестны. */
+        val contextPercent: Int?
+            get() = contextTokens?.let { used ->
+                contextLimit?.takeIf { it > 0 }?.let { (used * 100 / it).toInt().coerceAtLeast(0) }
+            }
+
+        /**
+         * Что сказать пользователю кроме разбивки времени: только то, на что он может
+         * повлиять. Длина контекста — главный источник медленных ответов в длинной
+         * сессии (задержка растёт от запроса к запросу), а сбросить контекст может
+         * только сам пользователь новой сессией.
+         */
+        val advice: String?
+            get() {
+                val percent = contextPercent
+                return when {
+                    compactionMs > 0 -> "Часть истории сессии уже заменена сводкой: агент"
+                        .plus(" перечитывает файлы заново, и каждый ход дорожает.")
+                        .plus(" Новая сессия начнётся с пустого контекста.")
+                    percent != null && percent >= CONTEXT_SATURATED_PERCENT ->
+                        "Контекст заполнен на $percent%: каждый следующий ответ модели будет"
+                            .plus(" дольше. Чтобы сбросить его, начните новую сессию.")
+                    else -> null
+                }
+            }
+
         /**
          * Короткая расшифровка длительности для пользователя: где прошло время
-         * долгого прогона. Токены сюда не входят — это объяснение паузы, а не
-         * данные для решения; подробности остаются в диагностике.
+         * долгого прогона и что с этим можно сделать. Сырые токены и технические
+         * причины сюда не попадают — подробности остаются в диагностике.
          * Фаза, которой не наблюдали, в текст не попадает: пустой счётчик после
          * неудачного запуска движка не должен выглядеть как «модель не думала».
          */
@@ -92,6 +120,7 @@ class CodingRunLatency(
             return buildString {
                 append("Прогон занял ").append(duration(wallMs))
                 if (parts.isEmpty()) append('.') else append(": ").append(parts.joinToString(", ")).append('.')
+                advice?.let { append(' ').append(it) }
             }
         }
     }
@@ -288,6 +317,7 @@ class CodingRunLatency(
             failedToolCalls = failedToolCalls,
             failedModelCalls = failedModelCalls,
             truncatedModelCalls = truncatedModelCalls,
+            contextTokens = lastContextTokens,
             peakContextTokens = peakContextTokens,
             contextLimit = contextLimit,
             slowestModelMs = slowestModelMs,
@@ -319,6 +349,9 @@ class CodingRunLatency(
     private companion object {
         /** Короткие паузы пользователю не интересны: в сводку попадают только значимые. */
         const val MIN_REPORT_MS = 5_000L
+
+        /** С этого заполнения контекста замедление ответов — не случайность, а следствие. */
+        const val CONTEXT_SATURATED_PERCENT = 85
     }
 }
 

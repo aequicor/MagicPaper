@@ -79,8 +79,8 @@ class CodingLatencyDiagnosticsTest {
     fun runSummarySplitsTheWallClockInsideTheFieldBudget() = withInfoLevel {
         CodingLatencyDiagnostics.log(
             CodingRunLatency.Summary(wallMs = 919_276, startupMs = 2_100, modelMs = 592_400, compactionMs = 41_000,
-                toolMs = 283_776, otherMs = 0, modelCalls = 38, toolCalls = 38, failedToolCalls = 1,
-                failedModelCalls = 0, truncatedModelCalls = 2, peakContextTokens = 118_400,
+                toolMs = 283_776, otherMs = 12_000, modelCalls = 38, toolCalls = 38, failedToolCalls = 1,
+                failedModelCalls = 1, truncatedModelCalls = 2, contextTokens = 118_400, peakContextTokens = 124_000,
                 contextLimit = 128_000, slowestModelMs = 49_017, slowestToolMs = 127_308),
             base,
         )
@@ -91,8 +91,11 @@ class CodingLatencyDiagnosticsTest {
         assertEquals("283776", entry.fields["toolMs"])
         assertEquals("68", entry.fields["modelSharePercent"])
         assertEquals("127308", entry.fields["slowestToolMs"])
+        assertEquals("118400", entry.fields["contextTokens"], "Текущая длина контекста объясняет рост пауз")
+        assertEquals("124000", entry.fields["peakContextTokens"])
         assertEquals("2", entry.fields["truncatedModelCalls"])
-        assertFalse("failedModelCalls" in entry.fields, "Нулевые счётчики в журнал не пишутся")
-        assertTrue(entry.fields.size <= 24, "Запись целиком проходит границу полей: ${entry.fields.size}")
+        assertEquals("1", entry.fields["failedModelCalls"])
+        assertTrue(entry.fields.size <= 24,
+            "Запись целиком проходит границу полей, иначе счётчики отсекаются: ${entry.fields.size}")
     }
 }

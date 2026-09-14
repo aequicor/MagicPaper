@@ -42,7 +42,6 @@ internal object CodingLatencyDiagnostics {
     fun log(summary: CodingRunLatency.Summary, base: Map<String, String>) {
         AppLog.info(COMPONENT, "run.summary", buildMap {
             putAll(base)
-            put("result", "completed")
             put("wallMs", summary.wallMs.toString())
             put("modelMs", summary.modelMs.toString())
             put("compactionMs", summary.compactionMs.toString())
@@ -55,6 +54,7 @@ internal object CodingLatencyDiagnostics {
             put("slowestModelMs", summary.slowestModelMs.toString())
             put("slowestToolMs", summary.slowestToolMs.toString())
             summary.peakContextTokens?.let { put("peakContextTokens", it.toString()) }
+            summary.contextTokens?.let { put("contextTokens", it.toString()) }
             summary.contextLimit?.let { put("contextLimit", it.toString()) }
             if (summary.failedModelCalls > 0) put("failedModelCalls", summary.failedModelCalls.toString())
             if (summary.truncatedModelCalls > 0) put("truncatedModelCalls", summary.truncatedModelCalls.toString())

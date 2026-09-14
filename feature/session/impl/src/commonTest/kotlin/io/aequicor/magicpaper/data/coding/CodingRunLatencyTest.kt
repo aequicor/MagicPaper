@@ -138,15 +138,17 @@ class CodingRunLatencyTest {
     }
 
     @Test
-    fun compactionIsNamedSeparatelyFromOrdinaryAnswers() {
+    fun compactionIsNamedSeparatelyAndPointsAtTheSessionItself() {
         at(0, CodingEvent.ModelRequest("r1"))
         at(1_000, CodingEvent.Compaction(CompactionStatus("s1", CompactionPhase.STARTED)))
         at(1_000, CodingEvent.ModelRequest("compact-1"))
         at(21_000, CodingEvent.Compaction(CompactionStatus("s1", CompactionPhase.COMPLETED)))
         clock = 21_000
 
-        assertEquals("Прогон занял 21 с: ответы модели 1 с (запросов 2), " +
-            "уплотнение контекста 20 с.", latency.summary().describe())
+        assertEquals("Прогон занял 21 с: ответы модели 1 с (запросов 2), уплотнение контекста 20 с."
+            .plus(" Часть истории сессии уже заменена сводкой: агент перечитывает файлы заново,"
+                .plus(" и каждый ход дорожает. Новая сессия начнётся с пустого контекста.")),
+            latency.summary().describe())
     }
 
     @Test
@@ -157,5 +159,39 @@ class CodingRunLatencyTest {
 
         assertEquals("Прогон занял 1 мин 30 с: инструменты 1 мин 30 с (вызовов 1).",
             latency.summary().describe())
+    }
+
+    /**
+     * Замедление из-за длины контекста — единственная причина долгого прогона,
+     * на которую пользователь влияет сам, поэтому она называется вместе с числами.
+     */
+    @Test
+    fun saturatedContextIsReportedByItsCurrentSizeAndSuggestsANewSession() {
+        at(0, CodingEvent.ContextUpdated(118_400, 128_000))
+        at(0, CodingEvent.ModelRequest("r1"))
+        at(45_000, CodingEvent.FinalText("Готово"))
+        clock = 45_000
+        val summary = latency.summary()
+
+        assertEquals(92, summary.contextPercent)
+        assertEquals(118_400, summary.contextTokens)
+        assertTrue(summary.describe().endsWith("Контекст заполнен на 92%: каждый следующий ответ"
+            .plus(" модели будет дольше. Чтобы сбросить его, начните новую сессию.")), summary.describe())
+    }
+
+    @Test
+    fun roomyContextGetsNoAdviceAndPeakIsNotMistakenForCurrentSize() {
+        at(0, CodingEvent.ContextUpdated(20_000, 128_000))
+        at(0, CodingEvent.ModelRequest("r1"))
+        at(5_000, CodingEvent.FinalText("Готово"))
+        // После уплотнения контекста стало меньше: совет про переполнение уже не про него.
+        at(6_000, CodingEvent.ContextUpdated(9_000, 128_000))
+        clock = 6_000
+        val summary = latency.summary()
+
+        assertEquals(null, summary.advice)
+        assertEquals(9_000, summary.contextTokens, "Совет строится на последнем семпле, а не на пике")
+        assertEquals(20_000, summary.peakContextTokens)
+        assertEquals("Прогон занял 6 с: ответы модели 5 с (запросов 1).", summary.describe())
     }
 }
