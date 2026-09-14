@@ -5,10 +5,11 @@ description: "Design or assess MagicPaper module boundaries, public contracts, d
 
 # Design within the module architecture
 
-Read [MODULES.md](../../docs/MODULES.md), the relevant row of the
-[task map](../../docs/agent-workflows/CODEMAP.md) and owner AGENTS.md.
-Start from the concrete behavior and existing owners. Preserve the user-requested
-scope; make routine implementation choices without a separate approval ceremony.
+Read the relevant row of the [task map](../../docs/agent-workflows/CODEMAP.md)
+and owner AGENTS.md. Consult [MODULES.md](../../docs/MODULES.md) only when the
+boundary change spans multiple modules. Start from the concrete behavior and
+existing owners. Preserve the user-requested scope; make routine implementation
+choices without a separate approval ceremony.
 
 For a meaningful boundary change specify:
 

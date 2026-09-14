@@ -1,17 +1,24 @@
 # MagicPaper development
 
+> **Note:** This file is already included in the agent's system prompt as
+> `project_instructions`. Do not re-read it via the `read` tool; refer to
+> the in-prompt copy instead. Subtree `AGENTS.md` files are separate and
+> must be read only when the task requires their module-specific details.
+
 ## Start with the owner
 
 This repository uses feature `api`/`impl` modules, Decompose navigation and an
 isolated Koin application. [docs/MODULES.md](docs/MODULES.md) defines ownership.
-Before editing a subtree, read the `AGENTS.md` files between this root and that
-subtree; do not assume instructions for a sibling module apply.
+Subtree `AGENTS.md` files contain only module-specific details; common rules are
+here. Read a subtree `AGENTS.md` only when the task touches that module's unique
+constraints; do not chain-read all ancestors.
 
 Use [the task map](docs/agent-workflows/CODEMAP.md) to locate the owning module,
 entry points and checks. Start with its API, the implementation being changed and
-the nearest relevant test. Search that module with `rg`; expand to callers when
-the contract or evidence requires it. Exclude build outputs from source searches.
-Do not read every architecture document or load every skill for a small task.
+the nearest relevant test. Search that module with `rg`; expand to callers only
+when the contract or evidence requires it. Exclude build outputs from source searches.
+For simple tasks, begin with the code directly; skip architecture documents and
+skills unless the task is complex or ambiguous.
 
 Current source, Gradle declarations and executable tests establish current
 behavior. `docs/PLAN-*`, historical inventories and old verification reports
@@ -22,8 +29,10 @@ official documentation when the answer is unresolved or version-sensitive.
 
 ## Select a workflow
 
-Read the matching skill when its described task applies. Choose a primary workflow;
-add a specialist only for the part of the task that needs it.
+For straightforward code changes, proceed directly from the task map and code;
+skip the skill files. Read the matching skill only when the task involves a
+non-obvious workflow, cross-module design or diagnostic complexity. Choose a
+primary workflow; add a specialist only for the part of the task that needs it.
 
 | Task | Skill |
 | --- | --- |
@@ -36,6 +45,24 @@ add a specialist only for the part of the task that needs it.
 
 Canonical skill sources live in `skills/`; `.agents/skills/` contains discovery
 links. These are development workflows, separate from the app's installed skills.
+
+## Minimize tool calls
+
+Each tool call (read, grep, powershell, find) costs time. Reduce unnecessary calls:
+
+- **Batch reads**: when you need multiple files in the same area, read them in
+  parallel rather than sequentially.
+- **Targeted search**: use `rg` with specific patterns and file filters; avoid
+  broad scans that return many irrelevant matches.
+- **Skip redundant reads**: if the task map already points to the file, do not
+  search for it again. If you already read a file, do not re-read it.
+- **Avoid documentation cascades**: do not read MODULES.md, VERIFICATION.md,
+  subtree AGENTS.md and skills for a simple code change. Start with the code.
+- **One search per intent**: combine related searches into one `rg` call with
+  alternation (`pattern1|pattern2`) instead of multiple separate searches.
+- **Skip verification matrix for trivial changes**: run only the owner test
+  from the task map; read VERIFICATION.md only when the change affects shared
+  contracts, multiple modules or platform behavior.
 
 ## Shared invariants
 
