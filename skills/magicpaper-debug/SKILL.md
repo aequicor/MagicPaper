@@ -8,6 +8,8 @@ description: "Diagnose and fix MagicPaper build failures, runtime exceptions, in
 Start with the failing command or user-visible trigger, first actionable error,
 source set and owner from the [task map](../../docs/agent-workflows/CODEMAP.md).
 Use existing logs and the matching test before a full rebuild or repository scan.
+For clear failures, go directly to the failing code; skip this workflow when
+the cause is obvious from the error message.
 
 1. Establish expected versus actual behavior and a bounded reproducer. Classify
    whether failure occurs in compilation, linking, storage, runtime or rendering.

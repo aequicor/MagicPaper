@@ -16,7 +16,8 @@ enum class FeatureFlag(
     AGENT_SPEED_BOOST(
         "Ускорение агента",
         "Оптимизации: кэш навыков, effort routing, prompt caching, increased maxTokens, " +
-            "сокращённый research prompt, кэш tool definitions, стабильный prompt prefix, skill summary.",
+            "сокращённый research prompt, кэш tool definitions, стабильный prompt prefix, skill summary, " +
+            "инструкция минимизации вызовов инструментов.",
     ),
 }
 

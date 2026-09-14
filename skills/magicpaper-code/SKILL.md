@@ -5,9 +5,11 @@ description: "Implement or refactor Kotlin/Compose Multiplatform behavior in Mag
 
 # Implement MagicPaper behavior
 
-Use the [task map](../../docs/agent-workflows/CODEMAP.md) and the owning subtree's
-AGENTS.md. Inspect the contract, implementation and relevant test before expanding
+Use the [task map](../../docs/agent-workflows/CODEMAP.md) for entry points.
+Inspect the contract, implementation and relevant test before expanding
 the search. Read the pinned dependency API only when local usage does not settle it.
+For straightforward changes, proceed directly from code; skip subtree AGENTS.md
+and this skill's full text when the task is unambiguous.
 
 - Turn the request into an observable behavior and identify who owns the state,
   command and side effect. Keep these with the existing feature/service owner.

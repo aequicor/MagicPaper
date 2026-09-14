@@ -42,6 +42,19 @@ internal val PI_CODING_INSTRUCTIONS = """
             If an edit fails to match, re-read that region and retry with the exact text.
             """.trimIndent()
 
+// Optimization 9 (AGENT_SPEED_BOOST): explicit instruction to minimize tool calls.
+// Reduces unnecessary read/grep/search before starting actual work.
+internal val MINIMIZE_TOOL_CALLS_INSTRUCTIONS = """
+            Минимизируй вызовы инструментов. Для простой задачи начни сразу с кода;
+            не читай AGENTS.md, CODEMAP.md, MODULES.md, VERIFICATION.md и skills,
+            если задача однозначна. Корневой AGENTS.md уже включён в контекст —
+            не перечитывай его через read. Делай параллельные вызовы read/grep,
+            когда нужно несколько файлов из одной области. Объединяй связанные
+            поиски в один rg с альтернативой (pattern1|pattern2). Не повторяй
+            поиск, если уже нашёл нужное. Для проверки запускай только тест
+            владельца из CODEMAP; не читай VERIFICATION.md для тривиальных изменений.
+            """.trimIndent()
+
 internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, override: String, research: Boolean = false,
     planningRules: PlanningRulesSnapshot? = null, featureFlags: FeatureFlagState = FeatureFlagState()): String {
     val methodology = (planningRules ?: if (planning) PlanningRulesSettings().snapshot() else null)?.effectivePrompt().orEmpty()
@@ -57,12 +70,19 @@ internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, overri
         CodingEngine.CODEX -> if (speedBoost) {
             // Optimization 7 (AGENT_SPEED_BOOST): stable prefix first for prompt caching.
             // Invariant instructions (coding + file tools) go first; dynamic (override, methodology) last.
+            // Optimization 9 (AGENT_SPEED_BOOST): minimize tool calls instruction.
             listOf(CodexAppServerOpenAiSubscription.CODING_INSTRUCTIONS, CODING_FILE_TOOL_INSTRUCTIONS, CODEX_FILE_TOOL_INSTRUCTIONS,
-                QuestionnaireTool.instructions, override, methodology)
+                QuestionnaireTool.instructions, MINIMIZE_TOOL_CALLS_INSTRUCTIONS, override, methodology)
         } else {
             listOf(QuestionnaireTool.instructions, CodexAppServerOpenAiSubscription.CODING_INSTRUCTIONS, CODING_FILE_TOOL_INSTRUCTIONS, CODEX_FILE_TOOL_INSTRUCTIONS, override)
         }
-        CodingEngine.PI -> listOf(CODING_FILE_TOOL_INSTRUCTIONS, PI_CODING_INSTRUCTIONS, QuestionnaireTool.instructions, override)
+        CodingEngine.PI -> if (speedBoost) {
+            // Optimization 9 (AGENT_SPEED_BOOST): minimize tool calls instruction.
+            listOf(CODING_FILE_TOOL_INSTRUCTIONS, PI_CODING_INSTRUCTIONS, QuestionnaireTool.instructions,
+                MINIMIZE_TOOL_CALLS_INSTRUCTIONS, override)
+        } else {
+            listOf(CODING_FILE_TOOL_INSTRUCTIONS, PI_CODING_INSTRUCTIONS, QuestionnaireTool.instructions, override)
+        }
         null -> listOf("Движок не выбран", override)
     }.let { if (!planning && !research) it + methodology else it }).filter { it.isNotBlank() }.joinToString("\n\n")
 }

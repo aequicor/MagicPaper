@@ -13,6 +13,10 @@ Preserve MagicPaper's warm paper identity while making behavior, density, naviga
 
 ## Before editing
 
+For simple UI tweaks (text, spacing, color), inspect the current component and
+edit directly; skip steps 1–3 below. For new screens or substantial layout
+changes, follow the full checklist.
+
 1. Read `docs/desktop-ui/CONTRACT.md` and the relevant rows in `docs/desktop-ui/SURFACE-MAP.md`. Treat `surface-bindings.json` as the migration assignment, not as generated API.
 2. Inspect the current public API of `:designSystem` and its call sites. If the module does not exist yet, create it according to the contract before migrating feature UI.
 3. Read [design-system.md](references/design-system.md). For platform behavior, window chrome, menus, keyboard, focus, dialogs, or accessibility, also read [platform-behavior.md](references/platform-behavior.md). For completion evidence, read [verification.md](references/verification.md).
