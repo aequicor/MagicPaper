@@ -92,10 +92,17 @@ internal fun buildRuntime(
         packageInstructions?.let { source ->
             single<SkillInstructionRuntime> { DefaultSkillInstructionRuntime(source, get()) }
         }
-        single { MagicAgent(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(), layoutEditor = layoutEditor) }
+        single { val settings = get<SettingsRepository>()
+            GatewaySessionRuntime(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(),
+                layoutEditor = layoutEditor, settings = { settings.load() }) }
         single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
         single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
-            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get()) }
+            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get()).also { graph ->
+                graph.toolHost.orchestration = io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(
+                    io.aequicor.magicpaper.domain.tools.OrchestrationActions { context, operation, tool, arguments ->
+                        graph.toolHost.receiver(context, operation, tool, arguments)
+                    })
+            } }
         single<CodingRuntime> { get<CodingRuntimeGraph>().runtime ?: codingRuntime }
         single<PlanningRepository> { get<CodingRuntimeGraph>().planningStore }
         single { DefaultRequestPinService(get(), get(), applicationScope, get()) }
@@ -120,7 +127,8 @@ internal fun buildRuntime(
         single<CodingService> { get<DefaultCodingService>() }
         single<SettingsService> { get<DefaultSettingsService>() }
         single<PluginService> { DefaultPluginService(get(), get()) }
-        single { DefaultChatService(get(), get(), get(), get(), get(),
+        single { DefaultChatService(if (codingRuntime.supported) get<CodingRuntime>() else get<GatewaySessionRuntime>(), get(), get(), get(), get(),
+            layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
             layoutProject = { boundId ->

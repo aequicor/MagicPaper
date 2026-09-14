@@ -17,8 +17,7 @@ kotlin {
             implementation(project(":core:storage:api"))
             implementation(project(":core:ai:api"))
             implementation(libs.koin.core)
-            implementation(project(":feature:chat:api"))
-            implementation(project(":feature:coding:api"))
+            implementation(project(":feature:session:api"))
             implementation(project(":feature:settings:api"))
             implementation(project(":feature:docs:api"))
             implementation(project(":feature:plugins:api"))
@@ -33,8 +32,7 @@ kotlin {
         jvmMain.dependencies { implementation(libs.oshi.core) }
         jvmTest.dependencies {
             implementation(project(":core:storage:impl"))
-            implementation(project(":feature:coding:impl"))
-            implementation(project(":feature:chat:impl"))
+            implementation(project(":feature:session:impl"))
             implementation(project(":feature:settings:impl"))
             implementation(compose.desktop.currentOs)
             implementation(libs.compose.material3)

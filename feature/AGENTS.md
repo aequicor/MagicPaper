@@ -13,7 +13,7 @@ platform adapters stay in the implementation's platform source sets.
 - Keep tests beside their owner. Integration-test dependencies may assemble
   several implementations; do not widen production visibility just for tests.
 - Plugin SPI belongs to `plugins:api`; Notes/Focus/Calc to `plugins:impl`;
-  skills panels to `skills:impl`; planning UI/runtime to `coding:impl`.
+  skills panels to `skills:impl`; planning UI/runtime to `session:impl`.
   Preserve plugin IDs and registration order. ProjectSkills UI and the coding
   runtime contract are separate capabilities.
 

@@ -4,7 +4,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.*
 
 class AppLoggerTest {
-    @Test fun defaultLevelKeepsDebugButRefusesTokenStreamTracePayloads() {
+    @Test fun defaultLevelRecordsInfoAndErrorsWithoutDiagnosticPayloads() {
         val output = mutableListOf<AppLogEntry>()
         val log = AppLogger(sink = AppLogSink { output += it })
         var payloads = 0
@@ -13,15 +13,15 @@ class AppLoggerTest {
         log.info("runtime", "started")
         log.error("runtime", "failed", IllegalStateException("raw body"))
         assertEquals(defaultLogLevel(), log.level)
-        assertTrue(log.isEnabled(LogLevel.DEBUG), "Navigation and strategy events must not be silent by default")
+        assertFalse(log.isEnabled(LogLevel.DEBUG), "Detailed diagnostics are opt-in")
         assertFalse(log.isEnabled(LogLevel.TRACE), "Per-token stream logging stays an explicit opt-in")
-        assertEquals(listOf(LogLevel.DEBUG, LogLevel.INFO, LogLevel.ERROR), output.map { it.level })
+        assertEquals(listOf(LogLevel.INFO, LogLevel.ERROR), output.map { it.level })
         assertEquals(0, payloads)
     }
 
-    @Test fun infoAndErrorRemainRecordedAtEveryDefaultLevel() {
+    @Test fun infoAndErrorRemainRecordedAtInfoAndHigherVerbosity() {
         val log = AppLogger(sink = AppLogSink {})
-        for (level in LogLevel.entries.filter { it != LogLevel.TRACE }) {
+        for (level in LogLevel.entries.filter { it.ordinal >= LogLevel.INFO.ordinal }) {
             log.level = level
             log.info("runtime", "started")
             log.error("runtime", "failed", IllegalStateException("raw body"))

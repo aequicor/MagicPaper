@@ -28,8 +28,9 @@ class ChatLayoutWorkflowTest {
         val gateway = object : LlmGateway {
             override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>) = "layout"
         }
-        fun service() = DefaultChatService(MagicAgent(gateway, fixture.search, EmbeddedDocRepository(), layoutEditor = editor),
+        fun service() = DefaultChatService(GatewaySessionRuntime(gateway, fixture.search, EmbeddedDocRepository(), layoutEditor = editor),
             fixture.chats, fixture.settings, fixture.profiles, null, workerDispatcher = Dispatchers.Main,
+            layoutAgent = LayoutChatAgent(gateway, editor),
             layoutProject = { id -> if (id == null) selected else listOf(first, second).find { it.id == id } })
         var chat = service()
         try {

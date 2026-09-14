@@ -47,16 +47,16 @@ Codex `textDelta`/`content` и `summaryTextDelta`/`summary` обрабатыва
 
 Проверка планирования с настоящими установленными движками и локальной тестовой
 моделью (без аккаунтов и платных запросов):
-`./gradlew :feature:coding:impl:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
+`./gradlew :feature:session:impl:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
 Она проходит через production runtime, проверяет чтение текущего кода и Git,
 получение валидного плана, выбранную модель и блокировку записи.
-Отдельно: `node --test feature/coding/impl/src/jvmTest/resources/coding/planning-tools.test.mjs`.
+Отдельно: `node --test feature/session/impl/src/jvmTest/resources/coding/planning-tools.test.mjs`.
 
 Основная проверка: `./gradlew verifyMigration`.
 
-Локальные проверки JavaScript находятся в `feature/coding/impl/src/jvmTest/resources/coding/`:
+Локальные проверки JavaScript находятся в `feature/session/impl/src/jvmTest/resources/coding/`:
 
-- `node --test feature/coding/impl/src/jvmTest/resources/coding/provider-bridge.test.mjs` — протокол, авторизация канала, инструменты и ошибки.
+- `node --test feature/session/impl/src/jvmTest/resources/coding/provider-bridge.test.mjs` — протокол, авторизация канала, инструменты и ошибки.
 - `codex-provider-integration.mjs` — настоящий Codex, тестовая модель, исполнение команды и продолжение истории после обновления подключения.
 - `pi-subscription-integration.mjs` — настоящий pi, нативный транспорт подписки, искусственный токен, чтение файла и получение свежего токена перед следующим запросом.
 - `other-providers-integration.mjs` — форматы Anthropic, Google и OpenRouter, инструменты и параметры генерации.

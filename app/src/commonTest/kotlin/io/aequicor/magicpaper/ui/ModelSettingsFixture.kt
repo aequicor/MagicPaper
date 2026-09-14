@@ -91,7 +91,7 @@ class ModelSettingsFixture {
     suspend fun prepareChat(requestPinRepository: RequestPinRepository? = null): DefaultChatService {
         seed()
         lateinit var service: DefaultChatService
-        service = DefaultChatService(MagicAgent(gateway, search, EmbeddedDocRepository()), chats, settings, profiles,
+        service = DefaultChatService(GatewaySessionRuntime(gateway, search, EmbeddedDocRepository()), chats, settings, profiles,
             pins(requestPinRepository), workerDispatcher = kotlinx.coroutines.Dispatchers.Main,
             draftRepository = draftRepository, draftBlobs = draftBlobs,
             onOpenSession = { service.activate(it) })

@@ -18,13 +18,23 @@ Kotlin-пакеты моделей сохранены при переносе, �
 | `:core:platform` | Выбор файлов, импорт/экспорт профилей, общая работа с вложениями черновиков |
 | `:core:ai:api` / `impl` | Контракты LLM, поиска и учёта использования; HTTP-адаптеры и исследования описаний моделей |
 | `:core:storage:api` / `impl` | Контракты обычного, секретного и долговременного хранения; реализации для платформ |
-| `:feature:chat:api` / `impl` | Чаты, агент, закреплённые запросы, история чатов |
-| `:feature:coding:api` / `impl` | Проекты, сессии, планирование, исполнение и интеграция движков pi/Codex |
+| `:feature:session:api` / `impl` | Чаты и проектные сессии, история, очередь, планирование и единый backend pi/Codex |
+| `:feature:custom-tools:api` / `impl` | Каталог инструментов оркестрации и проверка доступа только из режима планировщика; эффекты выполняет владелец сессий |
 | `:feature:settings:api` / `impl` | Настройки, подключения моделей и их секреты, редактирование профилей |
 | `:feature:docs:api` / `impl` | Поиск и просмотр встроенной документации |
 | `:feature:plugins:api` / `impl` | SPI/реестр плагинов и общие встроенные плагины |
 | `:feature:skills:api` / `impl` | Каталог, обучение, установка и локальные/project навыки |
 | `:desktopApp`, `:androidApp`, `:webApp` | Создание платформенного окружения и запуск общей оболочки |
+
+Чат и проектное исполнение находятся в `feature/session`. Desktop-чат вызывает
+`CodingRuntime.runChat`, который адаптирует сохранённую историю к тому же `run`, что
+используют проектные сессии. Пакеты Kotlin, ключи хранилища и ресурсные пути
+`coding/*` сохранены для совместимости. `GatewaySessionRuntime` обеспечивает HTTP
+на платформах без native-процессов; явный workflow макетов остаётся у `LayoutChatAgent`.
+
+`custom-tools` не владеет историей или процессами. Его `CustomOrchestration` проверяет
+режим и передаёт команды через `OrchestrationActions`, связанный в `app` с владельцем
+дерева сессий. Фильтрация каталога и проверка вызова обе требуют `PLANNING`.
 
 ## Отдельный инструмент верстки
 
@@ -36,7 +46,7 @@ Kotlin-пакеты моделей сохранены при переносе, �
 Плагин зависит от публичного Paper API и общего API редактора; обратных
 зависимостей у `:designSystem` нет. [Запуск и проверка](../tools/paper-editor/README.md).
 
-Обычный чат использует `LayoutEditor` из `chat:api`. `LayoutChatAgent` владеет
+Обычный чат использует `LayoutEditor` из `session:api`. `LayoutChatAgent` владеет
 генерацией и исправлением по диагностике; JVM-адаптер `DesktopLayoutEditor` — запуском
 внешнего процесса и ограниченными файловыми операциями. `app` передаёт выбранный
 проект и платформенный адаптер. `ChatSession.layoutProjectId` сохраняет привязку
@@ -86,10 +96,10 @@ Compose convention добавляет компилятор и ресурсы Com
 ## Платформы и ресурсы
 
 Все общие модули сохраняют JVM, Android, JS и Wasm targets. Нативные процессы и
-файловые адаптеры находятся в `feature/coding/impl/src/jvmMain`; недоступные на
+файловые адаптеры находятся в `feature/session/impl/src/jvmMain`; недоступные на
 платформе возможности поставляются через контракт и платформенную реализацию.
 
-Ресурсы протоколов движков находятся в `feature/coding/impl/src/jvmMain/resources/coding`.
+Ресурсы протоколов движков находятся в `feature/session/impl/src/jvmMain/resources/coding`.
 Их classpath-пути `coding/*` сохранены. Node-проверки и локальные интеграционные
 сценарии находятся в соседнем `src/jvmTest/resources/coding`.
 Шрифты и общие визуальные ресурсы принадлежат `designSystem`.
@@ -106,7 +116,7 @@ Compose convention добавляет компилятор и ресурсы Com
 - `./gradlew verifyMigration` — все перечисленные Gradle-проверки и Android host tests.
 
 Реальные движки проверяются отдельно с явными флагами, например
-`./gradlew :feature:coding:impl:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
+`./gradlew :feature:session:impl:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
 Подробности локальных серверов и ресурсов: [движки](ENGINES.md).
 
 JUnit XML сохраняет имена классов и тестов после переноса. Для сравнения с запуском

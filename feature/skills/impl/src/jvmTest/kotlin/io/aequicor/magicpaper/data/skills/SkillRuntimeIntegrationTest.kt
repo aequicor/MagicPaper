@@ -75,7 +75,7 @@ class SkillRuntimeIntegrationTest {
                     override suspend fun articles(): List<DocArticle> = error("No docs on skill route")
                     override suspend fun search(query: String, limit: Int): List<DocMatch> = error("No docs on skill route")
                 }
-                val agent = MagicAgent(gateway, search, docs, packageRuntime = runtime)
+                val agent = GatewaySessionRuntime(gateway, search, docs, packageRuntime = runtime)
                 val profile = LlmProfile("p", "Text", baseUrl = "https://chosen.example/v1", modelId = "m")
                 val result = agent.answer(emptyList(), "@skill:local.summary найди секрет проекта", AppSettings(), profile)
                 assertContains(result.text, "2.0.0")
@@ -112,7 +112,7 @@ class SkillRuntimeIntegrationTest {
                 assertFalse(Files.exists(marker))
                 assertEquals("PRIVATE_CONTENT_NOT_FOR_MODEL", Files.readString(secret))
                 Files.writeString(reports.resolve("evidence.txt"), """
-                    PASS: active 2.0.0 instruction reached MagicAgent gateway; receipt contains READ_PROJECT and NETWORK.
+                    PASS: active 2.0.0 instruction reached GatewaySessionRuntime gateway; receipt contains READ_PROJECT and NETWORK.
                     PASS: malicious instruction and tool-shaped response caused one gateway call to chosen.example only.
                     PASS: project search and docs ports were not called; script bytes and private.env content were absent from LLM messages.
                     PASS: explicit model refusal, provider exception and coroutine cancellation preserved the snapshot and SHA-256 of every repository file.

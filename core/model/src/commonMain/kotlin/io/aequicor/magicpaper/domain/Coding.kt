@@ -71,6 +71,8 @@ data class CodingSession(
     val engine: CodingEngine? = null,
     /** Durable request, retained until completion; STOP is an explicit user action. */
     val pendingRun: CodingRunCheckpoint? = null,
+    /** Accepted FIFO work; moved into pendingRun atomically before execution. */
+    val queuedPrompts: List<CodingRunCheckpoint> = emptyList(),
     /** Execution authority is separate from legacy presentation roles and native thread IDs. */
     val organismId: String? = null,
     val runtimeGeneration: Long = 0,
@@ -546,7 +548,8 @@ sealed interface CodingEvent {
     data class FinalThinking(val text: String, val sourceId: String = "", val summary: Boolean = false) : CodingEvent
 
     /** Итоговый текст ассистента (авторитетный, из события message_end). */
-    data class FinalText(val text: String, val sourceId: String = "") : CodingEvent
+    data class FinalText(val text: String, val sourceId: String = "",
+        val sources: List<SearchHit> = emptyList(), val attachments: List<Attachment> = emptyList()) : CodingEvent
 
     /** Агент начал вызывать инструмент (читает/пишет файл, выполняет команду и т.п.). */
     data class ToolStarted(

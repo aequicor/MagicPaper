@@ -11,5 +11,5 @@ internal actual fun platformWriteLog(line: String, error: Boolean) {
 }
 
 /** Browser consoles are already per-session diagnostics; TRACE stays an explicit opt-in. */
-internal actual fun defaultLogLevel(): LogLevel = LogLevel.DEBUG
+internal actual fun defaultLogLevel(): LogLevel = LogLevel.INFO
 

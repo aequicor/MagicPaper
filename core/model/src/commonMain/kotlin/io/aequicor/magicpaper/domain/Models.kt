@@ -43,6 +43,11 @@ data class ChatSession(
     val modelSelection: ModelSelection? = null,
     /** Project identity captured by an explicit layout request; restoration never opens the editor. */
     val layoutProjectId: String? = null,
+    /** The same native backend and resumable history as project sessions. */
+    val engine: CodingEngine? = null,
+    val nativeSessionId: String = "",
+    val pendingRun: CodingRunCheckpoint? = null,
+    val queuedPrompts: List<CodingRunCheckpoint> = emptyList(),
 )
 
 /** Доступные поисковые движки. */

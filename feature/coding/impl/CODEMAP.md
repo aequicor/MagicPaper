@@ -39,19 +39,19 @@
 ### Finding abort/stop functionality:
 ```bash
 # In service layer:
-grep -r "abortCoding" feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/
+grep -r "abortCoding" feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/
 
 # In UI callbacks:
-grep -r "onStopApproval\|onAbort" feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/
+grep -r "onStopApproval\|onAbort" feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/
 ```
 
 ### Finding approval handling:
 ```bash
 # Approval component (unused):
-grep -r "CodingApprovalDock" feature/coding/impl/
+grep -r "CodingApprovalDock" feature/session/impl/
 
 # Approval interactions (used):
-grep -r "approvalInteraction\|InteractionKind.APPROVAL" feature/coding/impl/
+grep -r "approvalInteraction\|InteractionKind.APPROVAL" feature/session/impl/
 ```
 
 ## Current Architecture Note

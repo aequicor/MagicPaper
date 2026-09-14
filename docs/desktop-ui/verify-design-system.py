@@ -65,7 +65,7 @@ if '--self-test' in sys.argv:
         assert len(violations(root)) == 2, 'nested feature modules must be checked'
         design_system = root / 'designSystem'
         design_system.mkdir()
-        for dependency in ['project(":app")', 'project(path = ":feature:chat:api")', 'projects.feature.coding.impl']:
+        for dependency in ['project(":app")', 'project(path = ":feature:session:api")', 'projects.feature.coding.impl']:
             (design_system / 'build.gradle.kts').write_text(f'implementation({dependency})')
             assert len(violations(root)) == 3, dependency
 if '--self-test' in sys.argv:

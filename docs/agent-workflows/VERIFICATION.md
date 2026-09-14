@@ -8,7 +8,7 @@
 | Изменение | Команда / доказательство |
 | --- | --- |
 | Только AGENTS/навыки/ссылки | Проверка frontmatter навыков, существования локальных ссылок и `git diff --check -- <изменённые файлы>`; сборка приложения не нужна |
-| Поведение одного модуля | `./gradlew :feature:chat:impl:jvmTest --tests '*ИмяТеста'` — подставить владельца и реальный класс |
+| Поведение одного модуля | `./gradlew :feature:session:impl:jvmTest --tests '*ИмяТеста'` — подставить владельца и реальный класс |
 | Границы или Gradle dependencies | `python3 docs/verify-module-architecture.py --self-test` |
 | UI, визуальный или интерактивный компонент | `python3 docs/desktop-ui/verify-design-system.py --self-test`, тесты Paper/consumer; рендер при изменении компоновки |
 | Приёмка Compose-компонента | Именованные `@Preview` и матрица состояний по [Compose preview workflow](../../skills/magicpaper-desktop-ui/references/compose-previews.md); осмотр реального рендера, interactive preview и semantics checks по применимости |
@@ -16,14 +16,14 @@
 | Runtime / DI / startup / reset | `./gradlew :app:jvmTest --tests '*RuntimeLifecycleTest' --tests '*AppRootHostTest'` |
 | Journal / deep links / dialogs | `./gradlew :app:jvmTest --tests '*RootComponentTest' --tests '*RootDialogLifecycleTest'`; browser bridge и host tests при изменении адаптера |
 | Черновики, миграции, секреты | `./gradlew :core:storage:impl:jvmTest :feature:settings:impl:jvmTest :core:platform:jvmTest`; проверить reopen, ошибку записи, отмену, delete/reset, stale update |
-| Native wire resources | `./gradlew :feature:coding:impl:nodeProtocolTest` |
+| Native wire resources | `./gradlew :feature:session:impl:nodeProtocolTest` |
 | Desktop host | `./gradlew :desktopApp:compileKotlin :desktopApp:test` |
 | Android host | `./gradlew :androidApp:assembleDebug :app:testAndroidHostTest :androidApp:testDebugUnitTest` |
 | JS / Wasm common API или зависимости | `./gradlew :webApp:compileKotlinJs :webApp:compileKotlinWasmJs :webApp:compileDevelopmentExecutableKotlinJs :webApp:compileDevelopmentExecutableKotlinWasmJs` |
 | IndexedDB | `./gradlew :core:storage:impl:jsBrowserTest`; нужен поддерживаемый установленный браузер; при изменении Wasm interop также `:core:storage:impl:wasmJsBrowserTest` |
 | Paper editor / каталог | `./gradlew -PpaperEditor=true :tools:paper-plugin:test :tools:paper-editor:compileKotlin`; PNG в `tools/paper-plugin/build/reports/paper-plugin/` |
-| Макеты из чата | `:feature:chat:impl:jvmTest`, `:app:jvmTest --tests '*ChatLayoutWorkflowTest' --tests '*ChatServiceLifecycleTest'`; модель в тестах заменена фикстурой |
-| Чат → native Paper Editor | Сначала `./gradlew -PpaperEditor=true :desktopApp:createDistributable`, затем `./gradlew -PpaperEditor=true -Pmagicpaper.paperEditor.it=true :feature:chat:impl:jvmTest --tests '*DesktopLayoutEditorIntegrationTest'`; отдельный временный проект, настоящий редактор, без LLM-запросов; PNG `feature/chat/impl/build/reports/layout-chat/generated.png`. `-Pmagicpaper.paperEditor.testExecutable=…` проверяет конкретный вложенный executable |
+| Макеты из чата | `:feature:session:impl:jvmTest`, `:app:jvmTest --tests '*ChatLayoutWorkflowTest' --tests '*ChatServiceLifecycleTest'`; модель в тестах заменена фикстурой |
+| Чат → native Paper Editor | Сначала `./gradlew -PpaperEditor=true :desktopApp:createDistributable`, затем `./gradlew -PpaperEditor=true -Pmagicpaper.paperEditor.it=true :feature:session:impl:jvmTest --tests '*DesktopLayoutEditorIntegrationTest'`; отдельный временный проект, настоящий редактор, без LLM-запросов; PNG `feature/session/impl/build/reports/layout-chat/generated.png`. `-Pmagicpaper.paperEditor.testExecutable=…` проверяет конкретный вложенный executable |
 | SPI редактора / запись экземпляров | `./gradlew -PpaperEditor=true :mission-visualization:shared:jvmTest :mission-visualization:engine:frontend:jvmTest :mission-visualization:engine:ir:jvmTest :mission-visualization:engine:backend-compose:jvmTest` |
 | Полная интеграция | `./gradlew verifyMigration` — команды и состав задачи проверять в корневом `build.gradle.kts` |
 

@@ -25,7 +25,7 @@ class PaperInteractionTest {
     @Test fun fullShapeFeedbackClearsWhenDisabledAndNeverActivatesBusyControls() {
         val state = mutableStateOf(PaperControlState.NORMAL)
         var clicks = 0
-        ImageComposeScene(240, 120) {
+        onPaperUi { ImageComposeScene(240, 120) {
             PaperTheme {
                 PaperSurface(Modifier.fillMaxSize()) {
                     Box(Modifier.padding(20.dp)) {
@@ -33,15 +33,15 @@ class PaperInteractionTest {
                     }
                 }
             }
-        }.use { scene ->
+        } }.use { scene ->
             var frame = 0L
             fun snapshot(): BufferedImage {
-                repeat(4) { scene.render(++frame * 16_000_000).close() }
-                return scene.render(++frame * 16_000_000).use { image ->
+                repeat(4) { onPaperUi { scene.render(++frame * 16_000_000).close() } }
+                return onPaperUi { scene.render(++frame * 16_000_000).use { image ->
                     image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
-                }
+                } }
             }
-            fun pointer(kind: PointerEventType) = scene.sendPointerEvent(kind, Offset(24f, 40f), type = PointerType.Mouse)
+            fun pointer(kind: PointerEventType) = onPaperUi { scene.sendPointerEvent(kind, Offset(24f, 40f), type = PointerType.Mouse) }
             val normal = snapshot()
             pointer(PointerEventType.Move)
             val hovered = snapshot()

@@ -273,7 +273,7 @@ class ProjectSkillsTest {
                 val events = runtime.run(CodingProject("A", "A", root.toString(), 0), CodingSession("chat-${engine.name}", "A", "Chat", 0, piSessionId = "old-context", engine = engine), "TASK-SECRET", LlmProfile("p", "Unconfigured"), emptyList()).toList()
                 assertEquals(1, events.filterIsInstance<CodingEvent.Failed>().size)
                 assertFalse(events.any { it is CodingEvent.SessionStarted })
-                assertContains(events.filterIsInstance<CodingEvent.Notice>().single().message, "Новая engine-сессия: true")
+                assertTrue(events.filterIsInstance<CodingEvent.Notice>().isEmpty(), "Successful skill preparation stays in diagnostics, not the transcript")
             }
             val records = Files.list(repo.resolve("coding-runs")).use { it.toList() }
             assertEquals(2, records.size)
@@ -282,6 +282,7 @@ class ProjectSkillsTest {
                 assertFalse(text.contains("TASK-SECRET"))
                 assertContains(text, approved.instructions.single().checksum)
                 assertContains(text, "prepared-not-confirmed")
+                assertTrue(Json.parseToJsonElement(text).toString().contains("\"freshSession\":true"))
             }
             val record = CodingSkillRunRecord("cancelled", "A", "chat", "Pi", approved)
             val cancelled = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile()), CodexAppServerOpenAiSubscription(Json, root.resolve("codex")),

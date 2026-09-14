@@ -15,8 +15,8 @@
 | --- | --- |
 | Оболочка, тулбар 28 dp, инсет «светофора» 78 dp | `app/src/commonMain/kotlin/io/aequicor/magicpaper/App.kt` (`TopBar`), `desktopApp/src/main/kotlin/io/aequicor/magicpaper/main.kt` (`MacTitleBarHeight`, `MacTrafficLightsWidth`) |
 | Боковая панель 272 dp + ручка 8 dp | `designSystem/.../PaperResizablePanels.kt` (`preferredWidth = 272f`), `app/.../ui/screens/UnifiedSidebar.kt` |
-| Строки проектов/сессий, кружки статусов, футер «Новый чат / Новый проект» | `app/.../ui/screens/UnifiedSidebar.kt` (`ProjectSectionHeader`, `UnifiedSessionRow`), `feature/coding/api/.../ui/screens/CodingStatusPresentation.kt` (`ActivityDot`, тона и подписи статусов) |
-| Заголовок сессии «имя / проект / режим» | `feature/coding/impl/.../ui/screens/CodingScreen.kt` (`CodingChat`, `PaperWorkspaceHeading`) |
+| Строки проектов/сессий, кружки статусов, футер «Новый чат / Новый проект» | `app/.../ui/screens/UnifiedSidebar.kt` (`ProjectSectionHeader`, `UnifiedSessionRow`), `feature/session/api/.../ui/screens/CodingStatusPresentation.kt` (`ActivityDot`, тона и подписи статусов) |
+| Заголовок сессии «имя / проект / режим» | `feature/session/impl/.../ui/screens/CodingScreen.kt` (`CodingChat`, `PaperWorkspaceHeading`) |
 | Пузыри журнала, свёрнутые строки инструментов | `CodingScreen.kt` (`CodingMessageBubble`, `ToolStepContent`, `paperConversationMessage`), цвета `docs/desktop-ui/BRANDBOOK.md` |
 | Композер: градиент, плейсхолдер, «+», режим, контекст, чип модели, «Отправить» | `CodingScreen.kt` (`CodingComposer`), `designSystem/.../PaperWorkspace.kt` (`PaperWorkspaceComposer`) |
 

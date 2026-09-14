@@ -13,5 +13,5 @@ internal actual fun platformWriteLog(line: String, error: Boolean) {
 internal actual fun defaultLogLevel(): LogLevel {
     val requested = System.getProperty("magicpaper.log.level")?.takeIf { it.isNotBlank() }
         ?: System.getenv("MAGICPAPER_LOG_LEVEL")?.takeIf { it.isNotBlank() }
-    return LogLevel.entries.firstOrNull { it.name.equals(requested?.trim(), ignoreCase = true) } ?: LogLevel.DEBUG
+    return LogLevel.entries.firstOrNull { it.name.equals(requested?.trim(), ignoreCase = true) } ?: LogLevel.INFO
 }

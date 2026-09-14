@@ -20,8 +20,8 @@ object ModelDefaults {
      * Дефолт усилия — «по умолчанию провайдера», если модель сама не объявила
      * штатный уровень; max_tokens приподнимаем, чтобы рассуждения влезли в ответ.
      * contextLimit — из факта провайдера (ProviderModel.contextWindow), если объявлен;
-     * для Qwen-моделей без объявления — 1 000 000 (заявленный DashScope/MaaS);
-     * иначе из текущего профиля; иначе дефолт AdvancedLlmOptions.
+     * иначе сохраняется настроенный предел. Семейство модели не доказывает
+     * размер контекста конкретного сервера или квантованной локальной модели.
      */
     fun recommendation(
         provider: ProviderType,
@@ -39,17 +39,13 @@ object ModelDefaults {
             controls != null -> maxOf(current.maxTokens, 16384)
             else -> current.maxTokens
         }
-        val contextLimit = fact?.contextWindow?.takeIf { it > 0 } ?: when {
-            // Qwen (DashScope/MaaS) заявляет 1 млн токенов контекста; сервер
-            // не всегда отдаёт context_window в /models, поэтому дефолт — 1M.
-            ProviderCatalog.familyOf(modelId) == "qwen" -> 1_000_000
-            else -> current.safeContextLimit
-        }
+        val contextLimit = fact?.contextWindow?.takeIf { it > 0 } ?: current.safeContextLimit
+        val outputLimit = fact?.maxOutputTokens?.takeIf { it > 0 } ?: Int.MAX_VALUE
         return ModelRecommendation(
             effort = effort,
             advanced = current.copy(
                 temperature = if (controls != null) null else current.temperature,
-                maxTokens = maxTokens,
+                maxTokens = minOf(maxTokens, outputLimit, contextLimit),
                 contextLimit = contextLimit,
             ),
         )

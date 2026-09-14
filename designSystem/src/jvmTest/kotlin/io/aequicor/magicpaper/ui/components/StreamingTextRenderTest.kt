@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui.components
 
+import io.aequicor.magicpaper.designsystem.onPaperUi
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -15,15 +16,15 @@ class StreamingTextRenderTest {
         val streaming = mutableStateOf(true)
         val session = mutableStateOf("first")
         var displayed = ""
-        ImageComposeScene(100, 100) {
+        onPaperUi { ImageComposeScene(100, 100) {
             key(session.value) {
                 val text = rememberPaperStreamingText(target.value, streaming.value)
                 SideEffect { displayed = text }
             }
-        }.use { scene ->
+        } }.use { scene ->
             var frame = 0L
             fun render() {
-                scene.render(++frame * 16_000_000L).close()
+                onPaperUi { scene.render(++frame * 16_000_000L).close() }
                 Thread.sleep(2)
             }
             repeat(4) { render() }

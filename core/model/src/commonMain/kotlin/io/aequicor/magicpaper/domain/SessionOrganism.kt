@@ -221,6 +221,7 @@ data class SessionAuthority(
 class StaleSessionVersion : IllegalArgumentException("Состояние изменилось"), io.aequicor.magicpaper.domain.tools.RejectedToolCall
 
 @Serializable enum class OrganismAction { CREATE, SEND, WAIT, STOP, ARCHIVE, RESTORE, RENAME, SIGNAL, PAUSE, QUARANTINE, ROUTE, REVIEW_RESULT }
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable data class OrganismCommand(
     val action: OrganismAction,
     val target: String = "",
@@ -237,4 +238,7 @@ class StaleSessionVersion : IllegalArgumentException("Состояние изм�
     val sourceVersion: String = "",
     val checks: List<String> = emptyList(),
     val expectedVersion: Long? = null,
+    // Preserve fingerprints of already persisted commands when the caller inherits its mode.
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val childMode: CodingInteractionMode? = null,
 )

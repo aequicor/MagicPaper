@@ -13,7 +13,7 @@ import kotlin.test.*
 class ChatServiceLifecycleTest {
     private suspend fun service(f: ModelSettingsFixture, repository: ChatRepository = f.chats, gateway: LlmGateway = f.gateway): DefaultChatService {
         f.seed()
-        return DefaultChatService(MagicAgent(gateway, f.search, EmbeddedDocRepository()), repository,
+        return DefaultChatService(GatewaySessionRuntime(gateway, f.search, EmbeddedDocRepository()), repository,
             f.settings, f.profiles, null, workerDispatcher = Dispatchers.Main,
             draftRepository = f.draftRepository, draftBlobs = f.draftBlobs).also { it.start(); it.activate("first") }
     }

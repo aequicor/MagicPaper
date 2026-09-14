@@ -121,16 +121,16 @@ if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory
     with TemporaryDirectory() as folder:
         root = Path(folder)
-        for name, dependency in [('feature/chat/api', ':feature:chat:impl'), ('feature/chat/impl', ':feature:chat:api')]:
+        for name, dependency in [('feature/session/api', ':feature:session:impl'), ('feature/session/impl', ':feature:session:api')]:
             target = root / name / 'build.gradle.kts'
             target.parent.mkdir(parents=True)
             target.write_text(f'commonMain.dependencies {{ implementation(project("{dependency}")) }}')
         assert len(violations(root)) == 2
-        (root / 'feature/chat/api/build.gradle.kts').write_text('')
+        (root / 'feature/session/api/build.gradle.kts').write_text('')
         assert not violations(root)
-        (root / 'feature/chat/impl/build.gradle.kts').write_text('commonTest.dependencies { implementation(project(":feature:skills:impl")) }')
+        (root / 'feature/session/impl/build.gradle.kts').write_text('commonTest.dependencies { implementation(project(":feature:skills:impl")) }')
         assert not violations(root)
-        for module in ('feature/chat/api', 'feature/chat/impl'):
+        for module in ('feature/session/api', 'feature/session/impl'):
             source = root / module / 'src/commonMain/kotlin/Shared.kt'
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text('package fixture\npublic fun operation() = Unit\n')
@@ -141,12 +141,12 @@ if '--self-test' in sys.argv:
         assert any('declare project dependencies' in error for error in violations(root))
     with TemporaryDirectory() as folder:
         root = Path(folder)
-        for name, dependency in [('app', ':feature:chat:impl'), ('desktopApp', ':app')]:
+        for name, dependency in [('app', ':feature:session:impl'), ('desktopApp', ':app')]:
             target = root / name / 'build.gradle.kts'
             target.parent.mkdir(parents=True)
             target.write_text(f'commonMain.dependencies {{ implementation(project("{dependency}")) }}')
         assert not violations(root)
-        api = root / 'feature/chat/api/build.gradle.kts'
+        api = root / 'feature/session/api/build.gradle.kts'
         api.parent.mkdir(parents=True)
         api.write_text('commonMain.dependencies { implementation(project(":app")) }')
         assert any('API depends on implementation :app' in error for error in violations(root))

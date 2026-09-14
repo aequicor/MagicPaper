@@ -46,7 +46,7 @@ fun LlmProfile.providerOptions(key: String): AdvancedLlmOptions {
     fun number(vararg names: String): JsonPrimitive? = names.firstNotNullOfOrNull { defaults[it] as? JsonPrimitive }
     // Передаём fact из каталога, чтобы recommendation подхватила contextWindow
     // и maxOutputTokens, объявленные провайдером (DashScope не отдаёт их в /models,
-    // но OpenRouter/Google отдают; без fact Qwen fallback на 1M не срабатывает).
+    // но другие провайдеры могут отдавать объявленные лимиты).
     val recommendation = ModelDefaults.recommendation(provider, sourceModelId(key), fact = model)
     return AdvancedLlmOptions(
         temperature = number("temperature")?.doubleOrNull,
@@ -69,8 +69,10 @@ fun LlmProfile.forModel(key: String = modelId, selection: EffortSelection = effo
     }
     val source = sourceModelId(key)
     val options = variants.firstOrNull { it.id == key }?.options ?: providerOptions(key)
-    val limit = modelCatalog.firstOrNull { it.id == source }?.maxOutputTokens
-    val bounded = if (limit != null) options.copy(maxTokens = minOf(options.maxTokens, limit)) else options
+    val fact = modelCatalog.firstOrNull { it.id == source }
+    val contextLimit = minOf(options.safeContextLimit, fact?.contextWindow?.takeIf { it > 0 } ?: Int.MAX_VALUE)
+    val bounded = options.copy(contextLimit = contextLimit,
+        maxTokens = minOf(options.maxTokens, fact?.maxOutputTokens?.takeIf { it > 0 } ?: Int.MAX_VALUE, contextLimit))
     return copy(modelId = source, codingModelId = source, advanced = bounded,
         effort = selection, effortOverrides = emptyMap(), invocationKey = key)
 }

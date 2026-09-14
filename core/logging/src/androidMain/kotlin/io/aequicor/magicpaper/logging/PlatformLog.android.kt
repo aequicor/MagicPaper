@@ -10,5 +10,5 @@ internal actual fun platformWriteLog(line: String, error: Boolean) {
 }
 
 /** Debug builds and logcat are verbose by design; release keeps the same DEBUG default. */
-internal actual fun defaultLogLevel(): LogLevel = LogLevel.DEBUG
+internal actual fun defaultLogLevel(): LogLevel = LogLevel.INFO
 
