@@ -23,7 +23,9 @@ class CodingRuntimeGraph(
     private val gateway: LlmGateway,
     private val search: SearchEngine,
     draftRepository: DraftRepository = InMemoryDraftRepository(),
+    taskWorkspace: TaskWorkspace = UnavailableTaskWorkspace,
 ) {
+    val taskWorktrees = codingProjects?.let { TaskWorktreeService(it, taskWorkspace, planningWorkspace) }
     val toolHost = ToolHost(StoredToolReceipts(store), io.aequicor.magicpaper.domain.RuntimeQuestionnaires(
         io.aequicor.magicpaper.data.coding.JsonRuntimeQuestionnaireStore(store, "tool-questionnaires")))
     val organisms = codingProjects?.let { io.aequicor.magicpaper.domain.SessionOrganismService(
@@ -32,6 +34,10 @@ class CodingRuntimeGraph(
     val sessionTree = organisms?.let { io.aequicor.magicpaper.domain.SessionTreeRuntime(it, codingProjects!!, profileRepo, settingsRepo, planningWorkspace = planningWorkspace) }
     val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(ToolEnabledCodingRuntime(it, toolHost, sessionTree), usageLedger) }
     init {
+    taskWorktrees?.requireQuiescent = { sessionTree?.requireTaskQuiescent(it) }
+    toolHost.taskHandoff = { context, result ->
+        checkNotNull(taskWorktrees).handoff(context, result.outcome == TaskHandoffOutcome.RESULT, result.checks)
+    }
     organisms?.integrationWorkspaces = integrationChecks?.let { io.aequicor.magicpaper.domain.SessionIntegrationWorkspaces(planningWorkspace, it) { toolHost.knownSecrets() } }
     sessionTree?.runtime = runtime
     if (runtime != null && organisms != null) {
@@ -91,7 +97,7 @@ class CodingRuntimeGraph(
         retryLimit = { settingsRepo.load().agentLimits.retries })
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, runtime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
-        LlmMilestoneVerifier(gateway, json, retryLimit = { settingsRepo.load().agentLimits.retries }), planningWorkspace, acceptanceChecks = acceptanceChecks,
+        LlmMilestoneVerifier(gateway, json, retryLimit = { settingsRepo.load().agentLimits.retries }), planningWorkspace, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees,
     )
     val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway,
         toolHost = toolHost, organisms = organisms, sessionTree = sessionTree, draftRepository = draftRepository) }

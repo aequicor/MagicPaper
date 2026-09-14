@@ -80,6 +80,7 @@ class DefaultCodingService(
     private val onCreateSession: (String?) -> Unit = {},
     private val draftRepository: io.aequicor.magicpaper.data.storage.DraftRepository = io.aequicor.magicpaper.data.storage.InMemoryDraftRepository(),
     private val draftBlobs: io.aequicor.magicpaper.data.storage.DraftBlobStore = io.aequicor.magicpaper.data.storage.InMemoryDraftBlobStore(),
+    private val taskWorktrees: TaskWorktreeService? = null,
     private val removePluginDrafts: suspend (projectId: String, planIds: Set<String>?) -> Unit = { _, _ -> },
 ) : CodingService {
     private val _state = MutableStateFlow(CodingState())
@@ -384,6 +385,15 @@ class DefaultCodingService(
         _state.value.coding.sessions.forEach { startQueuedPrompt(it.session.id) }
     }
     private fun observeRuntime() {
+        taskWorktrees?.let { worktrees -> scope.launch {
+            worktrees.changes.collect {
+                val saved = _state.value.coding.projects.flatMap { codingProjects?.sessions(it.id).orEmpty() }.associateBy { it.id }
+                _state.update { state -> state.copy(coding = state.coding.copy(sessions = state.coding.sessions.map { ui ->
+                    saved[ui.session.id]?.let { ui.copy(session = it) } ?: ui
+                })) }
+            }
+        } }
+
         scope.launch { _state.collect { refreshInteractions() } }
         codingRuntime?.let { runtime -> scope.launch { runtime.questionnaires.collect { refreshInteractions() } } }
         planningChat?.organisms?.let { service -> scope.launch {
@@ -509,9 +519,12 @@ class DefaultCodingService(
 
     private suspend fun loadCodingSessions(projects: List<CodingProject>): List<CodingSessionUi> {
         val repo = codingProjects ?: return emptyList()
-        return projects.flatMap { project -> repo.sessions(project.id).map { session ->
-            withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id))))
-        } }
+        return projects.flatMap { project ->
+            val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+            repo.sessions(project.id).map { session ->
+                withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id), worktreeAvailability = capability)))
+            }
+        }
     }
 
     private suspend fun codingStatusSnapshot(projects: List<CodingProject>): Map<String, CodingSessionStatus> {
@@ -677,6 +690,7 @@ class DefaultCodingService(
         val repo = codingProjects ?: return
         val project = repo.all().firstOrNull { it.id == projectId } ?: return
         val sessions = repo.sessions(projectId)
+        val worktreeCapability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
         // Determine which session should have messages loaded: prefer current, else first.
         val currentId = _state.value.coding.currentSessionId
         val activeSessionId = sessions.firstOrNull { it.id == currentId }?.id ?: sessions.firstOrNull()?.id
@@ -686,6 +700,7 @@ class DefaultCodingService(
                 session = session,
                 messages = messages,
                 running = codingJobs.value[session.id]?.isActive == true,
+                worktreeAvailability = worktreeCapability,
             ))
         }
         currentCoroutineContext().ensureActive()
@@ -1038,6 +1053,21 @@ class DefaultCodingService(
         }
     }
 
+    override fun toggleWorktree(sessionId: String) {
+        val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (ui.worktreeLocked) return
+        val project = _state.value.coding.projects.firstOrNull { it.id == ui.session.projectId } ?: return
+        scope.launch {
+            val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+            updateCodingSession(sessionId) { it.copy(worktreeAvailability = capability) }
+            if (!capability.available) return@launch
+            updateStoredCodingSession(ui.session) { current ->
+                check(!_state.value.coding.sessions.first { it.session.id == sessionId }.copy(session = current).worktreeLocked) { "Сначала завершите текущую задачу" }
+                current.copy(worktreeEnabled = !current.worktreeEnabled)
+            }
+        }
+    }
+
     override fun toggleSessionFeatureFlag(sessionId: String, flag: FeatureFlag) {
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         scope.launch {
@@ -1078,7 +1108,7 @@ class DefaultCodingService(
             }); return
         }
         if (text.isBlank() && attachments.isEmpty()) return
-        val request = CodingRunCheckpoint(Id.new(), text.trim(), attachments, interactionMode = selected.interactionMode)
+        val request = CodingRunCheckpoint(Id.new(), text.trim(), attachments, interactionMode = selected.interactionMode, worktreeEnabled = selected.worktreeEnabled)
         if (!validateInput(selected, attachments, request.messageId)) return
         val composer = composerDrafts[sessionId]
         val version = composer?.version
@@ -1110,6 +1140,9 @@ class DefaultCodingService(
             sendCodingPromptTo(sessionId, text, attachments)
             return
         }
+        if (ui.session.taskWorktree?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.DELIVERING)) {
+            sendCodingPromptTo(sessionId, text, attachments); return
+        }
         val running = codingJobs.value[sessionId]
         if (running == null) { resumeCodingSession(sessionId, text, attachments); return }
         if (!clarifyingSessions.add(sessionId)) return
@@ -1121,7 +1154,8 @@ class DefaultCodingService(
                 val accepted = updateStoredCodingSession(ui.session) { latest ->
                     check(codingJobs.value[sessionId] === running) { "Запуск изменился. Отправьте уточнение повторно." }
                     val request = checkNotNull(latest.pendingRun) { "Запуск ещё не готов принять уточнение." }
-                    latest.copy(pendingRun = request.copy(
+                    check(latest.taskWorktree?.phase !in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.DELIVERING)) { "Началось слияние; отправьте новый запрос" }
+                    latest.copy(taskWorktree = latest.taskWorktree?.copy(phase = if (latest.taskWorktree?.phase == TaskWorktreePhase.CONFLICT) TaskWorktreePhase.CONFLICT else TaskWorktreePhase.RUNNING, handoffGeneration = null, error = null), pendingRun = request.copy(
                         prompt = request.prompt + "\n\nУточнение пользователя: " + text.trim(),
                         attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.STOP))
                 }
@@ -1183,12 +1217,16 @@ class DefaultCodingService(
         val repo = codingProjects ?: return
         for (project in projects) for (session in repo.sessions(project.id)) {
             val request = session.pendingRun ?: continue
+            if (session.taskWorktree?.phase == TaskWorktreePhase.COMPLETE && request.hasSuccessfulResponse(repo.messages(project.id, session.id))) {
+                updateStoredCodingSession(session) { it.copy(pendingRun = null) }
+                continue
+            }
             if (request.intent != ExecutionIntent.RUN || session.archived || session.planningMode || session.stageId != null) continue
             // Child sessions (SESSION kind with organism) are recovered by their parent's
             // recoverUnknownChildren() once the parent's withScope registers its handle.
             if (session.organismId != null && session.sessionKind == SessionKind.SESSION) continue
             val response = repo.messages(project.id, session.id).firstOrNull { it.id == request.responseId }
-            if (response != null) {
+            if (response != null && session.taskWorktree?.let { it.phase != TaskWorktreePhase.COMPLETE } != true) {
                 // The reply may have reached disk just before the checkpoint was cleared.
                 updateStoredCodingSession(session) { it.copy(pendingRun = if (response.failed) request.copy(intent = ExecutionIntent.STOP) else null) }
                 continue
@@ -1301,8 +1339,36 @@ class DefaultCodingService(
                     prompt = researchContextSeed(codingProjects!!.messages(project.id, session.id),
                         codingProfileOf(current)?.advanced?.contextMessages ?: 20, request.messageId) + prompt
                 }
+                var executionProject = project
+                var workspaceRecord = current.taskWorktree?.takeIf { it.taskId == request.runId }
+                if (request.worktreeEnabled == true && current.interactionMode == CodingInteractionMode.CODE && current.stageId == null && current.sessionKind != SessionKind.SESSION) {
+                    val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+                    updateCodingSession(session.id) { it.copy(worktreeAvailability = capability) }
+                    if (workspaceRecord != null || capability.available) {
+                        recorder.apply(CodingEvent.Notice("Подготовка worktree"))
+                        workspaceRecord = checkNotNull(taskWorktrees).begin(project, session.id, request.runId)
+                        current = taskWorktrees.session(project.id, session.id)
+                        executionProject = project.copy(path = workspaceRecord.path)
+                        prompt += "\n\nРабочая папка этой задачи: ${workspaceRecord.path}. Работай только в ней. " +
+                            "Не изменяй исходную папку ${workspaceRecord.sourcePath} и не выполняй слияние в неё. " +
+                            "Уточнения задавай через magicpaper_questionnaire. После полного выполнения и проверок вызови magicpaper_task_handoff с RESULT " +
+                            "и командами проверок (массивы аргументов). Затем заверши ответ. При блокировке передай BLOCKED."
+                    } else {
+                        current = updateStoredCodingSession(current) { it.copy(pendingRun = it.pendingRun?.copy(worktreeEnabled = false)) }
+                    }
+                }
+                if (recovering && additionalMessage != null && workspaceRecord?.phase == TaskWorktreePhase.MERGING && workspaceRecord.error != null) {
+                    current = updateStoredCodingSession(current) { it.copy(taskWorktree = it.taskWorktree?.copy(
+                        phase = TaskWorktreePhase.RUNNING, handoffGeneration = null, error = null)) }
+                    workspaceRecord = current.taskWorktree
+                }
                 var ended = false
-                recorder.recordDrafts(runtime.run(project, current, prompt, codingProfileOf(current), request.attachments), onEvent = { event ->
+                val deliveryOnly = workspaceRecord?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT, TaskWorktreePhase.DELIVERING, TaskWorktreePhase.COMPLETE)
+                if (deliveryOnly) ended = true
+                else {
+                    if (workspaceRecord != null) current = updateStoredCodingSession(current) { it.copy(taskWorktree = it.taskWorktree?.copy(
+                        phase = TaskWorktreePhase.RUNNING, handoffGeneration = null, error = null)) }
+                    recorder.recordDrafts(runtime.run(executionProject, current, prompt, codingProfileOf(current), request.attachments), onEvent = { event ->
                     if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                         // Save the native conversation before the first command, not at the end of the turn.
                         current = updateStoredCodingSession(session) { it.copy(piSessionId = event.sessionId, needsHistorySeed = false) }
@@ -1311,9 +1377,37 @@ class DefaultCodingService(
                 }).collect { draft ->
                     updateCodingSession(session.id) { it.copy(draft = draft) }
                 }
+                }
                 if (!ended) recorder.apply(CodingEvent.Failed("Выполнение прервано. Нажмите «Продолжить»."))
-                val response = recorder.message(request.responseId, Id.now())
+                if (workspaceRecord != null && ended && recorder.draft(active = false).failedMessage == null) {
+                    runtime.reconcile(session.id)
+                    check(runtime.questionnaires.value.none { it.sessionId == session.id }) { "Ожидается ответ на уточнение" }
+                    check(taskWorktrees!!.session(project.id, session.id).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
+                    if (!deliveryOnly) current = updateStoredCodingSession(current) { it.copy(taskWorktree = it.taskWorktree?.copy(
+                        executionResponse = recorder.message(request.responseId, Id.now()))) }
+                    val finished = taskWorktrees.complete(project, session.id, request.runId) { conflict ->
+                        recorder.apply(CodingEvent.Notice("Разрешение конфликта"))
+                        val repairSession = taskWorktrees.session(project.id, session.id)
+                        var repairEnded = false
+                        recorder.recordDrafts(runtime.run(project.copy(path = conflict.path), repairSession,
+                            "Разреши Git merge-конфликт в этой рабочей папке, сохрани обе стороны, выполни необходимые проверки. " +
+                                "При неоднозначности задай вопрос через magicpaper_questionnaire. Перед завершением передай RESULT через magicpaper_task_handoff с командами проверок. Не меняй исходную папку.\n\nАктуальная задача и уточнения:\n${request.prompt}",
+                            codingProfileOf(repairSession)), onEvent = { if (it is CodingEvent.Finished) repairEnded = true }).collect { draft ->
+                            updateCodingSession(session.id) { it.copy(draft = draft) }
+                        }
+                        runtime.reconcile(session.id)
+                        check(repairEnded && recorder.draft(active = false).failedMessage == null && taskWorktrees.session(project.id, session.id).taskWorktree?.handoffGeneration != null) { "Конфликт требует продолжения" }
+                    }
+                    recorder.apply(CodingEvent.Notice("Результат влит в ${finished.targetBranch}"))
+                    current = taskWorktrees.session(project.id, session.id)
+                    updateCodingSession(session.id) { it.copy(session = current) }
+                }
+                val recorded = recorder.message(request.responseId, Id.now())
+                val response = if (deliveryOnly) current.taskWorktree?.executionResponse ?: recorded
+                    else if (workspaceRecord != null && recorded.failed) recorded.copy(id = "${request.responseId}-failure-${Id.new()}") else recorded
                 appendCodingMessage(session, response)
+                if (deliveryOnly && current.taskWorktree?.phase == TaskWorktreePhase.COMPLETE) appendCodingMessage(session,
+                    CodingMessage("${request.responseId}-merged", CodingRole.AGENT, "Результат влит в ${current.taskWorktree?.targetBranch}", createdAt = Id.now(), systemNotice = true))
                 updateStoredCodingSession(session) { latest -> latest.copy(pendingRun =
                     if (response.failed || latest.pendingRun?.intent == ExecutionIntent.STOP) latest.pendingRun?.copy(intent = ExecutionIntent.STOP) else null) }
                 AppLog.info("coding", "run.finished", operationFields + ("outcome" to if (response.failed) "failed" else "completed"))
@@ -1344,9 +1438,14 @@ class DefaultCodingService(
                 throw e
             } catch (e: Exception) {
                 AppLog.error("coding", "run.failed", e, operationFields)
-                recorder.apply(CodingEvent.Failed("Не удалось продолжить работу. Проверьте подключение и состояние сессии."))
+                val task = taskWorktrees?.session(project.id, session.id)?.taskWorktree?.takeIf { it.taskId == request.runId }
+                val safeError = if (request.worktreeEnabled == true && (e is IllegalStateException || e is IllegalArgumentException))
+                    e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
+                    else "Не удалось продолжить работу. Проверьте подключение и состояние сессии."
+                if (task != null) taskWorktrees!!.failure(project.id, session.id, request.runId, safeError)
+                recorder.apply(CodingEvent.Failed(safeError))
                 try {
-                    appendCodingMessage(session, recorder.message(request.responseId, Id.now()))
+                    appendCodingMessage(session, recorder.message(if (task != null) "${request.responseId}-failure-${Id.new()}" else request.responseId, Id.now()))
                     updateStoredCodingSession(session) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP)) }
                 } catch (storageError: Exception) {
                     if (storageError is CancellationException) throw storageError
@@ -1384,9 +1483,10 @@ class DefaultCodingService(
     override fun abortCodingSession(sessionId: String) {
         codingRuntime?.computerUse?.disable(sessionId)
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
-        if (ui.session.organismId != null && planningChat != null) {
+        if (ui.session.organismId != null && planningChat != null &&
+            !(ui.session.taskWorktree != null && ui.session.interactionMode == CodingInteractionMode.CODE && ui.session.stageId == null)) {
             planningChat.stopManagedSession(sessionId)
-            return
+            if (sessionId !in codingJobs.value) return
         }
         if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
             planningChat.cancelRequest(ui.session.parentSessionId ?: sessionId)

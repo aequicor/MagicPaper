@@ -283,6 +283,7 @@ class OrchestrationService(
         execution.stopAndJoin(previous.id)
         val draft = Plan(id, previous.projectId, previous.goal, parentSessionId = previous.parentSessionId,
             sessionId = previous.parentSessionId, replacesPlanId = previous.id,
+            worktreeEnabled = projects.sessions(previous.projectId).firstOrNull { it.id == previous.parentSessionId }?.worktreeEnabled ?: true,
             plannerSelection = previous.plannerSelection, engine = previous.engine, searchProvider = previous.searchProvider,
             priorities = previous.priorities, planningRulesSnapshot = previous.planningRulesSnapshot,
             tree = listOf(DecisionNode("$id-root", previous.goal, DecisionKind.GOAL)),
@@ -1250,7 +1251,7 @@ class OrchestrationService(
         if (plan == null) {
             val id = "plan-${input.id}"
             plan = Plan(id, session.projectId, input.text, parentSessionId = session.id, sessionId = session.id,
-                sharedWorkspace = false, plannerSelection = session.modelSelection, engine = session.engine, searchProvider = session.searchProvider,
+                sharedWorkspace = !session.worktreeEnabled, worktreeEnabled = session.worktreeEnabled, plannerSelection = session.modelSelection, engine = session.engine, searchProvider = session.searchProvider,
                 createdAt = input.createdAt, updatedAt = input.createdAt,
                 tree = listOf(DecisionNode("$id-root", input.text, DecisionKind.GOAL)),
                 dialogue = inputHistory(session).filter { it.id != input.id }.map {
@@ -1704,6 +1705,7 @@ class OrchestrationService(
             val completedRun = plan.phase == ExecutionPhase.COMPLETE
             val paused = state(plan.parentSessionId, plan.projectId).workPauses.values
                 .filter { it.planId == plan.id && it.proposalId == proposalId }.flatMap { it.stageIds }.toSet()
+            val nextWorktreeMode = projects.sessions(plan.projectId).firstOrNull { it.id == plan.parentSessionId }?.worktreeEnabled ?: true
             plan = store.update(id) { latest ->
                 require(expectedRevision == null || latest.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
                 require(latest.proposal?.id == proposalId) { "Предложение изменилось" }
@@ -1715,6 +1717,7 @@ class OrchestrationService(
                         "Подтверждённые уточнения плана:\n${proposal.explanation}",
                         state = if (latest.milestones.firstOrNull { it.id == stageId }?.completed == true) DeliveryState.ANSWERED else DeliveryState.QUEUED) }).distinctBy { it.id },
                     proposal = null, runId = if (completedRun) Id.new() else latest.runId,
+                    worktreeEnabled = if (completedRun) nextWorktreeMode else latest.worktreeEnabled,
                     workspace = if (completedRun) null else latest.workspace,
                     finalAttemptHistory = latest.finalAttemptHistory + listOfNotNull(latest.finalAttempt),
                     finalAttempt = null, phase = ExecutionPhase.RECOVERING, intent = ExecutionIntent.RUN,

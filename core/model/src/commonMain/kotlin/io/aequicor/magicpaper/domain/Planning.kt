@@ -99,6 +99,8 @@ data class Plan(
     val wizardStep: PlanningStep? = null,
     val parentSessionId: String = "",
     val sharedWorkspace: Boolean = false,
+    /** Null preserves workspace delivery for plans accepted before task worktrees. */
+    val worktreeEnabled: Boolean? = null,
     val confirmedRevision: Long? = null,
     val versions: List<PlanVersion> = emptyList(),
     val deliveries: List<PlanDelivery> = emptyList(),

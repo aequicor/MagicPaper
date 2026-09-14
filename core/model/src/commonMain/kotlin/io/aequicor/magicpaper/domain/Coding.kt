@@ -87,6 +87,8 @@ data class CodingSession(
      * суммаризация не готова или не нужна; тогда список показывает [name].
      */
     val shortTitle: String = "",
+    val worktreeEnabled: Boolean = true,
+    val taskWorktree: TaskWorktree? = null,
 )
 
 @Serializable
@@ -103,6 +105,8 @@ data class CodingRunCheckpoint(
     val responseTimelineId: String = "",
     /** Null only in legacy checkpoints; resolved from the persisted session before execution. */
     val interactionMode: CodingInteractionMode? = null,
+    /** Null keeps already accepted legacy requests on their original execution path. */
+    val worktreeEnabled: Boolean? = null,
 )
 
 /** A persisted successful reply is authoritative even while checkpoint cleanup is pending. */

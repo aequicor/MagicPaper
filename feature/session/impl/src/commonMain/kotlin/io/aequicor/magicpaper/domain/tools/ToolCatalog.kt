@@ -25,6 +25,8 @@ import kotlinx.serialization.json.*
 @Serializable data class ToolScheduleManage(val commands: List<ScheduleCommand>)
 @Serializable data class ToolQuestions(val questions: List<PlanningQuestion>)
 @Serializable data class ToolSearch(val query: String)
+@Serializable enum class TaskHandoffOutcome { RESULT, BLOCKED }
+@Serializable data class TaskHandoff(val outcome: TaskHandoffOutcome, val checks: List<List<String>> = emptyList())
 
 object ToolCatalog {
     private val all = ToolRole.entries.toSet()
@@ -47,6 +49,7 @@ object ToolCatalog {
         ToolDefinition("context.get", "Актуальное состояние проекта, плана и сессий", empty, ToolCategory.READ),
         app<ToolSearch>("web.search", "Поиск источников в интернете", category = ToolCategory.SEARCH),
         app<ToolQuestions>("questionnaire", "Уточнение у пользователя. Ожидает подтверждённых ответов; не выдаёт разрешений"),
+        app<TaskHandoff>("task.handoff", "Завершить worktree-задачу результатом RESULT либо сообщить BLOCKED. checks — команды проверок как массивы аргументов без shell. После RESULT закончи ответ; приложение проверит результат и выполнит слияние", setOf(ToolRole.CHAT), true),
         app<PlanToolProposal>("plan.propose", "Передать проект плана с объяснением, деревом решений и этапами. Не запускает исполнителей", setOf(ToolRole.PLANNER), true, true),
         app<ToolMessage>("plan.refine", "Разработать или доработать план. newPlan=true по поручению пользователя создаёт отдельный план взамен старого, сохраняя его историю; запуск требует отдельного подтверждения", coordinator, true, true),
         app<ToolRecalculate>("plan.recalculate", "Пересчитать часть плана по идентификатору узла", coordinator, true, true),

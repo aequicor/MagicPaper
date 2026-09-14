@@ -27,7 +27,20 @@ data class CodingSessionUi(
     val immunityProposalPending: Boolean = false,
     /** True when an agent replied while this session was not focused. */
     val unread: Boolean = false,
+    val worktreeAvailability: WorktreeAvailability = WorktreeAvailability(false, "Проверка Git…"),
 ) {
+    val worktreeSelected: Boolean get() {
+        if (session.researchMode) return false
+        if (session.taskWorktree?.let { it.phase != TaskWorktreePhase.COMPLETE } == true) return true
+        if (!worktreeAvailability.available) return false
+        return session.pendingRun?.let { it.worktreeEnabled == true }
+            ?: plan?.takeIf { it.status != PlanStatus.DONE }?.let { it.worktreeEnabled == true }
+            ?: session.queuedPrompts.firstOrNull()?.let { it.worktreeEnabled == true }
+            ?: session.worktreeEnabled
+    }
+    val worktreeLocked: Boolean get() = running || session.pendingRun != null || session.queuedPrompts.isNotEmpty() ||
+        session.taskWorktree?.let { it.phase != TaskWorktreePhase.COMPLETE } == true ||
+        (plan != null && plan.status != PlanStatus.DONE)
     val canResume: Boolean
         get() {
             if (running || interactions.isNotEmpty() || session.archived) return false
@@ -43,7 +56,7 @@ data class CodingSessionUi(
                     current.phase == ExecutionPhase.WAITING
             }
             if (session.planningMode || session.stageId != null) return false
-            return session.pendingRun?.let { !it.hasSuccessfulResponse(messages) }
+            return session.pendingRun?.let { session.taskWorktree != null || !it.hasSuccessfulResponse(messages) }
                 ?: (messages.interruptedCodingRequest() != null)
         }
 
@@ -60,6 +73,7 @@ data class CodingSessionUi(
             session.desiredState == io.aequicor.magicpaper.domain.SessionDesiredState.QUARANTINE ->
                 "Перед продолжением нужно проверить результат запуска."
             else -> draft.failedMessage
+                ?: session.taskWorktree?.error
                 ?: plan?.milestones?.firstOrNull { it.id == session.stageId }?.attempts?.lastOrNull()?.error?.message
                 ?: plan?.issue?.message
                 ?: "Запрос не удалось завершить."
@@ -76,6 +90,7 @@ data class CodingSessionUi(
         // The composer and sidebar must use the same actionable queue. Runtime flags
         // and saved attempts can outlive a question while its answer is being handled.
         if (interactions.isNotEmpty()) return CodingSessionStatus.WAITING
+        if (!running && session.taskWorktree?.error != null) return CodingSessionStatus.BLOCKED
         if (draft.failedMessage != null || (failedRequest && !running && !draft.active)) return CodingSessionStatus.BLOCKED
         val stage = plan?.milestones?.firstOrNull { it.id == session.stageId }
         if (stage != null) return when {

@@ -44,6 +44,7 @@ interface CodingService {
     fun changeCodingInteractionMode(sessionId: String, mode: CodingInteractionMode)
     /** Переключить per-session фича-флаг; пустой session override наследует глобальные из настроек. */
     fun toggleSessionFeatureFlag(sessionId: String, flag: FeatureFlag)
+    fun toggleWorktree(sessionId: String)
     fun sendCodingPrompt(text: String)
     fun sendCodingPromptTo(sessionId: String, text: String, attachments: List<Attachment> = emptyList())
     fun clarifyCodingSession(sessionId: String, text: String, attachments: List<Attachment> = emptyList())
