@@ -532,6 +532,17 @@ class SessionTreeRuntime(
         }
     }
 
+    suspend fun requireTaskQuiescent(sessionId: String) {
+        val organism = organisms.store.organisms.value.values.firstOrNull { sessionId in it.sessions } ?: return
+        val writers = organism.sessions.values.filter { it.mode == CodingInteractionMode.CODE }.map { it.id }.toSet()
+        lock.withLock {
+            check(handles.keys.none { it in writers } && retainedRootLeases.values.none { it.sessionId in writers }) { "Остановка исполнителей не подтверждена" }
+        }
+        check(codingWorkspaces?.retainedSessionIds().orEmpty().none { it in writers }) { "Рабочая копия исполнителя ещё занята" }
+        check(organism.sessions.values.none { it.id in writers && it.observed in setOf(SessionObservedState.RUNNING,
+            SessionObservedState.WAITING_USER, SessionObservedState.STOPPING, SessionObservedState.UNKNOWN) }) { "Не все исполнители завершили работу" }
+    }
+
     suspend fun pauseForReset() {
         shutdown()
         val unsettled = organisms.store.loadAll().flatMap { it.sessions.values }

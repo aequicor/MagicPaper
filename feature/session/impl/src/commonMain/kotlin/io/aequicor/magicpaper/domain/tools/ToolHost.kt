@@ -20,6 +20,7 @@ class ToolHost(val receipts: ToolReceiptStore, val questions: RuntimeQuestionnai
     var receiver: suspend (ToolExecutionContext, String, String, JsonObject) -> JsonElement = { _, _, _, _ -> error("Инструменты приложения не подключены") }
     var prepareWorker: suspend (CodingSession) -> ToolExecutionContext = { ToolExecutionContext.worker(it) }
     var search: (suspend (ToolExecutionContext, String) -> JsonElement)? = null
+    var taskHandoff: (suspend (ToolExecutionContext, TaskHandoff) -> Unit)? = null
     private val json = Json { ignoreUnknownKeys = false; encodeDefaults = true }
     internal suspend fun askQuestionnaire(ctx: ToolExecutionContext, id: String, args: JsonObject): JsonElement {
         val request = json.decodeFromJsonElement<ToolQuestions>(args)
@@ -38,6 +39,10 @@ class ToolHost(val receipts: ToolReceiptStore, val questions: RuntimeQuestionnai
                 if (override != null) override(ctx, id, args)
                 else when (definition.id) {
                     "questionnaire" -> askQuestionnaire(ctx, id, args)
+                    "task.handoff" -> {
+                        checkNotNull(taskHandoff) { "Worktree недоступен" }(ctx, json.decodeFromJsonElement<TaskHandoff>(args))
+                        buildJsonObject { put("accepted", true) }
+                    }
                     "web.search" -> search!!(ctx, json.decodeFromJsonElement<ToolSearch>(args).query.also { require(it.isNotBlank()) })
                     else -> if (definition.orchestration && orchestration != null) orchestration!!.execute(ctx, id, definition.id, args)
                         else receiver(ctx, id, definition.id, args)

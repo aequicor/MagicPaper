@@ -1455,7 +1455,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingScreen",
-    "annotationLine": 209,
+    "annotationLine": 210,
     "targets": [
       "PaperPage",
       "PaperSplitPane",
@@ -1467,7 +1467,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SessionArea",
-    "annotationLine": 296,
+    "annotationLine": 297,
     "targets": [
       "PaperTab",
       "PaperPluginHost",
@@ -1479,7 +1479,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SessionTab",
-    "annotationLine": 395,
+    "annotationLine": 405,
     "targets": [
       "PaperTab"
     ],
@@ -1489,7 +1489,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectsPanel",
-    "annotationLine": 429,
+    "annotationLine": 439,
     "targets": [
       "PaperTreeRow",
       "PaperScroll",
@@ -1502,7 +1502,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "sessionHeader",
-    "annotationLine": 468,
+    "annotationLine": 478,
     "targets": [
       "PaperTreeRow",
       "PaperIconButton",
@@ -1520,12 +1520,12 @@
       "PaperPanel"
     ],
     "stage": "6",
-    "annotationLine": 593
+    "annotationLine": 603
   },
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectPinnedSession",
-    "annotationLine": 607,
+    "annotationLine": 617,
     "targets": [
       "PaperTreeRow",
       "PaperIconButton",
@@ -1538,7 +1538,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectRow",
-    "annotationLine": 641,
+    "annotationLine": 651,
     "targets": [
       "PaperTreeRow",
       "PaperIconButton",
@@ -1550,7 +1550,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SessionRow",
-    "annotationLine": 720,
+    "annotationLine": 730,
     "targets": [
       "PaperListRow",
       "PaperIconButton",
@@ -1562,7 +1562,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "StatusTooltip",
-    "annotationLine": 817,
+    "annotationLine": 827,
     "targets": [
       "PaperTooltip"
     ],
@@ -1572,7 +1572,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ProjectsEmptyHint",
-    "annotationLine": 822,
+    "annotationLine": 832,
     "targets": [
       "PaperPanel",
       "PaperText"
@@ -1583,7 +1583,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingChat",
-    "annotationLine": 845,
+    "annotationLine": 855,
     "targets": [
       "PaperChatTranscript",
       "PaperComposer",
@@ -1596,7 +1596,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "status",
-    "annotationLine": 925,
+    "annotationLine": 939,
     "targets": [
       "PaperStatus",
       "PaperButton"
@@ -1607,7 +1607,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "SavedCodingHistoryItem",
-    "annotationLine": 1068,
+    "annotationLine": 1096,
     "targets": [
       "PaperChatTranscript",
       "PaperMarkdown"
@@ -1618,7 +1618,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingMessageBubble",
-    "annotationLine": 1145,
+    "annotationLine": 1173,
     "targets": [
       "PaperPanel",
       "PaperMarkdown",
@@ -1630,7 +1630,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingStepRow",
-    "annotationLine": 1252,
+    "annotationLine": 1280,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1642,7 +1642,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ThinkingStepRow",
-    "annotationLine": 1287,
+    "annotationLine": 1315,
     "targets": [
       "PaperMarkdown",
       "PaperPanel",
@@ -1655,7 +1655,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ToolStepRow",
-    "annotationLine": 1320,
+    "annotationLine": 1348,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1667,7 +1667,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "ToolStepContent",
-    "annotationLine": 1341,
+    "annotationLine": 1369,
     "targets": [
       "PaperMarkdown",
       "PaperPanel",
@@ -1680,7 +1680,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "DraftFragment",
-    "annotationLine": 1443,
+    "annotationLine": 1471,
     "targets": [
       "PaperPanel",
       "PaperText"
@@ -1691,7 +1691,7 @@
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "AgentMessageStatus",
-    "annotationLine": 1451,
+    "annotationLine": 1479,
     "targets": [
       "PaperPanel",
       "PaperStatus",
@@ -1709,19 +1709,20 @@
       "PaperText"
     ],
     "stage": "6",
-    "annotationLine": 1559
+    "annotationLine": 1587
   },
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
     "symbol": "CodingComposer",
-    "annotationLine": 1566,
+    "annotationLine": 1594,
     "targets": [
       "PaperAttachmentRow",
       "PaperButton",
       "PaperComposer",
       "PaperField",
       "PaperPromptField",
-      "PaperWorkspaceComposer"
+      "PaperWorkspaceComposer",
+      "PaperMenuToggleInfo"
     ],
     "stage": "6",
     "kind": "surface"

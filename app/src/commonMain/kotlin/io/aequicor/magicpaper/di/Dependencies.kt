@@ -31,6 +31,7 @@ internal fun buildRuntime(
     filePicker: FilePicker = NoopFilePicker,
     openAiSubscription: OpenAiSubscriptionService? = null,
     planningWorkspace: PlanningWorkspace = LocalPlanningWorkspace(),
+    taskWorkspace: TaskWorkspace = UnavailableTaskWorkspace,
     integrationChecks: SessionIntegrationCheckRunner? = null,
     platformPlugins: List<MagicPlugin> = emptyList(),
     projectSkills: ProjectSkills? = null,
@@ -97,7 +98,7 @@ internal fun buildRuntime(
                 layoutEditor = layoutEditor, settings = { settings.load() }) }
         single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
         single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
-            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get()).also { graph ->
+            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get(), taskWorkspace = taskWorkspace).also { graph ->
                 graph.toolHost.orchestration = io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(
                     io.aequicor.magicpaper.domain.tools.OrchestrationActions { context, operation, tool, arguments ->
                         graph.toolHost.receiver(context, operation, tool, arguments)
@@ -140,6 +141,7 @@ internal fun buildRuntime(
             onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },
             onCreateSession = { project -> get<NavigationEvents>().dialog(DialogRoute("new-session", project)) },
             draftRepository = get(), draftBlobs = get(),
+            taskWorktrees = get<CodingRuntimeGraph>().taskWorktrees,
             removePluginDrafts = { project, plans -> get<PluginService>().removeProjectDrafts(project, plans) }) }
         single { DefaultSettingsService(get(), get(), get(), get(), get(), get(),
             skills = get(), planning = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),

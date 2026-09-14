@@ -74,12 +74,12 @@ class ModelSettingsFixture {
     suspend fun prepareCoding(codingRuntime: CodingRuntime? = null, codingProjects: CodingProjectRepository? = null,
         requestPinRepository: RequestPinRepository? = null,
         workerDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Main,
-        activate: Boolean = true): DefaultCodingService {
+        activate: Boolean = true, taskWorktrees: TaskWorktreeService? = null, planningChat: PlanningChatService? = null): DefaultCodingService {
         seed()
         lateinit var service: DefaultCodingService
         service = DefaultCodingService(settings, profiles, kv, json, codingRuntime, codingProjects,
             gateway = gateway, requestPins = pins(requestPinRepository), usage = usage, workerDispatcher = workerDispatcher,
-            draftRepository = draftRepository, draftBlobs = draftBlobs,
+            draftRepository = draftRepository, draftBlobs = draftBlobs, taskWorktrees = taskWorktrees, planningChat = planningChat,
             onOpenSession = { project, session -> scope.launch { service.activate(project, session) } })
         service.start()
         if (activate) {

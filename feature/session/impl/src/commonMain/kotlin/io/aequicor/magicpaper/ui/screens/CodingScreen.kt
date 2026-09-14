@@ -1,4 +1,5 @@
 package io.aequicor.magicpaper.ui.screens
+import io.aequicor.magicpaper.domain.TaskWorktreePhase
 import io.aequicor.magicpaper.designsystem.PaperHoverActions
 import io.aequicor.magicpaper.designsystem.PaperRowMenu
 import io.aequicor.magicpaper.designsystem.PaperWorkspaceHeading
@@ -379,6 +380,15 @@ private fun SessionArea(
                 },
                 featureFlags = sessionInfo.featureFlags.resolve(globalFeatureFlags),
                 onToggleFeatureFlag = { flag -> vm.toggleSessionFeatureFlag(sessionInfo.id, flag) },
+                worktreeChecked = effective.worktreeSelected,
+                worktreeSwitchEnabled = effective.worktreeAvailability.available && !effective.worktreeLocked && !sessionInfo.researchMode,
+                worktreeInformation = when {
+                    !effective.worktreeAvailability.available -> effective.worktreeAvailability.reason.orEmpty()
+                    effective.worktreeLocked -> "Режим можно изменить после завершения текущей задачи"
+                    sessionInfo.researchMode -> "В режиме исследования слияние не выполняется"
+                    else -> "Работа в отдельной Git-копии. После завершения результат автоматически вливается в исходную ветку"
+                },
+                onWorktreeChange = if (sessionInfo.stageId == null && sessionInfo.sessionKind != SessionKind.SESSION) { { vm.toggleWorktree(sessionInfo.id) } } else null,
             )
     }
     if (switcherOpen) {
@@ -877,6 +887,10 @@ internal fun CodingChat(
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
     featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
     onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
+    worktreeChecked: Boolean = false,
+    worktreeSwitchEnabled: Boolean = true,
+    worktreeInformation: String = "Работа в отдельной Git-копии. После завершения результат автоматически вливается в исходную ветку",
+    onWorktreeChange: (() -> Unit)? = null,
     listState: LazyListState = key(session.session.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
@@ -996,6 +1010,16 @@ internal fun CodingChat(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
                     }
                 }
+                if (busy) session.session.taskWorktree?.let { task ->
+                    val phaseLabel = when (task.phase) {
+                        TaskWorktreePhase.PREPARING -> "Подготовка worktree"
+                        TaskWorktreePhase.CAPTURING -> "Сохранение результата"
+                        TaskWorktreePhase.MERGING, TaskWorktreePhase.DELIVERING -> "Слияние с ${task.targetBranch}"
+                        TaskWorktreePhase.CONFLICT -> "Разрешение конфликта"
+                        else -> null
+                    }
+                    if (phaseLabel != null) PaperStatus(phaseLabel, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
+                }
                 if (eventWaitLabel != null) {
                     PaperPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = LocalPaperColors.current.raisedSurface) {
                         PaperText(eventWaitLabel, Modifier.padding(10.dp), style = LocalPaperTypography.current.body)
@@ -1039,6 +1063,10 @@ internal fun CodingChat(
                     onPasteAttachments = onPasteAttachments,
                     featureFlags = remember(featureFlags) { featureFlags },
                     onToggleFeatureFlag = onToggleFeatureFlag,
+                    worktreeChecked = worktreeChecked,
+                    worktreeSwitchEnabled = worktreeSwitchEnabled,
+                    worktreeInformation = worktreeInformation,
+                    onWorktreeChange = onWorktreeChange,
                 )
             }
     }
@@ -1588,6 +1616,10 @@ internal fun CodingComposer(
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
     featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
     onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
+    worktreeChecked: Boolean = false,
+    worktreeSwitchEnabled: Boolean = true,
+    worktreeInformation: String = "Работа в отдельной Git-копии. После завершения результат автоматически вливается в исходную ветку",
+    onWorktreeChange: (() -> Unit)? = null,
     directAttachmentAction: Boolean = false,
 ) {
     var text by state.text
@@ -1690,6 +1722,10 @@ internal fun CodingComposer(
                                         if (!planning) onPlanning()
                                     },
                                 )
+                            }
+                            if (onWorktreeChange != null) {
+                                PaperMenuToggleInfo("Worktree", worktreeChecked, worktreeSwitchEnabled,
+                                    worktreeInformation, onCheckedChange = { closeMenu(); onWorktreeChange() })
                             }
                             // Feature flags toggle section
                             if (onToggleFeatureFlag != null) {

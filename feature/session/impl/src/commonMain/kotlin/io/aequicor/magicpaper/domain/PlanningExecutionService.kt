@@ -26,6 +26,7 @@ class PlanningExecutionService(
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val outputClock: () -> Long = Id::now,
     private val acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
+    private val taskWorktrees: TaskWorktreeService? = null,
 ) {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     val supported: Boolean get() = runtime.supported
@@ -150,7 +151,7 @@ class PlanningExecutionService(
         }
         fun spec(m: Milestone) = m.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", updatedAt = 0)
         require(latest.milestones.map(::spec) == base.milestones.map(::spec)) { "Этапы изменились во время ответа оркестратора" }
-        val rebased = latest.copy(sharedWorkspace = if (latest.confirmedRevision == null) proposal.sharedWorkspace else latest.sharedWorkspace, tree = proposal.tree, dialogue = proposal.dialogue, wizardStep = proposal.wizardStep, milestones = proposal.milestones.map { proposed ->
+        val rebased = latest.copy(sharedWorkspace = latest.worktreeEnabled?.not() ?: if (latest.confirmedRevision == null) proposal.sharedWorkspace else latest.sharedWorkspace, tree = proposal.tree, dialogue = proposal.dialogue, wizardStep = proposal.wizardStep, milestones = proposal.milestones.map { proposed ->
             latest.milestones.firstOrNull { it.id == proposed.id }?.takeIf { it.attempts.isNotEmpty() || it.status != MilestoneStatus.PENDING }?.let { current ->
                 require(spec(current) == spec(proposed)) { "Этап «${current.title}» начался во время планирования" }
                 current
@@ -274,6 +275,15 @@ class PlanningExecutionService(
         jobs[id] = scope.launch(UsageOwner(UsageScope(plan?.parentSessionId?.let { "coding:$it" }, projectId = plan?.projectId, planId = id), updatesContext = false)) { executeProject(id) }
     }
     private suspend fun executeProject(id: String) {
+        val initialTaskPlan = store.planFor(id) ?: return
+        val originalProject = projects?.all()?.firstOrNull { it.id == initialTaskPlan.projectId }
+        if (initialTaskPlan.worktreeEnabled == true && originalProject != null && initialTaskPlan.workspace == null) {
+            val parent = projects?.sessions(originalProject.id)?.firstOrNull { it.id == initialTaskPlan.parentSessionId }
+            if (parent?.taskWorktree?.phase != TaskWorktreePhase.COMPLETE && parent?.taskWorktree != null) Unit
+            else if (taskWorktrees?.availability(originalProject)?.available != true)
+                store.update(id) { it.copy(worktreeEnabled = false, sharedWorkspace = true) }
+        }
+        if (initialTaskPlan.worktreeEnabled != null) store.update(id) { it.copy(sharedWorkspace = it.worktreeEnabled == false) }
         val workspaces = workspaceFor(id)
         val acquiredProjects = mutableListOf<CodingProject>()
         suspend fun acquire(owner: CodingProject): Boolean = withContext(NonCancellable) {
@@ -286,10 +296,15 @@ class PlanningExecutionService(
         try {
             val initial = store.planFor(id) ?: return
             if (initial.blockingIssues(emptyList()).any { it.issue.retryBlocked }) return
-            val project = projects?.all()?.firstOrNull { it.id == initial.projectId }
+            var project = projects?.all()?.firstOrNull { it.id == initial.projectId }
             if (project == null) { block(id, PlanningIssue(IssueKind.CONFIGURATION, "Папка проекта не найдена")); return }
             check(store.plans().none { it.id != id && it.projectId == project.id && it.stopping }) {
                 "Остановка другой работы в этом проекте не подтверждена"
+            }
+            if (initial.worktreeEnabled == true) {
+                if (initial.runId.isBlank()) store.update(id) { it.copy(runId = Id.new()) }
+                val task = checkNotNull(taskWorktrees).begin(project, initial.parentSessionId, store.planFor(id)!!.runId)
+                project = project.copy(path = task.path)
             }
             val existingWorkspace = initial.workspace
             if (existingWorkspace != null) workspaces.validateExecutionPath(project, existingWorkspace.integrationPath)
@@ -408,7 +423,15 @@ class PlanningExecutionService(
                 }
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
                 journal(id, "apply-intent")
-                val applied = applyResult(id, project, workspace, judge) ?: return
+                val task = taskWorktrees?.session(project.id, plan.parentSessionId)?.taskWorktree?.takeIf { initial.worktreeEnabled == true && it.taskId == plan.runId }
+                val delivering = task?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT, TaskWorktreePhase.DELIVERING, TaskWorktreePhase.COMPLETE)
+                val applied = if (delivering) workspace.copy(applied = true) else applyResult(id, project, workspace, judge) ?: return
+                if (task != null) {
+                    taskWorktrees!!.complete(checkNotNull(originalProject), plan.parentSessionId, plan.runId,
+                        planAccepted = true, executionLeaseHeld = true,
+                        verifyMerged = { merged -> verifyTaskDelivery(id, merged, judge) },
+                        repair = { conflict -> repairTaskDelivery(id, project, conflict, judge) })
+                }
                 if (!acceptanceStillValid(id, workspace.integrationPath)) return
                 store.update(id) {
                     require(it.intent == ExecutionIntent.RUN && it.issue == null &&
@@ -475,6 +498,43 @@ class PlanningExecutionService(
             store.update(id) { it.copy(stopping = true, phase = ExecutionPhase.WAITING,
                 issue = PlanningIssue(IssueKind.UNCERTAIN, "Остановка не подтверждена: ${safeText(e.message.orEmpty())}", requiresUser = true)) }
         }
+    }
+
+    private suspend fun verifyTaskDelivery(id: String, task: TaskWorktree, judge: LlmProfile) {
+        val plan = store.planFor(id) ?: error("План удалён")
+        check(canRun(id)) { "План остановлен" }
+        val snapshot = workspaces.verificationSnapshot(task.path) ?: error("Проверка результата недоступна")
+        val attempt = checkNotNull(plan.finalAttempt).copy(verificationSnapshot = snapshot)
+        val (record, verdict) = reviewAcceptance(plan, Milestone("task-delivery", "Проверка слияния", description = plan.goal),
+            attempt, task.path, plan.acceptanceCriteria(), attempt.report, judge)
+        store.update(id) { it.copy(finalAttempt = it.finalAttempt?.copy(mergeAcceptanceRecord = record)) }
+        check(verdict.passed && verdict.issue == null && workspaces.verificationSnapshot(task.path) == snapshot) { "Проверка слияния не пройдена. Продолжите работу над планом" }
+    }
+
+    private suspend fun repairTaskDelivery(id: String, project: CodingProject, task: TaskWorktree, judge: LlmProfile) {
+        val plan = store.planFor(id) ?: error("План удалён")
+        var attempt = checkNotNull(plan.finalAttempt)
+        attempt = attempt.copy(mergePath = task.path, mergePhase = AttemptPhase.EXECUTING)
+        store.update(id) { it.copy(finalAttempt = attempt, phase = ExecutionPhase.INTEGRATING) }
+        val sessionId = "${attempt.sessionId}-delivery"
+        var ended = false
+        var failed = false
+        try {
+            monitoredRun(project.copy(path = task.path), CodingSession(sessionId, project.id, "Конфликт слияния", Id.now(),
+                piSessionId = attempt.mergeEngineSessionId, engine = attempt.engine ?: plan.engine,
+                planId = id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
+                pendingRun = CodingRunCheckpoint("${attempt.id}-delivery", "")),
+                "Разреши Git merge-конфликт в этой рабочей папке, сохрани обе стороны и выполни необходимые проверки. " +
+                    "При неоднозначности задай вопрос через magicpaper_questionnaire. Не изменяй исходную папку. Цель: ${plan.goal}", judge).collect { event ->
+                when (event) {
+                    is CodingEvent.SessionStarted -> { attempt = attempt.copy(mergeEngineSessionId = event.sessionId); store.update(id) { it.copy(finalAttempt = attempt) } }
+                    is CodingEvent.Failed -> failed = true
+                    CodingEvent.Finished -> ended = true
+                    else -> Unit
+                }
+            }
+        } finally { withContext(NonCancellable) { runtime.reconcile(sessionId) } }
+        check(ended && !failed) { "Конфликт требует продолжения" }
     }
 
     private suspend fun applyResult(id: String, project: CodingProject, workspace: PlanWorkspace, judge: LlmProfile): PlanWorkspace? {
@@ -1089,7 +1149,17 @@ class PlanningExecutionService(
         override suspend fun release(project: CodingProject) = workspaces.release(project)
         override suspend fun verificationSnapshot(path: String) = workspaces.verificationSnapshot(path)
     }
-    private suspend fun workspaceFor(id: String) = if (store.planFor(id)?.sharedWorkspace == true) shared else workspaces
+    private val direct = object : PlanningWorkspace by shared {
+        override suspend fun validateExecutionPath(project: CodingProject, path: String) = Unit
+    }
+    private suspend fun workspaceFor(id: String): PlanningWorkspace {
+        val plan = store.planFor(id)
+        return when (plan?.worktreeEnabled) {
+            true -> workspaces
+            false -> direct
+            null -> if (plan?.sharedWorkspace == true) shared else workspaces
+        }
+    }
     private suspend fun canRunStage(id: String, stageId: String): Boolean = canRun(id) &&
         store.planFor(id)?.let { stageId !in chatHooks?.blockedStages(it).orEmpty() } == true
     private suspend fun canRun(id: String) = !closing && store.failure.value == null && store.planFor(id)?.intent == ExecutionIntent.RUN

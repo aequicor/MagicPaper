@@ -32,6 +32,7 @@ kotlin {
             // Material is an implementation detail of Paper components only.
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
+            implementation(libs.compose.uiToolingPreview)
             implementation(libs.compose.components.resources)
             implementation(libs.androidx.lifecycle.runtimeCompose)
             implementation(libs.kotlinx.coroutinesCore)
@@ -43,7 +44,10 @@ kotlin {
             compileOnly(libs.jbr.api)
             implementation(libs.oshi.core)
         }
-        jvmTest.dependencies { implementation(compose.desktop.currentOs) }
+        jvmTest.dependencies {
+            implementation(compose.desktop.currentOs)
+            implementation(libs.kotlinx.coroutinesTest)
+        }
     }
 }
 

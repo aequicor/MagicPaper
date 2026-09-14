@@ -15,13 +15,15 @@ data class ToolExecutionContext(
     val planningRulesSnapshot: PlanningRulesSnapshot? = null,
     /** Temporary verification/merge runtimes borrow history ownership, never lifecycle authority. */
     val auxiliaryExecution: Boolean = false,
+    val taskWorktreeId: String? = null,
 ) {
     companion object {
         fun worker(session: CodingSession) = ToolExecutionContext(session.projectId, session.id, session.id,
             session.pendingRun?.runId ?: Id.new(), if (session.role == CodingSessionRole.WORKER) ToolRole.WORKER else ToolRole.CHAT,
             session.interactionMode, session.planId, stageId = session.stageId, parentSessionId = session.parentSessionId,
             organismId = session.organismId, runtimeGeneration = session.runtimeGeneration,
-            planningRulesSnapshot = session.planningRulesSnapshot)
+            planningRulesSnapshot = session.planningRulesSnapshot,
+            taskWorktreeId = session.taskWorktree?.takeIf { it.taskId == session.pendingRun?.runId }?.taskId)
     }
 }
 
@@ -37,6 +39,7 @@ data class ToolDefinition(
         (!context.auxiliaryExecution || native || !mutating || id == "immunity.signal") &&
         (!needsPlan || context.role !in setOf(ToolRole.ORCHESTRATOR, ToolRole.PLANNER) || context.mode == CodingInteractionMode.PLANNING) &&
         (id != "stage.handoff" || context.mode == CodingInteractionMode.CODE) &&
+        (id != "task.handoff" || (context.taskWorktreeId != null && context.mode == CodingInteractionMode.CODE && context.stageId == null)) &&
         (!native || !mutating || (context.mode == CodingInteractionMode.CODE && context.role in setOf(ToolRole.WORKER, ToolRole.CHAT))) &&
         (id != "research_check" || context.mode == CodingInteractionMode.RESEARCH)
     /** A temporary verifier may read its owner's history in an application-granted CODE mode. */

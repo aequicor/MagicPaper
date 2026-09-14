@@ -27,6 +27,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
         filePicker = DesktopFilePicker(),
         openAiSubscription = subscription,
         planningWorkspace = GitPlanningWorkspace(),
+        taskWorkspace = io.aequicor.magicpaper.data.planning.GitTaskWorkspace(),
         integrationChecks = ResearchSessionIntegrationChecks(),
         platformPlugins = listOf(skills.plugin),
         packageInstructions = skills.instructions,

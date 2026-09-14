@@ -11,6 +11,52 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlanningExecutionServiceTest {
+    @Test fun worktreePlanDeliversOnlyAfterAcceptanceAndUsesIsolatedSource() = runTest {
+        val prepared = mutableListOf<String>()
+        val applied = mutableListOf<String>()
+        var delivered = 0
+        var accepted = 0
+        val workspace = object : PlanningWorkspace by LocalPlanningWorkspace() {
+            override suspend fun verificationSnapshot(path: String) = "fixture-snapshot"
+            override suspend fun prepare(project: CodingProject, runId: String): PlanWorkspace {
+                prepared += project.path
+                return PlanWorkspace("/integration", "/integration")
+            }
+            override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace {
+                applied += project.path
+                return workspace.copy(applied = true)
+            }
+        }
+        val task = object : TaskWorkspace {
+            override suspend fun availability(project: CodingProject) = WorktreeAvailability(true)
+            override suspend fun describe(project: CodingProject, sessionId: String, taskId: String) =
+                TaskWorktree(taskId, project.path, "main", "base", "/task", "task")
+            override suspend fun open(record: TaskWorktree, previous: TaskWorktree?) = Unit
+            override suspend fun reconcile(record: TaskWorktree) = Unit
+            override suspend fun capture(record: TaskWorktree) = "result"
+            override suspend fun target(record: TaskWorktree) = "base"
+            override suspend fun merge(record: TaskWorktree) = "result"
+            override suspend fun verify(record: TaskWorktree) = Unit
+            override suspend fun delivered(record: TaskWorktree) = delivered > 0
+            override suspend fun deliver(record: TaskWorktree) { assertTrue(accepted > 0); delivered++ }
+        }
+        val verifier = object : MilestoneVerifier {
+            override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?): Verdict {
+                accepted++
+                return Verdict(true, "checked")
+            }
+        }
+        val (store, service, runtime) = fixture(workspace = workspace, verifier = verifier, taskWorkspace = task)
+        store.save(plan(stage("one")).copy(parentSessionId = "parent", worktreeEnabled = true))
+        service.start(project.id); advanceTimeBy(2_000); runCurrent()
+        assertEquals(PlanStatus.DONE, store.planFor("plan")?.status, store.planFor("plan")?.issue?.message)
+        assertEquals(listOf("/task"), prepared)
+        assertEquals(listOf("/task"), applied)
+        assertFalse("/fake" in runtime.executionPaths)
+        assertEquals(1, delivered)
+        service.shutdown()
+    }
+
     @Test fun resumedIsolatedPlanDoesNotAcquireOrReleaseAnOrdinarySessionsSourceLease() = runTest {
         val leases = LocalPlanningWorkspace()
         val workspace = object : PlanningWorkspace by leases {
@@ -100,6 +146,7 @@ class PlanningExecutionServiceTest {
     ) : CodingRuntime {
         val engines = mutableListOf<CodingEngine?>()
         val sessions = mutableListOf<CodingSession>()
+        val executionPaths = mutableListOf<String>()
         val calls = mutableListOf<String>(); val aborted = mutableListOf<String>()
         var onRun: suspend (CodingSession) -> Unit = {}
         var reconciliationFailure: String? = null
@@ -112,6 +159,7 @@ class PlanningExecutionServiceTest {
         override suspend fun uninstall() = Unit
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             calls += session.id
+            executionPaths += project.path
             sessions += session
             onRun(session)
             engines += session.engine
@@ -140,15 +188,17 @@ class PlanningExecutionServiceTest {
         override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace { applied++; return workspace.copy(applied = true) }
     }
     private suspend fun TestScope.fixture(runtime: Runtime = Runtime(), workspace: PlanningWorkspace = Workspaces(), verifier: MilestoneVerifier = pass,
-        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3): Triple<PlanningStore, PlanningExecutionService, Runtime> {
+        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3, taskWorkspace: TaskWorkspace? = null): Triple<PlanningStore, PlanningExecutionService, Runtime> {
         val kv = InMemoryKeyValueStore()
         val store = PlanningStore(JsonPlanningRepository(kv, json))
         val profiles = JsonLlmProfileRepository(kv, json).also { it.save(profile) }
         val projects = JsonCodingProjectRepository(kv, json).also { it.save(project) }
+        if (taskWorkspace != null) projects.saveSession(CodingSession("parent", project.id, "Task", 1, planningMode = true))
+        val taskWorktrees = taskWorkspace?.let { TaskWorktreeService(projects, it, workspace) }
         val settings = JsonSettingsRepository(kv, json)
         settings.save(AppSettings(agentLimits = OrganismLimits(retries = retryLimit)))
         return Triple(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope,
-            outputClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks), runtime)
+            outputClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees), runtime)
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
