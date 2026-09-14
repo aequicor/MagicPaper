@@ -39,6 +39,45 @@ class AgentToolBridgeTest {
         assertTrue(receipts.all { it.phase == ToolPhase.SUCCEEDED })
     }
 
+    @Test fun orchestrationToolsStayHiddenFromOrdinaryAndResearchRunsOnBothAgentSurfaces() = runBlocking {
+        val host = ToolHost(MemoryToolReceiptStore())
+        val orchestration = SessionToolCatalog.definitions.filter { it.orchestration }.map { it.wireName }
+        assertTrue(orchestration.isNotEmpty())
+        val create = buildJsonObject {
+            put("name", "Child"); put("task", "Inspect"); put("acceptance", "Verified findings")
+        }
+        for (mode in CodingInteractionMode.entries) {
+            val session = host.session(ToolExecutionContext("p", "s", "s", "r", ToolRole.CHAT, mode))
+            val embedded = PiAgentToolExtension.source(session)
+            AgentToolBridge(session).use { bridge ->
+                val listed = bridge.list()
+                for (wire in orchestration) {
+                    assertEquals(mode == CodingInteractionMode.PLANNING, wire in embedded, "$wire in pi extension for $mode")
+                    assertEquals(mode == CodingInteractionMode.PLANNING, wire in listed, "$wire in tools/list for $mode")
+                }
+            }
+            if (mode != CodingInteractionMode.PLANNING)
+                assertFailsWith<IllegalArgumentException> { session.call("denied", "session.create", create) }
+        }
+    }
+
+    private fun AgentToolBridge.list(): List<String> {
+        val connection = URI(url).toURL().openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.doOutput = true
+            val body = buildJsonObject { put("jsonrpc", "2.0"); put("id", JsonPrimitive(1)); put("method", "tools/list") }
+            connection.outputStream.use { it.write(body.toString().toByteArray()) }
+            return Json.parseToJsonElement(connection.inputStream.bufferedReader().use { it.readText() })
+                .jsonObject["result"]!!.jsonObject["tools"]!!.jsonArray
+                .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        } finally { connection.disconnect() }
+    }
+
     private fun AgentToolBridge.call(id: JsonPrimitive, tool: String, args: JsonObject = buildJsonObject {}): JsonObject {
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         try {
