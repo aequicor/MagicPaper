@@ -20,6 +20,8 @@ class GitTaskWorkspaceTest {
         val port = GitTaskWorkspace(pool)
         init {
             git(source, "init", "-b", "main")
+            // Delivery checks out files with the real Git; the developer's global core.autocrlf must not decide their bytes.
+            git(source, "config", "core.autocrlf", "false")
             source.resolve("base.txt").writeText("base\n")
             git(source, "add", "."); git(source, "commit", "-m", "base")
         }

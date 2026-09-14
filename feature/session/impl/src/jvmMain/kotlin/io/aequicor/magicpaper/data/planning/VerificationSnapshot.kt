@@ -9,7 +9,10 @@ import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
-/** Hashes the index and actual tracked/untracked bytes. Never stages files or runs Git filters. */
+/**
+ * Hashes the index and actual tracked/untracked bytes. A nested repository (submodule pointer or untracked clone)
+ * contributes only its recorded identity, exactly like Git itself. Never stages files or runs Git filters.
+ */
 internal suspend fun verificationSnapshot(path: String): String = withContext(Dispatchers.IO) {
     val root = Path.of(path).toRealPath()
     require(Files.isDirectory(root)) { "Нет папки для проверяемого снимка" }
@@ -34,9 +37,18 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
     fun field(text: String) = field(text.toByteArray())
     field("magicpaper-verification-v1")
     val repository = Files.exists(root.resolve(".git"))
+    // A submodule contributes the commit recorded in this index, never the bytes of its own repository.
+    val gitlinks = mutableMapOf<String, MutableList<String>>()
     val names = if (repository) {
         require(Path.of(git("rev-parse", "--show-toplevel").decodeToString().trim()).toRealPath() == root) { "Нужен корень репозитория" }
-        field(git("ls-files", "--stage", "-z"))
+        val index = git("ls-files", "--stage", "-z")
+        field(index)
+        // Each -z record is "<mode> <object> <stage>\t<path>" with an unquoted raw UTF-8 path.
+        index.decodeToString().split('\u0000').forEach { entry ->
+            val tab = entry.indexOf('\t')
+            val record = if (tab < 0) emptyList() else entry.substring(0, tab).split(' ')
+            if (record.size == 3 && record[0] == "160000") gitlinks.getOrPut(entry.substring(tab + 1)) { mutableListOf() } += record[1]
+        }
         git("ls-files", "--cached", "--others", "--exclude-standard", "-z").decodeToString()
             .split('\u0000').filter { it.isNotEmpty() }.distinct().sorted()
     } else Files.walk(root).use { stream -> stream.filter { !Files.isDirectory(it, NOFOLLOW_LINKS) }
@@ -49,7 +61,11 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
         var parent = file.parent
         while (parent != root) { require(!Files.isSymbolicLink(parent)) { "Ссылка в пути проверяемого файла" }; parent = parent.parent }
         field(name)
+        val pointer = gitlinks[name]
         when {
+            // The local checkout may be absent (an uninitialized worktree) or hold foreign history; the index above already
+            // carries the pointer, so a staged "new commits" change still moves the snapshot.
+            pointer != null -> { field("gitlink"); pointer.forEach { field(it) } }
             Files.isSymbolicLink(file) -> { field("symlink"); field(Files.readSymbolicLink(file).toString()) }
             !Files.exists(file, NOFOLLOW_LINKS) -> field("deleted")
             Files.isRegularFile(file, NOFOLLOW_LINKS) -> {
@@ -61,6 +77,8 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
                 }
                 field(hash.digest())
             }
+            // Git enumerates an untracked nested repository as one entry and never reads its bytes; delivery ignores them too.
+            Files.isDirectory(file, NOFOLLOW_LINKS) && Files.exists(file.resolve(".git"), NOFOLLOW_LINKS) -> field("nested-repository")
             else -> error("Неподдерживаемый файл снимка: $name")
         }
     }
