@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.data.storage
 
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.LlmProfileRepository
+import io.aequicor.magicpaper.domain.ModelLimitCatalog
+import io.aequicor.magicpaper.domain.withCatalogLimits
 import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -13,10 +15,16 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+/**
+ * Профили поставщиков. [modelLimits] — необязательный каталог заявленных пределов моделей
+ * (например, каталог движка): он дополняет сохранённые факты при чтении, чтобы профиль,
+ * записанный до появления источника, не занижал контекст. Объявленное провайдером не перезаписывается.
+ */
 class JsonLlmProfileRepository(
     private val store: KeyValueStore,
     private val json: Json,
     secrets: SecretStore = explicitOrTestSecrets(store),
+    private val modelLimits: ModelLimitCatalog? = null,
 ) : LlmProfileRepository {
     private val credentials = CredentialRecords(secrets, store, "profiles-credential-cleanup")
     private val mutex = Mutex()
@@ -31,6 +39,7 @@ class JsonLlmProfileRepository(
             credentials.migrate(compatible(record), SECRET_FIELDS, "profile:$id")
         }
         val profiles = migrated.map { json.decodeFromJsonElement(LlmProfile.serializer(), credentials.hydrate(it, SECRET_FIELDS)) }
+            .map { it.withCatalogLimits(modelLimits) }
         if (migrated != original) {
             commit(migrated)
             AppLog.info("ProfileCredentials", "migration_committed", mapOf("storageArea" to "profiles", "count" to profiles.size.toString()))
