@@ -44,6 +44,43 @@ class GitTaskWorkspaceTest {
         assertTrue(port.delivered(record))
     } }
 
+    @Test fun resultWithUninitializedSubmoduleCompletesVerificationAndDelivery() = runTest { fixture {
+        val submoduleCommit = git(source, "rev-parse", "HEAD")
+        source.resolve("tools/mission-visualization").mkdirs()
+        git(source, "update-index", "--add", "--cacheinfo", "160000,$submoduleCommit,tools/mission-visualization")
+        git(source, "commit", "-m", "submodule")
+        val kv = InMemoryKeyValueStore()
+        val repo = JsonCodingProjectRepository(kv, Json { encodeDefaults = true })
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        val service = TaskWorktreeService(repo, port, GitPlanningWorkspace(File(root, "leases")))
+        val task = service.begin(project, "session", "request")
+        File(task.path).resolve("result.txt").writeText("finished")
+        service.handoff(ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE), true, emptyList())
+        val complete = service.complete(project, "session", "request", repair = { error("unexpected repair") })
+        assertEquals(TaskWorktreePhase.COMPLETE, complete.phase)
+        assertEquals("finished", source.resolve("result.txt").readText())
+        assertEquals(submoduleCommit, git(source, "rev-parse", "HEAD:tools/mission-visualization"))
+        assertTrue(port.delivered(complete))
+    } }
+
+    @Test fun blockedHandoffKeepsItsReasonAndDoesNotDeliver() = runTest { fixture {
+        val repo = JsonCodingProjectRepository(InMemoryKeyValueStore(), Json { encodeDefaults = true })
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        val service = TaskWorktreeService(repo, port, GitPlanningWorkspace(File(root, "leases")))
+        val task = service.begin(project, "session", "request")
+        File(task.path).resolve("result.txt").writeText("incomplete")
+        service.handoff(ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE), false, emptyList())
+        val blocked = repo.sessions(project.id).single().taskWorktree!!
+        val failure = assertFailsWith<IllegalStateException> { service.complete(project, "session", "request", repair = {}) }
+        assertEquals(blocked.error, failure.message)
+        assertFalse(source.resolve("result.txt").exists())
+        assertEquals(TaskWorktreePhase.RUNNING, blocked.phase)
+    } }
+
     @Test fun sourceIsUntouchedUntilDeliveryAndAgentCommitsSurvive() = runTest { fixture {
         val task = open()
         val dir = File(task.path)

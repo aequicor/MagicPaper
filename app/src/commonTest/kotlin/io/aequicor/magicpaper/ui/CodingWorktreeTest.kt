@@ -23,6 +23,7 @@ class CodingWorktreeTest {
         var destination = "base"
         var conflict = false
         var verifyGate: CompletableDeferred<Unit>? = null
+        var verificationError: String? = null
         override suspend fun availability(project: CodingProject) = WorktreeAvailability(true)
         override suspend fun describe(project: CodingProject, sessionId: String, taskId: String) =
             TaskWorktree(taskId, project.path, "main", "base", "/isolated", "task-$taskId")
@@ -31,7 +32,10 @@ class CodingWorktreeTest {
         override suspend fun capture(record: TaskWorktree) = "result"
         override suspend fun target(record: TaskWorktree) = destination
         override suspend fun merge(record: TaskWorktree): String? { mergeAttempts++; return if (conflict) null else "result" }
-        override suspend fun verify(record: TaskWorktree) { verifyGate?.await() }
+        override suspend fun verify(record: TaskWorktree) {
+            verificationError?.let { error(it) }
+            verifyGate?.await()
+        }
         override suspend fun deliver(record: TaskWorktree) {
             if (advanceAtDelivery) { advanceAtDelivery = false; destination = "next"; throw TaskDestinationChanged() }
             deliveries++
@@ -116,6 +120,29 @@ class CodingWorktreeTest {
         assertEquals(1, runtime.calls.size)
         assertEquals(1, port.deliveries)
         assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").single().taskWorktree?.phase)
+    } }
+
+    @Test fun snapshotFailureAfterResultResumesDeliveryWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->
+        port.verificationError = "Неподдерживаемый файл снимка: tools/mission-visualization"
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        val failed = repo.sessions("p").single()
+        val task = failed.taskWorktree!!
+        assertEquals(TaskWorktreePhase.MERGING, task.phase)
+        assertEquals(ExecutionIntent.STOP, failed.pendingRun?.intent)
+        assertEquals(0, port.deliveries)
+        val response = assertNotNull(task.executionResponse)
+        port.verificationError = null
+        val recovery = service.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
+        service.submitQuestionnaire(recovery.id, listOf(PlanningAnswer("decision", selected = listOf("retry")))); runCurrent()
+        val completed = repo.sessions("p").single()
+        assertEquals(1, runtime.calls.size)
+        assertEquals(1, port.opens)
+        assertEquals(1, port.deliveries)
+        assertEquals(task.taskId, completed.taskWorktree?.taskId)
+        assertEquals(task.branch, completed.taskWorktree?.branch)
+        assertEquals(TaskWorktreePhase.COMPLETE, completed.taskWorktree?.phase)
+        assertNull(completed.pendingRun)
+        assertEquals(1, repo.messages("p", "s").count { it.id == response.id })
     } }
 
     @Test fun destinationAdvanceRepeatsMergeAndChecksWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->
@@ -210,6 +237,39 @@ class CodingWorktreeTest {
             assertTrue(runtime.calls.isEmpty())
             assertEquals(1, port.deliveries)
             assertNull(reopened.sessions("p").single().pendingRun)
+            assertEquals(response, reopened.messages("p", "s").single { it.id == "response" })
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun restartAfterUserLeavesFailedVerificationStoppedCanResumeSameTask() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); f.seed()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            val response = CodingMessage("response", CodingRole.AGENT, "Saved answer", createdAt = 2)
+            repo.save(project)
+            repo.saveSession(session.copy(pendingRun = CodingRunCheckpoint("request", "Task", responseId = "response",
+                worktreeEnabled = true, intent = ExecutionIntent.STOP, stoppedByUser = true),
+                taskWorktree = TaskWorktree("request", "/source", "main", "base", "/isolated", "task",
+                    phase = TaskWorktreePhase.MERGING, resultCommit = "result", targetCommit = "base", mergeCommit = "result",
+                    error = "Неподдерживаемый файл снимка: tools/mission-visualization", executionResponse = response)))
+            val reopened = JsonCodingProjectRepository(f.kv, f.json)
+            val port = Workspace()
+            val worktrees = TaskWorktreeService(reopened, port, LocalPlanningWorkspace())
+            val runtime = Runtime(worktrees)
+            service = f.prepareCoding(runtime, reopened, taskWorktrees = worktrees)
+            runCurrent()
+            assertEquals(0, port.deliveries, "Restoring a stopped task must not start Git operations")
+            assertTrue(service.state.value.coding.sessions.single().canResume)
+            service.resumeCodingSession("s"); runCurrent()
+            assertTrue(runtime.calls.isEmpty())
+            assertEquals(0, port.opens)
+            assertEquals(1, port.deliveries)
+            val complete = reopened.sessions("p").single()
+            assertEquals(TaskWorktreePhase.COMPLETE, complete.taskWorktree?.phase)
+            assertEquals("task", complete.taskWorktree?.branch)
+            assertNull(complete.pendingRun)
             assertEquals(response, reopened.messages("p", "s").single { it.id == "response" })
         } finally { service?.close(); Dispatchers.resetMain() }
     }

@@ -10,11 +10,16 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * Hashes the index and actual tracked/untracked bytes. A nested repository (submodule pointer or untracked clone)
- * contributes only its recorded identity, exactly like Git itself. Never stages files or runs Git filters.
+ * Hashes the index and actual tracked/untracked bytes, including gitlinks. An initialized submodule is hashed
+ * recursively; a nested clone that Git itself leaves untracked contributes only one entry. Never stages files or
+ * runs Git filters.
  */
 internal suspend fun verificationSnapshot(path: String): String = withContext(Dispatchers.IO) {
-    val root = Path.of(path).toRealPath()
+    snapshot(Path.of(path).toRealPath(), depth = 0).joinToString("") { "%02x".format(it) }
+}
+
+private fun snapshot(root: Path, depth: Int): ByteArray {
+    require(depth <= 32) { "Слишком большая вложенность подмодулей для снимка" }
     require(Files.isDirectory(root)) { "Нет папки для проверяемого снимка" }
     fun git(vararg args: String): ByteArray {
         val builder = ProcessBuilder(listOf("git", "-c", "core.fsmonitor=false", "-C", root.toString()) + args)
@@ -37,18 +42,17 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
     fun field(text: String) = field(text.toByteArray())
     field("magicpaper-verification-v1")
     val repository = Files.exists(root.resolve(".git"))
-    // A submodule contributes the commit recorded in this index, never the bytes of its own repository.
-    val gitlinks = mutableMapOf<String, MutableList<String>>()
+    var gitlinks = emptySet<String>()
     val names = if (repository) {
         require(Path.of(git("rev-parse", "--show-toplevel").decodeToString().trim()).toRealPath() == root) { "Нужен корень репозитория" }
         val index = git("ls-files", "--stage", "-z")
         field(index)
         // Each -z record is "<mode> <object> <stage>\t<path>" with an unquoted raw UTF-8 path.
-        index.decodeToString().split('\u0000').forEach { entry ->
-            val tab = entry.indexOf('\t')
-            val record = if (tab < 0) emptyList() else entry.substring(0, tab).split(' ')
-            if (record.size == 3 && record[0] == "160000") gitlinks.getOrPut(entry.substring(tab + 1)) { mutableListOf() } += record[1]
-        }
+        gitlinks = index.decodeToString().split('\u0000').filter { it.startsWith("160000 ") }
+            .map { it.substringAfter('\t') }.toSet()
+        // The parent index identifies the expected commit; the submodule's HEAD may differ
+        // even when its index and file bytes are identical (e.g. an empty commit).
+        if (depth > 0) field(git("rev-parse", "--verify", "HEAD"))
         git("ls-files", "--cached", "--others", "--exclude-standard", "-z").decodeToString()
             .split('\u0000').filter { it.isNotEmpty() }.distinct().sorted()
     } else Files.walk(root).use { stream -> stream.filter { !Files.isDirectory(it, NOFOLLOW_LINKS) }
@@ -61,13 +65,15 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
         var parent = file.parent
         while (parent != root) { require(!Files.isSymbolicLink(parent)) { "Ссылка в пути проверяемого файла" }; parent = parent.parent }
         field(name)
-        val pointer = gitlinks[name]
         when {
-            // The local checkout may be absent (an uninitialized worktree) or hold foreign history; the index above already
-            // carries the pointer, so a staged "new commits" change still moves the snapshot.
-            pointer != null -> { field("gitlink"); pointer.forEach { field(it) } }
             Files.isSymbolicLink(file) -> { field("symlink"); field(Files.readSymbolicLink(file).toString()) }
             !Files.exists(file, NOFOLLOW_LINKS) -> field("deleted")
+            name in gitlinks && Files.isDirectory(file, NOFOLLOW_LINKS) -> {
+                field("gitlink")
+                // Worktree creation leaves an uninitialized gitlink as an empty directory.
+                // Hash populated copies recursively so submodule edits cannot evade verification.
+                field(snapshot(file.toRealPath(), depth + 1))
+            }
             Files.isRegularFile(file, NOFOLLOW_LINKS) -> {
                 field(if (Files.isExecutable(file)) "executable" else "file")
                 val hash = MessageDigest.getInstance("SHA-256")
@@ -82,5 +88,5 @@ internal suspend fun verificationSnapshot(path: String): String = withContext(Di
             else -> error("Неподдерживаемый файл снимка: $name")
         }
     }
-    digest.digest().joinToString("") { "%02x".format(it) }
+    return digest.digest()
 }
