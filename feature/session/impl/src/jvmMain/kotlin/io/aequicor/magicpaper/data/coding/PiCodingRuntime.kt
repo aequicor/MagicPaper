@@ -73,11 +73,8 @@ class PiCodingRuntime(
     override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) { questionnaireRegistry.respond(id, answers) }
 
 
-    internal fun piAiDirectory(): File {
-        val agent = File(prefix, "node_modules/@earendil-works/pi-coding-agent")
-        return listOf(File(agent, "node_modules/@earendil-works/pi-ai/dist"), File(prefix, "node_modules/@earendil-works/pi-ai/dist"))
-            .firstOrNull { File(it, "index.js").isFile } ?: error("Подготовьте зависимости движков в настройках")
-    }
+    internal fun piAiDirectory(): File = resolvePiAiDist(prefix)
+        ?: error("Подготовьте зависимости движков в настройках")
     @Synchronized internal fun resourceScript(name: String): File {
         val resource = checkNotNull(javaClass.getResource("/coding/$name")) { "Нет адаптера $name" }
         val content = readCodingResource(resource)

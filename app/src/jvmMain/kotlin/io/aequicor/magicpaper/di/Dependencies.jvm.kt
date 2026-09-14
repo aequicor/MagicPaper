@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.data.coding.DesktopProjectDirPicker
+import io.aequicor.magicpaper.data.coding.engineModelLimits
 import io.aequicor.magicpaper.data.computer.DesktopComputerUse
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.data.planning.GitPlanningWorkspace
@@ -17,6 +18,9 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
     val engine = createDesktopCodingRuntime(computer, subscription, skills::selection, skills::recordRun, skills.runObserver)
     return buildRuntime(
         layoutEditor = io.aequicor.magicpaper.data.layout.DesktopLayoutEditor(),
+        // Пределы моделей из каталога установленного движка: эндпоинты без метаданных
+        // (например, DashScope compatible-mode) иначе остаются на значении конфигурации.
+        modelLimits = engineModelLimits(),
         store = FileKeyValueStore(),
         persistence = persistence,
         navigationSession = navigationSession,

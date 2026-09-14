@@ -17,6 +17,7 @@ Source paths below are relative to `src/commonMain/kotlin/io/aequicor/magicpaper
 | Orchestration catalog and access policy | `../../custom-tools/api` and `../../custom-tools/impl` |
 | Native Pi/Codex and skill input | JVM `data/coding/DesktopCodingRuntime.kt`, `PiCodingRuntime.kt` |
 | Engine search binaries (fd, rg) | JVM `data/coding/PiCodingRuntime.kt` + Gradle `bundleCodingSearchTools` |
+| Model limits declared by the engine catalog | JVM `data/coding/PiEngineModelLimits.kt` + `core/model` `ModelLimitCatalog.kt` |
 
 `CodingApprovalDock` and `PlanningBlockerDock` are legacy components. Current
 approvals use `UserInteractionRequest` and the questionnaire/interaction dock.

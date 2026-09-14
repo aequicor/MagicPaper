@@ -40,6 +40,7 @@ internal fun buildRuntime(
     onPlatformStarted: () -> Unit = {},
     onPlatformClosed: suspend () -> Unit = {},
     layoutEditor: LayoutEditor = UnavailableLayoutEditor,
+    modelLimits: ModelLimitCatalog? = null,
 ): MagicPaperRuntime = MagicPaperRuntime(navigationSession, onPlatformStarted, onPlatformClosed) { applicationScope ->
     var resetting = false
     module {
@@ -58,7 +59,7 @@ internal fun buildRuntime(
         projectSkills?.let { renderer -> single<ProjectSkills> { renderer } }
         openAiSubscription?.let { subscription -> single<OpenAiSubscriptionService> { subscription } }
         single<SettingsRepository> { JsonSettingsRepository(get(), get(), secrets = get()) }
-        single<LlmProfileRepository> { JsonLlmProfileRepository(get(), get(), secrets = get()) }
+        single<LlmProfileRepository> { JsonLlmProfileRepository(get(), get(), secrets = get(), modelLimits = modelLimits) }
         single<ChatRepository> { JsonChatRepository(get(), get()) }
         single<RequestPinRepository> { JsonRequestPinRepository(get(), get()) }
         single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get())) }
@@ -75,13 +76,17 @@ internal fun buildRuntime(
             put(ProviderType.ANTHROPIC, AnthropicGateway(get(), get()))
             put(ProviderType.GOOGLE, GoogleGateway(get(), get()))
         }, usage = get()) }
-        single<ModelDirectory> { RoutingModelDirectory(buildMap {
-            openAiSubscription?.let { put(ProviderType.OPENAI_SUBSCRIPTION, it) }
-            put(ProviderType.OPENAI_COMPATIBLE, OpenAiModelDirectory(get(), get()))
-            put(ProviderType.OPENROUTER, OpenAiModelDirectory(get(), get()))
-            put(ProviderType.ANTHROPIC, AnthropicModelDirectory(get(), get()))
-            put(ProviderType.GOOGLE, GoogleModelDirectory(get(), get()))
-        }) }
+        single<ModelDirectory> {
+            val providers = RoutingModelDirectory(buildMap {
+                openAiSubscription?.let { put(ProviderType.OPENAI_SUBSCRIPTION, it) }
+                put(ProviderType.OPENAI_COMPATIBLE, OpenAiModelDirectory(get(), get()))
+                put(ProviderType.OPENROUTER, OpenAiModelDirectory(get(), get()))
+                put(ProviderType.ANTHROPIC, AnthropicModelDirectory(get(), get()))
+                put(ProviderType.GOOGLE, GoogleModelDirectory(get(), get()))
+            })
+            // Эндпоинты, отдающие только id, дополняются фактами каталога движка.
+            if (modelLimits == null) providers else DeclaredLimitsModelDirectory(providers, modelLimits)
+        }
         single<SearchConnectionChecker> { HttpSearchConnectionChecker(get(), get(), get()) }
         single<DossierResearcher> { DefaultDossierResearcher(get(), get(), get()) }
         single<DocRepository> { EmbeddedDocRepository() }
