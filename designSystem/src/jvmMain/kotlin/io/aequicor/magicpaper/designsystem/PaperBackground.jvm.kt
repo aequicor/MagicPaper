@@ -5,6 +5,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -22,8 +23,9 @@ import org.jetbrains.skiko.GraphicsApi
 import oshi.SystemInfo
 
 @Composable
-internal actual fun rememberPaperEnvironment(): State<PaperEnvironment> {
+internal actual fun rememberPaperEnvironment(active: Boolean): State<PaperEnvironment> {
     val window = LocalWindowScope.current?.window as? ComposeWindow
+    val activeState = rememberUpdatedState(active)
     return produceState(PaperEnvironment(), window) {
         // Native hardware discovery can block. Never run it on the UI thread.
         val hardware = withContext(Dispatchers.IO) { runCatching { SystemInfo().hardware }.getOrNull() }
@@ -36,6 +38,11 @@ internal actual fun rememberPaperEnvironment(): State<PaperEnvironment> {
         }
         if (!capable || window == null) return@produceState
         while (isActive) {
+            // A background window keeps the last environment: polling waits, the value survives.
+            if (!activeState.value) {
+                delay(1_000)
+                continue
+            }
             // Read the actual backend on the UI thread, including automatic software fallback.
             val gpu = when (window.renderApi) {
                 GraphicsApi.OPENGL, GraphicsApi.DIRECT3D, GraphicsApi.ANGLE,

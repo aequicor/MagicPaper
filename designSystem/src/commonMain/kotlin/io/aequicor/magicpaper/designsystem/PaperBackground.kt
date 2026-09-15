@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -31,32 +32,36 @@ fun PaperBackground(enabled: Boolean, modifier: Modifier = Modifier) {
         Brush.verticalGradient(listOf(colors.surface, colors.canvas, colors.raisedSurface))
     }
     Box(modifier.background(parchment)) {
-        val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-        val foreground = LocalWindowInfo.current.isWindowFocused && lifecycle.isAtLeast(Lifecycle.State.RESUMED)
-        // Removing these composables cancels polling, receivers and frame callbacks entirely.
-        if (enabled && foreground) {
-            val environment by rememberPaperEnvironment()
-            if (environment.allowsAnimation) AnimatedPaper()
+        // Disabling the animation removes the sheet entirely; losing the foreground only
+        // interrupts it, so polling pauses but the drawn paper structure stays on screen.
+        if (enabled) {
+            val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+            val foreground = LocalWindowInfo.current.isWindowFocused && lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+            val environment by rememberPaperEnvironment(foreground)
+            if (environment.allowsAnimation) AnimatedPaper(running = foreground)
         }
     }
 }
 
 @Composable
-private fun AnimatedPaper() {
+private fun AnimatedPaper(running: Boolean) {
     val renderer = rememberPaperRenderer() ?: return
     val time = remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(renderer) {
+    val elapsed = remember { mutableLongStateOf(0L) }
+    val lastDraw = remember { mutableLongStateOf(0L) }
+    // The loop owns the frame callbacks: cancelling it stops the animation while the
+    // canvas keeps the last sheet frame. Resuming continues the remembered clock.
+    LaunchedEffect(renderer, running) {
+        if (!running) return@LaunchedEffect
         var previous = withFrameNanos { it }
-        var elapsed = 0L
-        var lastDraw = 0L
         while (isActive) {
             withFrameNanos { now ->
                 // Clamp stalls so waking/recovering never jumps the pattern forward.
-                elapsed += (now - previous).coerceIn(0L, 100_000_000L)
+                elapsed.longValue += (now - previous).coerceIn(0L, 100_000_000L)
                 previous = now
-                if (elapsed - lastDraw >= 33_333_333L) {
-                    time.floatValue = elapsed / 1_000_000_000f
-                    lastDraw = elapsed
+                if (elapsed.longValue - lastDraw.longValue >= 33_333_333L) {
+                    time.floatValue = elapsed.longValue / 1_000_000_000f
+                    lastDraw.longValue = elapsed.longValue
                 }
             }
         }
@@ -73,8 +78,9 @@ internal interface PaperRenderer {
 @Composable
 internal expect fun rememberPaperRenderer(): PaperRenderer?
 
+/** [active] is false while the window is in the background: polling waits, last value survives. */
 @Composable
-internal expect fun rememberPaperEnvironment(): State<PaperEnvironment>
+internal expect fun rememberPaperEnvironment(active: Boolean): State<PaperEnvironment>
 
 /** Shared AGSL/SkSL: fixed paper fibres and relief, lit by travelling ripples and grazing light. */
 internal val PaperShaderSource = """

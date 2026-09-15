@@ -17,6 +17,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalContext
@@ -25,7 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 @Composable
-internal actual fun rememberPaperEnvironment(): State<PaperEnvironment> {
+internal actual fun rememberPaperEnvironment(active: Boolean): State<PaperEnvironment> {
     val context = LocalContext.current.applicationContext
     val view = LocalView.current
     val hardwareCapable = remember(context) {
@@ -43,10 +44,18 @@ internal actual fun rememberPaperEnvironment(): State<PaperEnvironment> {
         battery.value = context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         onDispose { context.unregisterReceiver(receiver) }
     }
-    val batteryIntent = battery.value
-    return produceState(PaperEnvironment(), context, batteryIntent, hardwareCapable) {
+    val activeState = rememberUpdatedState(active)
+    // The battery intent is read inside the loop: a broadcast while paused must not
+    // restart the producer and drop the last environment the sheet was drawn from.
+    return produceState(PaperEnvironment(), context, hardwareCapable) {
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         while (isActive) {
+            // A background window keeps the last environment: polling waits, the value survives.
+            if (!activeState.value) {
+                delay(1_000)
+                continue
+            }
+            val batteryIntent = battery.value
             val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
             val valid = scale > 0 && level in 0..scale

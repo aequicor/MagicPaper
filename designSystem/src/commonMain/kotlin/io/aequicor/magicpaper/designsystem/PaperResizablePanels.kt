@@ -30,9 +30,17 @@ fun PaperResizablePanels(
         val pillWidth = 3.dp
         Row(Modifier.fillMaxSize()) {
             if (sidebarVisible) {
-            sidebar(Modifier.width(panelWidth.dp))
+                // The panel is measured under the drag strip: its full-width horizontal dividers
+                // reach the vertical edge line instead of stopping one strip short of it.
+                sidebar(Modifier.width(panelWidth.dp + stripWidth))
+            }
+            Box(Modifier.weight(1f)) { content() }
+        }
+        if (sidebarVisible) {
+            // The strip overlays the trailing edge of the panel: the line keeps sitting on the
+            // content boundary while the panel itself is painted underneath it.
             Box(
-                Modifier.width(stripWidth).fillMaxHeight()
+                Modifier.align(Alignment.TopStart).offset(x = panelWidth.dp).width(stripWidth).fillMaxHeight()
                     .semantics { contentDescription = "Изменить ширину списка сессий" }
                     .draggable(rememberDraggableState { delta ->
                         preferredWidth = (preferredWidth.coerceIn(minimum, maximum) + with(density) { delta.toDp().value }).coerceIn(minimum, maximum)
@@ -46,10 +54,6 @@ fun PaperResizablePanels(
                     thickness = lineThickness,
                 )
             }
-            }
-            Box(Modifier.weight(1f)) { content() }
-        }
-        if (sidebarVisible) {
             // Painted above both panels: the grip is centred on the line and must not be covered by
             // the content that starts on the same x. Dragging it still hits the strip underneath.
             val lineCenter = panelWidth.dp + stripWidth - lineThickness / 2f

@@ -78,7 +78,8 @@ class PlanningChatRenderTest {
                 }) { Text("Чат") } } }
             }.use { scene ->
                 repeat(5) { scene.render(it * 16_000_000L).close(); runCurrent() }
-                assertEquals(272, measuredWidth)
+                // The panel is measured under the 8 dp drag strip: 272 dp preferred plus the strip.
+                assertEquals(280, measuredWidth)
                 scene.sendPointerEvent(PointerEventType.Press, Offset(276f, 300f))
                 scene.sendPointerEvent(PointerEventType.Move, Offset(316f, 300f))
                 scene.sendPointerEvent(PointerEventType.Move, Offset(396f, 300f))
