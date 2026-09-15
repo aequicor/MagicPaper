@@ -20,6 +20,16 @@ request gets a new branch at the current source HEAD. Each session has one
 directory slot; only a clean, completed slot whose branch and commit match the
 recorded receipt may be reused.
 
+Branch and commit names are meaningful and ASCII. The task branch is
+`magicpaper/worktree-<slug>`: a transliterated, ref-safe slug of the task request
+(`TaskWorktree.label`), with a short task hash appended only when that name is
+already taken in the source repository. The delivery commit subject is the
+transliterated request line, and the task identifier stays in the commit body
+instead of being the whole message. Legacy records without a label fall back to
+the identifier. Planning stream branches use the same application prefix:
+`magicpaper/<purpose>-<path hash>`; the `codex/` prefix is gone from every branch
+the application creates.
+
 Ordinary coding must submit `task.handoff` through the normal tool/receipt path.
 Both native engines receive the active task's delivery policy in their system
 instructions, including when resuming history. Worktree mode authorizes automatic

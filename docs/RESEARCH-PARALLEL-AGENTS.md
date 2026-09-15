@@ -44,7 +44,7 @@ my-project-fix-pay/     ← worktree агента 3 (fix/payments)
 - По завершении: merge → `git worktree remove` → удаление ветки
 
 **Практика MagicPaper:** приложение уже создаёт изолированные worktree для каждого потока
-изменений (`codex/magicpaper/<назначение>-<хеш>`), с отдельным index и арендой писателя.
+изменений (`magicpaper/<назначение>-<хеш>`), с отдельным index и арендой писателя.
 Механизм `session_create` + `workspace` обеспечивает эту изоляцию автоматически.
 
 ### 2.2. Декомпозиция по домену, а не по файлу
@@ -335,7 +335,7 @@ git sparse-checkout set src/auth/ shared/types/ tests/auth/
 Из `SESSION-PLANNING-RULES.md`:
 - `prepare()` создаёт интеграционную feature-ветку через механизм Git worktree
 - `stage()` создаёт отдельную ветку и worktree для потока изменений
-- Имена `codex/magicpaper/<назначение>-<хеш>` не конфликтуют
+- Имена `magicpaper/<назначение>-<хеш>` не конфликтуют
 - Detached worktree открываются без изменения
 - Перенос в исходную папку сохраняет манифест и проверяет каждый файл
 

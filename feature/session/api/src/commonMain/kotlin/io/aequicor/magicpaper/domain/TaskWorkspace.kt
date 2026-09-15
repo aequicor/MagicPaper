@@ -5,7 +5,8 @@ class TaskDestinationChanged : IllegalStateException("Исходная ветк�
 /** Native Git operations; the session owner persists every intent before calling this port. */
 interface TaskWorkspace {
     suspend fun availability(project: CodingProject): WorktreeAvailability
-    suspend fun describe(project: CodingProject, sessionId: String, taskId: String): TaskWorktree
+    /** [label] — содержательный текст задачи: по нему именуются ветка и коммит копии. */
+    suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String): TaskWorktree
     suspend fun open(record: TaskWorktree, previous: TaskWorktree? = null)
     suspend fun reconcile(record: TaskWorktree)
     suspend fun capture(record: TaskWorktree): String
@@ -29,7 +30,7 @@ interface TaskWorkspace {
 object UnavailableTaskWorkspace : TaskWorkspace {
     override suspend fun availability(project: CodingProject) = WorktreeAvailability(false, "Worktree недоступен на этой платформе")
     private fun unavailable(): Nothing = error("Worktree недоступен на этой платформе")
-    override suspend fun describe(project: CodingProject, sessionId: String, taskId: String): TaskWorktree = unavailable()
+    override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String): TaskWorktree = unavailable()
     override suspend fun open(record: TaskWorktree, previous: TaskWorktree?) = unavailable()
     override suspend fun reconcile(record: TaskWorktree) = unavailable()
     override suspend fun capture(record: TaskWorktree): String = unavailable()

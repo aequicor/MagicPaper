@@ -31,7 +31,8 @@ class TaskWorktreeService(
     }
 
     suspend fun begin(project: CodingProject, sessionId: String, taskId: String): TaskWorktree {
-        val previous = session(project.id, sessionId).taskWorktree
+        val current = session(project.id, sessionId)
+        val previous = current.taskWorktree
         if (previous?.taskId == taskId) {
             if (previous.phase == TaskWorktreePhase.PREPARING) workspace.open(previous)
             else workspace.reconcile(previous)
@@ -47,7 +48,7 @@ class TaskWorktreeService(
         }
         check(previous == null || previous.phase == TaskWorktreePhase.COMPLETE) { "Сначала завершите предыдущую задачу" }
         return leased(project.copy(id = "task-source-$sessionId")) {
-            val record = workspace.describe(project, sessionId, taskId).copy(
+            val record = workspace.describe(project, sessionId, taskId, taskLabel(current)).copy(
                 reuseBranch = previous?.branch.orEmpty(), reuseCommit = previous?.mergeCommit.orEmpty())
             projects.updateSession(project.id, sessionId) { current ->
                 check(current.taskWorktree == previous) { "Задача изменилась" }
@@ -78,6 +79,20 @@ class TaskWorktreeService(
     suspend fun failure(projectId: String, sessionId: String, taskId: String, message: String) {
         save(projectId, sessionId, taskId) { it.copy(error = message) }
     }
+
+    /**
+     * Ветка и коммит задачи подписываются её собственным запросом, а не идентификатором:
+     * первая непустая строка текущего запроса, затем название сессии. Пустой запрос
+     * оставляет имя на откате к идентификатору задачи внутри порта.
+     */
+    private fun taskLabel(session: CodingSession): String = listOf(
+        session.pendingRun?.prompt.orEmpty(),
+        session.queuedPrompts.firstOrNull()?.prompt.orEmpty(),
+        session.shortTitle,
+        session.name.takeUnless { it.isDefaultSessionName() }.orEmpty(),
+    ).firstOrNull { it.isNotBlank() }
+        ?.lineSequence()?.firstOrNull { it.isNotBlank() }
+        .orEmpty().trim().take(MAX_TASK_LABEL)
 
     /** Bringing the copy up to date is an optimization: a folder owned by another delivery must not block the run. */
     private suspend fun refresh(project: CodingProject, sessionId: String, record: TaskWorktree): TaskWorktreeRefresh? =
@@ -155,6 +170,11 @@ class TaskWorktreeService(
 
     private suspend fun <T> leased(owner: CodingProject, action: suspend () -> T): T =
         checkNotNull(leasedOrNull(owner, action)) { "Рабочая папка занята. Повторите продолжение после завершения другой задачи" }
+
+    private companion object {
+        /** Имя ветки и subject коммита ограничивает порт; здесь сырой текст просто не разрастается. */
+        const val MAX_TASK_LABEL = 160
+    }
 
     private suspend fun <T> leasedOrNull(owner: CodingProject, action: suspend () -> T): T? {
         retainedLeases.value[owner.id]?.let { previous ->

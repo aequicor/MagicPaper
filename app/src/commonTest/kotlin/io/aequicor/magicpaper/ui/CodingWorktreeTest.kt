@@ -27,8 +27,8 @@ class CodingWorktreeTest {
         var verifyGate: CompletableDeferred<Unit>? = null
         var verificationError: String? = null
         override suspend fun availability(project: CodingProject) = WorktreeAvailability(true)
-        override suspend fun describe(project: CodingProject, sessionId: String, taskId: String) =
-            TaskWorktree(taskId, project.path, "main", "base", "/isolated", "task-$taskId")
+        override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String) =
+            TaskWorktree(taskId, project.path, "main", "base", "/isolated", "task-$taskId", label = label)
         override suspend fun open(record: TaskWorktree, previous: TaskWorktree?) { opens++ }
         override suspend fun reconcile(record: TaskWorktree) = Unit
         override suspend fun capture(record: TaskWorktree) = "result"

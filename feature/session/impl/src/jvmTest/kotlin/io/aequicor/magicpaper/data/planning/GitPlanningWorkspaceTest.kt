@@ -87,8 +87,8 @@ class GitPlanningWorkspaceTest {
         val a = port.stage(project, workspace, attempt("empty"))
         assertEquals(originalHead, workspace.baseCommit)
         assertEquals(a.baseCommit, port.capture(a))
-        assertTrue(git(File(workspace.integrationPath), "symbolic-ref", "--short", "HEAD").startsWith("codex/magicpaper/"))
-        assertTrue(git(File(a.path), "symbolic-ref", "--short", "HEAD").startsWith("codex/magicpaper/"))
+        assertTrue(git(File(workspace.integrationPath), "symbolic-ref", "--short", "HEAD").startsWith("magicpaper/"))
+        assertTrue(git(File(a.path), "symbolic-ref", "--short", "HEAD").startsWith("magicpaper/"))
         assertEquals(originalHead, git(source, "rev-parse", "HEAD"))
     }
 

@@ -25,7 +25,7 @@ class GitTaskWorkspaceTest {
             source.resolve("base.txt").writeText("base\n")
             git(source, "add", "."); git(source, "commit", "-m", "base")
         }
-        suspend fun open(id: String = "one"): TaskWorktree = port.describe(project, "session", id).also { port.open(it) }
+        suspend fun open(id: String = "one"): TaskWorktree = port.describe(project, "session", id, "Task $id").also { port.open(it) }
         suspend fun prepare(record: TaskWorktree): TaskWorktree {
             val captured = record.copy(resultCommit = port.capture(record), targetCommit = port.target(record))
             return captured.copy(mergeCommit = checkNotNull(port.integrate(captured)))
@@ -117,9 +117,9 @@ class GitTaskWorkspaceTest {
 
     @Test fun dirtyIndexAndUntrackedFilesBlockPreparation() = runTest { fixture {
         source.resolve("untracked").writeText("user")
-        assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r") }
+        assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }
         git(source, "add", "untracked")
-        assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r") }
+        assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }
         assertEquals("user", source.resolve("untracked").readText())
     } }
 
@@ -254,7 +254,7 @@ class GitTaskWorkspaceTest {
     @Test fun nextTaskReusesDirectoryButNotBranchAndRejectsDirtyPool() = runTest { fixture {
         val first = prepare(open())
         port.deliver(first)
-        val next = port.describe(project, "session", "two").copy(reuseBranch = first.branch, reuseCommit = first.mergeCommit)
+        val next = port.describe(project, "session", "two", "Task two").copy(reuseBranch = first.branch, reuseCommit = first.mergeCommit)
         assertEquals(first.path, next.path)
         File(first.path).resolve("unexpected").writeText("preserve")
         assertFailsWith<IllegalArgumentException> { port.open(next, first) }
@@ -263,6 +263,30 @@ class GitTaskWorkspaceTest {
         assertNotEquals(first.branch, next.branch)
         assertEquals(next.branch, git(File(next.path), "branch", "--show-current"))
         port.open(next) // replay of the saved preparation intent
+    } }
+
+    @Test fun taskBranchAndCommitCarryMeaningfulAsciiNameOfTheRequest() = runTest { fixture {
+        val record = port.describe(project, "session", "one", "Фикс авторизации: убрать юникод из имён!")
+        assertEquals("magicpaper/worktree-fiks-avtorizacii-ubrat-yunikod-iz-imen", record.branch)
+        port.open(record)
+        File(record.path).resolve("done.txt").writeText("yes")
+        port.capture(record)
+        val dir = File(record.path)
+        val subject = git(dir, "log", "-1", "--pretty=%s")
+        val body = git(dir, "log", "-1", "--pretty=%b")
+        assertEquals("Fiks avtorizacii: ubrat yunikod iz imen!", subject)
+        assertTrue(subject.all { it.code < 128 }, subject)
+        assertTrue(body.contains("one"), body)
+    } }
+
+    @Test fun occupiedBranchNameGetsUniqueSuffixInsteadOfFailing() = runTest { fixture {
+        val label = "Одна и та же задача"
+        git(source, "branch", "magicpaper/worktree-odna-i-ta-zhe-zadacha")
+        val taken = port.describe(project, "session", "one", label)
+        assertTrue(taken.branch.startsWith("magicpaper/worktree-odna-i-ta-zhe-zadacha-"), taken.branch)
+        git(source, "branch", "-D", "magicpaper/worktree-odna-i-ta-zhe-zadacha")
+        val free = port.describe(project, "session", "two", label)
+        assertEquals("magicpaper/worktree-odna-i-ta-zhe-zadacha", free.branch)
     } }
 
     @Test fun crashAfterDeliveryIsRecognizedWithoutReapplying() = runTest { fixture {

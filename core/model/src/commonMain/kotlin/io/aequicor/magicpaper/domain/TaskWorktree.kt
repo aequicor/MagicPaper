@@ -31,6 +31,11 @@ data class TaskWorktree(
     val refreshNote: String? = null,
     /** Output survives a crash between native completion and Git delivery. */
     val executionResponse: CodingMessage? = null,
+    /**
+     * Первая содержательная строка запроса задачи: источник осознанного имени ветки и коммита.
+     * Пусто у legacy-записей; тогда имена откатываются к идентификатору задачи.
+     */
+    val label: String = "",
 )
 
 data class WorktreeAvailability(val available: Boolean, val reason: String? = null)

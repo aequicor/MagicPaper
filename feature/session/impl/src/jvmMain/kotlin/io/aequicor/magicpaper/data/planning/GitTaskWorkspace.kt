@@ -37,13 +37,14 @@ class GitTaskWorkspace(
         }
     }
 
-    override suspend fun describe(project: CodingProject, sessionId: String, taskId: String): TaskWorktree = withContext(Dispatchers.IO) {
+    override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String): TaskWorktree = withContext(Dispatchers.IO) {
         val source = File(git(File(project.path), "rev-parse", "--show-toplevel").trim()).canonicalFile
         clean(source)
         val target = git(source, "symbolic-ref", "--short", "HEAD").trim()
         val base = git(source, "rev-parse", "HEAD").trim()
         val slot = File(root, hash(source.path + ":" + sessionId)).canonicalFile
-        TaskWorktree(taskId, source.path, target, base, slot.path, "codex/magicpaper/task-${hash(sessionId + ":" + taskId)}")
+        TaskWorktree(taskId, source.path, target, base, slot.path, taskBranch(source, label, hash(sessionId + ":" + taskId)),
+            label = label)
     }
 
     override suspend fun open(record: TaskWorktree, previous: TaskWorktree?) = withContext(Dispatchers.IO) {
@@ -92,7 +93,7 @@ class GitTaskWorkspace(
         require(!mergeInProgress(dir) && !rebaseInProgress(dir)) { "Сначала разрешите конфликт объединения" }
         if (git(dir, "status", "--porcelain").isNotBlank()) {
             git(dir, "add", "-A")
-            git(dir, "commit", "-m", "MagicPaper task ${record.taskId}")
+            git(dir, "commit", "-m", commitSubject(record), "-m", "MagicPaper task: ${record.taskId}")
         }
         checkpoint("captured")
         git(dir, "rev-parse", "HEAD").trim()
@@ -215,6 +216,21 @@ class GitTaskWorkspace(
         check(delivered(record)) { "Слияние не подтверждено" }
     }
 
+    /**
+     * Ветка задачи читается как название работы, а не как идентификатор: слаг запроса под
+     * префиксом приложения. Короткий хеш добавляется только при занятом имени, чтобы слот пула
+     * и история доставок оставались однозначными.
+     */
+    private suspend fun taskBranch(source: File, label: String, unique: String): String {
+        val slug = asciiSlug(label, BRANCH_SLUG_LIMIT).ifBlank { "task-${unique.take(UNIQUE_SUFFIX_LENGTH)}" }
+        val candidate = "$BRANCH_PREFIX$slug"
+        val taken = probe(source, "show-ref", "--verify", "--quiet", "refs/heads/$candidate").first == 0
+        return if (taken) "$candidate-${unique.take(UNIQUE_SUFFIX_LENGTH)}" else candidate
+    }
+    /** Subject берёт строку запроса задачи; тело коммита сохраняет идентификатор для журналов. */
+    private fun commitSubject(record: TaskWorktree): String =
+        asciiSubject(record.label, COMMIT_SUBJECT_LIMIT).ifBlank { "MagicPaper task ${record.taskId}" }
+
     private fun managed(record: TaskWorktree, mustExist: Boolean = true): File = File(record.path).canonicalFile.also {
         require(it.parentFile == root.canonicalFile && (!mustExist || it.isDirectory)) { "Рабочая копия недоступна или не принадлежит приложению" }
     }
@@ -304,3 +320,7 @@ class GitTaskWorkspace(
 
 private const val CHECK_OUTPUT_DETAIL = 2000
 private const val REBASE_STEP_LIMIT = 64
+private const val BRANCH_PREFIX = "magicpaper/worktree-"
+private const val BRANCH_SLUG_LIMIT = 48
+private const val COMMIT_SUBJECT_LIMIT = 100
+private const val UNIQUE_SUFFIX_LENGTH = 8

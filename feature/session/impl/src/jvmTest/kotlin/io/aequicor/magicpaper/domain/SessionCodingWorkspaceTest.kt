@@ -61,7 +61,7 @@ class SessionCodingWorkspaceTest {
         withTimeout(20_000) { f.tree.withScope(f.f.root) { f.create("child") } }
         val record = f.record()
         assertEquals(SessionCodingWorkspacePhase.CAPTURED, record.phase)
-        assertTrue(git(File(record.attempt.path), "symbolic-ref", "--short", "HEAD").startsWith("codex/magicpaper/"))
+        assertTrue(git(File(record.attempt.path), "symbolic-ref", "--short", "HEAD").startsWith("magicpaper/"))
         assertEquals("verified child result", git(source, "show", "${record.attempt.resultCommit}:result.txt"))
         assertEquals(head, git(source, "rev-parse", "HEAD")); assertEquals(index, git(source, "write-tree"))
         assertEquals(status, git(source, "status", "--porcelain")); assertFalse(File(source, "result.txt").exists())
@@ -253,7 +253,10 @@ class SessionCodingWorkspaceTest {
 
     private fun workspace(checkpoint: (String) -> Unit = {}) = GitPlanningWorkspace(Files.createTempDirectory("session-workspace-").toFile(), checkpoint)
     private fun repository(): File = Files.createTempDirectory("session-source-").toFile().also { source ->
-        git(source, "init"); File(source, "initial.txt").writeText("initial\n")
+        git(source, "init")
+        // Изолированные копии чекаутит настоящий Git: глобальный core.autocrlf разработчика не должен решать байты.
+        git(source, "config", "core.autocrlf", "false")
+        File(source, "initial.txt").writeText("initial\n")
         git(source, "add", "."); git(source, "commit", "-m", "Initial source")
     }
     private fun git(directory: File, vararg arguments: String): String {

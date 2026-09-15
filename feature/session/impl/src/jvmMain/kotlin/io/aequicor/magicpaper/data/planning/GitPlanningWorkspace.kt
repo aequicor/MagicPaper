@@ -139,8 +139,9 @@ class GitPlanningWorkspace(
             }
             return@serializedMutation existing
         }
-        val subject = attempt.report.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(120)
-            ?: "Результат этапа ${attempt.id}"
+        val subject = attempt.report.lineSequence().firstOrNull { it.isNotBlank() }
+            ?.let { asciiSubject(it, STAGE_SUBJECT_LIMIT) }?.ifBlank { null }
+            ?: "MagicPaper stage result ${attempt.id}"
         val head = git(dir, "rev-parse", "HEAD").trim()
         require(runCatching { git(dir, "merge-base", "--is-ancestor", attempt.baseCommit, head) }.isSuccess) {
             "История рабочей копии больше не продолжает базу этапа; результат требует проверки"
@@ -287,7 +288,7 @@ class GitPlanningWorkspace(
      * Legacy detached worktrees are reopened unchanged. Git refuses a second checkout
      * of the same branch. The path hash avoids collisions between runs and project aliases. */
     private fun addBranchWorktree(source: File, destination: File, base: String, purpose: String) {
-        val branch = "codex/magicpaper/$purpose-${hash(destination.canonicalPath.toByteArray()).take(24)}"
+        val branch = "magicpaper/$purpose-${hash(destination.canonicalPath.toByteArray()).take(24)}"
         val existing = runCatching { git(source, "rev-parse", "--verify", "refs/heads/$branch").trim() }.getOrNull()
         if (existing == null) git(source, "worktree", "add", "-b", branch, destination.path, base)
         else {
@@ -333,3 +334,5 @@ class GitPlanningWorkspace(
         } finally { tmp.delete() }
     }
 }
+
+private const val STAGE_SUBJECT_LIMIT = 120

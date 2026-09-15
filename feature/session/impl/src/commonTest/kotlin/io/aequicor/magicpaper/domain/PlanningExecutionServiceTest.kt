@@ -29,8 +29,8 @@ class PlanningExecutionServiceTest {
         }
         val task = object : TaskWorkspace {
             override suspend fun availability(project: CodingProject) = WorktreeAvailability(true)
-            override suspend fun describe(project: CodingProject, sessionId: String, taskId: String) =
-                TaskWorktree(taskId, project.path, "main", "base", "/task", "task")
+            override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String) =
+                TaskWorktree(taskId, project.path, "main", "base", "/task", "task", label = label)
             override suspend fun open(record: TaskWorktree, previous: TaskWorktree?) = Unit
             override suspend fun reconcile(record: TaskWorktree) = Unit
             override suspend fun capture(record: TaskWorktree) = "result"
