@@ -17,11 +17,28 @@ data class PlanRetryRecoveryRequest(
 )
 data class PlanRetryRecoveryProof(val quarantineOperationIds: Set<String>, val evidence: List<String>)
 
-internal fun SessionOrganism.unresolvedQuarantines(sessionId: String): List<SessionAuditEvent> = audit.filter { event ->
-    event.action == "QUARANTINE" && sessionId in event.affected && audit.none { resolution ->
-        resolution.action == "RECONCILE_QUARANTINE" && resolution.operationId == "resolved-$sessionId-${event.operationId}"
-    }
-}
+/** Host evidence for a session whose run left an unknown tool outcome. */
+data class SessionQuarantineRecoveryRequest(
+    val session: CodingSession,
+    val generation: Long,
+    val quarantines: List<SessionAuditEvent>,
+)
+data class SessionQuarantineProof(val quarantineOperationIds: Set<String>, val evidence: List<String>)
+
+/** Proven evidence is application-owned; an unproven outcome is closed only by the named human confirmation. */
+data class SessionQuarantineResolution(
+    val proven: Boolean,
+    val userConfirmed: Boolean,
+    val quarantineOperationIds: Set<String>,
+    val evidence: List<String>,
+)
+
+enum class QuarantineRecoveryOutcome { RESOLVED, NEEDS_CONFIRMATION, NO_QUARANTINE }
+
+/** Новый запрос упирается в неснятый карантин: продолжение возможно только через явное восстановление. */
+class SessionQuarantineBlocked(val sessionId: String, message: String) : IllegalStateException(message)
+
+internal fun SessionOrganism.unresolvedQuarantines(sessionId: String): List<SessionAuditEvent> = pendingQuarantines(sessionId)
 
 /** Application-owned authority and projection bridge. Never treats model prose as a command. */
 class SessionOrganismService(
@@ -105,6 +122,8 @@ class SessionOrganismService(
     private val immunityActions = Mutex()
     /** Called only by an explicit plan retry. Null preserves the unresolved stop. */
     var reconcilePlanRetry: suspend (PlanRetryRecoveryRequest) -> PlanRetryRecoveryProof? = { null }
+    /** Called only by an explicit recovery. Null preserves the quarantine; it never re-executes the effect. */
+    var reconcileUnknownOutcomes: suspend (SessionQuarantineRecoveryRequest) -> SessionQuarantineProof? = { null }
 
     suspend fun changeMode(session: CodingSession, mode: CodingInteractionMode): CodingSession {
         val organism = ensure(session)
@@ -117,6 +136,35 @@ class SessionOrganismService(
         // persisted; a checkpoint discovered only during migration is interrupted work.
         val organism = ensure(session)
         project(store.prepareUserTurn(organism.id, session.id, requestId))
+    }
+
+    /** Explicit human recovery of a quarantined session. The unknown operation is never repeated here. */
+    suspend fun reconcileQuarantine(session: CodingSession, userConfirmed: Boolean): QuarantineRecoveryOutcome {
+        val organism = ensure(session)
+        val saved = store.get(organism.id)
+        val node = saved.sessions[session.id] ?: return QuarantineRecoveryOutcome.NO_QUARANTINE
+        val quarantines = saved.unresolvedQuarantines(node.id)
+        if (quarantines.isEmpty()) return QuarantineRecoveryOutcome.NO_QUARANTINE
+        require(saved.deletedAt == null && !saved.stoppedByUser && !node.archived && node.id !in saved.historyDeletedIds) {
+            "Сессия удалена, архивирована или остановлена пользователем"
+        }
+        val stored = projects.sessions(session.projectId).firstOrNull { it.id == node.id } ?: error("Сессия удалена")
+        // The organism owns the generation fence; the sidebar projection may lag behind it.
+        val proof = reconcileUnknownOutcomes(SessionQuarantineRecoveryRequest(
+            stored.copy(runtimeGeneration = node.generation), node.generation, quarantines))
+        if (proof == null && !userConfirmed) return QuarantineRecoveryOutcome.NEEDS_CONFIRMATION
+        val resolution = if (proof != null) {
+            require(proof.quarantineOperationIds == quarantines.map { it.operationId }.toSet() &&
+                proof.evidence.isNotEmpty() && proof.evidence.all { it.isNotBlank() }) {
+                "Подтверждение исхода неполно; повторите сверку"
+            }
+            SessionQuarantineResolution(proven = true, userConfirmed = false,
+                quarantineOperationIds = proof.quarantineOperationIds, evidence = proof.evidence)
+        } else SessionQuarantineResolution(proven = false, userConfirmed = true,
+            quarantineOperationIds = quarantines.map { it.operationId }.toSet(),
+            evidence = quarantines.map { "Пользователь подтвердил фактический исход: ${it.reason}" })
+        project(store.resolveSessionQuarantine(organism.id, node.id, resolution))
+        return QuarantineRecoveryOutcome.RESOLVED
     }
 
     suspend fun authorizePlanRetry(plan: Plan, stageId: String, attempt: StageAttempt): PlanAttemptRetryAuthorization? {

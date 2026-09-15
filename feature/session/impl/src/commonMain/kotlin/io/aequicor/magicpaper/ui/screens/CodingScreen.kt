@@ -31,6 +31,7 @@ import io.aequicor.magicpaper.domain.UserInteractionRequest
 import io.aequicor.magicpaper.domain.QuestionnaireDraft
 import io.aequicor.magicpaper.domain.PlanningAnswer
 import io.aequicor.magicpaper.domain.InteractionKind
+import io.aequicor.magicpaper.domain.pendingQuarantines
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -334,6 +335,26 @@ private fun SessionArea(
                 onApprove = { proposal, action, confirmed -> vm.approveImmunityIntervention(organism.id, proposal.id, action, confirmed) },
                 onDismiss = { vm.dismissImmunityIntervention(organism.id, it) })
         }
+        // Блокировка карантином: триггеры над диалогом и в строке статуса открывают один диалог.
+        val quarantineOrganism = ui.organisms[sessionInfo.organismId]?.takeIf { organism ->
+            organism.deletedAt == null && organism.pendingQuarantines(sessionInfo.id).isNotEmpty() }
+        val quarantineRecoveryState by vm.quarantineRecovery.collectAsState()
+        var quarantineOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
+        val quarantineReveal = quarantineRecoveryState.reveal[sessionInfo.id]
+        LaunchedEffect(quarantineReveal) { if (quarantineReveal != null) quarantineOpen = true }
+        quarantineOrganism?.let { organism ->
+            io.aequicor.magicpaper.designsystem.PaperPanel(Modifier.fillMaxWidth()
+                .padding(io.aequicor.magicpaper.designsystem.LocalPaperSpacing.current.xs),
+                kind = io.aequicor.magicpaper.designsystem.PaperSurfaceKind.RAISED) {
+                io.aequicor.magicpaper.ui.components.SessionQuarantineRecoveryTrigger(organism, sessionInfo.id,
+                    quarantineRecoveryState, Modifier.padding(io.aequicor.magicpaper.designsystem.LocalPaperSpacing.current.xs)) {
+                    quarantineOpen = true
+                }
+            }
+            io.aequicor.magicpaper.ui.components.SessionQuarantineRecoveryDialog(organism, sessionInfo.id,
+                quarantineRecoveryState, quarantineOpen, { quarantineOpen = false },
+                { confirmed -> vm.reconcileCodingQuarantine(sessionInfo.id, confirmed) })
+        }
             CodingChat(
                 project = project,
                 session = effective,
@@ -365,6 +386,10 @@ private fun SessionArea(
                     }
                 },
                 onSkills = onSkills,
+                quarantineRecovery = quarantineOrganism?.let { organism -> {
+                    io.aequicor.magicpaper.ui.components.SessionQuarantineRecoveryTrigger(organism, sessionInfo.id,
+                        quarantineRecoveryState, Modifier.fillMaxWidth()) { quarantineOpen = true }
+                } },
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
                 onInteractionMode = if (sessionInfo.stageId == null && !sessionInfo.archived) {
@@ -896,6 +921,8 @@ internal fun CodingChat(
     worktreeSwitchEnabled: Boolean = true,
     worktreeInformation: String = "Работа в отдельной Git-копии. После завершения результат автоматически вливается в исходную ветку",
     onWorktreeChange: (() -> Unit)? = null,
+    /** Действуемое восстановление рядом с причиной блокировки: пользователь не должен его искать. */
+    quarantineRecovery: (@Composable () -> Unit)? = null,
     listState: LazyListState = key(session.session.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
@@ -1019,8 +1046,11 @@ internal fun CodingChat(
                     OrchestrationStatus(session, planningService, onOpenSession, Modifier, scrolled = false)
                 else if (interactions.isEmpty()) session.blockingReason?.let { reason ->
                     PaperStatusPanel(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                        PaperStatus("Выполнение остановлено. $reason", isError = true,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(LocalPaperSpacing.current.xs)) {
+                            PaperStatus("Выполнение остановлено. $reason", isError = true, modifier = Modifier.fillMaxWidth())
+                            quarantineRecovery?.invoke()
+                        }
                     }
                 }
                 if (busy) session.session.taskWorktree?.let { task ->

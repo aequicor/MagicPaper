@@ -331,8 +331,8 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
             remainingTokens = 0, version = node.version + 1, lastObservedAt = clock())
         val resolved = old.copy(version = old.version + 1, sessions = old.sessions + (node.id to stopped) +
             (parent.id to parent.copy(remainingTokens = parent.remainingTokens + node.remainingTokens, version = parent.version + 1)),
-            audit = old.audit + quarantines.map { event -> SessionAuditEvent("resolved-${node.id}-${event.operationId}", "APPLICATION",
-                "RECONCILE_QUARANTINE", setOf(node.id), proof.evidence.joinToString("\n") { redact(it) }, clock()) } +
+            audit = old.audit + quarantines.map { event -> SessionAuditEvent(quarantineResolutionId(node.id, event.operationId), "APPLICATION",
+                QUARANTINE_RESOLVED_ACTION, setOf(node.id), proof.evidence.joinToString("\n") { redact(it) }, clock()) } +
                 SessionAuditEvent("plan-reconciled-${node.id}-${stopped.version}", "APPLICATION", "PLAN_RETRY_RECONCILED", setOf(node.id),
                     proof.evidence.joinToString("\n") { redact(it) }, clock()))
         requirePlanRetryEligible(resolved, stopped, request.binding)
@@ -465,13 +465,41 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         if (!stopped && !uncertain) return@withLock old
         require(node.kind in setOf(SessionKind.ZYGOTE, SessionKind.IMMUNITY) && !node.archived && !old.stoppedByUser) { "Сначала восстановите рабочую область" }
         require((old.subtree(sessionId) - sessionId).all { old.sessions.getValue(it).settled }) { "Остановка поддерева ещё не подтверждена" }
-        require(old.audit.none { it.action == "QUARANTINE" && sessionId in it.affected }) { "Сначала проверьте фактический исход операции" }
+        // A blocked turn is an actionable state, not an ordinary refusal: the UI opens the recovery dialog.
+        if (old.unresolvedQuarantines(sessionId).isNotEmpty())
+            throw SessionQuarantineBlocked(sessionId, "Сначала проверьте фактический исход операции")
         require(old.hasTokenBudget() && old.withinDuration()) { "Бюджет организма исчерпан; создайте новую сессию" }
         val next = node.copy(desired = SessionDesiredState.RUN, observed = SessionObservedState.PENDING,
             generation = node.generation + 1, previousGeneration = node.generation, version = node.version + 1)
         commit(old.copy(version = old.version + 1, sessions = old.sessions + (node.id to next),
             audit = old.audit + SessionAuditEvent("user-turn-$requestId", "USER", "RESUME", setOf(node.id),
                 if (uncertain) "Новый запрос после незавершённого запуска" else "Новый запрос после подтверждённой остановки", clock())))
+    }
+
+    /** Host proof or an explicit human confirmation closes a quarantine; neither repeats the unknown effect.
+     *  The session becomes an ordinarily stopped one, so the next human request reopens it. */
+    suspend fun resolveSessionQuarantine(id: String, sessionId: String, resolution: SessionQuarantineResolution): SessionOrganism = lock.withLock {
+        val old = read(id); val node = old.sessions.getValue(sessionId)
+        require(old.deletedAt == null && sessionId !in old.historyDeletedIds && !node.archived) { "Сессия удалена или архивирована" }
+        val quarantines = old.unresolvedQuarantines(sessionId)
+        if (quarantines.isEmpty()) return@withLock old
+        require(!old.stoppedByUser) { "Организм остановлен пользователем" }
+        require(node.observed == SessionObservedState.UNKNOWN ||
+            (node.settled && node.desired == SessionDesiredState.QUARANTINE)) { "Сначала подтвердите остановку предыдущего запуска" }
+        require((old.subtree(sessionId) - sessionId).all { old.sessions.getValue(it).settled }) { "Остановка поддерева ещё не подтверждена" }
+        require(resolution.quarantineOperationIds == quarantines.map { it.operationId }.toSet()) { "Состояние изменилось во время проверки; повторите действие" }
+        require(resolution.evidence.isNotEmpty() && resolution.evidence.all { it.isNotBlank() }) { "Подтверждение исхода не сохранено" }
+        require(resolution.proven || resolution.userConfirmed) { "Исход не доказан; требуется подтверждение пользователя" }
+        val parent = node.authorityParentId?.let { old.sessions.getValue(it) }
+        val stopped = node.copy(desired = SessionDesiredState.STOP, observed = SessionObservedState.STOPPED,
+            remainingTokens = 0, version = node.version + 1, lastObservedAt = clock())
+        commit(old.copy(version = old.version + 1,
+            sessions = old.sessions + (node.id to stopped) + (parent?.let { parent ->
+                mapOf(parent.id to parent.copy(remainingTokens = parent.remainingTokens + node.remainingTokens, version = parent.version + 1))
+            } ?: emptyMap()),
+            audit = old.audit + quarantines.map { event -> SessionAuditEvent(quarantineResolutionId(node.id, event.operationId),
+                if (resolution.proven) "APPLICATION" else "USER", QUARANTINE_RESOLVED_ACTION, setOf(node.id),
+                resolution.evidence.joinToString("\n") { redact(it) }, clock()) }))
     }
 
     /** Application-only turn boundary. Reopening a root never reopens its finished children. */
@@ -569,7 +597,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
         require(old.deletedAt == null && target !in old.historyDeletedIds) { "Удалённую историю нельзя восстановить как архив" }
         old.operations[operationId]?.let { return@withLock old }
         require(node.settled && node.archived) { "Сначала подтвердите остановку и архивирование" }
-        require(old.audit.none { it.action == "QUARANTINE" && target in it.affected }) { "Исход операции неизвестен; сначала нужна проверка её фактического результата" }
+        require(old.unresolvedQuarantines(target).isEmpty()) { "Исход операции неизвестен; сначала нужна проверка её фактического результата" }
         require(node.kind != SessionKind.IMMUNITY || node.observed == SessionObservedState.STOPPED)
         val parent = node.authorityParentId?.let { old.sessions.getValue(it) }
         require(parent == null || parent.acceptsWork) { "Сначала восстановите родителя" }
@@ -698,7 +726,7 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
                 }
                 OrganismAction.RESTORE -> {
                     requireChild()
-                    requireTool(old.audit.none { it.action == "QUARANTINE" && targetId in it.affected }) { "Карантин требует проверки фактического исхода операции" }
+                    requireTool(old.unresolvedQuarantines(targetId).isEmpty()) { "Карантин требует проверки фактического исхода операции" }
                     requireTool(target!!.settled && (target.lifecycleParentId == null || old.sessions.getValue(target.lifecycleParentId!!).acceptsWork)) { "Восстановите рабочую область родителя" }
                     requireTool(old.limits.retries.hasRoom(target.retryCount)) { "Лимит восстановлений исчерпан" }
                     requireTool(old.results.none { it.sessionId == targetId && it.accepted }) { "Принятая работа уже выполнена" }

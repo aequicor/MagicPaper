@@ -43,6 +43,8 @@ class CodingRuntimeGraph(
     if (runtime != null && organisms != null) {
         val recovery = io.aequicor.magicpaper.domain.PlanRetryNativeRecovery(runtime, toolHost.receipts) { toolHost.knownSecrets() }
         organisms.reconcilePlanRetry = recovery::reconcile
+        val quarantineRecovery = io.aequicor.magicpaper.domain.SessionQuarantineRecovery(runtime, toolHost.receipts) { toolHost.knownSecrets() }
+        organisms.reconcileUnknownOutcomes = quarantineRecovery::reconcile
     }
     sessionTree?.cancelQuestions = { sessionId ->
         try { toolHost.questions.revoke(sessionId) }

@@ -32,6 +32,8 @@ interface CodingService {
     fun selectCodingProject(id: String)
     fun approveImmunityIntervention(organismId: String, proposalId: String, action: ImmunityAction, deleteConfirmed: Boolean = false)
     fun dismissImmunityIntervention(organismId: String, proposalId: String)
+    /** Явная сверка прерванных операций; [confirmed] означает подтверждение фактического исхода человеком. */
+    fun reconcileCodingQuarantine(sessionId: String, confirmed: Boolean = false)
     fun deleteCodingProject(id: String)
     fun addCodingSession(engine: CodingEngine = CodingEngine.PI)
     fun openPlanningChat()

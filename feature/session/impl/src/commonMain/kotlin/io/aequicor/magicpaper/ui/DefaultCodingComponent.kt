@@ -30,6 +30,7 @@ class DefaultCodingComponent(
     val requestPins get() = service.requestPins
     val usage get() = service.usage
     val immunityActions get() = service.immunityActions
+    val quarantineRecovery get() = service.quarantineRecovery
     val questionnaireDrafts get() = service.questionnaireDrafts
     fun composerDraft(id: String) = service.composerDraft(id)
     init {

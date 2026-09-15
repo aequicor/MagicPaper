@@ -121,6 +121,14 @@ data class CodingSessionUi(
     }
 }
 
+/** Явное восстановление сессии из карантина: что выполняется и где нужно подтверждение человека. */
+data class QuarantineRecoveryState(
+    val busy: Set<String> = emptySet(),
+    val awaitingConfirmation: Set<String> = emptySet(),
+    /** Токен раскрытия диалога: растёт, когда блокировка обнаружена действием пользователя. */
+    val reveal: Map<String, Long> = emptyMap(),
+)
+
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
     val organisms: Map<String, io.aequicor.magicpaper.domain.SessionOrganism> = emptyMap(),

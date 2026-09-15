@@ -791,6 +791,51 @@ class DefaultCodingService(
         }
     }
 
+    private val _quarantineRecovery = MutableStateFlow(QuarantineRecoveryState())
+    val quarantineRecovery: StateFlow<QuarantineRecoveryState> = _quarantineRecovery.asStateFlow()
+
+    /** Явное восстановление: сначала сверка по журналу движка, затем — подтверждение человека. */
+    override fun reconcileCodingQuarantine(sessionId: String, confirmed: Boolean) {
+        val service = planningChat?.organisms ?: return
+        while (true) {
+            val current = _quarantineRecovery.value
+            if (sessionId in current.busy) return
+            if (_quarantineRecovery.compareAndSet(current, current.copy(busy = current.busy + sessionId))) break
+        }
+        scope.launch {
+            try {
+                val repo = codingProjects ?: error("Хранилище сессий недоступно")
+                var session: CodingSession? = null
+                for (project in repo.all()) {
+                    session = repo.sessions(project.id).firstOrNull { it.id == sessionId }
+                    if (session != null) break
+                }
+                val outcome = service.reconcileQuarantine(checkNotNull(session) { "Сессия недоступна" }, confirmed)
+                when (outcome) {
+                    QuarantineRecoveryOutcome.NEEDS_CONFIRMATION -> {
+                        AppLog.info("coding", "quarantine.unproven", mapOf("sessionId" to sessionId))
+                        revealQuarantineRecovery(sessionId)
+                    }
+                    else -> {
+                        AppLog.info("coding", "quarantine.reconciled", mapOf("sessionId" to sessionId,
+                            "outcome" to outcome.name, "confirmed" to confirmed.toString()))
+                        _quarantineRecovery.update { it.copy(awaitingConfirmation = it.awaitingConfirmation - sessionId) }
+                    }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "quarantine.recovery.failed", failure, mapOf("sessionId" to sessionId))
+                _state.update { it.copy(notice = "Не удалось снять блокировку сессии. Проверьте фактический результат прерванных операций и повторите сверку.") }
+            } finally { _quarantineRecovery.update { it.copy(busy = it.busy - sessionId) } }
+        }
+    }
+
+    /** Блокировка карантином — действуемое состояние: диалог восстановления открывается сам. */
+    private fun revealQuarantineRecovery(sessionId: String) = _quarantineRecovery.update { state ->
+        state.copy(awaitingConfirmation = state.awaitingConfirmation + sessionId,
+            reveal = state.reveal + (sessionId to (state.reveal[sessionId] ?: 0L) + 1))
+    }
+
     override fun deleteCodingProject(id: String) {
         val repo = codingProjects ?: return
         while (true) {
@@ -1461,9 +1506,15 @@ class DefaultCodingService(
             } catch (e: Exception) {
                 AppLog.error("coding", "run.failed", e, operationFields)
                 val task = taskWorktrees?.session(project.id, session.id)?.taskWorktree?.takeIf { it.taskId == request.runId }
-                val safeError = if (request.worktreeEnabled == true && (e is IllegalStateException || e is IllegalArgumentException))
-                    e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
-                    else "Не удалось продолжить работу. Проверьте подключение и состояние сессии."
+                val blocked = e as? SessionQuarantineBlocked
+                if (blocked != null) revealQuarantineRecovery(session.id)
+                val safeError = when {
+                    blocked != null -> "Сессия заблокирована: исход прерванной операции не подтверждён. " +
+                        "Откройте «Восстановление после прерванной операции» над диалогом."
+                    request.worktreeEnabled == true && (e is IllegalStateException || e is IllegalArgumentException) ->
+                        e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
+                    else -> "Не удалось продолжить работу. Проверьте подключение и состояние сессии."
+                }
                 if (task != null) taskWorktrees!!.failure(project.id, session.id, request.runId, safeError)
                 recorder.apply(CodingEvent.Failed(safeError))
                 try {
