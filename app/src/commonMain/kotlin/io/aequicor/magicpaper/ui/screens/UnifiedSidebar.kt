@@ -53,6 +53,7 @@ import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.SessionKind
 import io.aequicor.magicpaper.domain.aggregateCodingStatus
+import io.aequicor.magicpaper.domain.sidebarTitle
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.SidebarActions
 import io.aequicor.magicpaper.designsystem.PaperToolbarButton
@@ -163,7 +164,7 @@ internal fun rememberUnifiedItems(
                 }
                 val childItem = UnifiedSidebarItem(
                     id = childUi.session.id,
-                    displayName = childUi.session.name,
+                    displayName = childUi.session.sidebarTitle(),
                     sortTime = childUi.session.createdAt,
                     isCoding = true,
                     projectId = childUi.session.projectId,
@@ -203,7 +204,7 @@ internal fun rememberUnifiedItems(
                     )
                     UnifiedSidebarItem(
                         id = sessionUi.session.id,
-                        displayName = sessionUi.session.name,
+                        displayName = sessionUi.session.sidebarTitle(),
                         sortTime = sessionUi.session.createdAt,
                         isCoding = true,
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
@@ -217,7 +218,7 @@ internal fun rememberUnifiedItems(
                 } else {
                     UnifiedSidebarItem(
                         id = sessionUi.session.id,
-                        displayName = sessionUi.session.name,
+                        displayName = sessionUi.session.sidebarTitle(),
                         sortTime = sessionUi.session.createdAt,
                         isCoding = true,
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
