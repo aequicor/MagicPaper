@@ -35,7 +35,7 @@ class TaskWorktreeIntegrationChecks(
             var registered = false
             try {
                 currentCoroutineContext().ensureActive()
-                val started = ProcessBuilder(command).directory(dir).redirectErrorStream(true).redirectOutput(output).start()
+                val started = ProcessBuilder(resolve(dir, command)).directory(dir).redirectErrorStream(true).redirectOutput(output).start()
                 process = started
                 started.outputStream.close()
                 check(active.putIfAbsent(id, started) == null) { "Проверка этой задачи уже выполняется" }
@@ -70,6 +70,19 @@ class TaskWorktreeIntegrationChecks(
 
     /** Проверка не оставляет служебных каталогов и владеющих процессов: только собственные build-выходы worktree. */
     override suspend fun reconcile(id: String) { active.remove(id) }
+
+    /**
+     * CreateProcess ищет относительный исполняемый файл в каталоге родительского процесса, а не в каталоге
+     * проверки, поэтому путь с разделителем закрепляется за рабочей копией; простое имя остаётся на поиск PATH.
+     */
+    private fun resolve(dir: File, command: List<String>): List<String> {
+        val name = command.first()
+        val relative = name.contains('/') || name.contains(File.separatorChar)
+        if (name.isBlank() || !relative && !File(dir, name).isFile) return command
+        val suffixes = listOf("") + System.getenv("PATHEXT").orEmpty().split(';').filter { it.isNotBlank() }
+        val file = suffixes.asSequence().map { File(dir, name + it) }.firstOrNull { it.isFile } ?: return command
+        return listOf(file.canonicalPath) + command.drop(1)
+    }
 
     private fun kill(process: Process) {
         process.descendants().use { children -> children.forEach { it.destroyForcibly() } }
