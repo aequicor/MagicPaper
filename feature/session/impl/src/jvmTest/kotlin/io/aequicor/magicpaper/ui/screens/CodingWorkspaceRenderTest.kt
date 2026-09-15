@@ -112,10 +112,12 @@ class CodingWorkspaceRenderTest {
             val pin = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.first {
                 it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Закреплённый запрос" }
             }
-            assertTrue(pin.boundsInRoot.top < 32f, "Pin stays at the top")
+            // The journal now runs behind the title bar: pinned surfaces sit below
+            // its inset, and the top shadow starts there instead of at the window edge.
+            assertTrue(pin.boundsInRoot.top in 56f..88f, "Pin stays right below the title bar inset")
             val pixels = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(pinnedBytes))
             fun red(y: Int) = (pixels.getRGB(0, y) shr 16) and 255
-            assertTrue(red(0) < red(100) - 20, "Shadow starts at the top and touches the left boundary")
+            assertTrue(red(64) < red(20) - 20, "Shadow starts at the title bar inset and touches the left boundary")
 
         }
     }

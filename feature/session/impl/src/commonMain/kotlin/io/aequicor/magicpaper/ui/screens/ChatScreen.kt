@@ -21,7 +21,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import io.aequicor.magicpaper.designsystem.paperTranscriptFade
+import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -33,6 +36,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -126,6 +130,10 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = paperStickToBottom(listState, session?.id)
+    // Messages run edge-to-edge behind the title bar: the frost band blurs them
+    // there, and the transcript fade takes over right below it once scrolled.
+    val topInset = LocalWindowToolbarHeight.current ?: 56.dp
+    val scrolled by remember(listState) { derivedStateOf { listState.canScrollBackward } }
     var expandedMessages by rememberSaveable(session?.id) { mutableStateOf(emptyList<String>()) }
     val expandedParts = buildMap<String, PaperInlineMessageParts> {
         messages.filter { it.id in expandedMessages }.forEach { message ->
@@ -151,12 +159,13 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isEmpty()) {
-            EmptyHint()
+            Box(Modifier.fillMaxSize().padding(top = topInset)) { EmptyHint() }
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll),
-                contentPadding = PaddingValues(16.dp),
+                modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
+                    .paperTranscriptFade(topShadowVisible = scrolled, topOffset = topInset),
+                contentPadding = PaddingValues(start = 16.dp, top = topInset + 16.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.Top,
             ) {
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
@@ -174,7 +183,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 }
             }
         }
-        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd),
+        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = topInset),
             browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp))
         AnimatedVisibility(

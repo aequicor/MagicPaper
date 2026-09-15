@@ -115,16 +115,20 @@ public fun PaperWorkspaceHeading(title: String, subtitle: String, modifier: Modi
     }
 }
 
-/** Blend blurred messages into the sharp transcript from the top across effectHeight. Place pinned surfaces above this layer. */
+/**
+ * Blend blurred messages into the sharp transcript from [topOffset] across effectHeight.
+ * [topOffset] keeps an overlaid band (the window title bar) outside this effect: the band
+ * owns its own frost there. Place pinned surfaces above this layer.
+ */
 @Composable
-public fun Modifier.paperTranscriptFade(topShadowVisible: Boolean = false, effectHeight: Dp = 32.dp): Modifier {
+public fun Modifier.paperTranscriptFade(topShadowVisible: Boolean = false, effectHeight: Dp = 32.dp, topOffset: Dp = 0.dp): Modifier {
     val blurred = rememberGraphicsLayer()
     return graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithContent {
             drawContent()
             if (topShadowVisible) {
-                val start = 0f
-                val edge = effectHeight.toPx().coerceAtLeast(1f)
+                val start = topOffset.toPx().coerceIn(0f, size.height)
+                val edge = (start + effectHeight.toPx()).coerceAtLeast(start + 1f)
                 blurred.record { this@drawWithContent.drawContent() }
                 blurred.renderEffect = BlurEffect(6.dp.toPx(), 6.dp.toPx(), TileMode.Clamp)
                 clipRect(top = start, bottom = edge.coerceAtMost(size.height)) {
@@ -157,21 +161,66 @@ public fun Modifier.paperTranscriptFade(topShadowVisible: Boolean = false, effec
         }
 }
 
-/** A shadow starting at the viewport top, extending below any overlaid cards. */
+/** A shadow starting at [topOffset] (below an overlaid title bar band), extending below any overlaid cards. */
 @Composable
-public fun Modifier.paperChatTopShadow(visible: Boolean, effectHeight: Dp = 32.dp): Modifier {
+public fun Modifier.paperChatTopShadow(visible: Boolean, effectHeight: Dp = 32.dp, topOffset: Dp = 0.dp): Modifier {
     val color = LocalPaperColors.current.depthShadow
     return drawWithContent {
         drawContent()
-        if (visible) drawRect(
-            Brush.verticalGradient(
-                0f to color.copy(alpha = .24f),
-                .25f to color.copy(alpha = .13f),
-                .5f to color.copy(alpha = .05f),
-                .75f to color.copy(alpha = .01f),
-                1f to Color.Transparent,
-                startY = 0f, endY = effectHeight.toPx().coerceAtLeast(1f)),
-            size = androidx.compose.ui.geometry.Size(size.width, effectHeight.toPx().coerceAtLeast(1f)),
-        )
+        if (visible) {
+            val start = topOffset.toPx().coerceIn(0f, size.height)
+            val extent = effectHeight.toPx().coerceAtLeast(1f)
+            drawRect(
+                Brush.verticalGradient(
+                    0f to color.copy(alpha = .24f),
+                    .25f to color.copy(alpha = .13f),
+                    .5f to color.copy(alpha = .05f),
+                    .75f to color.copy(alpha = .01f),
+                    1f to Color.Transparent,
+                    startY = start, endY = start + extent),
+                topLeft = Offset(0f, start),
+                size = androidx.compose.ui.geometry.Size(size.width, (size.height - start).coerceAtLeast(0f)),
+            )
+        }
+    }
+}
+
+/**
+ * Frosted band under the window title bar: content that scrolls behind the bar
+ * (message transcripts) is replaced by its blur plus a surface scrim, so chrome
+ * buttons stay legible, and blends back to sharp content [fade] below the band.
+ */
+@Composable
+public fun Modifier.paperTitleBarFrost(height: Dp, fade: Dp = 16.dp): Modifier {
+    val blurred = rememberGraphicsLayer()
+    val scrim = LocalPaperColors.current.surface
+    return drawWithContent {
+        drawContent()
+        val strip = height.toPx().coerceIn(0f, size.height)
+        val end = (strip + fade.toPx()).coerceAtMost(size.height)
+        if (strip <= 0f || end <= strip) return@drawWithContent
+        val hold = (strip / end).coerceIn(0f, 1f)
+        blurred.record { this@drawWithContent.drawContent() }
+        blurred.renderEffect = BlurEffect(10.dp.toPx(), 10.dp.toPx(), TileMode.Clamp)
+        clipRect(top = 0f, bottom = end) {
+            drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint())
+            drawLayer(blurred)
+            drawRect(
+                Brush.verticalGradient(
+                    0f to Color.White,
+                    hold to Color.White,
+                    1f to Color.Transparent,
+                    startY = 0f, endY = end),
+                blendMode = BlendMode.DstIn,
+            )
+            drawContext.canvas.restore()
+            drawRect(
+                Brush.verticalGradient(
+                    0f to scrim.copy(alpha = .45f),
+                    hold to scrim.copy(alpha = .28f),
+                    1f to scrim.copy(alpha = 0f),
+                    startY = 0f, endY = end),
+            )
+        }
     }
 }

@@ -96,6 +96,9 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.Composable
@@ -230,6 +233,7 @@ fun CodingScreen(
     }
     Column(modifier = Modifier.fillMaxSize()) {
         if (showProjectsPanel) {
+        val panelTopInset = LocalWindowToolbarHeight.current ?: 56.dp
         PaperResizablePanels(modifier = Modifier.weight(1f), sidebar = { panelModifier ->
             ProjectsPanel(
                 ui = ui,
@@ -242,7 +246,7 @@ fun CodingScreen(
                 onDeleteSession = vm::deleteCodingSession,
                 onArchiveSession = vm::archiveCodingSession,
                 onAbortSession = vm::abortCodingSession,
-                modifier = panelModifier,
+                modifier = panelModifier.padding(top = panelTopInset),
             )
         }) {
                 val project = ui.current
@@ -832,8 +836,9 @@ private fun StatusTooltip(status: CodingSessionStatus, content: @Composable () -
 
 @Composable
 private fun ProjectsEmptyHint(hasProject: Boolean, onCreate: () -> Unit) {
+    val topInset = LocalWindowToolbarHeight.current ?: 56.dp
     Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
+        modifier = Modifier.fillMaxSize().padding(PaddingValues(start = 32.dp, top = topInset + 32.dp, end = 32.dp, bottom = 32.dp)),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -956,14 +961,21 @@ internal fun CodingChat(
     var systemHeaderHeight by remember(session.session.id) { mutableStateOf(0.dp) }
     val protectedBottom = maxOf(systemHeaderHeight, with(density) { scroll.requestPinsBounds?.bottom?.toDp() ?: 0.dp })
     val effectHeight = if (protectedBottom > 0.dp) maxOf(32.dp, protectedBottom + 12.dp) else 32.dp
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    // The journal viewport reaches the window top so messages scroll behind the
+    // title bar; when something pushes it down (approval panels), the frost band
+    // stays above it and the local fade starts from the journal's own edge.
+    val titleBarInset = LocalWindowToolbarHeight.current ?: 56.dp
+    var journalTopInWindow by remember { mutableStateOf(0f) }
+    val localTopInset = with(density) { (titleBarInset - journalTopInWindow.toDp()).coerceAtLeast(0.dp) }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()
+        .onGloballyPositioned { journalTopInWindow = it.boundsInWindow().top }) {
             val questionHeight = maxHeight * 0.75f
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
-                    .paperChatTopShadow(scrolled, effectHeight = effectHeight)
-                    .paperTranscriptFade(topShadowVisible = scrolled, effectHeight = effectHeight),
-                contentPadding = PaddingValues(start = 8.dp, top = systemHeaderHeight + 12.dp,
+                    .paperChatTopShadow(scrolled, effectHeight = effectHeight, topOffset = localTopInset)
+                    .paperTranscriptFade(topShadowVisible = scrolled, effectHeight = effectHeight, topOffset = localTopInset),
+                contentPadding = PaddingValues(start = 8.dp, top = systemHeaderHeight + localTopInset + 12.dp,
                     end = 8.dp, bottom = footerHeight + 4.dp),
                 verticalArrangement = Arrangement.Top,
             ) {
@@ -1001,6 +1013,7 @@ internal fun CodingChat(
                 }
             }
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth()
+                .padding(top = localTopInset)
                 .onSizeChanged { systemHeaderHeight = with(density) { it.height.toDp() } }) {
                 if (showOrchestrationStatus)
                     OrchestrationStatus(session, planningService, onOpenSession, Modifier, scrolled = false)
@@ -1029,7 +1042,7 @@ internal fun CodingChat(
                     }
                 }
             }
-            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = systemHeaderHeight),
+            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = systemHeaderHeight + localTopInset),
                 browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null }, itemKeys = pinKeys, compact = true)
             PaperChatScrollToBottomButton(scroll,
                 Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = (footerHeight - 8.dp).coerceAtLeast(0.dp)))

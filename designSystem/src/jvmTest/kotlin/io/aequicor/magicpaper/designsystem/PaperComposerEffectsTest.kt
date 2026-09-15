@@ -142,6 +142,70 @@ class PaperComposerEffectsTest {
         }
     }
 
+    @Test fun titleBarFrostBlursContentAcrossTheStripAndFadesBelow() {
+        ImageComposeScene(120, 120) {
+            PaperTheme {
+                Box(Modifier.fillMaxSize().background(Color.White).paperTitleBarFrost(40.dp, fade = 16.dp)) {
+                    Row(Modifier.fillMaxSize()) {
+                        Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
+                        Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
+                    }
+                }
+            }
+        }.use { scene ->
+            val bytes = scene.render(0L).use { image -> image.encodeToData()!!.use { it.bytes } }
+            java.io.File("build/reports/design-effects").apply { mkdirs() }
+                .resolve("titlebar-frost.png").writeBytes(bytes)
+            val pixels = ImageIO.read(ByteArrayInputStream(bytes))
+            fun red(x: Int, y: Int) = (pixels.getRGB(x, y) shr 16) and 255
+            assertTrue(red(59, 20) > 100, "Frost must cover dark content behind the title bar")
+            assertTrue(kotlin.math.abs(red(59, 20) - red(60, 20)) < 40, "The strip boundary must be blurred")
+            assertTrue(red(59, 48) < red(59, 20), "Frost must weaken towards the fade below the strip")
+            assertEquals(0, red(59, 62))
+            assertEquals(255, red(60, 62))
+        }
+    }
+
+    @Test fun transcriptFadeTopOffsetKeepsTheTitleBarBandOutOfTheEffect() {
+        ImageComposeScene(120, 120) {
+            PaperTheme {
+                Row(Modifier.fillMaxSize()
+                    .paperTranscriptFade(topShadowVisible = true, effectHeight = 32.dp, topOffset = 40.dp)) {
+                    Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
+                    Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
+                }
+            }
+        }.use { scene ->
+            val pixels = scene.render(0L).use { image ->
+                image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
+            }
+            fun red(x: Int, y: Int) = (pixels.getRGB(x, y) shr 16) and 255
+            assertEquals(0, red(59, 20), "Above the offset the transcript stays sharp")
+            assertEquals(255, red(60, 20))
+            assertTrue(red(59, 44) > 40, "Blur must start at the offset")
+            assertTrue(red(60, 44) < 200, "Blur must start at the offset")
+            assertEquals(0, red(59, 80), "Below offset + effect the transcript stays sharp")
+            assertEquals(255, red(60, 80))
+        }
+    }
+
+    @Test fun chatTopShadowStartsBelowTheOffset() {
+        ImageComposeScene(120, 120) {
+            PaperTheme {
+                Box(Modifier.fillMaxSize().background(Color.White)
+                    .paperChatTopShadow(true, effectHeight = 32.dp, topOffset = 40.dp))
+            }
+        }.use { scene ->
+            val pixels = scene.render(0L).use { image ->
+                image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
+            }
+            fun red(y: Int) = (pixels.getRGB(60, y) shr 16) and 255
+            assertEquals(255, red(20), "No shadow above the offset")
+            assertTrue(red(44) < 255, "Shadow must start at the offset")
+            assertEquals(255, red(80))
+        }
+    }
+
     @Test fun shadowStartsAtTopAndReachesBelowUnblurredCardsAtDifferentScales() {
         for (scale in listOf(1f, 2f)) for (cardHeight in listOf(40, 80)) {
             val extent = cardHeight + 12

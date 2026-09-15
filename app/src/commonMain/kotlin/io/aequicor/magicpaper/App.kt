@@ -88,24 +88,29 @@ private fun AppShellContent(runtime: MagicPaperRuntime, root: RootComponent<AppC
     CompositionLocalProvider(LocalPaperHideSystemSteps provides config.settings.hideSystemSteps,
         LocalPaperDialogLifecycle provides dialogLifecycle) {
         Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
-                if (config.showWelcome) {
-                    Box(Modifier.safeDrawingPadding()) { (root as ApplicationRoot).welcome.Content() }
-                } else {
-                    TopBar(root, usage, selectedId, isCoding, onToggleSidebar = { sidebarVisible = !sidebarVisible })
-                    Box(Modifier.weight(1f).navigationBarsPadding()) {
-                        PaperResizablePanels(sidebarVisible = sidebarVisible,
-                            sidebar = { modifier ->
-                                UnifiedSidebar(sidebarActions, chats.sessions, projects.coding, selectedId, isCoding, modifier)
-                            }) {
+            if (config.showWelcome) {
+                Box(Modifier.fillMaxSize().safeDrawingPadding()) { (root as ApplicationRoot).welcome.Content() }
+            } else {
+                // The bar overlays the content: transcripts run edge-to-edge behind it
+                // and the frost band keeps its buttons legible over scrolled messages.
+                val topInset = LocalWindowToolbarHeight.current ?: 56.dp
+                val edgeToEdge = navigation.route is AppRoute.Chat || navigation.route is AppRoute.Projects
+                Box(Modifier.fillMaxSize().navigationBarsPadding().paperTitleBarFrost(topInset)) {
+                    PaperResizablePanels(sidebarVisible = sidebarVisible,
+                        sidebar = { modifier ->
+                            UnifiedSidebar(sidebarActions, chats.sessions, projects.coding, selectedId, isCoding,
+                                modifier.padding(top = topInset))
+                        }) {
+                        Box(Modifier.fillMaxSize().then(if (edgeToEdge) Modifier else Modifier.padding(top = topInset))) {
                             key(stack.active.configuration.id) { stack.active.instance.Content() }
                         }
-                        Notice(navigation.error ?: config.notice ?: chats.notice ?: projects.notice,
-                            Modifier.align(Alignment.BottomCenter)) {
-                            root.dismissNavigationError(); settings.dismissNotice(); chat.dismissNotice(); coding.dismissNotice()
-                        }
+                    }
+                    Notice(navigation.error ?: config.notice ?: chats.notice ?: projects.notice,
+                        Modifier.align(Alignment.BottomCenter)) {
+                        root.dismissNavigationError(); settings.dismissNotice(); chat.dismissNotice(); coding.dismissNotice()
                     }
                 }
+                TopBar(root, usage, selectedId, isCoding, onToggleSidebar = { sidebarVisible = !sidebarVisible })
             }
             CompositionLocalProvider(LocalPaperDialogLifecycle provides null) {
             slot.child?.configuration?.let { dialog ->
