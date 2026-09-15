@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.research
 
 import io.aequicor.magicpaper.data.coding.OwnedCodingProcess
+import io.aequicor.magicpaper.data.coding.WindowsExecutables
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -183,18 +184,32 @@ internal class ResearchCheckRunner(
         if (System.getProperty("os.name").startsWith("Mac")) put("JAVA_TOOL_OPTIONS", "-Djdk.lang.Process.launchMechanism=fork")
     }
 
-    private fun resolveExecutable(name: String, cwd: Path, env: Map<String, String>): String {
-        if (name.contains('/') || name.contains('\\')) return cwd.resolve(name).normalize().toRealPath().toString()
-        val windows = System.getProperty("os.name").startsWith("Windows")
-        val suffixes = if (windows) listOf("") + (env["PATHEXT"] ?: ".EXE;.CMD;.BAT").split(';') else listOf("")
+    /**
+     * Правила выбора исполнимого файла на Windows общие с итоговыми проверками задачи: см. WindowsExecutables.
+     */
+    internal fun resolveExecutable(name: String, cwd: Path, env: Map<String, String>): String {
+        val windows = WindowsExecutables.isWindows()
+        val extensions = WindowsExecutables.extensions(env["PATHEXT"] ?: DEFAULT_PATHEXT)
+        val suffixes = WindowsExecutables.suffixes(name, extensions)
+        fun candidates(base: Path) = suffixes.asSequence().map { Paths.get(base.toString() + it) }
+        if (name.contains('/') || name.contains('\\')) {
+            val base = cwd.resolve(name).normalize()
+            // Отсутствующий файл по-прежнему доходит до toRealPath: причина отказа остаётся прежней.
+            val file = candidates(base).firstOrNull { Files.isRegularFile(it) } ?: return base.toRealPath().toString()
+            require(WindowsExecutables.isLaunchable(file.toFile(), extensions)) {
+                "$name не является исполнимым файлом Windows; нужен аналог с расширением, например $name.bat"
+            }
+            return file.toRealPath().toString()
+        }
         val paths = env.entries.firstOrNull { it.key.equals("PATH", true) }?.value.orEmpty().split(File.pathSeparator)
-        return paths.asSequence().filter(String::isNotBlank).flatMap { dir -> suffixes.asSequence().map { Paths.get(dir, name + it) } }
-            .firstOrNull { Files.isRegularFile(it) && (windows || Files.isExecutable(it)) }?.toRealPath()?.toString()
-            ?: error("Команда не найдена: $name")
+        return paths.asSequence().filter(String::isNotBlank).flatMap { dir -> candidates(Paths.get(dir, name)) }
+            .firstOrNull { Files.isRegularFile(it) && (windows || Files.isExecutable(it)) && WindowsExecutables.isLaunchable(it.toFile(), extensions) }
+            ?.toRealPath()?.toString() ?: error("Команда не найдена: $name")
     }
     private fun key(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).take(16).joinToString("") { "%02x".format(it) }
     companion object {
         const val MAX_OUTPUT = 64_000
+        const val DEFAULT_PATHEXT = ".EXE;.CMD;.BAT"
         val shared by lazy { ResearchCheckRunner() }
     }
 }

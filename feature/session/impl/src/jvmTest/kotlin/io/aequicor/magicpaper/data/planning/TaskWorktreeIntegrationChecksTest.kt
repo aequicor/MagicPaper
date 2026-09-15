@@ -44,6 +44,36 @@ class TaskWorktreeIntegrationChecksTest {
         assertTrue(result.output.contains("from-worktree"), result.output)
     } }
 
+    /** Регресс CreateProcess error=193: POSIX-обёртка `./gradlew` не должна запускаться на Windows вместо `gradlew.bat`. */
+    @Test fun windowsPrefersExecutableWrapperOverPosixScript() = runTest { withDir("magicpaper-task-check-wrapper-") { dir ->
+        File(dir, "gradlew").writeText("#!/bin/sh\necho from-posix-wrapper")
+        if (windows) {
+            File(dir, "gradlew.bat").writeText("@echo from-windows-wrapper")
+            val result = TaskWorktreeIntegrationChecks().run(dir.path, "wrapper", listOf("./gradlew", "help"))
+            assertEquals(0, result.exitCode, result.output + result.blockedReason)
+            assertTrue(result.output.contains("from-windows-wrapper"), result.output)
+        } else {
+            File(dir, "gradlew").setExecutable(true)
+            val result = TaskWorktreeIntegrationChecks().run(dir.path, "wrapper", listOf("./gradlew"))
+            assertEquals(0, result.exitCode, result.output)
+            assertTrue(result.output.contains("from-posix-wrapper"), result.output)
+        }
+    } }
+
+    @Test fun nonExecutableScriptOnWindowsReportsActionableReason() = runTest { withDir("magicpaper-task-check-posix-only-") { dir ->
+        File(dir, "gradlew").writeText("#!/bin/sh\necho from-posix-wrapper")
+        if (windows) {
+            val result = TaskWorktreeIntegrationChecks().run(dir.path, "posix-only", listOf("./gradlew"))
+            assertNull(result.exitCode)
+            assertNotNull(result.blockedReason)
+            assertTrue(result.blockedReason!!.contains("gradlew"), result.blockedReason)
+            assertFalse(result.blockedReason!!.contains("error=193"), result.blockedReason)
+        } else {
+            File(dir, "gradlew").setExecutable(true)
+            assertEquals(0, TaskWorktreeIntegrationChecks().run(dir.path, "posix-only", listOf("./gradlew")).exitCode)
+        }
+    } }
+
     // Процессы живут в реальном времени: виртуальные часы runTest сделали бы пределы и остановки нефизичными.
     @Test fun timedOutCheckIsBlockedInsteadOfSilentlyPassing() = runBlocking { withDir("magicpaper-task-check-timeout-") { dir ->
         val started = System.currentTimeMillis()

@@ -1,9 +1,11 @@
 package io.aequicor.magicpaper.data.planning
 
+import io.aequicor.magicpaper.data.coding.WindowsExecutables
 import io.aequicor.magicpaper.domain.SessionIntegrationCheck
 import io.aequicor.magicpaper.domain.SessionIntegrationCheckRunner
 import kotlinx.coroutines.*
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -74,13 +76,18 @@ class TaskWorktreeIntegrationChecks(
     /**
      * CreateProcess ищет относительный исполняемый файл в каталоге родительского процесса, а не в каталоге
      * проверки, поэтому путь с разделителем закрепляется за рабочей копией; простое имя остаётся на поиск PATH.
+     * Выбор исполнимого файла на Windows общий с защищёнными проверками: см. WindowsExecutables.
      */
     private fun resolve(dir: File, command: List<String>): List<String> {
         val name = command.first()
         val relative = name.contains('/') || name.contains(File.separatorChar)
         if (name.isBlank() || !relative && !File(dir, name).isFile) return command
-        val suffixes = listOf("") + System.getenv("PATHEXT").orEmpty().split(';').filter { it.isNotBlank() }
-        val file = suffixes.asSequence().map { File(dir, name + it) }.firstOrNull { it.isFile } ?: return command
+        val extensions = WindowsExecutables.extensions(System.getenv("PATHEXT"))
+        val file = WindowsExecutables.suffixes(name, extensions).asSequence().map { File(dir, name + it) }
+            .firstOrNull { it.isFile } ?: return command
+        // Понятная причина отказа вместо кода CreateProcess: владелец приёмки покажет её агенту и пользователю.
+        if (!WindowsExecutables.isLaunchable(file, extensions))
+            throw IOException("$name не является исполнимым файлом Windows; нужен аналог с расширением, например $name.bat")
         return listOf(file.canonicalPath) + command.drop(1)
     }
 
