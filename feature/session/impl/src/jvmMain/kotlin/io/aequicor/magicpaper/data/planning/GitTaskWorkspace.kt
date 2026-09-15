@@ -7,9 +7,11 @@ import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 
-/** Branch delivery is separate from the planner's legacy file transfer. All writes stay in managed copies until ff-only delivery. */
-// Объединение с веткой назначения выполняется переносом (rebase): история ветки остаётся линейной,
-// а каждое прерывание либо завершается, либо откатывается к сохранённой точке до переноса.
+/**
+ * Branch delivery is separate from the planner's legacy file transfer. All writes stay in managed copies until ff-only delivery.
+ * Объединение с веткой назначения выполняется переносом (rebase): история ветки остаётся линейной,
+ * а каждое прерывание либо завершается, либо откатывается к сохранённой точке до переноса.
+ */
 class GitTaskWorkspace(
     private val root: File = File(System.getProperty("user.home"), ".MagicPaper/task-worktrees"),
     private val checkpoint: (String) -> Unit = {},
@@ -124,7 +126,7 @@ class GitTaskWorkspace(
         if (code != 0 || !ancestor(dir, tip, "HEAD")) {
             if (rebaseInProgress(dir)) git(dir, "rebase", "--abort")
             check(head(dir) == before) { "Не удалось откатить обновление рабочей копии\n${tail(output)}" }
-            AppLog.info("coding.worktree", "task.refresh.declined", mapOf("entityId" to record.taskId, "result" to code.toString()))
+            AppLog.debug("coding.worktree", "task.refresh.declined", mapOf("entityId" to record.taskId, "result" to code.toString()))
             return@withContext TaskWorktreeRefresh(behind, tip,
                 note = "Изменения ветки назначения конфликтуют с задачей; объединение выполнится при слиянии")
         }
@@ -182,11 +184,11 @@ class GitTaskWorkspace(
             AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(), "result" to code.toString()))
             check(code == 0 && result.blockedReason == null) {
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
-                val tail = tail(result.output)
+                val detail = tail(result.output)
                 buildString {
                     append("Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение")
                     result.blockedReason?.let { append('\n').append(PlanningDiagnostics.redact(it)) }
-                    if (tail.isNotEmpty()) append('\n').append(tail)
+                    if (detail.isNotEmpty()) append('\n').append(detail)
                 }
             }
         }

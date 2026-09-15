@@ -68,8 +68,9 @@ A task can outlive the destination tip it started from, and an agent editing a s
 repeats work the destination already contains. `TaskWorkspace.refresh` measures the distance
 read-only (`git rev-list --left-right --count HEAD...refs/heads/<target>`) and, when that is
 safe, brings the copy onto the destination tip. The session owner calls it once per run start
-for a task that is still PREPARING/RUNNING/READY, under the writer lease of the managed copy; a
-folder owned by another delivery only postpones the update.
+for a task that is still RUNNING/READY, under the writer lease of the managed copy; a
+folder owned by another delivery only postpones the update. A PREPARING copy is left on its
+recorded base commit so replaying preparation stays possible.
 
 The update is declined, never forced: unsaved agent edits are not committed on the agent's
 behalf, an unfinished Git operation is left alone, and a conflict before a run is rolled back

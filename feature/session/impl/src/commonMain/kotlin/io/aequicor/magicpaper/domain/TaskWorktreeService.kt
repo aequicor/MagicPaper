@@ -36,7 +36,8 @@ class TaskWorktreeService(
             if (previous.phase == TaskWorktreePhase.PREPARING) workspace.open(previous)
             else workspace.reconcile(previous)
             // Опорная точка запуска: рантайм ещё не работает, поэтому копию можно безопасно подтянуть к ветке назначения.
-            val refreshed = if (previous.phase in setOf(TaskWorktreePhase.PREPARING, TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY))
+            // PREPARING не обновляется: подготовленная копия обязана остаться на сохранённом базовом коммите.
+            val refreshed = if (previous.phase in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY))
                 refresh(project, sessionId, previous) else null
             return save(project.id, sessionId, taskId) { current ->
                 val running = if (current.phase == TaskWorktreePhase.PREPARING) current.copy(phase = TaskWorktreePhase.RUNNING) else current
