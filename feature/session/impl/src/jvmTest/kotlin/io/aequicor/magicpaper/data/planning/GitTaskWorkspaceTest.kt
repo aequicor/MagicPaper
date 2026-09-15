@@ -265,7 +265,7 @@ class GitTaskWorkspaceTest {
         port.open(next) // replay of the saved preparation intent
     } }
 
-    @Test fun taskBranchAndCommitCarryMeaningfulAsciiNameOfTheRequest() = runTest { fixture {
+    @Test fun taskBranchAndCommitCarryMeaningfulNameOfTheRequest() = runTest { fixture {
         val record = port.describe(project, "session", "one", "Фикс авторизации: убрать юникод из имён!")
         assertEquals("magicpaper/worktree-fiks-avtorizacii-ubrat-yunikod-iz-imen", record.branch)
         port.open(record)
@@ -274,8 +274,7 @@ class GitTaskWorkspaceTest {
         val dir = File(record.path)
         val subject = git(dir, "log", "-1", "--pretty=%s")
         val body = git(dir, "log", "-1", "--pretty=%b")
-        assertEquals("Fiks avtorizacii: ubrat yunikod iz imen!", subject)
-        assertTrue(subject.all { it.code < 128 }, subject)
+        assertEquals("Фикс авторизации: убрать юникод из имён!", subject)
         assertTrue(body.contains("one"), body)
     } }
 

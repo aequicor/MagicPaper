@@ -229,7 +229,7 @@ class GitTaskWorkspace(
     }
     /** Subject берёт строку запроса задачи; тело коммита сохраняет идентификатор для журналов. */
     private fun commitSubject(record: TaskWorktree): String =
-        asciiSubject(record.label, COMMIT_SUBJECT_LIMIT).ifBlank { "MagicPaper task ${record.taskId}" }
+        commitSubjectText(record.label, COMMIT_SUBJECT_LIMIT).ifBlank { "MagicPaper task ${record.taskId}" }
 
     private fun managed(record: TaskWorktree, mustExist: Boolean = true): File = File(record.path).canonicalFile.also {
         require(it.parentFile == root.canonicalFile && (!mustExist || it.isDirectory)) { "Рабочая копия недоступна или не принадлежит приложению" }

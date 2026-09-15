@@ -140,7 +140,7 @@ class GitPlanningWorkspace(
             return@serializedMutation existing
         }
         val subject = attempt.report.lineSequence().firstOrNull { it.isNotBlank() }
-            ?.let { asciiSubject(it, STAGE_SUBJECT_LIMIT) }?.ifBlank { null }
+            ?.let { commitSubjectText(it, STAGE_SUBJECT_LIMIT) }?.ifBlank { null }
             ?: "MagicPaper stage result ${attempt.id}"
         val head = git(dir, "rev-parse", "HEAD").trim()
         require(runCatching { git(dir, "merge-base", "--is-ancestor", attempt.baseCommit, head) }.isSuccess) {

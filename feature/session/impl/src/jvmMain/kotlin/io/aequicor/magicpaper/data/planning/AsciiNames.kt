@@ -1,9 +1,9 @@
 package io.aequicor.magicpaper.data.planning
 
 /**
- * Имена Git-объектов приложения остаются осознанными и ASCII: ветка задачи получает слаг её
- * запроса, а коммит — транслитерированную строку вместо хеша идентификатора. Юникод и служебные
- * символы не попадают ни в ref, ни в subject: Git-клиенты и логи показывают читаемый текст.
+ * Имена Git-объектов приложения остаются осознанными: ветка задачи получает ASCII-слаг её
+ * запроса, а коммит сохраняет исходный текст (Git поддерживает UTF-8 в сообщениях).
+ * Юникод и служебные символы не попадают в ref: Git-клиенты и логи показывают читаемое имя ветки.
  */
 private val CYRILLIC_ASCII = mapOf(
     'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e",
@@ -36,6 +36,9 @@ internal fun asciiSlug(text: String, limit: Int): String {
     return cut.substringBeforeLast('-', cut).trim('-')
 }
 
-/** Однострочный subject коммита: переносы и повторы пробелов схлопываются, юникод транслитерируется. */
-internal fun asciiSubject(text: String, limit: Int): String =
-    transliterateAscii(text).replace(Regex("\\s+"), " ").trim().take(limit).trim()
+/**
+ * Subject коммита без транслитерации: Git поддерживает UTF-8 в сообщениях, кириллица сохраняется.
+ * Схлопывает переносы и повторы пробелов, обрезает по лимиту.
+ */
+internal fun commitSubjectText(text: String, limit: Int): String =
+    text.replace(Regex("\\s+"), " ").trim().take(limit).trim()
