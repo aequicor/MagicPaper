@@ -2,14 +2,23 @@ package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.designsystem.PaperPromptField
+import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
@@ -107,6 +116,48 @@ class ChatChatScrollToBottomTest {
         for (coding in listOf(false)) Chat(coding, long = false).use { chat ->
             assertTrue(chat.atEnd())
             assertNull(chat.button())
+        }
+    }
+
+    @Test fun floatingComposerLeavesTheLastMessageReadable() {
+        val scene = onUi { ImageComposeScene(420, 520) {
+            MagicPaperTheme { Surface {
+                Box(Modifier.fillMaxSize()) {
+                    MessagesList(
+                        ChatSession("s", "Диалог", 0, 0, messages = listOf(
+                            ChatMessage("answer", ChatRole.AGENT, "Последний ответ", 1),
+                        )),
+                        busy = false,
+                        bottomContentPadding = 124.dp,
+                        floatingControlsBottomPadding = 116.dp,
+                    )
+                    PaperWorkspaceComposer(Modifier.align(Alignment.BottomCenter).width(420.dp)) {
+                        PaperPromptField("", {}, "Что нужно сделать?")
+                        Box(Modifier.height(32.dp))
+                    }
+                }
+            } }
+        } }
+        try {
+            repeat(24) { frame -> onUi { scene.render(frame * 32_000_000L).close() } }
+            val nodes = onUi {
+                fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+            }
+            val answer = nodes.single { node ->
+                node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Последний ответ" } == true
+            }
+            val prompt = nodes.single { it.config.getOrNull(SemanticsProperties.EditableText) != null }
+            assertTrue(answer.boundsInRoot.bottom + 12f <= prompt.boundsInRoot.top - 8f,
+                "Последнее сообщение должно оставаться читаемым над парящим полем")
+            onUi {
+                val directory = File("build/reports/chat-composer").apply { mkdirs() }
+                scene.render(1_000_000_000L).use { image -> image.encodeToData()!!.use {
+                    File(directory, "floating-composer.png").writeBytes(it.bytes)
+                } }
+            }
+        } finally {
+            onUi { scene.close() }
         }
     }
 }

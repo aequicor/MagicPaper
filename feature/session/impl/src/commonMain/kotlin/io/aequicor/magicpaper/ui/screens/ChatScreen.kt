@@ -46,6 +46,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.key
@@ -97,32 +99,41 @@ import io.aequicor.magicpaper.designsystem.PaperTextRole
 fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
-    Column(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
         val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
-        MessagesList(state.current, state.busy, modifier = Modifier.weight(1f),
+        val density = LocalDensity.current
+        var composerHeight by remember { mutableStateOf(0.dp) }
+        MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+            bottomContentPadding = composerHeight + 12.dp,
+            floatingControlsBottomPadding = composerHeight + 4.dp,
             pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty())
-        Composer(
-            draftSession = vm.composerDraft,
-            enabled = true,
-            busy = state.busy,
-            paused = state.current?.pendingRun != null && !state.busy,
-            onPause = vm::pause,
-            onResume = vm::resume,
-            onClarify = vm::clarify,
-            session = state.current,
-            profiles = state.availableLlmProfiles,
-            activeProfileId = state.settings.activeLlmProfileId,
-            onSend = { text, attachments -> vm.send(text, attachments) },
-            onOpenSwitcher = { vm.toggleModelSwitcher(true) },
-            onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
-            onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
-        )
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .onSizeChanged { composerHeight = with(density) { it.height.toDp() } }) {
+            Composer(
+                draftSession = vm.composerDraft,
+                enabled = true,
+                busy = state.busy,
+                paused = state.current?.pendingRun != null && !state.busy,
+                onPause = vm::pause,
+                onResume = vm::resume,
+                onClarify = vm::clarify,
+                session = state.current,
+                profiles = state.availableLlmProfiles,
+                activeProfileId = state.settings.activeLlmProfileId,
+                onSend = { text, attachments -> vm.send(text, attachments) },
+                onOpenSwitcher = { vm.toggleModelSwitcher(true) },
+                onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
+                onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
+            )
+        }
     }
 }
 
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
     pins: List<RequestPinGroup> = emptyList(),
+    bottomContentPadding: androidx.compose.ui.unit.Dp = 16.dp,
+    floatingControlsBottomPadding: androidx.compose.ui.unit.Dp = 12.dp,
     listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.runtime.key(session?.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
@@ -168,7 +179,8 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
                     .paperChatTopShadow(scrolled, topOffset = topInset),
-                contentPadding = PaddingValues(start = 16.dp, top = laneTop + 16.dp, end = 16.dp, bottom = 16.dp),
+                contentPadding = PaddingValues(start = 16.dp, top = laneTop + 16.dp,
+                    end = 16.dp, bottom = bottomContentPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
@@ -188,13 +200,14 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
         }
         RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = laneTop),
             browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
-        PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp))
+        PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = floatingControlsBottomPadding))
         AnimatedVisibility(
             visible = busy,
             modifier = Modifier.align(Alignment.BottomStart),
         ) {
             Row(
-                modifier = Modifier.padding(start = 20.dp, bottom = 6.dp),
+                modifier = Modifier.padding(start = 20.dp, bottom = floatingControlsBottomPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 PaperProgress(modifier = Modifier.size(14.dp), kind = PaperProgressKind.CIRCULAR, label = "Чары плетутся")
