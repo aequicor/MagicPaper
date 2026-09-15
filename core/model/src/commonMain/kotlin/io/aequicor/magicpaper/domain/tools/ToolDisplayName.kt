@@ -23,5 +23,6 @@ fun toolDisplayName(id: String): String = when (id) {
     "file.edit" -> "Редактирование файла"
     "file.write" -> "Запись файла"
     "shell.exec" -> "Команда"
+    "view_image", "functions:view_image", "codex:view_image" -> "Анализ изображения"
     else -> id
 }

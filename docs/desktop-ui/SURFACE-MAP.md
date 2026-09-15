@@ -266,4 +266,4 @@
 
 ## Граница новых составных API
 
-`PaperImage`, `PaperAttachmentRow`, `PaperAttachmentChip` — доступный preview изображения, список вложений и отдельное вложение с удалением/открытием. `PaperLink` — фокусируемая ссылка с activation/context copy. `PaperScroll` — viewport/scrollbar и управление follow-end без потери пользовательской позиции. Эти API создаются как составные DS-компоненты до переноса соответствующих поверхностей этапа 6; базовые focus/semantics/controls предоставляет этап 3. Остальные Paper* и платформенные обязанности определены в CONTRACT.md.
+`PaperImage`, `PaperExpandableImage`, `PaperAttachmentRow`, `PaperAttachmentChip` — доступный preview изображения, плавно раскрываемая миниатюра, список вложений и отдельное вложение с удалением/открытием. `PaperLink` — фокусируемая ссылка с activation/context copy. `PaperScroll` — viewport/scrollbar и управление follow-end без потери пользовательской позиции. Эти API создаются как составные DS-компоненты до переноса соответствующих поверхностей этапа 6; базовые focus/semantics/controls предоставляет этап 3. Остальные Paper* и платформенные обязанности определены в CONTRACT.md.

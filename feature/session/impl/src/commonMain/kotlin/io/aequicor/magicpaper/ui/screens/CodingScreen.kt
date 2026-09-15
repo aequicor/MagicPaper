@@ -1194,8 +1194,8 @@ private fun SavedCodingHistoryItem(
                                 parts.Content(fragment.index,
                                     style = LocalPaperTypography.current.body.copy(fontFamily = PaperFonts.code),
                                     color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
+                                if (fragment.last) CodingResultImages(message, step)
                             })
-                        if (fragment.last) CodingResultImages(message, step)
                     } else parts.Content(fragment.index,
                         style = when (step?.kind) {
                             CodingStepKind.INFO -> LocalPaperTypography.current.body
@@ -1373,8 +1373,7 @@ internal fun CodingStepRow(step: CodingStep, live: Boolean, message: CodingMessa
             )
         }
         CodingStepKind.TOOL, CodingStepKind.EXEC -> {
-            ToolStepRow(step, live)
-            message?.let { CodingResultImages(it, step) }
+            ToolStepRow(step, live, message)
         }
         CodingStepKind.SUMMARY -> Unit
     }
@@ -1415,7 +1414,7 @@ private fun ThinkingStepRow(step: CodingStep, live: Boolean) {
 
 /** Команда или действие: часы до завершения, полный текст и вывод по тапу. */
 @Composable
-private fun ToolStepRow(step: CodingStep, live: Boolean) {
+private fun ToolStepRow(step: CodingStep, live: Boolean, message: CodingMessage? = null) {
     var expanded by rememberSaveable(step.id, step.callId) { mutableStateOf(false) }
     val preview = remember(step.title) { codingToolPreview(step.title) }
     // Output can grow on every event. A closed card has the same small set of
@@ -1430,6 +1429,9 @@ private fun ToolStepRow(step: CodingStep, live: Boolean) {
         toolPhase = step.toolPhase,
         expanded = expanded,
         onToggle = { expanded = !expanded },
+        supplement = message?.takeIf { step.images.isNotEmpty() }?.let { owner ->
+            { CodingResultImages(owner, step) }
+        },
     )
 }
 
@@ -1448,6 +1450,7 @@ private fun ToolStepContent(
     showHeader: Boolean = true,
     toolPhase: ToolPhase? = null,
     body: (@Composable () -> Unit)? = null,
+    supplement: (@Composable () -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val status = when { toolPhase == ToolPhase.WAITING && running -> ToolStepStatus.WAITING
@@ -1533,6 +1536,7 @@ private fun ToolStepContent(
                 style = LocalPaperTypography.current.code,
                 color = if (ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
         }
+        if (expanded) supplement?.invoke()
     }
 }
 

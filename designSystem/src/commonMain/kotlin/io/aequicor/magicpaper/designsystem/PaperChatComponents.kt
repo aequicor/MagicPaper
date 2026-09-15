@@ -27,6 +27,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -37,6 +38,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.text.KeyboardActions
@@ -325,6 +327,31 @@ public fun PaperImage(
 
 /** Controls whether an image fills its bounds or remains completely visible. */
 public enum class PaperImageScale { CROP, FIT }
+
+/** Inline image preview that preserves context while smoothly revealing readable detail. */
+@Composable
+public fun PaperExpandableImage(
+    bitmap: ImageBitmap,
+    description: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val width by animateDpAsState(if (expanded) 360.dp else 72.dp, tween(220), label = "Attachment preview width")
+    val height by animateDpAsState(if (expanded) 280.dp else 64.dp, tween(220), label = "Attachment preview height")
+    val shape = RoundedCornerShape(if (expanded) 10.dp else 7.dp)
+    Image(
+        bitmap = bitmap,
+        contentDescription = description,
+        contentScale = if (expanded) ContentScale.Fit else ContentScale.Crop,
+        modifier = modifier.size(width, height).clip(shape)
+            .paperClickable(shape = shape, role = Role.Button, onClick = onToggle)
+            .semantics {
+                stateDescription = if (expanded) "Изображение раскрыто" else "Миниатюра изображения"
+                contentDescription = if (expanded) "Свернуть $description" else "Раскрыть $description"
+            },
+    )
+}
 
 @Composable
 public fun PaperApprovalDock(modifier: Modifier = Modifier, content: @Composable () -> Unit) =

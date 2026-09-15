@@ -15,19 +15,24 @@ import androidx.compose.ui.semantics.getOrNull
 import io.aequicor.magicpaper.domain.tools.ToolPhase
 import io.aequicor.magicpaper.domain.CodingStep
 import io.aequicor.magicpaper.domain.CodingStepKind
+import io.aequicor.magicpaper.domain.CodingImageLocator
+import io.aequicor.magicpaper.domain.CodingImageReference
+import io.aequicor.magicpaper.domain.CodingImageSource
+import io.aequicor.magicpaper.domain.CodingMessage
+import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class CodingToolPreviewRenderTest {
-    private class Card(initial: CodingStep) : AutoCloseable {
+    private class Card(initial: CodingStep, private val message: CodingMessage? = null) : AutoCloseable {
         val step = mutableStateOf(initial)
         var height = 0
         private var frame = 0L
         val scene = ImageComposeScene(680, 600) {
             MagicPaperTheme {
                 Column(Modifier.fillMaxWidth().onSizeChanged { height = it.height }) {
-                    CodingStepRow(step.value, live = true)
+                    CodingStepRow(step.value, live = true, message = message)
                 }
             }
         }
@@ -45,6 +50,22 @@ class CodingToolPreviewRenderTest {
             render()
         }
         override fun close() = scene.close()
+    }
+
+    @Test fun imageAnalysisThumbnailAppearsInsideToolDisclosure() {
+        val image = CodingImageReference("call:image", CodingImageSource.TOOL_RESULT, "session", "invocation",
+            "timeline", "message", "call", "scan.png", "image/png", 68,
+            CodingImageLocator.InlineBase64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        val message = CodingMessage(id = "message", role = CodingRole.AGENT, text = "", createdAt = 0, timelineId = "timeline")
+        Card(CodingStep(CodingStepKind.TOOL, "⚒ Анализ изображения", tool = "view_image", callId = "call",
+            images = listOf(image)), message).use { card ->
+            card.render()
+            assertFalse("Результаты изображений" in card.texts())
+            card.toggle()
+            assertTrue("Результаты изображений" in card.texts(), "The thumbnail belongs to the opened tool details")
+            card.toggle()
+            assertFalse("Результаты изображений" in card.texts())
+        }
     }
 
     @Test fun waitingAndCancellationRemainVisibleInTheExistingToolCard() {

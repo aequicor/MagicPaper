@@ -1,8 +1,6 @@
 package io.aequicor.magicpaper.ui.components
 
-import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -10,30 +8,26 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.decodeToImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.PaperAttachmentChip
 import io.aequicor.magicpaper.designsystem.PaperAttachmentRow
@@ -41,6 +35,7 @@ import io.aequicor.magicpaper.designsystem.PaperAttachmentThumbnail
 import io.aequicor.magicpaper.designsystem.PaperAttachmentThumbnailState
 import io.aequicor.magicpaper.designsystem.PaperImage
 import io.aequicor.magicpaper.designsystem.PaperImageScale
+import io.aequicor.magicpaper.designsystem.PaperExpandableImage
 import io.aequicor.magicpaper.designsystem.PaperModal
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
@@ -360,7 +355,6 @@ fun renderAttachmentChip(attachment: Attachment, onRemove: (() -> Unit)? = null,
 @Composable
 fun renderMessageAttachments(attachments: List<Attachment>) {
     if (attachments.isEmpty()) return
-    var preview by remember { mutableStateOf<Attachment?>(null) }
     Spacer(Modifier.height(6.dp))
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -369,27 +363,12 @@ fun renderMessageAttachments(attachments: List<Attachment>) {
         attachments.forEach { attachment ->
             val bitmap = rememberAttachmentThumbnail(attachment).bitmap
             if (bitmap != null) {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = 220.dp)
-                        .heightIn(max = 160.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .paperClickable { preview = attachment },
-                ) {
-                    PaperImage(
-                        bitmap,
-                        attachment.name,
-                        Modifier.fillMaxWidth().heightIn(max = 160.dp),
-                        scale = PaperImageScale.FIT,
-                    )
-                }
+                var expanded by rememberSaveable(attachment.id) { mutableStateOf(false) }
+                PaperExpandableImage(bitmap, attachment.name, expanded, { expanded = !expanded })
             } else {
                 AttachmentChip(attachment)
             }
         }
-    }
-    preview?.let { attachment ->
-        ImagePreviewDialog(attachment) { preview = null }
     }
 }
 
@@ -432,7 +411,6 @@ fun renderCodingResultImages(message: CodingMessage, step: CodingStep) {
 @Composable
 private fun CodingImageAttachments(images: List<CodingImageReference>, heading: String) {
     if (images.isEmpty()) return
-    var preview by remember { mutableStateOf<Attachment?>(null) }
     Spacer(Modifier.height(6.dp))
     PaperText(heading, role = PaperTextRole.LABEL)
     FlowRow(
@@ -449,11 +427,23 @@ private fun CodingImageAttachments(images: List<CodingImageReference>, heading: 
                         state = PaperAttachmentThumbnailState.ERROR,
                         onRemove = null,
                     )
-                } else AttachmentChip(attachment, onOpen = { preview = attachment })
+                } else {
+                    val bitmap = rememberAttachmentThumbnail(attachment)
+                    if (bitmap.bitmap != null) {
+                        var expanded by rememberSaveable(image.imageId) { mutableStateOf(false) }
+                        PaperExpandableImage(bitmap.bitmap, image.name, expanded, { expanded = !expanded })
+                    } else {
+                        PaperAttachmentThumbnail(
+                            label = "${image.name} · ${formatSize(image.sizeBytes)}",
+                            description = image.name,
+                            state = if (bitmap.failed) PaperAttachmentThumbnailState.ERROR else PaperAttachmentThumbnailState.LOADING,
+                            onRemove = null,
+                        )
+                    }
+                }
             }
         }
     }
-    preview?.let { attachment -> ImagePreviewDialog(attachment) { preview = null } }
 }
 
 private fun CodingImageReference.asInlineAttachment(): Attachment? =
