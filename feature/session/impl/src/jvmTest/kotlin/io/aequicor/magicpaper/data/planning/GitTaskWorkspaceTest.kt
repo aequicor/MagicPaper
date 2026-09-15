@@ -98,6 +98,23 @@ class GitTaskWorkspaceTest {
         assertEquals("", git(source, "status", "--porcelain"))
     } }
 
+    @Test fun verifyRunsTaskChecksInManagedCopyAndReportsTheirOutput() = runTest { fixture {
+        val checked = GitTaskWorkspace(pool, checks = TaskWorktreeIntegrationChecks())
+        val task = open()
+        val dir = File(task.path)
+        dir.resolve("result.txt").writeText("ok")
+        git(dir, "add", "."); git(dir, "commit", "-m", "result")
+        val record = prepare(task)
+        checked.verify(record.copy(checks = listOf(listOf("git", "--version"))))
+        val failure = assertFailsWith<IllegalStateException> {
+            checked.verify(record.copy(checks = listOf(listOf("git", "rev-parse", "--verify", "refs/heads/missing-branch"))))
+        }
+        assertTrue(failure.message!!.startsWith("Проверка результата завершилась с ошибкой"), failure.message)
+        assertTrue(failure.message!!.contains("fatal"), failure.message)
+        assertEquals(record.mergeCommit, git(dir, "rev-parse", "HEAD"))
+        assertEquals("", git(dir, "status", "--porcelain", "--untracked-files=all"))
+    } }
+
     @Test fun dirtyIndexAndUntrackedFilesBlockPreparation() = runTest { fixture {
         source.resolve("untracked").writeText("user")
         assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r") }

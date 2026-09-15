@@ -11,7 +11,8 @@ import java.security.MessageDigest
 class GitTaskWorkspace(
     private val root: File = File(System.getProperty("user.home"), ".MagicPaper/task-worktrees"),
     private val checkpoint: (String) -> Unit = {},
-    private val checks: SessionIntegrationCheckRunner = io.aequicor.magicpaper.data.research.ResearchSessionIntegrationChecks(),
+    // Управляемая копия задачи проверяется без песочницы исследования: см. KDoc TaskWorktreeIntegrationChecks.
+    private val checks: SessionIntegrationCheckRunner = TaskWorktreeIntegrationChecks(),
 ) : TaskWorkspace {
     override suspend fun availability(project: CodingProject): WorktreeAvailability = withContext(Dispatchers.IO) {
         val source = File(project.path)
@@ -123,8 +124,17 @@ class GitTaskWorkspace(
             val result = try { checks.run(dir.path, checkId, args) }
             finally { withContext(NonCancellable) { checks.abort(checkId); checks.reconcile(checkId) } }
             val code = result.exitCode
-            AppLog.info("coding.worktree", "check.finished", mapOf("taskId" to record.taskId, "exitCode" to code.toString()))
-            check(code == 0 && result.blockedReason == null) { "Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение" }
+            // Ключи вне allowlist AppLog санитируются до `[redacted]`: идентификатор задачи и код выхода берём из разрешённых.
+            AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(), "result" to code.toString()))
+            check(code == 0 && result.blockedReason == null) {
+                // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
+                val tail = PlanningDiagnostics.redact(result.output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
+                buildString {
+                    append("Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение")
+                    result.blockedReason?.let { append('\n').append(PlanningDiagnostics.redact(it)) }
+                    if (tail.isNotEmpty()) append('\n').append(tail)
+                }
+            }
         }
         require(verificationSnapshot(dir.path) == before) { "Проверка изменила файлы задачи; нужна повторная приёмка" }
         clean(dir)
@@ -193,3 +203,5 @@ class GitTaskWorkspace(
     }
     private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).take(12).joinToString("") { "%02x".format(it) }
 }
+
+private const val CHECK_OUTPUT_DETAIL = 2000
