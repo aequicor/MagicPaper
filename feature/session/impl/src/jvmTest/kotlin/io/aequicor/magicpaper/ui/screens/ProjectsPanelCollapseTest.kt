@@ -213,6 +213,21 @@ class ProjectsPanelCollapseTest {
         assertEquals(fullBounds, p.text(title).boundsInRoot, "Leaving the row restores all title space")
     }
 
+    @Test fun nonGreenSessionShowsStatusSubtitleWhileGreenSessionStaysCompact() = Panel().use { p ->
+        p.ui.value = p.ui.value.copy(sessions = p.ui.value.sessions.map {
+            if (it.session.id == "ordinary") it.copy(running = true) else it
+        })
+        p.render()
+
+        assertTrue(p.hasText("работает"), "A working session must show its status below the title")
+        assertFalse(p.hasText("ждёт запроса"), "The green idle state must not show a subtitle")
+        assertTrue(
+            p.text("работает").boundsInRoot.top >= p.text("Ordinary").boundsInRoot.bottom,
+            "The status must be laid out below the session name",
+        )
+        p.snapshot("session-status-subtitle")
+    }
+
     @Test fun newSessionButtonUsesOnlyItsCallback() = Panel().use { p ->
         p.hover("project-a")
         val button = p.newSessionButton()

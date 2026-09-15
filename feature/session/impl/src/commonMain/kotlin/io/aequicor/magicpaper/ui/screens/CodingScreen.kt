@@ -803,14 +803,23 @@ private fun SessionRow(
     ) {
         StatusTooltip(status) { ActivityDot(status, size = 8) }
         Spacer(Modifier.width(7.dp))
-        PaperFadingText(
-            displayName,
-            modifier = Modifier.weight(1f),
-            style = LocalPaperTypography.current.chrome,
-            fontWeight = FontWeight.Normal,
-            color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
-            marqueeOnHover = true,
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            PaperFadingText(
+                displayName,
+                style = LocalPaperTypography.current.chrome,
+                fontWeight = FontWeight.Normal,
+                color = LocalPaperColors.current.text,
+                marqueeOnHover = true,
+            )
+            if (status != CodingSessionStatus.IDLE) {
+                PaperFadingText(
+                    status.label,
+                    style = LocalPaperTypography.current.chrome,
+                    color = LocalPaperColors.current.secondaryText,
+                    marqueeOnHover = true,
+                )
+            }
+        }
         if (item.unread) {
             Spacer(Modifier.width(6.dp))
             Box(
