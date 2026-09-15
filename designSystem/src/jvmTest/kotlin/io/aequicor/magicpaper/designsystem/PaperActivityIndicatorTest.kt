@@ -149,7 +149,10 @@ class PaperActivityIndicatorTest {
     @Test fun bothSilhouettesShareFillAndOutlineWhileOnlyShapeDiffers() {
         val colors = PaperColors()
         for (tone in PaperActivityTone.values()) {
-            val circle = Glyph(raster(PaperActivityShape.CIRCLE, tone, running = false))
+            val circleRaster = raster(PaperActivityShape.CIRCLE, tone, running = false)
+            val directory = java.io.File("build/reports/activity-indicators").apply { mkdirs() }
+            ImageIO.write(circleRaster, "png", java.io.File(directory, "$tone.png"))
+            val circle = Glyph(circleRaster)
             val diamond = Glyph(raster(PaperActivityShape.DIAMOND, tone, running = false))
             val (fill, edge) = colors.activityIndicatorColors(tone)
             assertEquals(circle.centreRgb, diamond.centreRgb, "$tone fill must be identical")

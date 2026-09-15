@@ -61,6 +61,10 @@ public data class PaperColors(
     public val activityYellow: Color = Color(0xFFE8C66C),
     public val activityGreen: Color = Color(0xFF8FC7A2),
     public val activityYellowEdge: Color = Color(0xFF80621E),
+    public val activityPurple: Color = Color(0xFFBB9FE3),
+    public val activityPurpleEdge: Color = Color(0xFF59447A),
+    public val activityBlue: Color = Color(0xFF8FBAE8),
+    public val activityBlueEdge: Color = Color(0xFF345878),
     public val systemText: Color = Color(0xFF713A86),
     public val systemSurface: Color = Color(0xFFF0E2F4),
 )
