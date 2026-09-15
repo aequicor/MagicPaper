@@ -55,9 +55,7 @@ class PaperContentEntranceTest {
             render()
             onUi { shown.value = true }
             val arrival = render()
-            assertEquals(80, arrival.last())
-            assertTrue(arrival.any { it in 1 until 80 }, "The entrance must contain intermediate heights: $arrival")
-            assertTrue(arrival.zipWithNext().all { (before, after) -> after >= before })
+            assertTrue(arrival.all { it == 80 }, "The entrance must reserve its full layout height: $arrival")
             val before = compositions
             onUi { animate.value = false; label.value = "Done" }
             assertTrue(render().all { it == 80 }, "Updating content must not remove or shrink it")

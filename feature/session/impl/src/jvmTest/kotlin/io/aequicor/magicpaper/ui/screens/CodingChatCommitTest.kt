@@ -282,7 +282,7 @@ class CodingChatCommitTest {
         chat.snapshot("preparing-answer-$width")
     } }
 
-    @Test fun newCommandAppearsGraduallyAndStaysVisibleThroughCompletion() = Chat().use { chat ->
+    @Test fun newCommandKeepsStableLayoutAndStaysVisibleThroughCompletion() = Chat().use { chat ->
         chat.recorder.apply(CodingEvent.ToolStarted("command", "./gradlew check", callId = "animated-command", isExec = true))
         chat.value.value = chat.value.value.copy(draft = chat.recorder.draft(true))
         val step = chat.value.value.draft.steps.last()
@@ -292,9 +292,8 @@ class CodingChatCommitTest {
             chat.list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { heights += it.size }
         }
         val fullHeight = heights.last()
-        assertTrue(heights.any { it in 1 until fullHeight }, "New commands must expand over several frames: $heights")
-        assertTrue(heights.zipWithNext().all { (before, after) -> after >= before },
-            "A new command must not briefly disappear: $heights")
+        assertTrue(heights.all { it == fullHeight },
+            "A new command must reserve its full height instead of moving the trailing status: $heights")
         assertFalse(chat.list.canScrollForward, "Follow the bottom after the appearance animation")
 
         chat.readMiddle()

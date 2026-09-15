@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -13,7 +12,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 
 /**
  * Reveal newly arriving content once within its saved composition identity.
@@ -26,7 +24,10 @@ public fun PaperContentEntrance(animate: Boolean, content: @Composable () -> Uni
     val visibility = remember { MutableTransitionState(!animate || appeared).apply { targetState = true } }
     SideEffect { appeared = true }
     AnimatedVisibility(visibility,
-        enter = fadeIn(tween(180)) + expandVertically(tween(220), expandFrom = Alignment.Top),
+        // Keep the full layout height from the first frame. Expanding a lazy chat row changes the
+        // preceding fragment's bottom shape before the new surface has reached it, briefly exposing
+        // the transcript background and moving the trailing agent status on every animation frame.
+        enter = fadeIn(tween(180)),
         exit = ExitTransition.None,
     ) { content() }
 }
