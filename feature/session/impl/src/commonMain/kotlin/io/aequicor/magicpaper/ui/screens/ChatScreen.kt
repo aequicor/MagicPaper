@@ -8,10 +8,7 @@ import io.aequicor.magicpaper.ui.components.PaperPreserveInlineExpansion
 import io.aequicor.magicpaper.ui.components.PaperCollapseMessage
 
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -20,20 +17,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import io.aequicor.magicpaper.designsystem.PaperTitleBarLaneGap
 import io.aequicor.magicpaper.designsystem.paperChatTopShadow
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -45,25 +37,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.Attachment
-import io.aequicor.magicpaper.domain.MAX_ATTACHMENTS_PER_MESSAGE
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.LlmProfile
-import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
@@ -72,7 +53,7 @@ import io.aequicor.magicpaper.ui.ChatState
 import io.aequicor.magicpaper.ui.components.PaperChatMarkdown
 import io.aequicor.magicpaper.ui.components.PaperChatPlainText
 import io.aequicor.magicpaper.ui.components.MessageAttachments
-import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
+import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.paperStickToBottom
 import io.aequicor.magicpaper.ui.components.PaperChatScrollItem
 import io.aequicor.magicpaper.ui.components.PaperChatScrollToBottomButton
@@ -81,16 +62,10 @@ import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.paperChatScrollInput
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
-import io.aequicor.magicpaper.designsystem.PaperAction
-import io.aequicor.magicpaper.designsystem.PaperButton
-import io.aequicor.magicpaper.designsystem.PaperButtonKind
-import io.aequicor.magicpaper.designsystem.PaperComposer
-import io.aequicor.magicpaper.designsystem.PaperComposerField
 import io.aequicor.magicpaper.designsystem.PaperDivider
-import io.aequicor.magicpaper.designsystem.PaperPanel
-import io.aequicor.magicpaper.designsystem.PaperProgress
-import io.aequicor.magicpaper.designsystem.PaperProgressKind
-import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
+import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
+import io.aequicor.magicpaper.designsystem.PaperActivityTone
+import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
 
@@ -99,16 +74,9 @@ import io.aequicor.magicpaper.designsystem.PaperTextRole
 fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
-    Box(modifier = Modifier.fillMaxSize()) {
-        val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
-        val density = LocalDensity.current
-        var composerHeight by remember { mutableStateOf(0.dp) }
-        MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
-            bottomContentPadding = composerHeight + 12.dp,
-            floatingControlsBottomPadding = composerHeight + 4.dp,
-            pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty())
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .onSizeChanged { composerHeight = with(density) { it.height.toDp() } }) {
+    val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
+    MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+        pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty(), footer = {
             Composer(
                 draftSession = vm.composerDraft,
                 enabled = true,
@@ -125,8 +93,7 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
             )
-        }
-    }
+    })
 }
 
 @Composable
@@ -137,6 +104,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.runtime.key(session?.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
+    footer: @Composable () -> Unit = {},
 ) {
     val messages = session?.messages.orEmpty()
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
@@ -171,16 +139,20 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     PaperPreserveInlineExpansion(expandedParts, scroll)
     val pinNumbers = remember(pins, indices) { requestPinNumbers(pins, indices.keys) }
     var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
+    val density = LocalDensity.current
+    var footerHeight by remember { mutableStateOf(0.dp) }
+    // External overlays and the measured footer reserve the same bottom lane.
+    val transcriptBottomPadding = maxOf(bottomContentPadding, footerHeight + 4.dp)
+    val controlsBottomPadding = maxOf(floatingControlsBottomPadding, footerHeight - 8.dp)
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
-        if (messages.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(top = laneTop)) { EmptyHint() }
+        if (messages.isEmpty() && !busy) {
+            Box(Modifier.fillMaxSize().padding(top = laneTop, bottom = maxOf(footerHeight, bottomContentPadding))) { EmptyHint() }
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
                     .paperChatTopShadow(scrolled, topOffset = topInset),
-                contentPadding = PaddingValues(start = 16.dp, top = laneTop + 16.dp,
-                    end = 16.dp, bottom = bottomContentPadding),
+                contentPadding = PaddingValues(start = 8.dp, top = laneTop + 12.dp, end = 8.dp, bottom = transcriptBottomPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
@@ -196,28 +168,24 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                         }
                     }
                 }
+                if (busy) item(key = ChatWorkingItem.STATUS, contentType = "status") {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PaperActivityIndicator(PaperActivityTone.WORKING, "Чары плетутся", running = true)
+                        PaperText("Чары плетутся…", role = PaperTextRole.CHROME,
+                            color = LocalPaperColors.current.secondaryText)
+                    }
+                }
             }
         }
         RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = laneTop),
             browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
-            .padding(end = 16.dp, bottom = floatingControlsBottomPadding))
-        AnimatedVisibility(
-            visible = busy,
-            modifier = Modifier.align(Alignment.BottomStart),
-        ) {
-            Row(
-                modifier = Modifier.padding(start = 20.dp, bottom = floatingControlsBottomPadding),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PaperProgress(modifier = Modifier.size(14.dp), kind = PaperProgressKind.CIRCULAR, label = "Чары плетутся")
-                Spacer(Modifier.width(8.dp))
-                PaperText(
-                    text = "Чары плетутся…",
-                    role = PaperTextRole.BODY,
-                    color = LocalPaperColors.current.secondaryText,
-                )
-            }
+            .padding(end = 8.dp, bottom = controlsBottomPadding))
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
+            footer()
         }
     }
 }
@@ -239,6 +207,8 @@ private fun EmptyHint() {
     }
 }
 
+private enum class ChatWorkingItem { STATUS }
+
 private data class ChatMessageFragment(val message: ChatMessage, val parts: PaperInlineMessageParts? = null, val index: Int = 0) {
     val key: String get() = if (index == 0) message.id else "${message.id}:text:$index"
     val first: Boolean get() = index == 0
@@ -250,30 +220,16 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
     fragment: ChatMessageFragment = ChatMessageFragment(message), onCollapse: () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 10.dp else 0.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 8.dp else 0.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        PaperPanel(
-            kind = if (isUser) PaperSurfaceKind.SELECTED else PaperSurfaceKind.PANEL,
+        MessagePinColumn(
+            number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
             modifier = Modifier
-                // На узких экранах бабл не должна занимать всю ширину —
-                // 100% не даёт читаемой строки.
-                .widthIn(max = 560.dp)
+                .widthIn(max = 820.dp)
                 .then(if (fragment.parts != null) Modifier.fillMaxWidth() else Modifier)
-                .clip(
-                    // «хвост» бабла со стороны автора: верхний угол у его края — почти острый.
-                    RoundedCornerShape(
-                        topStart = if (!fragment.first) 0.dp else if (isUser) 20.dp else 6.dp,
-                        topEnd = if (!fragment.first) 0.dp else if (isUser) 6.dp else 20.dp,
-                        bottomStart = if (fragment.last) 20.dp else 0.dp,
-                        bottomEnd = if (fragment.last) 20.dp else 0.dp,
-                    )
-                )
-                ,
+                .paperConversationMessage(isUser, fragment.first, fragment.last),
         ) {
-            MessagePinColumn(number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = if (fragment.first) 10.dp else 0.dp,
-                    bottom = if (fragment.last) 10.dp else 0.dp)) {
             if (fragment.parts != null) {
                 fragment.parts.Content(fragment.index)
                 if (fragment.last) PaperCollapseMessage(onCollapse)
@@ -309,7 +265,6 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                     }
                 }
             }
-            }
         }
     }
 }
@@ -323,31 +278,7 @@ private fun ModelChip(
     onClick: () -> Unit,
 ) {
     val resolved = ProfileResolver.resolve(session, io.aequicor.magicpaper.domain.AppSettings(activeLlmProfileId = activeProfileId), profiles)
-    val overridden = session?.llmProfileId != null
-    PaperAction(
-        onClick = onClick,
-        modifier = Modifier.heightIn(min = 48.dp),
-    ) {
-        if (resolved == null) {
-            PaperText(
-                "✦ Источник не подключён",
-                role = PaperTextRole.BODY,
-                color = LocalPaperColors.current.error,
-            )
-        } else {
-            // Подпись с учётом словаря модели: при подмене уровня видно «х-выс→выс».
-            val effortGlyph = resolved.effortLabel(
-                ModelDefaults.capability(resolved),
-                resolved.modelId,
-            )
-            PaperText(
-                "${if (overridden) "◌ " else ""}✦ ${resolved.shortLabel} · $effortGlyph ▾",
-                role = PaperTextRole.BODY,
-                color = LocalPaperColors.current.action,
-                maxLines = 1,
-            )
-        }
-    }
+    CodingModelChip(resolved, overridden = session?.llmProfileId != null, onClick = onClick)
 }
 
 @Composable

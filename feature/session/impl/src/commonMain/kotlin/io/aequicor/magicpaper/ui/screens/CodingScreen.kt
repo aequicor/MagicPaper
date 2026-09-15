@@ -1714,7 +1714,7 @@ internal fun CodingComposer(
                         if (directAttachmentAction) onPickAttachments(attachments.size) { attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE) }
                         else { searchMenuOpen = false; menuOpen = true }
                     },
-                        modifier = Modifier.size(32.dp).semantics { contentDescription = if (directAttachmentAction) "Прикрепить файлы" else "Инструменты и параметры сессии" },
+                        modifier = Modifier.widthIn(min = 32.dp).heightIn(min = 32.dp).semantics { contentDescription = if (directAttachmentAction) "Прикрепить файлы" else "Инструменты и параметры сессии" },
                         contentPadding = PaddingValues(0.dp)) {
                         PaperText("+", style = LocalPaperTypography.current.title, color = LocalPaperColors.current.action)
                     }
