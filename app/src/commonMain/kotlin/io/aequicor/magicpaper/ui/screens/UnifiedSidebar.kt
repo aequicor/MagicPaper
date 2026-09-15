@@ -43,6 +43,7 @@ import io.aequicor.magicpaper.designsystem.PaperActivityTone
 import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
+import io.aequicor.magicpaper.designsystem.PaperFadingText
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextAction
 import io.aequicor.magicpaper.designsystem.PaperTextRole
@@ -504,12 +505,12 @@ private fun UnifiedSessionRow(
         }
 
         Column(modifier = Modifier.weight(1f)) {
-            PaperText(
+            // Длинное название затухает по краю и прокручивается при наведении.
+            PaperFadingText(
                 item.displayName,
                 style = LocalPaperTypography.current.body,
                 color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                marqueeOnHover = true,
             )
         }
         // Ромбик иммунитета на строке зиготы.
@@ -590,13 +591,12 @@ private fun UnifiedChildSessionRow(
             ActivityDot(item.codingStatus, size = 8)
             Spacer(Modifier.width(7.dp))
         }
-        PaperText(
+        PaperFadingText(
             item.displayName,
             modifier = Modifier.weight(1f),
             style = LocalPaperTypography.current.chrome,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
+            marqueeOnHover = true,
         )
         if (item.unread) {
             Spacer(Modifier.width(6.dp))

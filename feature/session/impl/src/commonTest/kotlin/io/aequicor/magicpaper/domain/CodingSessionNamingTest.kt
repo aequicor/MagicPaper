@@ -63,6 +63,15 @@ class CodingSessionNamingTest {
     @Test fun modelAnswerIsStrippedToItsTaskWords() {
         assertEquals("Найти ошибку", compactSessionTitle("🗓️ «Найти ошибку»"))
         assertEquals("Исправить меню", compactSessionTitle("- **Исправить меню**"))
+        // Название до десяти слов сохраняется полностью, лишние слова отбрасываются.
+        assertEquals(
+            "Восстановить детские сессии после сбоя приложения и сохранить их состояние",
+            compactSessionTitle("Восстановить детские сессии после сбоя приложения и сохранить их состояние"),
+        )
+        assertEquals(
+            "one two three four five six seven eight nine ten",
+            compactSessionTitle("one two three four five six seven eight nine ten eleven"),
+        )
         assertNull(compactSessionTitle("   "))
     }
 

@@ -795,9 +795,12 @@ fun CodingSession.sidebarTitle(): String = when {
 fun CodingSession.needsShortTitle(): Boolean = parentSessionId == null &&
     sessionKind != SessionKind.IMMUNITY && shortTitle.isBlank() && !nameManuallySet && !archived
 
+private const val MAX_TITLE_WORDS = 10
+private const val MAX_TITLE_LENGTH = 100
+
 /**
  * Модель даёт заголовок, интерфейс — только одну короткую строку: без разметки, без кавычек
- * и префиксов, не длиннее трёх слов.
+ * и префиксов, не длиннее [MAX_TITLE_WORDS] слов.
  */
 fun compactSessionTitle(answer: String): String? {
     val text = answer.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
@@ -810,8 +813,8 @@ fun compactSessionTitle(answer: String): String? {
         .replace(Regex("\\s+"), " ").trim().trim { !it.isLetterOrDigit() }
     if (text.isBlank()) return null
     val words = text.split(' ')
-    val short = if (words.size <= 3) text else words.take(3).joinToString(" ")
-    return short.take(40).trimEnd('.', ',', ':', ';', '-').ifBlank { null }
+    val short = if (words.size <= MAX_TITLE_WORDS) text else words.take(MAX_TITLE_WORDS).joinToString(" ")
+    return short.take(MAX_TITLE_LENGTH).trimEnd('.', ',', ':', ';', '-').ifBlank { null }
 }
 
 /** Includes archived workers and nested descendants. */

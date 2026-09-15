@@ -1,6 +1,10 @@
 package io.aequicor.magicpaper.designsystem
 
 
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,7 +22,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Fade overflowing ink into the existing paper, including translucent selected rows. */
+/**
+ * Fade overflowing ink into the existing paper, including translucent selected rows.
+ * With [marqueeOnHover] a single-line overflow scrolls automatically while the
+ * text is hovered, so a long title stays readable without truncation or a tooltip.
+ */
 @Composable
 public fun PaperFadingText(
     text: String,
@@ -27,11 +35,16 @@ public fun PaperFadingText(
     fontWeight: FontWeight? = null,
     style: TextStyle = LocalPaperTypography.current.body,
     maxLines: Int = 1,
+    marqueeOnHover: Boolean = false,
 ) {
-    var overflowing by remember(text, style) { mutableStateOf(false) }
+    var overflowing by remember(text, style, maxLines) { mutableStateOf(false) }
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    val scrolling = marqueeOnHover && maxLines == 1 && overflowing && hovered
     PaperText(
         text = text,
         modifier = modifier
+            .then(if (marqueeOnHover && maxLines == 1) Modifier.hoverable(hoverInteraction) else Modifier)
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithContent {
                 drawContent()
@@ -51,13 +64,24 @@ public fun PaperFadingText(
                         blendMode = BlendMode.DstIn,
                     )
                 }
-            },
+            }
+            .then(
+                if (scrolling) {
+                    Modifier.basicMarquee(
+                        iterations = Int.MAX_VALUE,
+                        initialDelayMillis = 250,
+                        repeatDelayMillis = 800,
+                    )
+                } else Modifier,
+            ),
         color = color,
         fontWeight = fontWeight,
         style = style,
         maxLines = maxLines,
         softWrap = maxLines > 1,
         overflow = TextOverflow.Clip,
-        onTextLayout = { overflowing = it.didOverflowWidth || it.didOverflowHeight },
+        // Под прокруткой текст измеряется без ограничения ширины; переполнение
+        // фиксируется по обычной раскладке и не сбрасывается во время анимации.
+        onTextLayout = { if (!scrolling) overflowing = it.didOverflowWidth || it.didOverflowHeight },
     )
 }

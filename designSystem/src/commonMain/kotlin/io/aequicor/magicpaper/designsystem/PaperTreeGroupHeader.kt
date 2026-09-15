@@ -41,8 +41,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -50,7 +48,8 @@ import androidx.compose.ui.unit.dp
  * expansion; [active] indicates that the current selection belongs to the group.
  * Left/Right collapse/expand idempotently. Content follows the tree's leading
  * guide while the disclosure, optional status and title share a vertical centre.
- * The full title remains available to accessibility and in a tooltip at any scale.
+ * A long title fades at the trailing edge and scrolls automatically on hover;
+ * the full title remains available to accessibility at any scale.
  * [onClick] opens the zygote session when the title area is clicked; expansion
  * is still toggled via the disclosure arrow or keyboard. [trailing] renders
  * an optional side action (e.g. immunity diamond) after the title.
@@ -116,14 +115,12 @@ public fun PaperTreeGroupHeader(
     ) {
         leading?.invoke()
         Spacer(Modifier.width(8.dp))
-        PaperText(
+        PaperFadingText(
             title,
             modifier = Modifier.weight(1f),
-            role = PaperTextRole.CHROME,
+            style = LocalPaperTypography.current.chrome,
             fontWeight = FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            softWrap = false,
+            marqueeOnHover = true,
         )
         if (trailing != null) {
             Spacer(Modifier.width(8.dp))

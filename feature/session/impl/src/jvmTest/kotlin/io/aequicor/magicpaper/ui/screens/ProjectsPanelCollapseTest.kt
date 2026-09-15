@@ -204,7 +204,11 @@ class ProjectsPanelCollapseTest {
         val fullBounds = p.text(title).boundsInRoot
         assertTrue(fullBounds.right >= 185f, "Hidden actions must not leave an empty strip before the row edge")
         p.hover("session-ordinary")
-        assertTrue(p.text(title).boundsInRoot.right < fullBounds.right, "Visible actions need their own space")
+        // Действия получают собственное место до края строки, а длинный заголовок
+        // при наведении прокручивается: его раскладка становится шире строки.
+        val actions = p.actionsMenu().boundsInRoot
+        assertTrue(actions.width > 0f && actions.right <= 200f, "Visible actions need their own space inside the row")
+        assertTrue(p.text(title).boundsInRoot.width > fullBounds.width, "Hovered long title must scroll instead of truncating")
         p.hover("project-b")
         assertEquals(fullBounds, p.text(title).boundsInRoot, "Leaving the row restores all title space")
     }

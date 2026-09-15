@@ -783,6 +783,7 @@ private fun SessionRow(
             style = LocalPaperTypography.current.chrome,
             fontWeight = FontWeight.Normal,
             color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
+            marqueeOnHover = true,
         )
         if (item.unread) {
             Spacer(Modifier.width(6.dp))
