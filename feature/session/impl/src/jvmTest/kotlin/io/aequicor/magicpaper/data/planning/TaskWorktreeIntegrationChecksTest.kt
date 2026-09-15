@@ -35,6 +35,15 @@ class TaskWorktreeIntegrationChecksTest {
         assertTrue(path.isNotEmpty() && !path.contains("%PATH%"), path)
     } }
 
+    @Test fun relativeExecutableIsResolvedAgainstWorktree() = runTest { withDir("magicpaper-task-check-relative-") { dir ->
+        val file = if (windows) File(dir, "run.cmd") else File(dir, "run.sh")
+        file.writeText(if (windows) "@echo from-worktree" else "#!/bin/sh\necho from-worktree")
+        if (!windows) file.setExecutable(true)
+        val result = TaskWorktreeIntegrationChecks().run(dir.path, "relative", listOf("./" + file.name))
+        assertEquals(0, result.exitCode, result.output)
+        assertTrue(result.output.contains("from-worktree"), result.output)
+    } }
+
     // Процессы живут в реальном времени: виртуальные часы runTest сделали бы пределы и остановки нефизичными.
     @Test fun timedOutCheckIsBlockedInsteadOfSilentlyPassing() = runBlocking { withDir("magicpaper-task-check-timeout-") { dir ->
         val started = System.currentTimeMillis()

@@ -124,7 +124,8 @@ class GitTaskWorkspace(
             val result = try { checks.run(dir.path, checkId, args) }
             finally { withContext(NonCancellable) { checks.abort(checkId); checks.reconcile(checkId) } }
             val code = result.exitCode
-            AppLog.info("coding.worktree", "check.finished", mapOf("taskId" to record.taskId, "exitCode" to code.toString()))
+            // Ключи вне allowlist AppLog санитируются до `[redacted]`: идентификатор задачи и код выхода берём из разрешённых.
+            AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(), "result" to code.toString()))
             check(code == 0 && result.blockedReason == null) {
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
                 val tail = PlanningDiagnostics.redact(result.output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
