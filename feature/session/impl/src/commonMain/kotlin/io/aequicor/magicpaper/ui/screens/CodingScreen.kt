@@ -1696,10 +1696,27 @@ internal fun CodingComposer(
 ) {
     var text by state.text
     var attachments by state.attachments
-    val resumeSubmission = onResume != null && (!planning || (text.isBlank() && attachments.isEmpty()))
-    fun submit() {
-        if (!enabled || busy || (onResume == null && text.isBlank() && attachments.isEmpty())) return
-        (if (resumeSubmission) onResume else onSend)(text, attachments)
+    val hasInput = text.isNotBlank() || attachments.isNotEmpty()
+    val primaryAction = when {
+        busy && hasInput && onClarify != null -> ComposerPrimaryAction.CLARIFY
+        busy && hasInput -> ComposerPrimaryAction.QUEUE
+        busy -> ComposerPrimaryAction.PAUSE
+        onResume != null && (!planning || !hasInput) -> ComposerPrimaryAction.RESUME
+        else -> ComposerPrimaryAction.SEND
+    }
+    val primaryEnabled = when (primaryAction) {
+        ComposerPrimaryAction.PAUSE -> true
+        ComposerPrimaryAction.RESUME -> enabled
+        else -> enabled && hasInput
+    }
+    fun activatePrimaryAction() {
+        if (!primaryEnabled) return
+        when (primaryAction) {
+            ComposerPrimaryAction.SEND, ComposerPrimaryAction.QUEUE -> onSend(text, attachments)
+            ComposerPrimaryAction.PAUSE -> onAbort()
+            ComposerPrimaryAction.CLARIFY -> onClarify?.invoke(text, attachments)
+            ComposerPrimaryAction.RESUME -> onResume?.invoke(text, attachments)
+        }
         // The service clears the captured draft only after persisting the accepted request.
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1719,8 +1736,8 @@ internal fun CodingComposer(
                                     attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
                                 }
                             } else if (event.type == KeyEventType.KeyDown && (event.isMetaPressed || event.isCtrlPressed) && event.key == Key.Enter) {
-                                submit()
-                                true
+                                if (primaryAction != ComposerPrimaryAction.PAUSE) activatePrimaryAction()
+                                primaryAction != ComposerPrimaryAction.PAUSE
                             } else {
                                 false
                             }
@@ -1854,20 +1871,13 @@ internal fun CodingComposer(
                     modifier = Modifier.padding(horizontal = 6.dp).height(24.dp),
                     color = LocalPaperColors.current.border,
                 )
-                if (busy) io.aequicor.magicpaper.designsystem.PaperButton("Пауза", onAbort,
-                    kind = io.aequicor.magicpaper.designsystem.PaperButtonKind.SECONDARY)
-                else io.aequicor.magicpaper.designsystem.PaperButton(
-                    if (!enabled) "Движок не готов" else if (resumeSubmission) "Продолжить" else "Отправить",
-                    onClick = ::submit,
-                    enabled = enabled && (onResume != null || text.isNotBlank() || attachments.isNotEmpty()))
-            }
-            if (busy) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                onClarify?.let { clarify ->
-                    PaperButton("Уточнить", { clarify(text, attachments) }, kind = PaperButtonKind.SECONDARY,
-                        enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()))
-                }
-                PaperButton("В очередь", { onSend(text, attachments) },
-                    enabled = enabled && (text.isNotBlank() || attachments.isNotEmpty()))
+                io.aequicor.magicpaper.designsystem.PaperButton(
+                    label = if (!enabled && primaryAction != ComposerPrimaryAction.PAUSE) "Движок не готов" else primaryAction.label,
+                    onClick = ::activatePrimaryAction,
+                    modifier = Modifier.widthIn(min = 104.dp),
+                    kind = if (primaryAction == ComposerPrimaryAction.PAUSE) PaperButtonKind.SECONDARY else PaperButtonKind.PRIMARY,
+                    enabled = primaryEnabled,
+                )
             }
             if (narrowContext) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (onInteractionMode != null || planning || research) CodingModeLabel(planning, research)
@@ -1876,6 +1886,14 @@ internal fun CodingComposer(
             }
         }
     }
+}
+
+private enum class ComposerPrimaryAction(val label: String) {
+    SEND("Отправить"),
+    PAUSE("Пауза"),
+    CLARIFY("Уточнить"),
+    RESUME("Возобновить"),
+    QUEUE("В очередь"),
 }
 
 private val SearchProvider.menuLabel: String

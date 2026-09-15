@@ -56,7 +56,7 @@ class CodingComposerRenderTest {
         } finally { Dispatchers.resetMain() }
     }
 
-    @Test fun chatComposerOffersTheSameRunningActionsAtNarrowAndWideWidths() = runTest {
+    @Test fun chatComposerSwitchesItsSingleRunningActionAtNarrowAndWideWidths() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {
             for (width in listOf(390, 1000)) {
@@ -70,16 +70,18 @@ class CodingComposerRenderTest {
                     fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
                     fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                     render()
+                    nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Пауза") }
+                        .config[SemanticsActions.OnClick].action?.invoke()
                     nodes().first { it.config.contains(SemanticsActions.SetText) }.config[SemanticsActions.SetText].action!!
                         .invoke(androidx.compose.ui.text.AnnotatedString("Уточнение к задаче"))
                     render()
-                    for (label in listOf("Пауза", "Уточнить", "В очередь")) {
-                        val node = nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf(label) }
-                        assertTrue(node.boundsInRoot.left >= 0 && node.boundsInRoot.right <= width)
-                        assertTrue(node.boundsInRoot.bottom <= 300)
-                        assertTrue(node.config[SemanticsActions.OnClick].action?.invoke() == true)
-                    }
-                    assertEquals(listOf(1, 1, 1), listOf(paused, clarified, queued))
+                    val action = nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Уточнить") }
+                    assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= width)
+                    assertTrue(action.boundsInRoot.bottom <= 300)
+                    assertTrue(action.config[SemanticsActions.OnClick].action?.invoke() == true)
+                    assertTrue(nodes().none { it.config.getOrNull(SemanticsProperties.ContentDescription) in
+                        listOf(listOf("Пауза"), listOf("В очередь")) })
+                    assertEquals(listOf(1, 1, 0), listOf(paused, clarified, queued))
                     val output = File("build/reports/session-input").apply { mkdirs() }
                     File(output, "chat-running-$width.png").writeBytes(scene.render(128_000_000L).use {
                         it.encodeToData()!!.use { data -> data.bytes }
@@ -89,7 +91,7 @@ class CodingComposerRenderTest {
         } finally { Dispatchers.resetMain() }
     }
 
-    @Test fun runningSessionOffersPauseClarificationAndQueueAtBothWidths() = runTest {
+    @Test fun runningSessionShowsOnlyClarifyWhenTheDraftHasContent() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {
             for (width in listOf(390, 1000)) {
@@ -102,15 +104,14 @@ class CodingComposerRenderTest {
                 } }.use { scene ->
                     repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
                     fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
-                    for (label in listOf("Пауза", "Уточнить", "В очередь")) {
-                        val node = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.single {
-                            it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf(label)
-                        }
-                        assertTrue(node.boundsInRoot.left >= 0 && node.boundsInRoot.right <= width)
-                        assertTrue(node.boundsInRoot.bottom <= 260)
-                        assertTrue(node.config[SemanticsActions.OnClick].action?.invoke() == true)
-                    }
-                    assertEquals(listOf(1, 1, 1), listOf(paused, clarified, queued))
+                    val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    val action = nodes.single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Уточнить") }
+                    assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= width)
+                    assertTrue(action.boundsInRoot.bottom <= 260)
+                    assertTrue(action.config[SemanticsActions.OnClick].action?.invoke() == true)
+                    assertTrue(nodes.none { it.config.getOrNull(SemanticsProperties.ContentDescription) in
+                        listOf(listOf("Пауза"), listOf("В очередь")) })
+                    assertEquals(listOf(0, 1, 0), listOf(paused, clarified, queued))
                     val output = File("build/reports/session-input").apply { mkdirs() }
                     File(output, "running-$width.png").writeBytes(scene.render(128_000_000L).use {
                         it.encodeToData()!!.use { data -> data.bytes }
@@ -201,7 +202,7 @@ class CodingComposerRenderTest {
                     assertTrue(draft.clearIfUnchanged(submittedVersion))
                     assertEquals("", draft.text.value)
                     draw()
-                    click("Продолжить")
+                    click("Возобновить")
                     repeat(6) { draw() }
                     assertEquals(1, resumed)
                     assertEquals(1, sent.size)
@@ -230,7 +231,7 @@ class CodingComposerRenderTest {
                 }.use { scene ->
                     repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
                     fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
-                    val label = if (resumable) "Продолжить" else "Отправить"
+                    val label = if (resumable) "Возобновить" else "Отправить"
                     val button = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }.first {
                         it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true
                     }.boundsInRoot.center
@@ -244,6 +245,33 @@ class CodingComposerRenderTest {
                         it.encodeToData()!!.use { data -> data.bytes }
                     })
                 }
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun stoppedSessionUsesTheSingleResumeActionWithAnEnteredClarification() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val draft = io.aequicor.magicpaper.ui.components.CodingComposerDraft().apply {
+                text.value = "Продолжи с учётом проверки"
+            }
+            var resumedWith = ""
+            ImageComposeScene(500, 140) { MagicPaperTheme { Surface {
+                CodingComposer(state = draft, enabled = true, busy = false,
+                    onSend = { _, _ -> fail("A stopped session must resume its request") },
+                    onResume = { text, _ -> resumedWith = text },
+                    onAbort = {}, onPickAttachments = { _, _ -> })
+            } } }.use { scene ->
+                repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                val actions = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    .filter { it.config.getOrNull(SemanticsProperties.Role) == Role.Button }
+                    .filter { it.config.getOrNull(SemanticsProperties.ContentDescription)?.firstOrNull() in
+                        setOf("Отправить", "Пауза", "Уточнить", "Возобновить", "В очередь") }
+                val resume = actions.single()
+                assertEquals(listOf("Возобновить"), resume.config.getOrNull(SemanticsProperties.ContentDescription))
+                assertTrue(resume.config[SemanticsActions.OnClick].action?.invoke() == true)
+                assertEquals("Продолжи с учётом проверки", resumedWith)
             }
         } finally { Dispatchers.resetMain() }
     }

@@ -66,7 +66,7 @@ class ChatTranscriptDesignTest {
                     val plus = scene.text("+")
                     assertTrue(plus.boundsInRoot.top >= attach.boundsInRoot.top && plus.boundsInRoot.bottom <= attach.boundsInRoot.bottom,
                         "Attachment glyph must fit the control at ${case.scale} text scale")
-                    val labels = if (case.name == "busy") listOf("Пауза", "Уточнить", "В очередь") else listOf("Отправить")
+                    val labels = if (case.name == "busy") listOf("Пауза") else listOf("Отправить")
                     for (label in labels) {
                         val action = scene.text(label)
                         assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= case.width, "$label clipped: ${case.name}")
