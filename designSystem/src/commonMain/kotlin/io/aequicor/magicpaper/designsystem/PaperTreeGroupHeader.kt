@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -49,7 +50,8 @@ import androidx.compose.ui.unit.dp
  * Left/Right collapse/expand idempotently. Content follows the tree's leading
  * guide while the disclosure, optional status and title share a vertical centre.
  * A long title fades at the trailing edge and scrolls automatically on hover;
- * the full title remains available to accessibility at any scale.
+ * [subtitle], when present, is rendered below it with secondary emphasis.
+ * The full text remains available to accessibility at any scale.
  * [onClick] opens the zygote session when the title area is clicked; expansion
  * is still toggled via the disclosure arrow or keyboard. [trailing] renders
  * an optional side action (e.g. immunity diamond) after the title.
@@ -69,6 +71,7 @@ public fun PaperTreeGroupHeader(
     hoverActions: (@Composable (Boolean) -> Unit)? = null,
     keepActionsVisible: Boolean = false,
     childCount: Int = 0,
+    subtitle: String? = null,
 ) {
     val colors = LocalPaperColors.current
     val shape = RoundedCornerShape(6.dp)
@@ -115,13 +118,22 @@ public fun PaperTreeGroupHeader(
     ) {
         leading?.invoke()
         Spacer(Modifier.width(8.dp))
-        PaperFadingText(
-            title,
-            modifier = Modifier.weight(1f),
-            style = LocalPaperTypography.current.chrome,
-            fontWeight = FontWeight.Normal,
-            marqueeOnHover = true,
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            PaperFadingText(
+                title,
+                style = LocalPaperTypography.current.chrome,
+                fontWeight = FontWeight.Normal,
+                marqueeOnHover = true,
+            )
+            if (subtitle != null) {
+                PaperFadingText(
+                    subtitle,
+                    style = LocalPaperTypography.current.chrome,
+                    color = colors.secondaryText,
+                    marqueeOnHover = true,
+                )
+            }
+        }
         if (trailing != null) {
             Spacer(Modifier.width(8.dp))
             trailing.invoke(isHovered)

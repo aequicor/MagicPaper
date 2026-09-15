@@ -310,6 +310,7 @@ internal fun UnifiedSidebar(
                                 var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
                                 PaperTreeGroupHeader(
                                     title = item.displayName,
+                                    subtitle = item.codingStatus?.sidebarSubtitle,
                                     expanded = organismExpanded,
                                     onToggle = { collapsedOrganisms = collapsedOrganisms + (item.id to !organismExpanded) },
                                     modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),

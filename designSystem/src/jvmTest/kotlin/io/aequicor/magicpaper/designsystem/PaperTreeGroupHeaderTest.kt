@@ -40,6 +40,35 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperTreeGroupHeaderTest {
     @Test
+    fun subtitleIsRenderedBelowTaskTitle() {
+        ImageComposeScene(280, 100) {
+            PaperTheme {
+                PaperTreeGroupHeader(
+                    title = "Добавить сессиям subtitle",
+                    subtitle = "Работа завершена · нужна ручная проверка",
+                    expanded = false,
+                    onToggle = {},
+                )
+            }
+        }.use { scene ->
+            repeat(5) { scene.render((it + 1) * 16_000_000L).close() }
+            val title = scene.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == "Добавить сессиям subtitle"
+            }
+            val subtitle = scene.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == "Работа завершена · нужна ручная проверка"
+            }
+            assertTrue(subtitle.boundsInRoot.top >= title.boundsInRoot.bottom)
+
+            val file = File("build/reports/paper-task-group-header/status-subtitle.png")
+            file.parentFile.mkdirs()
+            scene.render(96_000_000L).use { image ->
+                image.encodeToData()!!.use { file.writeBytes(it.bytes) }
+            }
+        }
+    }
+
+    @Test
     fun disclosureActionsAndKeyboardChangeExpansionOnce() {
         val expanded = mutableStateOf(true)
         val focus = FocusRequester()
