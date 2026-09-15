@@ -67,6 +67,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
             // M3-чекбоксы для task-листов — как в дефолте m3-модуля,
             // который затирается кастомным набором компонентов.
             checkbox = { MarkdownCheckBox(it.content, it.node, it.typography.text) },
+            table = { PaperMarkdownTable(it) },
             unorderedList = { model ->
                 if ((model.node as? PaperMarkdownSlice)?.listContinuation == true)
                     MarkdownListItems(model.content, model.node, model.listDepth, bullet = { _, _, _ -> PaperText(" ") })

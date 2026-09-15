@@ -44,7 +44,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.elements.MarkdownCheckBox
 import com.mikepenz.markdown.m3.markdownTypography
 
 /** Semantic transcript shell. It deliberately owns only visual treatment; features retain list state and anchors. */
@@ -74,6 +76,11 @@ public fun PaperMarkdown(text: String, modifier: Modifier = Modifier, compact: B
     Markdown(
         content = text,
         modifier = modifier,
+        // Дефолт m3-модуля; таблица переопределена, чтобы ячейки переносились, а не обрезались.
+        components = markdownComponents(
+            checkbox = { MarkdownCheckBox(it.content, it.node, it.typography.text) },
+            table = { PaperMarkdownTable(it) },
+        ),
         typography = markdownTypography(
             h1 = paperTextStyle(if (compact) body else PaperTextRole.TITLE),
             h2 = paperTextStyle(if (compact) body else PaperTextRole.TITLE),
