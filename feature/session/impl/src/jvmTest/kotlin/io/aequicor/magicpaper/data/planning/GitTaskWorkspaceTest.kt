@@ -147,6 +147,29 @@ class GitTaskWorkspaceTest {
         assertEquals(result.mergeCommit, git(source, "rev-parse", "HEAD"))
     } }
 
+    @Test fun repeatedDestinationAdvanceKeepsCapturedResultReachable() = runTest { fixture {
+        var task = open()
+        File(task.path).resolve("task.txt").writeText("task")
+        task = task.copy(resultCommit = port.capture(task))
+
+        source.resolve("first.txt").writeText("first")
+        git(source, "add", "."); git(source, "commit", "-m", "first parallel task")
+        task = task.copy(targetCommit = port.target(task))
+        task = task.copy(mergeCommit = checkNotNull(port.integrate(task)))
+        task = task.copy(integratedCommit = task.targetCommit)
+
+        source.resolve("second.txt").writeText("second")
+        git(source, "add", "."); git(source, "commit", "-m", "second parallel task")
+        task = task.copy(targetCommit = port.target(task))
+        task = task.copy(mergeCommit = checkNotNull(port.integrate(task)))
+
+        port.verify(task)
+        port.deliver(task)
+        assertEquals("task", source.resolve("task.txt").readText())
+        assertEquals("first", source.resolve("first.txt").readText())
+        assertEquals("second", source.resolve("second.txt").readText())
+    } }
+
     @Test fun fixAlreadyPresentUpstreamIsDroppedInsteadOfConflicting() = runTest { fixture {
         val task = open()
         File(task.path).resolve("base.txt").writeText("fixed\n")

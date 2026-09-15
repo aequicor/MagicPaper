@@ -155,8 +155,10 @@ class GitTaskWorkspace(
                 clean(dir)
                 if (ancestor(dir, "HEAD", record.targetCommit)) git(dir, "merge", "--ff-only", record.targetCommit)
                 else {
-                    // Точка до переноса сохраняется в общем репозитории: она доказывает, что результат переписан нами, а не потерян.
-                    git(dir, "update-ref", preIntegrationRef(record), head(dir))
+                    // Первая точка до переноса сохраняется в общем репозитории: она доказывает, что исходный
+                    // результат переписан нами, а не потерян. Повторный перенос после продвижения назначения
+                    // не должен заменять её уже переписанным HEAD и тем самым уничтожать это доказательство.
+                    preservePreIntegrationRef(dir, record)
                     val (code, output) = rebaseOnto(dir, record.targetCommit)
                     if (code != 0) {
                         if (unmerged(dir).isNotBlank()) return@withContext null
@@ -279,8 +281,14 @@ class GitTaskWorkspace(
         require(record.resultCommit.isNotBlank(), lost)
         if (ancestor(dir, record.resultCommit, "HEAD")) return
         val pre = preIntegrationRef(record)
+        val previousTarget = record.integratedCommit.ifBlank { record.targetCommit }
         require(probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 && ancestor(dir, record.resultCommit, pre) &&
-            record.targetCommit.isNotBlank() && ancestor(dir, record.targetCommit, "HEAD"), lost)
+            previousTarget.isNotBlank() && ancestor(dir, previousTarget, "HEAD"), lost)
+    }
+    private suspend fun preservePreIntegrationRef(dir: File, record: TaskWorktree) {
+        val ref = preIntegrationRef(record)
+        if (probe(dir, "show-ref", "--verify", "--quiet", ref).first != 0)
+            git(dir, "update-ref", ref, head(dir))
     }
     private fun preIntegrationRef(record: TaskWorktree) = "refs/magicpaper/task-pre-integration-${hash(record.taskId)}"
     private fun tail(output: String) = PlanningDiagnostics.redact(output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
