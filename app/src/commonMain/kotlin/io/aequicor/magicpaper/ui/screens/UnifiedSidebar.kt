@@ -86,6 +86,9 @@ internal data class ImmunityInfo(
     val selected: Boolean,
 )
 
+internal val CodingSessionStatus.sidebarSubtitle: String?
+    get() = label.takeUnless { this == CodingSessionStatus.IDLE }
+
 /** Элементы единого списка: чаты и кодинг-сессии, отсортированные по обновлению. */
 @Composable
 internal fun rememberUnifiedItems(
@@ -512,6 +515,15 @@ private fun UnifiedSessionRow(
                 color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.text,
                 marqueeOnHover = true,
             )
+            item.codingStatus?.sidebarSubtitle
+                ?.let { subtitle ->
+                    PaperFadingText(
+                        subtitle,
+                        style = LocalPaperTypography.current.chrome,
+                        color = LocalPaperColors.current.secondaryText,
+                        marqueeOnHover = true,
+                    )
+                }
         }
         // Ромбик иммунитета на строке зиготы.
         val immunity = item.immunity
@@ -591,13 +603,23 @@ private fun UnifiedChildSessionRow(
             ActivityDot(item.codingStatus, size = 8)
             Spacer(Modifier.width(7.dp))
         }
-        PaperFadingText(
-            item.displayName,
-            modifier = Modifier.weight(1f),
-            style = LocalPaperTypography.current.chrome,
-            color = if (selected) LocalPaperColors.current.text else LocalPaperColors.current.text,
-            marqueeOnHover = true,
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            PaperFadingText(
+                item.displayName,
+                style = LocalPaperTypography.current.chrome,
+                color = LocalPaperColors.current.text,
+                marqueeOnHover = true,
+            )
+            item.codingStatus?.sidebarSubtitle
+                ?.let { subtitle ->
+                    PaperFadingText(
+                        subtitle,
+                        style = LocalPaperTypography.current.chrome,
+                        color = LocalPaperColors.current.secondaryText,
+                        marqueeOnHover = true,
+                    )
+                }
+        }
         if (item.unread) {
             Spacer(Modifier.width(6.dp))
             UnreadDot()
