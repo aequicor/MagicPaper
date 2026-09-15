@@ -115,6 +115,28 @@ class GitTaskWorkspaceTest {
         assertEquals("", git(dir, "status", "--porcelain", "--untracked-files=all"))
     } }
 
+    @Test fun failedTestIdentitySurvivesWarningsFromParallelBuildTasks() = runTest { fixture {
+        val output = "PaperActivityIndicatorTest > pulseIsSharedByBothSilhouettes FAILED\n" +
+            "w: unrelated compilation warning\n".repeat(300) + "BUILD FAILED in 16s"
+        val runner = object : SessionIntegrationCheckRunner {
+            override suspend fun run(path: String, id: String, command: List<String>) =
+                SessionIntegrationCheck(command, 1, output, null)
+            override fun abort(id: String) = Unit
+            override suspend fun reconcile(id: String) = Unit
+        }
+        val checked = GitTaskWorkspace(pool, checks = runner)
+        val task = open()
+        File(task.path, "result.txt").writeText("pending result")
+        val record = prepare(task)
+        val failure = assertFailsWith<IllegalStateException> {
+            checked.verify(record.copy(checks = listOf(listOf("./gradlew", "test"))))
+        }
+        assertContains(failure.message.orEmpty(), "PaperActivityIndicatorTest > pulseIsSharedByBothSilhouettes FAILED")
+        assertContains(failure.message.orEmpty(), "BUILD FAILED in 16s")
+        assertTrue(failure.message.orEmpty().length < 2200, "Diagnostic remains bounded")
+        assertEquals(record.baseCommit, git(source, "rev-parse", "HEAD"), "A failed check never delivers the task")
+    } }
+
     @Test fun dirtyIndexAndUntrackedFilesBlockPreparation() = runTest { fixture {
         source.resolve("untracked").writeText("user")
         assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }

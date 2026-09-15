@@ -187,7 +187,7 @@ class GitTaskWorkspace(
             AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(), "result" to code.toString()))
             check(code == 0 && result.blockedReason == null) {
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
-                val detail = tail(result.output)
+                val detail = checkFailureDetail(result.output)
                 buildString {
                     append("Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение")
                     result.blockedReason?.let { append('\n').append(PlanningDiagnostics.redact(it)) }
@@ -291,6 +291,15 @@ class GitTaskWorkspace(
             git(dir, "update-ref", ref, head(dir))
     }
     private fun preIntegrationRef(record: TaskWorktree) = "refs/magicpaper/task-pre-integration-${hash(record.taskId)}"
+    private fun checkFailureDetail(output: String): String {
+        val safe = PlanningDiagnostics.redact(output)
+        // Parallel Gradle tasks can print warnings after a failed test. A tail alone loses
+        // the failing test's identity, and the next run overwrites its HTML/XML report.
+        val failures = safe.lineSequence().filter { it.trimEnd().endsWith(" FAILED") }
+            .take(6).joinToString("\n") { it.take(160) }
+        if (failures.isEmpty()) return safe.takeLast(CHECK_OUTPUT_DETAIL).trim()
+        return (failures + "\n" + safe.takeLast(CHECK_OUTPUT_DETAIL - failures.length - 1)).trim()
+    }
     private fun tail(output: String) = PlanningDiagnostics.redact(output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
     private suspend fun ancestor(dir: File, before: String, after: String): Boolean {
         val code = probe(dir, "merge-base", "--is-ancestor", before, after).first

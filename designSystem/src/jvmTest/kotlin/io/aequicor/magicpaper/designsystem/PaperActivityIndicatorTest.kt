@@ -30,6 +30,9 @@ import androidx.compose.ui.use
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import javax.imageio.ImageIO
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -45,7 +48,7 @@ import kotlin.test.assertTrue
  * Pulse geometry is measured on a larger glyph than the sidebar's 10 dp, where one pixel is a
  * large share of the shape and the shared easing curve would be hidden by quantization.
  */
-@OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class, ExperimentalCoroutinesApi::class)
 class PaperActivityIndicatorTest {
     private companion object {
         const val page = 40
@@ -111,8 +114,10 @@ class PaperActivityIndicatorTest {
 
         /** Inked area of one glyph across a whole pulse iteration. */
         fun areasAcrossCycle(shape: PaperActivityShape, tone: PaperActivityTone,
-            glyph: androidx.compose.ui.unit.Dp): List<Int> =
-            ImageComposeScene(page, page) {
+            glyph: androidx.compose.ui.unit.Dp, startTimeNanos: Long): List<Int> {
+            val scheduler = TestCoroutineScheduler()
+            val dispatcher = StandardTestDispatcher(scheduler)
+            return ImageComposeScene(page, page, coroutineContext = dispatcher) {
                 PaperTheme {
                     Box(Modifier.fillMaxSize().background(Color.White)) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -121,7 +126,22 @@ class PaperActivityIndicatorTest {
                         }
                     }
                 }
-            }.use { scene -> cycleTimes.map { time -> Glyph(scene.render(time).use { it.png() }).inkCount } }
+            }.use { scene ->
+                // Construction/LaunchedEffect startup is not a sampled animation frame.
+                // Previously the first frame could precede effect startup, shifting the last
+                // sample out of phase and intermittently rejecting a valid worktree result.
+                scene.render(startTimeNanos).close()
+                scheduler.runCurrent()
+                cycleTimes.map { time ->
+                    val frameTime = startTimeNanos + time
+                    scene.render(frameTime).close()
+                    scheduler.runCurrent()
+                    // Apply this frame's animation update before inspecting its pixels, without
+                    // advancing animation time or relying on wall-clock sleeps/another thread.
+                    Glyph(scene.render(frameTime).use { it.png() }).inkCount
+                }
+            }
+        }
 
         private fun org.jetbrains.skia.Image.png(): BufferedImage =
             encodeToData()!!.use { data -> ImageIO.read(ByteArrayInputStream(data.bytes)) }
@@ -189,13 +209,18 @@ class PaperActivityIndicatorTest {
     }
 
     @Test fun pulseIsSharedByBothSilhouettes() {
+        // Independent scenes and nonzero frame epochs exercise startup, not just a warmed scene.
+        repeat(30) { verifyPulseCycle(startTimeNanos = it * 2_000_000_000L) }
+    }
+
+    private fun verifyPulseCycle(startTimeNanos: Long) {
         val pulseSize = 32.dp
         // The midpoint sample of one Reverse iteration: tween(700) turns around after 700 ms.
         val peak = cycleTimes.size / 2
         for (tone in listOf(PaperActivityTone.WORKING, PaperActivityTone.ATTENTION)) {
             val curves = PaperActivityShape.values().map { shape ->
                 val resting = Glyph(raster(shape, tone, running = false, glyph = pulseSize)).inkCount
-                shape to areasAcrossCycle(shape, tone, pulseSize).map { it.toFloat() / resting }
+                shape to areasAcrossCycle(shape, tone, pulseSize, startTimeNanos).map { it.toFloat() / resting }
             }
             for ((shape, ratios) in curves) {
                 assertTrue(ratios.distinct().size >= 4, "$shape $tone must actually pulse: $ratios")
