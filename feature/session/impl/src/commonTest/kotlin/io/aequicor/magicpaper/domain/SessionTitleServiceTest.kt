@@ -121,7 +121,7 @@ class SessionTitleServiceTest {
     @Test fun readyTitleIsPublishedOnceAndSurvivesTheNextRefresh() {
         val f = Fixture { "Загрузка проекта" }
         f.sync(CodingSession("root", project.id, "Новая сессия", 1), user("почини загрузку проекта"))
-        assertEquals("🗓️ Загрузка проекта", f.stored().sidebarTitle())
+        assertEquals("Загрузка проекта", f.stored().sidebarTitle())
         f.sync(f.stored(), saved = false)
         assertEquals(1, f.calls.size, "A titled session is never summarised twice")
     }

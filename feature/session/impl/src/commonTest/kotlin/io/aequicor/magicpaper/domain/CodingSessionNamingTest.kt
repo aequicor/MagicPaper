@@ -7,7 +7,7 @@ import io.aequicor.magicpaper.ui.CodingSessionUi
 class CodingSessionNamingTest {
     @Test fun automaticNamesPreserveManualAndWorkerNames() {
         val session = CodingSession("s", "p", "Сессия 1", 1)
-        assertEquals("🗓️ Найти ошибку", session.namedFromPrompt("  Найти ошибку\nПодробности").name)
+        assertEquals("Найти ошибку", session.namedFromPrompt("  Найти ошибку\nПодробности").name)
         assertEquals(session, session.namedFromPrompt(" "))
         val manual = session.copy(nameManuallySet = true)
         assertEquals(manual, manual.namedFromPrompt("Запрос"))
@@ -17,7 +17,7 @@ class CodingSessionNamingTest {
 
     @Test fun newSessionTitleIsReplacedByFirstPrompt() {
         val session = CodingSession("s", "p", "Новая сессия", 1)
-        assertEquals("🗓️ Исправить меню", session.namedFromPrompt("Исправить меню").name)
+        assertEquals("Исправить меню", session.namedFromPrompt("Исправить меню").name)
         val manual = session.copy(nameManuallySet = true)
         assertEquals(manual, manual.namedFromPrompt("Исправить меню"))
     }
@@ -32,7 +32,7 @@ class CodingSessionNamingTest {
         val session = CodingSession("s", "p", "Новая сессия", 1)
         assertEquals(session, session.namedFromPrompt("""{"time":1789370239679,"level":"ERROR","msg":"boom"}"""))
         assertEquals("🗓️ Автонейминг создаёт названия сессий",
-            session.namedFromPrompt("""{"time":1789370239679,"level":"ERROR"}
+            session.copy(planningMode = true).namedFromPrompt("""{"time":1789370239679,"level":"ERROR"}
                 |Автонейминг создаёт названия сессий, не закрывающие задачу
                 |""".trimMargin()).name)
     }
@@ -56,7 +56,8 @@ class CodingSessionNamingTest {
         assertFalse(root.copy(nameManuallySet = true).needsShortTitle())
         assertFalse(root.copy(sessionKind = SessionKind.IMMUNITY).needsShortTitle())
         assertFalse(root.copy(archived = true).needsShortTitle())
-        assertEquals("🗓️ Найти ошибку", root.copy(shortTitle = "Найти ошибку").sidebarTitle())
+        assertEquals("Найти ошибку", root.copy(shortTitle = "Найти ошибку").sidebarTitle())
+        assertEquals("🗓️ Найти ошибку", root.copy(shortTitle = "Найти ошибку", planningMode = true).sidebarTitle())
     }
 
     @Test fun modelAnswerIsStrippedToItsTaskWords() {

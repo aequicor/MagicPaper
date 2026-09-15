@@ -729,7 +729,7 @@ fun String.isDefaultSessionName(): Boolean =
 fun CodingSession.namedFromPrompt(prompt: String, localSummaryAllowed: Boolean = true): CodingSession {
     if (nameManuallySet || parentSessionId != null || !name.isDefaultSessionName() || !localSummaryAllowed) return this
     val summary = localSessionSummary(prompt) ?: return this
-    return copy(name = "🗓️ $summary")
+    return copy(name = if (planningMode) "🗓️ $summary" else summary)
 }
 
 /**
@@ -781,7 +781,11 @@ private fun String.looksLikePastedData(): Boolean {
 private val PASTED_TIMESTAMP = Regex("""^(\(?\d{4}[-/]\d{2}[-/]|\d{9,}|\d{2}:\d{2}:\d{2}|\[\d{2,})""")
 
 /** A started session is listed by its short request, never by its placeholder name. */
-fun CodingSession.sidebarTitle(): String = if (shortTitle.isBlank()) name else "\ud83d\uddd3\ufe0f $shortTitle"
+fun CodingSession.sidebarTitle(): String = when {
+    shortTitle.isBlank() -> name
+    planningMode -> "\ud83d\uddd3\ufe0f $shortTitle"
+    else -> shortTitle
+}
 
 /**
  * Корневая сессия владеет задачей в списке, поэтому только она стоит одного модельного вызова
