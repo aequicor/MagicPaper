@@ -18,6 +18,8 @@ import io.aequicor.magicpaper.ui.*
 import io.aequicor.magicpaper.ui.components.*
 import io.aequicor.magicpaper.ui.screens.UnifiedSidebar
 import io.aequicor.magicpaper.ui.screens.NewCodingSessionDialog
+import io.aequicor.magicpaper.ui.screens.SessionRecencyTracker
+import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.ui.window.*
 import kotlinx.coroutines.delay
 
@@ -55,16 +57,23 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
         }
     }
     SideEffect { (root as ApplicationRoot).shellPresentation = presentation }
+    // Navigation recreates the visit content below. Recency belongs to the app shell,
+    // otherwise selecting another session would reset the activity ordering.
+    val sidebarRecencyTracker = remember { SessionRecencyTracker(Id::now) }
     Box(Modifier.fillMaxSize()) {
         // The animation belongs to the window, not a visit: recreating it resets
         // its clock and shader and makes the entire window flash on navigation.
         PaperBackground(config.settings.paperAnimationEnabled, Modifier.matchParentSize())
-        key(visit.id) { presentation.Content { AppShellContent(runtime, root) } }
+        key(visit.id) { presentation.Content { AppShellContent(runtime, root, sidebarRecencyTracker) } }
     }
 }
 
 @Composable
-private fun AppShellContent(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
+private fun AppShellContent(
+    runtime: MagicPaperRuntime,
+    root: RootComponent<AppChild>,
+    sidebarRecencyTracker: SessionRecencyTracker,
+) {
     val settings = runtime.koin.get<SettingsService>()
     val chat = runtime.koin.get<ChatService>()
     val coding = runtime.koin.get<CodingService>()
@@ -100,7 +109,7 @@ private fun AppShellContent(runtime: MagicPaperRuntime, root: RootComponent<AppC
                     PaperResizablePanels(sidebarVisible = sidebarVisible,
                         sidebar = { modifier ->
                             UnifiedSidebar(sidebarActions, chats.sessions, projects.coding, selectedId, isCoding,
-                                modifier.padding(top = topInset))
+                                modifier.padding(top = topInset), sidebarRecencyTracker)
                         }) {
                         Box(Modifier.fillMaxSize().then(if (edgeToEdge) Modifier else Modifier.padding(top = topInset))) {
                             key(stack.active.configuration.id) { stack.active.instance.Content() }

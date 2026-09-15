@@ -57,7 +57,6 @@ import io.aequicor.magicpaper.domain.aggregateCodingStatus
 import io.aequicor.magicpaper.domain.sidebarTitle
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.SidebarActions
-import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.designsystem.PaperToolbarButton
 import io.aequicor.magicpaper.designsystem.PaperToolbarIcon
 
@@ -103,11 +102,6 @@ internal class SessionRecencyTracker(private val now: () -> Long) {
             else -> activityTimes.getValue(id)
         }
     }
-
-    fun retain(ids: Set<String>) {
-        statuses.keys.retainAll(ids)
-        activityTimes.keys.retainAll(ids)
-    }
 }
 
 /** Элементы единого списка: чаты и кодинг-сессии, отсортированные по обновлению. */
@@ -117,6 +111,7 @@ internal fun rememberUnifiedItems(
     coding: CodingUi,
     selectedId: String?,
     viewingCoding: Boolean,
+    recencyTracker: SessionRecencyTracker,
 ): List<UnifiedSidebarItem> {
     val chatItems = remember(chatSessions) {
         chatSessions.map { session ->
@@ -143,9 +138,7 @@ internal fun rememberUnifiedItems(
         }
         result
     }
-    val recencyTracker = remember { SessionRecencyTracker(Id::now) }
-    val codingItems = remember(coding.sessions, coding.projects, coding.organisms, immunityByZygote) {
-        recencyTracker.retain(coding.sessions.mapTo(mutableSetOf()) { it.session.id })
+    val codingItems = remember(coding.sessions, coding.projects, coding.organisms, immunityByZygote, recencyTracker) {
         // Все сессии (включая архивные) для построения дерева; видимые фильтруются ниже.
         val allSessions = coding.sessions
         val sessionById = allSessions.associateBy { it.session.id }
@@ -264,15 +257,16 @@ internal fun rememberUnifiedItems(
 
 /** Единая боковая панель: чаты и кодинг-сессии в одном списке с группировкой по проектам. */
 @Composable
-fun UnifiedSidebar(
+internal fun UnifiedSidebar(
     vm: SidebarActions,
     chatSessions: List<ChatSession>,
     coding: CodingUi,
     selectedId: String?,
     viewingCoding: Boolean,
     modifier: Modifier = Modifier,
+    recencyTracker: SessionRecencyTracker,
 ) {
-    val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding)
+    val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding, recencyTracker)
     val codingByProject = items.filter { it.isCoding }.groupBy { it.projectId }
     val projectOrder = coding.projects.map { it.id }
     val chatItems = items.filter { !it.isCoding }

@@ -38,14 +38,15 @@ class UnifiedSidebarStatusTest {
     }
 
     @Test
-    fun removedSessionDoesNotKeepItsOldActivityTime() {
+    fun temporarilyMissingSessionKeepsItsActivityTimeWhenItReturns() {
         var now = 30L
         val tracker = SessionRecencyTracker { now }
         tracker.observe("session", CodingSessionStatus.IDLE, createdAt = 10)
-        tracker.observe("session", CodingSessionStatus.WORKING, createdAt = 10)
+        val workingAt = tracker.observe("session", CodingSessionStatus.WORKING, createdAt = 10)
 
-        tracker.retain(emptySet())
+        // Repository refreshes can briefly omit a session while interruption is persisted.
         now = 40
-        assertEquals(20, tracker.observe("session", CodingSessionStatus.IDLE, createdAt = 20))
+        assertEquals(workingAt, tracker.observe("session", CodingSessionStatus.WORKING, createdAt = 10))
+        assertEquals(now, tracker.observe("session", CodingSessionStatus.IDLE, createdAt = 10))
     }
 }
