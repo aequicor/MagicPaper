@@ -13,6 +13,10 @@ data class AppLogEntry internal constructor(
     val fields: Map<String, String>,
     val causeTypes: List<String> = emptyList(),
     val detail: String? = null,
+    /** Sanitized message of the recorded cause; secrets and URLs are redacted, length is bounded. */
+    val causeMessage: String? = null,
+    /** Sanitized, frame-bounded stack trace of the recorded cause. */
+    val causeStack: String? = null,
 ) {
     /** One bounded JSON line. Raw Throwable instances never reach a sink. */
     fun line(): String = buildString {
@@ -32,6 +36,8 @@ data class AppLogEntry internal constructor(
         }
         append(']')
         detail?.let { append(",\"detail\":").append(quote(it)) }
+        causeMessage?.let { append(",\"causeMessage\":").append(quote(it)) }
+        causeStack?.let { append(",\"causeStack\":").append(quote(it)) }
         append('}')
     }
 }
@@ -94,7 +100,8 @@ class AppLogger(
         if (!isEnabled(level)) return
         val entry = try {
             AppLogEntry(platformEpochMillis(), level, code(component), code(event), safeFields(fields),
-                cause?.let(::causeTypes).orEmpty(), detail)
+                cause?.let(::causeTypes).orEmpty(), detail,
+                cause?.let(::sanitizedMessage), cause?.let(::sanitizedStack))
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Throwable) {
             // Sanitation and platform initialization belong to diagnostics too. Do not retry the
@@ -208,6 +215,38 @@ private fun causeTypes(cause: Throwable): List<String> = buildList {
         }
     }
 }
+
+/**
+ * Exception messages and frames may embed request content, credentials or user text, so they pass
+ * the same redactor as TRACE payloads and stay bounded. The redacted result is bounded after
+ * redaction, never before, so a credential cannot survive in an unexamined tail. A failure of the
+ * sanitizer or of the platform stack renderer degrades to `null` instead of losing the whole
+ * entry: cause types and fields remain recorded. The exception instance is never modified.
+ */
+private const val MESSAGE_SCAN_LIMIT = 4_096
+private const val MESSAGE_RESULT_LIMIT = 512
+private const val STACK_FRAME_LIMIT = 40
+private const val STACK_LENGTH_LIMIT = 8_192
+
+private fun sanitizedMessage(cause: Throwable): String? = try {
+    val raw = cause.message ?: return null
+    redact(raw.take(MESSAGE_SCAN_LIMIT), emptySet()).bounded(MESSAGE_RESULT_LIMIT)
+} catch (failure: Throwable) { null }
+
+private fun sanitizedStack(cause: Throwable): String? = try {
+    // toString() itself may fail; rendering degrades to the class name and the frames only.
+    val header = try { cause.toString() } catch (failure: Throwable) {
+        causeTypes(cause).firstOrNull() ?: "Throwable"
+    }
+    val frames = try {
+        cause.stackTraceToString().lineSequence().filter { it.isNotBlank() }.take(STACK_FRAME_LIMIT)
+    } catch (failure: Throwable) { emptySequence() }
+    val rendered = buildString {
+        append(header)
+        frames.forEach { append('\n').append(it) }
+    }.take(STACK_LENGTH_LIMIT)
+    redact(rendered, emptySet()).ifBlank { null }
+} catch (failure: Throwable) { null }
 
 // Kotlin/JS enables Unicode regex mode: literal quotes must not use identity escapes (\").
 // Lazy construction keeps platform regex failures inside the entry-preparation boundary.

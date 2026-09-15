@@ -88,7 +88,7 @@ class AppLoggerTest {
             "A metric name carrying free text is refused, not published")
     }
 
-    @Test fun exceptionTypesRemainCorrelatedWithoutMessagesOrStacks() {
+    @Test fun exceptionTypesMessagesAndStacksRemainCorrelatedWithSecretsRedacted() {
         val original = IllegalArgumentException("api_key=private-value")
         val failure = IllegalStateException("https://example.com?access_token=private", original)
         val log = AppLogger(sink = AppLogSink {})
@@ -99,6 +99,33 @@ class AppLoggerTest {
         assertFalse("private" in entry.line())
         assertFalse("example.com" in entry.line())
         assertEquals("retry", entry.fields["recovery"])
+        assertEquals("[redacted URL]", entry.causeMessage, "The cause message stays available, sanitized")
+        val stack = entry.causeStack!!
+        assertTrue("IllegalStateException" in stack, "The stack keeps the failure type and frames: $stack")
+        assertTrue(stack.lines().size > 1, "The stack must contain frames, not only the message")
+        assertFalse('\n' in entry.line(), "One entry must remain one physical line")
+    }
+
+    @Test fun causeMessageAndStackAreBoundedAndSurviveBrokenRendering() {
+        val log = AppLogger(sink = AppLogSink {})
+        var cause: Throwable = IllegalStateException("secret".repeat(4_000))
+        repeat(20) { cause = IllegalStateException("nested", cause) }
+        log.error("runtime", "chain", cause)
+        val entry = log.history().last()
+        val chainStack = entry.causeStack!!
+        assertTrue(entry.causeMessage!!.length <= 512)
+        assertTrue(chainStack.length <= 8_192)
+        assertTrue(chainStack.lines().size <= 41, "Header plus at most 40 frames")
+
+        class BrokenRender(message: String) : IllegalStateException(message) {
+            override fun toString(): String = error("broken renderer")
+        }
+        val broken = BrokenRender("password=private")
+        log.error("runtime", "broken_cause", broken)
+        val brokenEntry = log.history().last()
+        assertEquals(listOf("BrokenRender"), brokenEntry.causeTypes)
+        assertEquals("password=private", broken.message, "The exception itself is never modified")
+        assertFalse("private" in brokenEntry.line())
     }
 
     @Test fun traceRedactsCredentialFieldsHeadersTokensAndKnownSecretAnswers() {
