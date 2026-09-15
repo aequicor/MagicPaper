@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -22,11 +24,13 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.VisualTransformation
@@ -65,10 +69,19 @@ public fun PaperWorkspaceComposer(modifier: Modifier = Modifier, content: @Compo
     val colors = LocalPaperColors.current
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
-    val surface by animateColorAsState(if (focused) colors.composerFocused else colors.composerSurface)
+    val surface by animateColorAsState(
+        if (focused) colors.composerFocused else colors.composerSurface,
+        animationSpec = tween(durationMillis = 180),
+        label = "Composer focus surface",
+    )
+    val entrance = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { entrance.animateTo(1f, tween(durationMillis = 180)) }
     val shape = RoundedCornerShape(16.dp)
     CompositionLocalProvider(LocalComposerInteraction provides source) {
         Column(modifier.fillMaxWidth().padding(8.dp)
+            // Alpha alone keeps the final geometry from the first layout pass, so the
+            // transcript never jumps while the writing surface gently appears.
+            .graphicsLayer { alpha = entrance.value }
             .dropShadow(shape) {
                 radius = 5.dp.toPx()
                 spread = 0f

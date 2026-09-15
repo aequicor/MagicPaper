@@ -20,6 +20,31 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class PaperComposerEffectsTest {
+    @Test fun composerAppearsWithAStationaryFade() {
+        val scene = onPaperUi { ImageComposeScene(300, 100) {
+            PaperTheme {
+                Box(Modifier.fillMaxSize().background(Color.White)) {
+                    PaperWorkspaceComposer { Spacer(Modifier.height(50.dp)) }
+                }
+            }
+        } }
+        try {
+            fun red(atNanos: Long): Int = onPaperUi { scene.render(atNanos).use { image ->
+                image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)).getRGB(150, 40) }
+            } }.let { (it shr 16) and 255 }
+
+            val first = red(0L)
+            Thread.sleep(10)
+            val middle = red(90_000_000L)
+            Thread.sleep(10)
+            val settled = red(240_000_000L)
+            assertTrue(first > middle, "Composer must fade in instead of appearing in the first frame: $first, $middle")
+            assertTrue(middle > settled, "Composer fade must progress smoothly to the final surface: $middle, $settled")
+        } finally {
+            onPaperUi { scene.close() }
+        }
+    }
+
     @Test fun questionnairePromptPreservesSecretAndDisabledSemantics() {
         for (enabled in listOf(true, false)) {
             var edits = 0
