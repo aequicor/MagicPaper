@@ -134,7 +134,13 @@ class CodingWorktreeTest {
         assertNull(repo.sessions("p").single().pendingRun)
         service.sendCodingPromptTo("s", "Next task"); runCurrent()
         assertEquals(2, port.deliveries)
-        assertNotEquals(original.branch, repo.sessions("p").single().taskWorktree?.branch)
+        val next = assertNotNull(repo.sessions("p").single().taskWorktree)
+        assertNotEquals(original.branch, next.branch)
+        val systemMessages = repo.messages("p", "s").filter { it.systemNotice }.map { it.text }
+        assertContains(systemMessages, "Создана worktree-ветка ${original.branch}")
+        assertContains(systemMessages, "Результат влит в main")
+        assertContains(systemMessages, "Worktree переключён с ${original.branch} на ${next.branch}")
+        assertEquals(2, systemMessages.count { it == "Результат влит в main" })
     } }
 
     @Test fun stopDuringVerificationRetainsTaskAndResumeDoesNotRerunAgent() = runTest { fixture { service, runtime, port, repo ->

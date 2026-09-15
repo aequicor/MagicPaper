@@ -1413,6 +1413,13 @@ class DefaultCodingService(
                         recorder.apply(CodingEvent.Notice("Подготовка worktree"))
                         workspaceRecord = checkNotNull(taskWorktrees).begin(project, session.id, request.runId)
                         current = taskWorktrees.session(project.id, session.id)
+                        val branchNotice = if (workspaceRecord.reuseBranch.isBlank()) {
+                            "Создана worktree-ветка ${workspaceRecord.branch}"
+                        } else {
+                            "Worktree переключён с ${workspaceRecord.reuseBranch} на ${workspaceRecord.branch}"
+                        }
+                        appendCodingMessage(session, CodingMessage("${request.responseId}-worktree-branch", CodingRole.AGENT,
+                            branchNotice, createdAt = Id.now(), systemNotice = true))
                         executionProject = project.copy(path = workspaceRecord.path)
                         prompt += "\n\nРабочая папка этой задачи: ${workspaceRecord.path}. Работай только в ней. " +
                             "Не изменяй исходную папку ${workspaceRecord.sourcePath} и не выполняй слияние в неё. " +
@@ -1473,7 +1480,7 @@ class DefaultCodingService(
                 val response = if (deliveryOnly) current.taskWorktree?.executionResponse ?: recorded
                     else if (workspaceRecord != null && recorded.failed) recorded.copy(id = "${request.responseId}-failure-${Id.new()}") else recorded
                 appendCodingMessage(session, response)
-                if (deliveryOnly && current.taskWorktree?.phase == TaskWorktreePhase.COMPLETE) appendCodingMessage(session,
+                if (workspaceRecord != null && current.taskWorktree?.phase == TaskWorktreePhase.COMPLETE) appendCodingMessage(session,
                     CodingMessage("${request.responseId}-merged", CodingRole.AGENT, "Результат влит в ${current.taskWorktree?.targetBranch}", createdAt = Id.now(), systemNotice = true))
                 updateStoredCodingSession(session) { latest -> latest.copy(pendingRun =
                     if (response.failed || latest.pendingRun?.intent == ExecutionIntent.STOP) latest.pendingRun?.copy(intent = ExecutionIntent.STOP) else null) }
