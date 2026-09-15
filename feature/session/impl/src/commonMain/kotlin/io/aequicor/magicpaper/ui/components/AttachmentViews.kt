@@ -185,7 +185,7 @@ private fun rememberAttachmentPreviewBitmap(attachment: Attachment): ImageBitmap
     return bitmap
 }
 
-private fun decodeAttachmentThumbnail(attachment: Attachment): ImageBitmap? = runCatching {
+internal fun decodeAttachmentThumbnail(attachment: Attachment): ImageBitmap? = runCatching {
     if (attachment.kind != AttachmentKind.IMAGE || attachment.sizeBytes !in 1..MAX_THUMBNAIL_SOURCE_BYTES) return null
     if (attachment.dataBase64.length > ((MAX_THUMBNAIL_SOURCE_BYTES + 2) / 3) * 4) return null
     val bytes = attachment.bytes
@@ -211,7 +211,7 @@ private fun decodeAttachmentThumbnail(attachment: Attachment): ImageBitmap? = ru
     }
 }.getOrNull()
 
-private fun decodeAttachmentPreview(attachment: Attachment): ImageBitmap? = runCatching {
+internal fun decodeAttachmentPreview(attachment: Attachment): ImageBitmap? = runCatching {
     if (attachment.kind != AttachmentKind.IMAGE || attachment.sizeBytes !in 1..MAX_PREVIEW_SOURCE_BYTES) return null
     if (attachment.dataBase64.length > ((MAX_PREVIEW_SOURCE_BYTES + 2) / 3) * 4) return null
     val bytes = attachment.bytes
@@ -363,8 +363,7 @@ fun renderMessageAttachments(attachments: List<Attachment>) {
         attachments.forEach { attachment ->
             val bitmap = rememberAttachmentThumbnail(attachment).bitmap
             if (bitmap != null) {
-                var expanded by rememberSaveable(attachment.id) { mutableStateOf(false) }
-                PaperExpandableImage(bitmap, attachment.name, expanded, { expanded = !expanded })
+                ExpandableAttachmentImage(attachment, bitmap)
             } else {
                 AttachmentChip(attachment)
             }
@@ -430,8 +429,7 @@ private fun CodingImageAttachments(images: List<CodingImageReference>, heading: 
                 } else {
                     val bitmap = rememberAttachmentThumbnail(attachment)
                     if (bitmap.bitmap != null) {
-                        var expanded by rememberSaveable(image.imageId) { mutableStateOf(false) }
-                        PaperExpandableImage(bitmap.bitmap, image.name, expanded, { expanded = !expanded })
+                        ExpandableAttachmentImage(attachment, bitmap.bitmap)
                     } else {
                         PaperAttachmentThumbnail(
                             label = "${image.name} · ${formatSize(image.sizeBytes)}",
@@ -444,6 +442,14 @@ private fun CodingImageAttachments(images: List<CodingImageReference>, heading: 
             }
         }
     }
+}
+
+/** The compact bitmap keeps the transcript light; full pixels exist only while the image is open. */
+@Composable
+private fun ExpandableAttachmentImage(attachment: Attachment, thumbnail: ImageBitmap) {
+    var expanded by rememberSaveable(attachment.id) { mutableStateOf(false) }
+    val preview = if (expanded) rememberAttachmentPreviewBitmap(attachment) else null
+    PaperExpandableImage(preview ?: thumbnail, attachment.name, expanded, { expanded = !expanded })
 }
 
 private fun CodingImageReference.asInlineAttachment(): Attachment? =
