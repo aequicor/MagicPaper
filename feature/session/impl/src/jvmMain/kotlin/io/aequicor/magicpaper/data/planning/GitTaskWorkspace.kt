@@ -8,6 +8,8 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /** Branch delivery is separate from the planner's legacy file transfer. All writes stay in managed copies until ff-only delivery. */
+// Объединение с веткой назначения выполняется переносом (rebase): история ветки остаётся линейной,
+// а каждое прерывание либо завершается, либо откатывается к сохранённой точке до переноса.
 class GitTaskWorkspace(
     private val root: File = File(System.getProperty("user.home"), ".MagicPaper/task-worktrees"),
     private val checkpoint: (String) -> Unit = {},
@@ -70,16 +72,22 @@ class GitTaskWorkspace(
 
     override suspend fun reconcile(record: TaskWorktree) = withContext(Dispatchers.IO) {
         val dir = managed(record)
-        require(git(dir, "symbolic-ref", "--short", "HEAD").trim() == record.branch) { "Ветка рабочей копии изменена" }
+        // Во время переноса HEAD отделён: ветка задачи остаётся на точке до переноса, поэтому проверяется она.
+        val rebasing = rebaseInProgress(dir)
+        val own = if (rebasing) "refs/heads/${record.branch}" else "HEAD"
+        if (rebasing) require(probe(dir, "show-ref", "--verify", "--quiet", own).first == 0) { "Ветка рабочей копии изменена" }
+        else require(git(dir, "symbolic-ref", "--short", "HEAD").trim() == record.branch) { "Ветка рабочей копии изменена" }
         require(File(git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir").trim()).canonicalFile ==
             File(git(File(record.sourcePath), "rev-parse", "--path-format=absolute", "--git-common-dir").trim()).canonicalFile) { "Рабочая копия принадлежит другому репозиторию" }
-        require(ancestor(dir, record.baseCommit, "HEAD")) { "История задачи больше не продолжает исходный коммит" }
+        // Перенос на ветку назначения переписывает коммиты задачи: историю продолжает исходная база либо сохранённая точка объединения.
+        require(ancestor(dir, record.baseCommit, own) ||
+            (record.integratedCommit.isNotBlank() && ancestor(dir, record.integratedCommit, own))) { "История задачи больше не продолжает исходный коммит" }
     }
 
     override suspend fun capture(record: TaskWorktree): String = withContext(Dispatchers.IO) {
         reconcile(record)
         val dir = managed(record)
-        require(probe(dir, "rev-parse", "--verify", "MERGE_HEAD").first != 0) { "Сначала разрешите конфликт слияния" }
+        require(!mergeInProgress(dir) && !rebaseInProgress(dir)) { "Сначала разрешите конфликт объединения" }
         if (git(dir, "status", "--porcelain").isNotBlank()) {
             git(dir, "add", "-A")
             git(dir, "commit", "-m", "MagicPaper task ${record.taskId}")
@@ -95,24 +103,70 @@ class GitTaskWorkspace(
         git(source, "rev-parse", "HEAD").trim()
     }
 
-    override suspend fun merge(record: TaskWorktree): String? = withContext(Dispatchers.IO) {
+    override suspend fun refresh(record: TaskWorktree): TaskWorktreeRefresh = withContext(Dispatchers.IO) {
         reconcile(record)
         val dir = managed(record)
-        if (probe(dir, "rev-parse", "--verify", "MERGE_HEAD").first == 0) {
-            if (git(dir, "diff", "--name-only", "--diff-filter=U").isNotBlank()) return@withContext null
+        val target = "refs/heads/${record.targetBranch}"
+        if (probe(dir, "rev-parse", "--verify", "--quiet", target).first != 0)
+            return@withContext TaskWorktreeRefresh(note = "Ветка назначения ${record.targetBranch} недоступна")
+        val tip = git(dir, "rev-parse", target).trim()
+        // Незавершённое объединение уже меняет HEAD: расстояние в этот момент не измеряется.
+        if (mergeInProgress(dir) || rebaseInProgress(dir))
+            return@withContext TaskWorktreeRefresh(targetCommit = tip, note = "Сначала завершите объединение с веткой назначения")
+        val behind = distance(dir, tip)
+        if (behind == 0) return@withContext TaskWorktreeRefresh(behind, tip)
+        // Правки агента не принадлежат приложению: копия с несохранёнными изменениями обновится только при слиянии.
+        if (git(dir, "status", "--porcelain").isNotBlank())
+            return@withContext TaskWorktreeRefresh(behind, tip, note = "В копии есть несохранённые изменения")
+        // До запуска конфликт некому разрешать: неудача откатывается, задача остаётся на прежнем коммите.
+        val before = head(dir)
+        val (code, output) = if (ancestor(dir, "HEAD", tip)) probe(dir, "merge", "--ff-only", tip) else rebaseOnto(dir, tip)
+        if (code != 0 || !ancestor(dir, tip, "HEAD")) {
+            if (rebaseInProgress(dir)) git(dir, "rebase", "--abort")
+            check(head(dir) == before) { "Не удалось откатить обновление рабочей копии\n${tail(output)}" }
+            AppLog.info("coding.worktree", "task.refresh.declined", mapOf("entityId" to record.taskId, "result" to code.toString()))
+            return@withContext TaskWorktreeRefresh(behind, tip,
+                note = "Изменения ветки назначения конфликтуют с задачей; объединение выполнится при слиянии")
+        }
+        checkpoint("refreshed")
+        AppLog.info("coding.worktree", "task.refreshed", mapOf("entityId" to record.taskId, "result" to behind.toString()))
+        TaskWorktreeRefresh(distance(dir, tip), tip, updated = true)
+    }
+
+    override suspend fun integrate(record: TaskWorktree): String? = withContext(Dispatchers.IO) {
+        reconcile(record)
+        val dir = managed(record)
+        requireResult(dir, record)
+        if (mergeInProgress(dir)) {
+            // Слияние, оставленное предыдущей версией доставки, завершается, а не отбрасывается.
+            if (unmerged(dir).isNotBlank()) return@withContext null
             git(dir, "add", "-A")
             git(dir, "commit", "--no-edit")
-        }
-        require(record.resultCommit.isNotBlank() && ancestor(dir, record.resultCommit, "HEAD")) { "Сохранённый результат задачи потерян из истории" }
-        if (!ancestor(dir, record.targetCommit, "HEAD")) {
-            clean(dir)
-            if (probe(dir, "merge", "--no-edit", if (ancestor(dir, "HEAD", record.targetCommit)) "--ff-only" else "--no-ff", record.targetCommit).first != 0) {
-                require(probe(dir, "rev-parse", "--verify", "MERGE_HEAD").first == 0) { "Не удалось подготовить слияние" }
-                return@withContext null
+        } else {
+            if (rebaseInProgress(dir)) {
+                // Прерванный перенос без сохранённого CONFLICT не содержит разрешения конфликта: откат и повтор.
+                if (record.phase != TaskWorktreePhase.CONFLICT) git(dir, "rebase", "--abort")
+                else if (!continueRebase(dir)) return@withContext null
+            }
+            if (!ancestor(dir, record.targetCommit, "HEAD")) {
+                clean(dir)
+                if (ancestor(dir, "HEAD", record.targetCommit)) git(dir, "merge", "--ff-only", record.targetCommit)
+                else {
+                    // Точка до переноса сохраняется в общем репозитории: она доказывает, что результат переписан нами, а не потерян.
+                    git(dir, "update-ref", preIntegrationRef(record), head(dir))
+                    val (code, output) = rebaseOnto(dir, record.targetCommit)
+                    if (code != 0) {
+                        if (unmerged(dir).isNotBlank()) return@withContext null
+                        if (!rebaseInProgress(dir) || !continueRebase(dir)) {
+                            if (rebaseInProgress(dir)) git(dir, "rebase", "--abort")
+                            error("Не удалось перенести задачу на ветку назначения\n${tail(output)}")
+                        }
+                    }
+                }
             }
         }
         checkpoint("merged")
-        git(dir, "rev-parse", "HEAD").trim()
+        head(dir)
     }
 
     override suspend fun verify(record: TaskWorktree) = withContext(Dispatchers.IO) {
@@ -128,7 +182,7 @@ class GitTaskWorkspace(
             AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(), "result" to code.toString()))
             check(code == 0 && result.blockedReason == null) {
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
-                val tail = PlanningDiagnostics.redact(result.output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
+                val tail = tail(result.output)
                 buildString {
                     append("Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение")
                     result.blockedReason?.let { append('\n').append(PlanningDiagnostics.redact(it)) }
@@ -164,12 +218,54 @@ class GitTaskWorkspace(
     }
     private suspend fun clean(dir: File) {
         require(git(dir, "status", "--porcelain", "--untracked-files=all").isBlank()) { "Сначала сохраните незакоммиченные изменения" }
-        for (name in listOf("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")) {
-            val path = git(dir, "rev-parse", "--git-path", name).trim()
-            val marker = File(path).let { if (it.isAbsolute) it else File(dir, path) }
-            require(!marker.exists()) { "Сначала завершите текущую Git-операцию" }
-        }
+        for (name in listOf("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"))
+            require(!markerPath(dir, name).exists()) { "Сначала завершите текущую Git-операцию" }
     }
+    /** Git keeps per-operation markers in the linked worktree's own directory, not in the shared one. */
+    private suspend fun markerPath(dir: File, name: String): File {
+        val path = git(dir, "rev-parse", "--git-path", name).trim()
+        return File(path).let { if (it.isAbsolute) it else File(dir, path) }
+    }
+    private suspend fun mergeInProgress(dir: File) = probe(dir, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").first == 0
+    private suspend fun rebaseInProgress(dir: File) = markerPath(dir, "rebase-merge").exists() || markerPath(dir, "rebase-apply").exists()
+    private suspend fun unmerged(dir: File) = git(dir, "diff", "--name-only", "--diff-filter=U")
+    private suspend fun head(dir: File) = git(dir, "rev-parse", "HEAD").trim()
+    /** Commits of the destination branch that the task copy does not contain yet. */
+    private suspend fun distance(dir: File, target: String): Int {
+        val parts = git(dir, "rev-list", "--left-right", "--count", "HEAD...$target").trim().split(Regex("\\s+"))
+        check(parts.size == 2) { "Не удалось измерить расстояние до ветки назначения" }
+        return checkNotNull(parts.last().toIntOrNull()) { "Не удалось измерить расстояние до ветки назначения" }
+    }
+    private suspend fun rebaseOnto(dir: File, onto: String) = probe(dir, "-c", "core.editor=true", "rebase", onto)
+    /**
+     * Continues a rebase the agent repaired. False means unresolved conflicts remain in the copy;
+     * a commit that became empty after resolution is skipped, as Git itself advises.
+     */
+    private suspend fun continueRebase(dir: File): Boolean {
+        repeat(REBASE_STEP_LIMIT) {
+            if (!rebaseInProgress(dir)) return true
+            if (unmerged(dir).isNotBlank()) return false
+            git(dir, "add", "-A")
+            val (code, output) = probe(dir, "-c", "core.editor=true", "rebase", "--continue")
+            if (code == 0) return true
+            if (!rebaseInProgress(dir)) error("Не удалось продолжить перенос ветки\n${tail(output)}")
+            if (unmerged(dir).isNotBlank()) return false
+            val (skipped, skipOutput) = probe(dir, "rebase", "--skip")
+            if (skipped != 0 && rebaseInProgress(dir)) error("Не удалось продолжить перенос ветки\n${tail(skipOutput)}")
+        }
+        error("Перенос ветки не завершён после $REBASE_STEP_LIMIT шагов")
+    }
+    /** The captured result must stay reachable; our own recorded pre-rebase point explains a rewritten history. */
+    private suspend fun requireResult(dir: File, record: TaskWorktree) {
+        val lost = { "Сохранённый результат задачи потерян из истории" }
+        require(record.resultCommit.isNotBlank(), lost)
+        if (ancestor(dir, record.resultCommit, "HEAD")) return
+        val pre = preIntegrationRef(record)
+        require(probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 && ancestor(dir, record.resultCommit, pre) &&
+            record.targetCommit.isNotBlank() && ancestor(dir, record.targetCommit, "HEAD"), lost)
+    }
+    private fun preIntegrationRef(record: TaskWorktree) = "refs/magicpaper/task-pre-integration-${hash(record.taskId)}"
+    private fun tail(output: String) = PlanningDiagnostics.redact(output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
     private suspend fun ancestor(dir: File, before: String, after: String): Boolean {
         val code = probe(dir, "merge-base", "--is-ancestor", before, after).first
         check(code == 0 || code == 1) { "Не удалось проверить историю Git" }
@@ -205,3 +301,4 @@ class GitTaskWorkspace(
 }
 
 private const val CHECK_OUTPUT_DETAIL = 2000
+private const val REBASE_STEP_LIMIT = 64

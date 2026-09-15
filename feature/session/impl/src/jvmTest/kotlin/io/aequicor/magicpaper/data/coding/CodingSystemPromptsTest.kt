@@ -40,6 +40,20 @@ class CodingSystemPromptsTest {
         }
     }
 
+    @Test fun destinationDistanceAndPreRunUpdateReachTheAgent() {
+        val task = TaskWorktree("task", "/source", "feature/current", "base", "/pool/session", "codex/task")
+        val session = CodingSession("session", "project", "Task", 1, taskWorktree = task,
+            pendingRun = CodingRunCheckpoint("input", "Task", responseId = "response", runId = task.taskId, worktreeEnabled = true))
+        val upToDate = codingSystemPrompt(CodingEngine.PI, false, "", session = session)
+        assertFalse("HEAD..feature/current" in upToDate || "подтянута" in upToDate)
+        val stale = codingSystemPrompt(CodingEngine.PI, false, "", session = session.copy(taskWorktree = task.copy(
+            behindCommits = 4, refreshNote = "В копии есть несохранённые изменения")))
+        assertTrue("(4)" in stale && "HEAD..feature/current" in stale && "несохранённые" in stale, stale)
+        val updated = codingSystemPrompt(CodingEngine.PI, false, "", session = session.copy(taskWorktree = task.copy(integratedCommit = "tip")))
+        assertTrue("подтянута к ветке назначения feature/current" in updated, updated)
+        assertFalse("HEAD..feature/current" in updated)
+    }
+
     @Test fun ordinarySessionDoesNotInheritPlannerMethodologyFromLifecycleAdoption() {
         val rules = PlanningRulesSettings().edited("Create milestones and wait for plan approval").snapshot()
         val ordinary = CodingSession("root", "project", "New session", 1,

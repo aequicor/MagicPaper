@@ -22,5 +22,23 @@ internal fun CodingSession.taskWorktreeInstructions(): String {
         Опросник нужен только для отсутствующих требований или неоднозначного конфликта.
         Реальные вопросы требуют ответа; ошибку проверки или незавершённую работу нельзя
         объявлять RESULT. При неустранимой блокировке передай outcome=BLOCKED.
-    """.trimIndent()
+    """.trimIndent() + freshness(task)
+}
+
+/** Distance to the destination branch changes what the agent must verify before editing. */
+private fun freshness(task: TaskWorktree): String {
+    val note = when {
+        task.behindCommits > 0 -> """
+            В ветке назначения ${task.targetBranch} есть новые коммиты (${task.behindCommits}), которых нет в рабочей копии:
+            ${task.refreshNote ?: "обновление отложено"}. Часть работы могла быть сделана там — перед правкой дефекта
+            посмотри в рабочей копии git log --oneline HEAD..${task.targetBranch} и git diff HEAD ${task.targetBranch}
+            и не повторяй уже сделанное. Ветку назначения не сливай и не переноси сам: объединение выполняет приложение.
+        """
+        task.integratedCommit.isNotBlank() && task.integratedCommit != task.baseCommit -> """
+            Рабочая копия подтянута к ветке назначения ${task.targetBranch}, её изменения уже видны в твоих файлах.
+            Перечитай затронутые файлы до правок: дефекты, которые ты собирался исправлять, могли быть устранены там.
+        """
+        else -> return ""
+    }
+    return "\n" + note.trimIndent()
 }

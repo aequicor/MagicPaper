@@ -1014,11 +1014,14 @@ internal fun CodingChat(
                     val phaseLabel = when (task.phase) {
                         TaskWorktreePhase.PREPARING -> "Подготовка worktree"
                         TaskWorktreePhase.CAPTURING -> "Сохранение результата"
-                        TaskWorktreePhase.MERGING, TaskWorktreePhase.DELIVERING -> "Слияние с ${task.targetBranch}"
+                        TaskWorktreePhase.MERGING, TaskWorktreePhase.DELIVERING -> "Объединение с ${task.targetBranch}"
                         TaskWorktreePhase.CONFLICT -> "Разрешение конфликта"
                         else -> null
                     }
                     if (phaseLabel != null) PaperStatus(phaseLabel, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
+                    // Отставание от ветки назначения видно, пока агент работает; на время объединения его сменяет метка фазы.
+                    else if (task.behindCommits > 0) PaperStatus("Ветка ${task.targetBranch} ушла вперёд (${task.behindCommits})",
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
                 }
                 if (eventWaitLabel != null) {
                     PaperPanel(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), color = LocalPaperColors.current.raisedSurface) {

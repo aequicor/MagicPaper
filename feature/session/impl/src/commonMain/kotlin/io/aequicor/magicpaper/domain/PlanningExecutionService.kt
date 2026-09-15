@@ -524,7 +524,8 @@ class PlanningExecutionService(
                 piSessionId = attempt.mergeEngineSessionId, engine = attempt.engine ?: plan.engine,
                 planId = id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
                 pendingRun = CodingRunCheckpoint("${attempt.id}-delivery", "")),
-                "Разреши Git merge-конфликт в этой рабочей папке, сохрани обе стороны и выполни необходимые проверки. " +
+                "Разреши конфликт переноса задачи на ветку назначения в этой рабочей папке: сохрани обе стороны и добавь спорные файлы в индекс (git add). " +
+                    "Приложение само продолжит перенос и проверки; не выполняй git rebase --continue, --skip или --abort. " +
                     "При неоднозначности задай вопрос через magicpaper_questionnaire. Не изменяй исходную папку. Цель: ${plan.goal}", judge).collect { event ->
                 when (event) {
                     is CodingEvent.SessionStarted -> { attempt = attempt.copy(mergeEngineSessionId = event.sessionId); store.update(id) { it.copy(finalAttempt = attempt) } }

@@ -35,7 +35,8 @@ class PlanningExecutionServiceTest {
             override suspend fun reconcile(record: TaskWorktree) = Unit
             override suspend fun capture(record: TaskWorktree) = "result"
             override suspend fun target(record: TaskWorktree) = "base"
-            override suspend fun merge(record: TaskWorktree) = "result"
+            override suspend fun refresh(record: TaskWorktree) = TaskWorktreeRefresh()
+            override suspend fun integrate(record: TaskWorktree) = "result"
             override suspend fun verify(record: TaskWorktree) = Unit
             override suspend fun delivered(record: TaskWorktree) = delivered > 0
             override suspend fun deliver(record: TaskWorktree) { assertTrue(accepted > 0); delivered++ }

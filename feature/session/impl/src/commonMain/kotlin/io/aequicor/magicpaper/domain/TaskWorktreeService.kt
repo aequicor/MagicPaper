@@ -35,7 +35,14 @@ class TaskWorktreeService(
         if (previous?.taskId == taskId) {
             if (previous.phase == TaskWorktreePhase.PREPARING) workspace.open(previous)
             else workspace.reconcile(previous)
-            return save(project.id, sessionId, taskId) { if (it.phase == TaskWorktreePhase.PREPARING) it.copy(phase = TaskWorktreePhase.RUNNING) else it }
+            // Опорная точка запуска: рантайм ещё не работает, поэтому копию можно безопасно подтянуть к ветке назначения.
+            val refreshed = if (previous.phase in setOf(TaskWorktreePhase.PREPARING, TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY))
+                refresh(project, sessionId, previous) else null
+            return save(project.id, sessionId, taskId) { current ->
+                val running = if (current.phase == TaskWorktreePhase.PREPARING) current.copy(phase = TaskWorktreePhase.RUNNING) else current
+                if (refreshed == null) running else running.copy(behindCommits = refreshed.behind, refreshNote = refreshed.note,
+                    integratedCommit = if (refreshed.updated) refreshed.targetCommit else running.integratedCommit)
+            }
         }
         check(previous == null || previous.phase == TaskWorktreePhase.COMPLETE) { "Сначала завершите предыдущую задачу" }
         return leased(project.copy(id = "task-source-$sessionId")) {
@@ -70,6 +77,10 @@ class TaskWorktreeService(
     suspend fun failure(projectId: String, sessionId: String, taskId: String, message: String) {
         save(projectId, sessionId, taskId) { it.copy(error = message) }
     }
+
+    /** Bringing the copy up to date is an optimization: a folder owned by another delivery must not block the run. */
+    private suspend fun refresh(project: CodingProject, sessionId: String, record: TaskWorktree): TaskWorktreeRefresh? =
+        leasedOrNull(project.copy(id = "task-refresh-$sessionId", path = record.path)) { workspace.refresh(record) }
 
     /** Called only after the runtime (and its children) has reconciled. Each Git effect has a saved intent. */
     suspend fun complete(project: CodingProject, sessionId: String, taskId: String,
@@ -113,16 +124,17 @@ class TaskWorktreeService(
                     phase = if (it.phase == TaskWorktreePhase.CONFLICT) it.phase else TaskWorktreePhase.MERGING, error = null) }
                 var merged: String? = null
                 if (record.phase != TaskWorktreePhase.CONFLICT || record.handoffGeneration != null || planAccepted)
-                    execution { merged = workspace.merge(record) }
+                    execution { merged = workspace.integrate(record) }
                 if (merged == null) {
                     record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.CONFLICT, handoffGeneration = null) }
                     repair(record)
                     if (!planAccepted) requireQuiescent(sessionId)
                     record = checkNotNull(session(project.id, sessionId).taskWorktree)
-                    execution { merged = workspace.merge(record) }
+                    execution { merged = workspace.integrate(record) }
                     check(merged != null) { "Конфликт не разрешён. Уточните запрос и продолжите" }
                 }
-                record = save(project.id, sessionId, taskId) { it.copy(mergeCommit = checkNotNull(merged), phase = TaskWorktreePhase.MERGING) }
+                record = save(project.id, sessionId, taskId) { it.copy(mergeCommit = checkNotNull(merged),
+                    integratedCommit = it.targetCommit, behindCommits = 0, refreshNote = null, phase = TaskWorktreePhase.MERGING) }
                 execution { workspace.verify(record) }
                 verifyMerged(record)
                 record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.DELIVERING) }
@@ -140,13 +152,16 @@ class TaskWorktreeService(
         }
     }
 
-    private suspend fun <T> leased(owner: CodingProject, action: suspend () -> T): T {
+    private suspend fun <T> leased(owner: CodingProject, action: suspend () -> T): T =
+        checkNotNull(leasedOrNull(owner, action)) { "Рабочая папка занята. Повторите продолжение после завершения другой задачи" }
+
+    private suspend fun <T> leasedOrNull(owner: CodingProject, action: suspend () -> T): T? {
         retainedLeases.value[owner.id]?.let { previous ->
             require(previous.path == owner.path) { "Не завершено освобождение другой рабочей папки" }
             withContext(NonCancellable) { leases.release(previous) }
             retainedLeases.update { it - owner.id }
         }
-        check(leases.acquire(owner)) { "Рабочая папка занята. Повторите продолжение после завершения другой задачи" }
+        if (!leases.acquire(owner)) return null
         var failure: Throwable? = null
         try { return action() } catch (e: Throwable) { failure = e; throw e }
         finally { withContext(NonCancellable) {

@@ -1410,8 +1410,10 @@ class DefaultCodingService(
                         val repairSession = taskWorktrees.session(project.id, session.id)
                         var repairEnded = false
                         recorder.recordDrafts(runtime.run(project.copy(path = conflict.path), repairSession,
-                            "Разреши Git merge-конфликт в этой рабочей папке, сохрани обе стороны, выполни необходимые проверки. " +
-                                "При неоднозначности задай вопрос через magicpaper_questionnaire. Перед завершением передай RESULT через magicpaper_task_handoff с командами проверок. Не меняй исходную папку.\n\nАктуальная задача и уточнения:\n${request.prompt}",
+                            "Разреши конфликт переноса задачи на ветку назначения в этой рабочей папке: отредактируй спорные файлы, " +
+                                "сохрани обе стороны и добавь их в индекс (git add). Приложение само продолжит перенос и запустит проверки: " +
+                                "не выполняй git rebase --continue, --skip или --abort и не меняй исходную папку. " +
+                                "При неоднозначности задай вопрос через magicpaper_questionnaire. Перед завершением передай RESULT через magicpaper_task_handoff с командами проверок.\n\nАктуальная задача и уточнения:\n${request.prompt}",
                             codingProfileOf(repairSession)), onEvent = { if (it is CodingEvent.Finished) repairEnded = true }).collect { draft ->
                             updateCodingSession(session.id) { it.copy(draft = draft) }
                         }

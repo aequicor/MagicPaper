@@ -23,8 +23,25 @@ data class TaskWorktree(
     val error: String? = null,
     val reuseBranch: String = "",
     val reuseCommit: String = "",
+    /** Destination tip the copy was last brought onto; empty until the first update or integration. */
+    val integratedCommit: String = "",
+    /** Destination commits missing from the task copy at the last distance check. */
+    val behindCommits: Int = 0,
+    /** Why the copy was not brought onto the destination tip; null when it is up to date. */
+    val refreshNote: String? = null,
     /** Output survives a crash between native completion and Git delivery. */
     val executionResponse: CodingMessage? = null,
 )
 
 data class WorktreeAvailability(val available: Boolean, val reason: String? = null)
+
+/**
+ * Distance to the destination branch plus the outcome of a safe pre-run update.
+ * `updated` is false when nothing had to change or when the copy must not be touched yet.
+ */
+data class TaskWorktreeRefresh(
+    val behind: Int = 0,
+    val targetCommit: String = "",
+    val updated: Boolean = false,
+    val note: String? = null,
+)

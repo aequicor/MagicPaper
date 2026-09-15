@@ -14,9 +14,11 @@ Legacy pending requests and plans have a null mode and retain their old behavior
 
 `CodingRunCheckpoint.runId` (or `Plan.runId`) is the stable task identity. Native
 restart, clarification, questionnaire answers and Stop/Continue do not create a
-new worktree. A subsequent completed-task request gets a new branch at the current
-source HEAD. Each session has one directory slot; only a clean, completed slot
-whose branch and commit match the recorded receipt may be reused.
+new worktree; each of them is a run start and may bring the existing copy onto the
+current destination tip (see Destination distance). A subsequent completed-task
+request gets a new branch at the current source HEAD. Each session has one
+directory slot; only a clean, completed slot whose branch and commit match the
+recorded receipt may be reused.
 
 Ordinary coding must submit `task.handoff` through the normal tool/receipt path.
 Both native engines receive the active task's delivery policy in their system
@@ -41,7 +43,7 @@ Neither a final engine event nor a saved response proves Git delivery.
 | PREPARING | Create or validate the exact recorded branch and directory |
 | RUNNING / READY | Continue the same task; READY is an authenticated handoff |
 | CAPTURING | Capture remaining changes; reuse existing agent commits |
-| MERGING | Merge the recorded destination tip in the managed copy and verify |
+| MERGING | Bring the copy onto the recorded destination tip and verify |
 | CONFLICT | Agent repairs the managed copy; questions retain this workspace |
 | DELIVERING | Fast-forward the original branch; reconcile ancestry and a clean checkout after a crash |
 | COMPLETE | Persist final response and release the slot for the next task |
@@ -51,6 +53,33 @@ at creation, rather than consulting the currently selected UI project at deliver
 Revalidate the source branch, HEAD, index and working files before fast-forward;
 never stash, force-reset or push. Failed or uncertain workspaces cannot enter the
 pool. Source changes or an advanced destination leave a recoverable checkpoint.
+
+Integration replays the task commits onto the destination tip (`git rebase`) instead of
+merging the tip in, so delivery keeps the destination history linear and a change that is
+already upstream is dropped instead of conflicting. A crash between the replay and the saved
+receipt stays recoverable: the copy keeps a `refs/magicpaper/task-pre-integration-*` ref, an
+interrupted replay without a saved CONFLICT phase is aborted and repeated, and a replay left in
+CONFLICT is continued after the agent stages its resolution. A merge left in progress by an
+older application version is still completed, not discarded.
+
+## Destination distance
+
+A task can outlive the destination tip it started from, and an agent editing a stale copy
+repeats work the destination already contains. `TaskWorkspace.refresh` measures the distance
+read-only (`git rev-list --left-right --count HEAD...refs/heads/<target>`) and, when that is
+safe, brings the copy onto the destination tip. The session owner calls it once per run start
+for a task that is still PREPARING/RUNNING/READY, under the writer lease of the managed copy; a
+folder owned by another delivery only postpones the update.
+
+The update is declined, never forced: unsaved agent edits are not committed on the agent's
+behalf, an unfinished Git operation is left alone, and a conflict before a run is rolled back
+with `git rebase --abort` because nobody is there to resolve it. A declined update keeps the
+measured distance and its reason in the task record; the remaining integration happens at
+delivery. Delivery never depends on a successful update.
+
+`behindCommits`, `refreshNote` and `integratedCommit` are reported to the user as a session
+status and to the agent in the worktree instructions, so a resumed run re-reads files instead of
+trusting saved line numbers. Distance is metadata: on its own it authorizes no Git effect.
 
 Checks declared by the agent run through `SessionIntegrationCheckRunner`, which
 uses the existing protected research runner. There is no unrestricted shell
@@ -77,9 +106,12 @@ selects direct execution; it does not loosen legacy workspace validation.
 `CodingSessionUi` derives selected/locked state from the active task or accepted
 request before falling back to the preference. The composer consumes
 `PaperMenuToggleInfo`; its information action remains available when the setting
-is disabled. Previews: `PaperMenuToggleInfoPreview`, group **Menu setting**.
+is disabled. While a task runs, the session shows its delivery phase, or the
+measured distance to the destination branch when the copy could not be updated.
+Previews: `PaperMenuToggleInfoPreview`, group **Menu setting**.
 
 Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`,
+`CodingSystemPromptsTest.destinationDistanceAndPreRunUpdateReachTheAgent`,
 `PlanningExecutionServiceTest.worktreePlanDeliversOnlyAfterAcceptanceAndUsesIsolatedSource`,
 `PaperMenuToggleInfoTest` and
 `CodingComposerRenderTest.plusMenuExposesWorktreeAndKeepsInfoAvailableWhileLocked`.

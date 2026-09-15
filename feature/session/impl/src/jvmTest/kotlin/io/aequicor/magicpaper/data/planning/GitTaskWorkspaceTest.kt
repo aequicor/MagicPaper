@@ -28,7 +28,7 @@ class GitTaskWorkspaceTest {
         suspend fun open(id: String = "one"): TaskWorktree = port.describe(project, "session", id).also { port.open(it) }
         suspend fun prepare(record: TaskWorktree): TaskWorktree {
             val captured = record.copy(resultCommit = port.capture(record), targetCommit = port.target(record))
-            return captured.copy(mergeCommit = checkNotNull(port.merge(captured)))
+            return captured.copy(mergeCommit = checkNotNull(port.integrate(captured)))
         }
     }
     private suspend fun fixture(block: suspend Fixture.() -> Unit) {
@@ -132,17 +132,82 @@ class GitTaskWorkspaceTest {
         assertFalse(port.availability(project).available)
     } }
 
-    @Test fun concurrentDestinationChangesAreMergedWithoutLosingEitherSide() = runTest { fixture {
+    @Test fun concurrentDestinationChangesAreIntegratedWithoutLosingEitherSide() = runTest { fixture {
         val task = open()
         File(task.path).resolve("task.txt").writeText("task")
         source.resolve("user.txt").writeText("user")
         git(source, "add", "."); git(source, "commit", "-m", "parallel user")
         val target = git(source, "rev-parse", "HEAD")
         val result = prepare(task)
+        assertEquals(listOf(result.mergeCommit, target), git(source, "rev-list", "--parents", "-n", "1", result.mergeCommit).split(" "),
+            "перенос сохраняет линейную историю: коммит задачи стоит прямо на ветке назначения")
         port.deliver(result)
         assertEquals("user", source.resolve("user.txt").readText())
         assertEquals("task", source.resolve("task.txt").readText())
-        assertTrue(git(source, "rev-list", "--parents", "-n", "1", "HEAD").contains(target))
+        assertEquals(result.mergeCommit, git(source, "rev-parse", "HEAD"))
+    } }
+
+    @Test fun fixAlreadyPresentUpstreamIsDroppedInsteadOfConflicting() = runTest { fixture {
+        val task = open()
+        File(task.path).resolve("base.txt").writeText("fixed\n")
+        git(File(task.path), "commit", "-am", "agent fix")
+        source.resolve("base.txt").writeText("fixed\n")
+        git(source, "commit", "-am", "the same fix")
+        val tip = git(source, "rev-parse", "HEAD")
+        val result = prepare(task)
+        assertEquals(tip, result.mergeCommit)
+        port.deliver(result)
+        assertEquals(tip, git(source, "rev-parse", "HEAD"))
+        assertEquals("fixed\n", source.resolve("base.txt").readText())
+    } }
+
+    @Test fun preRunUpdateBringsCleanCopyOntoTheDestinationTip() = runTest { fixture {
+        val task = open()
+        File(task.path).resolve("task.txt").writeText("task")
+        git(File(task.path), "add", "."); git(File(task.path), "commit", "-m", "agent")
+        source.resolve("user.txt").writeText("user")
+        git(source, "add", "."); git(source, "commit", "-m", "user")
+        val tip = git(source, "rev-parse", "HEAD")
+        val refreshed = port.refresh(task)
+        assertTrue(refreshed.updated, refreshed.note)
+        assertEquals(0, refreshed.behind)
+        assertEquals(tip, refreshed.targetCommit)
+        assertEquals(tip, git(File(task.path), "rev-parse", "HEAD^"))
+        assertEquals("user", File(task.path).resolve("user.txt").readText())
+        assertEquals("task", File(task.path).resolve("task.txt").readText())
+        assertEquals(tip, git(source, "rev-parse", "HEAD"), "исходная папка не меняется до доставки")
+        assertFalse(port.refresh(task.copy(integratedCommit = tip)).updated)
+    } }
+
+    @Test fun preRunUpdateDeclinesWithoutTouchingUnsavedWork() = runTest { fixture {
+        val task = open()
+        File(task.path).resolve("base.txt").writeText("agent\n")
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "user")
+        val declined = port.refresh(task)
+        assertFalse(declined.updated)
+        assertEquals(1, declined.behind)
+        assertEquals(git(source, "rev-parse", "HEAD"), declined.targetCommit)
+        assertNotNull(declined.note)
+        assertEquals("agent\n", File(task.path).resolve("base.txt").readText())
+        assertEquals(task.baseCommit, git(File(task.path), "rev-parse", "HEAD"))
+    } }
+
+    @Test fun preRunUpdateRollsBackAConflictAndLeavesItToDelivery() = runTest { fixture {
+        val task = open()
+        File(task.path).resolve("base.txt").writeText("agent\n")
+        git(File(task.path), "commit", "-am", "agent")
+        val before = git(File(task.path), "rev-parse", "HEAD")
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "user")
+        val declined = port.refresh(task)
+        assertFalse(declined.updated)
+        assertEquals(1, declined.behind)
+        assertNotNull(declined.note)
+        assertEquals(before, git(File(task.path), "rev-parse", "HEAD"))
+        assertEquals("agent\n", File(task.path).resolve("base.txt").readText())
+        // Копия не осталась в состоянии переноса: её можно снова сохранить и доставить обычным путём.
+        assertEquals(before, port.capture(task))
     } }
 
     @Test fun targetAdvanceWithoutTaskChangesDoesNotCreateMergeCommit() = runTest { fixture {
@@ -161,11 +226,15 @@ class GitTaskWorkspaceTest {
         source.resolve("base.txt").writeText("user\n")
         git(source, "commit", "-am", "user")
         task = task.copy(targetCommit = port.target(task))
-        assertNull(port.merge(task))
+        assertNull(port.integrate(task))
         assertEquals("user\n", source.resolve("base.txt").readText())
+        // Сохранённый результат остаётся достижимым, а прерванный перенос не теряет ветку задачи.
+        assertEquals(task.resultCommit, git(File(task.path), "rev-parse", "refs/heads/${task.branch}"))
+        assertNull(port.integrate(task))
         File(task.path).resolve("base.txt").writeText("user\nagent\n")
         git(File(task.path), "add", "base.txt")
-        task = task.copy(mergeCommit = checkNotNull(port.merge(task)))
+        task = task.copy(phase = TaskWorktreePhase.CONFLICT)
+        task = task.copy(mergeCommit = checkNotNull(port.integrate(task)))
         port.deliver(task)
         assertEquals("user\nagent\n", source.resolve("base.txt").readText())
     } }

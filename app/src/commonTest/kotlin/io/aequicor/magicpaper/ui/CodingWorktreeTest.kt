@@ -19,7 +19,9 @@ class CodingWorktreeTest {
         var opens = 0
         var deliveries = 0
         var advanceAtDelivery = false
-        var mergeAttempts = 0
+        var integrateAttempts = 0
+        var refreshes = 0
+        var refreshResult = TaskWorktreeRefresh()
         var destination = "base"
         var conflict = false
         var verifyGate: CompletableDeferred<Unit>? = null
@@ -31,7 +33,8 @@ class CodingWorktreeTest {
         override suspend fun reconcile(record: TaskWorktree) = Unit
         override suspend fun capture(record: TaskWorktree) = "result"
         override suspend fun target(record: TaskWorktree) = destination
-        override suspend fun merge(record: TaskWorktree): String? { mergeAttempts++; return if (conflict) null else "result" }
+        override suspend fun refresh(record: TaskWorktree): TaskWorktreeRefresh { refreshes++; return refreshResult }
+        override suspend fun integrate(record: TaskWorktree): String? { integrateAttempts++; return if (conflict) null else "result" }
         override suspend fun verify(record: TaskWorktree) {
             verificationError?.let { error(it) }
             verifyGate?.await()
@@ -87,6 +90,32 @@ class CodingWorktreeTest {
         assertEquals(0, port.deliveries)
         assertEquals(ExecutionIntent.STOP, repo.sessions("p").single().pendingRun?.intent)
         assertTrue(service.state.value.coding.sessions.single().worktreeLocked)
+    } }
+
+    @Test fun continuedTaskRecordsDestinationDistanceItCouldNotClose() = runTest { fixture { service, runtime, port, repo ->
+        runtime.gate = CompletableDeferred()
+        port.refreshResult = TaskWorktreeRefresh(behind = 3, targetCommit = "tip", note = "В копии есть несохранённые изменения")
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(0, port.refreshes, "a fresh task starts at the destination tip")
+        service.clarifyCodingSession("s", "Clarification"); runCurrent()
+        assertEquals(1, port.refreshes)
+        val stale = repo.sessions("p").single().taskWorktree!!
+        assertEquals(3, stale.behindCommits)
+        assertEquals("В копии есть несохранённые изменения", stale.refreshNote)
+        assertEquals("", stale.integratedCommit)
+    } }
+
+    @Test fun preRunUpdateRecordsTheIntegrationPointBeforeTheAgentContinues() = runTest { fixture { service, runtime, port, repo ->
+        runtime.gate = CompletableDeferred()
+        port.refreshResult = TaskWorktreeRefresh(behind = 0, targetCommit = "tip", updated = true)
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        service.clarifyCodingSession("s", "Clarification"); runCurrent()
+        assertEquals(1, port.refreshes)
+        val updated = repo.sessions("p").single().taskWorktree!!
+        assertEquals(0, updated.behindCommits)
+        assertNull(updated.refreshNote)
+        assertEquals("tip", updated.integratedCommit)
+        assertEquals(TaskWorktreePhase.RUNNING, updated.phase)
     } }
 
     @Test fun clarificationKeepsWorkspaceAndNextTaskReusesSlotWithFreshBranch() = runTest { fixture { service, runtime, port, repo ->
@@ -145,11 +174,11 @@ class CodingWorktreeTest {
         assertEquals(1, repo.messages("p", "s").count { it.id == response.id })
     } }
 
-    @Test fun destinationAdvanceRepeatsMergeAndChecksWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->
+    @Test fun destinationAdvanceRepeatsIntegrationAndChecksWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->
         port.advanceAtDelivery = true
         service.sendCodingPromptTo("s", "Task"); runCurrent()
         assertEquals(1, runtime.calls.size)
-        assertEquals(2, port.mergeAttempts)
+        assertEquals(2, port.integrateAttempts)
         assertEquals(1, port.deliveries)
         assertEquals("next", repo.sessions("p").single().taskWorktree?.targetCommit)
     } }
