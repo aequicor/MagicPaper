@@ -75,6 +75,27 @@ class SessionTreeRuntimeTest {
         } finally { finish.complete(Unit); rootJob.cancelAndJoin() }
     } }
 
+    @Test fun childPersistsNativeConversationBeforeContinuingWork() = runTest { withContext(Dispatchers.Default) {
+        val f = SessionOrganismTestFixture(); f.initialize()
+        val sessionStarted = CompletableDeferred<Unit>(); val finish = CompletableDeferred<Unit>()
+        val tree = connect(f, Runtime { _ ->
+            emit(CodingEvent.SessionStarted("native-child-context"))
+            sessionStarted.complete(Unit)
+            finish.await()
+            emit(CodingEvent.Finished)
+        })
+        val rootJob = launch { tree.withScope(f.root) { f.create("create") } }
+        try {
+            withTimeout(5_000) { sessionStarted.await() }
+            val saved = f.projects.sessions(f.project.id).single { it.id == "session-create" }
+            assertEquals("native-child-context", saved.piSessionId)
+            assertFalse(saved.needsHistorySeed)
+        } finally {
+            finish.complete(Unit)
+            withTimeout(5_000) { rootJob.join() }
+        }
+    } }
+
     @Test fun cancellingParentWaitsForChildCleanupAndCancelsLocalQuestions() = runTest { withContext(Dispatchers.Default) {
         val f = SessionOrganismTestFixture(); f.initialize()
         val started = CompletableDeferred<Unit>(); val cleaning = CompletableDeferred<Unit>(); val cleaned = CompletableDeferred<Unit>()

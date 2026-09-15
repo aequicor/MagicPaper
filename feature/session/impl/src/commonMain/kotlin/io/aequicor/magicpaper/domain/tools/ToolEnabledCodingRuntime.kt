@@ -55,7 +55,12 @@ class ToolEnabledCodingRuntime(private val delegate: CodingRuntime, private val 
             val executionProject = tree?.projectForExecution(project, current) ?: project
             val events = if (planning) delegate.runPlanning(executionProject, current, instruction, profile ?: error("Профиль недоступен"))
                 else delegate.run(executionProject, current, instruction, profile, attachments)
-            events.withTools(tools).collect { event ->
+            // Save the native conversation upstream of the channel-based tool adapter.
+            // This must complete before the engine can emit its first command, otherwise a
+            // crash can leave a recoverable child checkpoint without its accumulated context.
+            events.onEach { event ->
+                if (event is CodingEvent.SessionStarted) tree?.nativeSessionStarted(current, event.sessionId)
+            }.withTools(tools).collect { event ->
                 if (event is CodingEvent.UsageObserved) tree?.observeUsage(current, event)
                 if (event is CodingEvent.Failed) { failed = true; tree?.failed(current.id) }
                 if (event is CodingEvent.Finished) {

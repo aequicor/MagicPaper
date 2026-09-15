@@ -45,6 +45,14 @@ class SessionTreeRuntime(
     /** Controller closure may be deferred when the failed callback belongs to that controller. */
     var externalPlanStop: suspend (String, Job) -> Boolean = { _, _ -> true }
     suspend fun failed(sessionId: String) { lock.withLock { handles[sessionId]?.failed = true } }
+    internal suspend fun nativeSessionStarted(session: CodingSession, nativeSessionId: String) {
+        if (nativeSessionId.isBlank()) return
+        projects.updateSession(session.projectId, session.id) { saved ->
+            if (saved.runtimeGeneration == session.runtimeGeneration) {
+                saved.copy(piSessionId = nativeSessionId, needsHistorySeed = false)
+            } else saved
+        }
+    }
     suspend fun incoming(session: CodingSession): List<SessionDelivery> = organisms.pendingContext(session)
     suspend fun processed(session: CodingSession, ids: List<String>) = organisms.acknowledgeContext(session, ids)
     suspend fun auxiliaryContext(context: ToolExecutionContext): ToolExecutionContext {
