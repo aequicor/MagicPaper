@@ -40,6 +40,7 @@ import io.aequicor.magicpaper.designsystem.PaperAttachmentRow
 import io.aequicor.magicpaper.designsystem.PaperAttachmentThumbnail
 import io.aequicor.magicpaper.designsystem.PaperAttachmentThumbnailState
 import io.aequicor.magicpaper.designsystem.PaperImage
+import io.aequicor.magicpaper.designsystem.PaperImageScale
 import io.aequicor.magicpaper.designsystem.PaperModal
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
@@ -375,7 +376,12 @@ fun renderMessageAttachments(attachments: List<Attachment>) {
                         .clip(RoundedCornerShape(10.dp))
                         .paperClickable { preview = attachment },
                 ) {
-                    PaperImage(bitmap, attachment.name, Modifier.fillMaxWidth().heightIn(max = 160.dp))
+                    PaperImage(
+                        bitmap,
+                        attachment.name,
+                        Modifier.fillMaxWidth().heightIn(max = 160.dp),
+                        scale = PaperImageScale.FIT,
+                    )
                 }
             } else {
                 AttachmentChip(attachment)
@@ -396,7 +402,7 @@ fun renderImagePreviewDialog(attachment: Attachment, onDismiss: () -> Unit) {
         text = {
             Column(modifier = Modifier.padding(12.dp)) {
                 if (bitmap != null) {
-                    PaperImage(bitmap, attachment.name, Modifier.fillMaxWidth())
+                    PaperImage(bitmap, attachment.name, Modifier.fillMaxWidth(), scale = PaperImageScale.FIT)
                 } else {
                     PaperText("Не удалось показать изображение.")
                 }

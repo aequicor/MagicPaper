@@ -305,9 +305,26 @@ public fun PaperAttachmentThumbnail(
 }
 
 @Composable
-public fun PaperImage(bitmap: ImageBitmap, description: String?, modifier: Modifier = Modifier, size: Dp? = null) {
-    Image(bitmap = bitmap, contentDescription = description, modifier = if (size == null) modifier else modifier.size(size), contentScale = ContentScale.Crop)
+public fun PaperImage(
+    bitmap: ImageBitmap,
+    description: String?,
+    modifier: Modifier = Modifier,
+    size: Dp? = null,
+    scale: PaperImageScale = PaperImageScale.CROP,
+) {
+    Image(
+        bitmap = bitmap,
+        contentDescription = description,
+        modifier = if (size == null) modifier else modifier.size(size),
+        contentScale = when (scale) {
+            PaperImageScale.CROP -> ContentScale.Crop
+            PaperImageScale.FIT -> ContentScale.Fit
+        },
+    )
 }
+
+/** Controls whether an image fills its bounds or remains completely visible. */
+public enum class PaperImageScale { CROP, FIT }
 
 @Composable
 public fun PaperApprovalDock(modifier: Modifier = Modifier, content: @Composable () -> Unit) =
