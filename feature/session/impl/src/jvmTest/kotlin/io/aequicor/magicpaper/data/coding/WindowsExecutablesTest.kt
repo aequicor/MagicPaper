@@ -16,8 +16,9 @@ class WindowsExecutablesTest {
     @Test fun windowsTriesExecutableExtensionsBeforeBareName() {
         val expected = if (windows) listOf(".EXE", ".CMD", "") else listOf("")
         assertEquals(expected, WindowsExecutables.suffixes("gradlew", listOf(".EXE", ".CMD", "")))
-        // Точное имя с известным расширением остаётся первым кандидатом.
-        assertEquals(listOf("") + listOf(".EXE", ".CMD"), WindowsExecutables.suffixes("run.cmd", listOf(".EXE", ".CMD")))
+        // На Windows точное имя остаётся первым; POSIX не применяет PATHEXT.
+        val exactName = if (windows) listOf("", ".EXE", ".CMD") else listOf("")
+        assertEquals(exactName, WindowsExecutables.suffixes("run.cmd", listOf(".EXE", ".CMD")))
     }
 
     @Test fun launchabilityFollowsExtensionOrPeImage() {

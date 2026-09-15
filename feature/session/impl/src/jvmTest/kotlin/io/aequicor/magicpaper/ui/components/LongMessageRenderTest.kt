@@ -90,7 +90,8 @@ class LongMessageRenderTest {
                 assertTrue(onUi { scene.texts().any { "Новый хвост" in it } })
                 click("Свернуть")
                 render()
-                assertEquals(2, list.layoutInfo.totalItemsCount)
+                assertEquals(if (role == CodingRole.AGENT) 3 else 2, list.layoutInfo.totalItemsCount,
+                    "Header, collapsed message, and manual review for a completed agent response")
                 assertTrue(onUi { "Читать далее" in scene.texts() })
             } finally { onUi { scene.close() } }
         }
@@ -127,7 +128,7 @@ class LongMessageRenderTest {
             assertTrue(onUi { scene.texts().any { "Конец вывода" in it } })
             click("Свернуть")
             render()
-            assertEquals(2, list.layoutInfo.totalItemsCount)
+            assertEquals(3, list.layoutInfo.totalItemsCount, "Header, collapsed tool output, and manual review")
             assertTrue(onUi { "Читать далее" in scene.texts() }, "Restore the opened tool, including its preview")
         } finally { onUi { scene.close() } }
     }

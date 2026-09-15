@@ -358,6 +358,8 @@ private fun SessionArea(
             CodingChat(
                 project = project,
                 session = effective,
+                onResultRead = { vm.markSessionRead(sessionInfo.id, it) },
+                onManualVerification = { responseId, checked -> vm.setSessionManuallyVerified(sessionInfo.id, responseId, checked) },
                 contextUsage = vm.usage.state.collectAsState().value.contexts["coding:${sessionInfo.id}"]?.takeIf { it.model == vm.codingProfileOf(sessionInfo, workerPlan)?.modelId }
                     ?: io.aequicor.magicpaper.domain.ContextUsageSnapshot("coding:${sessionInfo.id}", vm.codingProfileOf(sessionInfo, workerPlan)?.modelId.orEmpty()),
                 pins = pins[PinConversation(sessionInfo.id, sessionInfo.projectId)].orEmpty(),
@@ -897,6 +899,8 @@ internal fun CodingChat(
     planningService: PlanningChatService? = null,
     planningQuestionsSession: CodingSessionUi = session,
     onOpenSession: (String) -> Unit = {},
+    onResultRead: (String) -> Unit = {},
+    onManualVerification: (String, Boolean) -> Unit = { _, _ -> },
     onPlanning: (() -> Unit)? = null,
     onInteractionMode: ((CodingInteractionMode) -> Unit)? = null,
     modeSwitchEnabled: Boolean = true,
@@ -923,12 +927,23 @@ internal fun CodingChat(
     onWorktreeChange: (() -> Unit)? = null,
     /** Действуемое восстановление рядом с причиной блокировки: пользователь не должен его искать. */
     quarantineRecovery: (@Composable () -> Unit)? = null,
+    windowFocused: Boolean = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused,
     listState: LazyListState = key(session.session.id) {
         rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     },
 ) {
     CompositionLocalProvider(LocalOpenQuestionnaire provides onOpenQuestionnaire) {
     val messages = session.messages
+    val completedResponseId = session.completedResponseId
+    val latestOnResultRead by androidx.compose.runtime.rememberUpdatedState(onResultRead)
+    LaunchedEffect(session.session.id, completedResponseId, session.unread, windowFocused, listState) {
+        if (completedResponseId != null && session.unread && windowFocused) {
+            androidx.compose.runtime.snapshotFlow {
+                !listState.canScrollForward && listState.layoutInfo.visibleItemsInfo.lastOrNull()?.key ==
+                    "session-result:$completedResponseId"
+            }.collect { visible -> if (visible) latestOnResultRead(completedResponseId) }
+        }
+    }
     val hideSystemSteps = LocalPaperHideSystemSteps.current
     val rows = remember(messages, hideSystemSteps) { codingChatRows(messages, hideSystemSteps) }
     val history = remember(rows) { codingHistoryItems(rows) }
@@ -1028,6 +1043,13 @@ internal fun CodingChat(
                                 scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
                                 expandedMessages = expandedMessages - item.key
                             })
+                    }
+                }
+                if (completedResponseId != null) {
+                    item(key = "session-result:$completedResponseId", contentType = "result") {
+                        SessionResultReview(session.manuallyVerified) { checked ->
+                            onManualVerification(completedResponseId, checked)
+                        }
                     }
                 }
                 if (busy && (hasDraft || statusMessageId == null)) {

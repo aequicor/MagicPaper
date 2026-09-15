@@ -89,6 +89,8 @@ data class CodingSession(
     val shortTitle: String = "",
     val worktreeEnabled: Boolean = true,
     val taskWorktree: TaskWorktree? = null,
+    /** Manual acceptance belongs to a specific response, never to future runs. */
+    val manuallyVerifiedResponseId: String? = null,
 )
 
 @Serializable
@@ -141,6 +143,9 @@ enum class CodingSessionStatus {
     /** Сессия ждёт события или времени, ответ пользователя не требуется. */
     SCHEDULED,
 
+    UNREAD,
+    NEEDS_TESTING,
+
     /** Сессия свободна, ждёт запроса — зелёный. */
     IDLE,
 }
@@ -157,7 +162,9 @@ fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSess
         CodingSessionStatus.WORKING -> 3
         CodingSessionStatus.QUEUED -> 4
         CodingSessionStatus.SCHEDULED -> 5
-        CodingSessionStatus.IDLE -> 6
+        CodingSessionStatus.UNREAD -> 6
+        CodingSessionStatus.NEEDS_TESTING -> 7
+        CodingSessionStatus.IDLE -> 8
     } } ?: CodingSessionStatus.IDLE
 
 /** Фазы состояния кодинг-рантайма (движка пи-агента). */

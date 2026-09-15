@@ -67,7 +67,7 @@ class LargeCodingChatRenderTest {
 
     @Test fun aThousandStepsInOneSavedMessageStayLazyWhileScrolling() = Chat(session("saved", 1000)).use { chat ->
         chat.render()
-        assertEquals(1002, chat.list.layoutInfo.totalItemsCount)
+        assertEquals(1003, chat.list.layoutInfo.totalItemsCount, "Header, 1001 history items, and manual review")
         assertFalse(chat.list.canScrollForward)
         chat.assertBounded()
         chat.scene.snapshot("saved-tail", ++chat.frame * 32_000_000L)

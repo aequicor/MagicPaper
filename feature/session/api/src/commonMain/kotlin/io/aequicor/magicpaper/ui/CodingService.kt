@@ -39,7 +39,8 @@ interface CodingService {
     fun openPlanningChat()
     fun selectCodingSession(id: String)
     /** Mark the session as read up to its last visible agent message. */
-    fun markSessionRead(sessionId: String)
+    fun markSessionRead(sessionId: String, messageId: String)
+    fun setSessionManuallyVerified(sessionId: String, responseId: String, verified: Boolean)
     fun deleteAllCodingSessions(projectId: String)
     fun archiveCodingSession(id: String)
     fun deleteCodingSession(id: String)

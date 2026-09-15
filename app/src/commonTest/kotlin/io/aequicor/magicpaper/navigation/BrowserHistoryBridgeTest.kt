@@ -221,7 +221,7 @@ class BrowserHistoryBridgeTest {
             FeatureComponentFactory { visit, _, _ -> visit.route }, initialWelcomeRequired = false,
             dispatcher = StandardTestDispatcher(testScheduler))
         val cloneBridge = BrowserHistoryBridge(clone, copiedBrowser, "clone", backgroundScope)
-        clone.awaitIdle(); runCurrent(); copiedBrowser.completeTraversal(); runCurrent(); clone.awaitIdle()
+        clone.awaitIdle(); runCurrent(); copiedBrowser.completeTraversal(); runCurrent(); clone.awaitIdle(); runCurrent()
         assertEquals(AppRoute.Chat("a"), clone.navigationState.value.route)
         assertEquals("clone", Json.decodeFromString<BrowserVisitEntry>(requireNotNull(copiedBrowser.state)).journalKey)
         clone.navigate(AppRoute.Settings()); clone.awaitIdle(); runCurrent()

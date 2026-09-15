@@ -197,8 +197,8 @@ class PlanningSessionStatusTest {
                 CodingSessionUi(worker, listOf(result), plan = completed, awaitingUser = true,
                     draft = CodingDraft(awaitingApproval = true)))).withRequests()
             assertTrue(ui.interactions.isEmpty())
-            assertEquals(listOf(CodingSessionStatus.IDLE, CodingSessionStatus.IDLE), ui.sessionsOf(parent.projectId).map { it.status })
-            assertEquals(CodingSessionStatus.IDLE, ui.statusOf(parent.projectId))
+            assertEquals(listOf(CodingSessionStatus.IDLE, CodingSessionStatus.NEEDS_TESTING), ui.sessionsOf(parent.projectId).map { it.status })
+            assertEquals(CodingSessionStatus.NEEDS_TESTING, ui.statusOf(parent.projectId))
         }
     }
 

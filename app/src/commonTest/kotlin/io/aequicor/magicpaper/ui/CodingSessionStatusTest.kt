@@ -26,7 +26,7 @@ class CodingSessionStatusTest {
         val completed = CodingSessionUi(worker,
             messages = listOf(CodingMessage("result", CodingRole.AGENT, "Работа завершена, проверки прошли.", createdAt = 1)),
             plan = plan, interactions = emptyList())
-        assertEquals(CodingSessionStatus.IDLE, completed.status)
+        assertEquals(CodingSessionStatus.NEEDS_TESTING, completed.status)
         for (session in listOf(
             worker.copy(observedState = SessionObservedState.UNKNOWN),
             worker.copy(observedState = SessionObservedState.COMPLETED, desiredState = SessionDesiredState.QUARANTINE),

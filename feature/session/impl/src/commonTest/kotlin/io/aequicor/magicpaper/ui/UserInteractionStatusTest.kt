@@ -70,7 +70,7 @@ class UserInteractionStatusTest {
         val agent = CodingMessage("a", CodingRole.AGENT, "Продолжить?**", createdAt = 2)
         assertEquals(CodingSessionStatus.IDLE, codingStatusOf(listOf(user, agent)))
         assertEquals(CodingSessionStatus.WORKING, CodingSessionUi(plain, listOf(user), running = true, draft = CodingDraft(awaitingModel = true)).status)
-        assertEquals(CodingSessionStatus.IDLE, CodingSessionUi(plain, listOf(agent), awaitingUser = true, draft = CodingDraft(awaitingApproval = true)).status)
+        assertEquals(CodingSessionStatus.NEEDS_TESTING, CodingSessionUi(plain, listOf(agent), awaitingUser = true, draft = CodingDraft(awaitingApproval = true)).status)
     }
 
     @Test fun structuredQuestionStaysOpenAfterNewerMessagesAndOnlyAffectsItsStage() {
@@ -100,7 +100,7 @@ class UserInteractionStatusTest {
             val pending = interactionCandidates(CodingUi(sessions = listOf(item)), emptyList(), emptyMap(), emptyMap())
             assertTrue(pending.isEmpty())
             assertFalse(item.canResume)
-            assertEquals(CodingSessionStatus.IDLE, item.status)
+            assertEquals(CodingSessionStatus.NEEDS_TESTING, item.status)
         }
     }
 

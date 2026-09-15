@@ -91,7 +91,10 @@ class DefaultCodingService(
     override val state: StateFlow<CodingState> = _state.asStateFlow()
     val sessionTitles = if (codingProjects != null && gateway != null)
         SessionTitleService(codingProjects, profileRepo, settingsRepo, gateway, scope) else null
-    val unreadTracker = UnreadTracker(store, json)
+    val unreadTracker = UnreadTracker(store, json, workerDispatcher) { error ->
+        AppLog.error("coding", "read-marker.load.failed", error)
+        _state.update { it.copy(notice = "Не удалось загрузить отметки прочтения. Перезапустите приложение, чтобы повторить загрузку.") }
+    }
     init {
         // Готовое название задачи появляется в списке сразу, а не после следующей перезагрузки журналов.
         sessionTitles?.let { titles -> scope.launch {
@@ -503,7 +506,7 @@ class DefaultCodingService(
 
     }
     private fun withUnread(item: CodingSessionUi): CodingSessionUi {
-        val unread = unreadTracker.hasUnread(item.session.id, item.messages, _state.value.coding.currentSessionId)
+        val unread = unreadTracker.hasUnread(item.session.id, item.messages)
         return if (item.unread == unread) item else item.copy(unread = unread)
     }
 
@@ -548,7 +551,7 @@ class DefaultCodingService(
         val repo = codingProjects ?: return emptyMap()
         return projects.associate { project ->
             val statuses = repo.sessions(project.id).map { session ->
-                withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id))).status
+                withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id)))).status
             }
             project.id to aggregateCodingStatus(statuses)
         }
@@ -566,7 +569,7 @@ class DefaultCodingService(
                 _state.value.coding.sessions.firstOrNull { it.session.id == session.id }?.status
                     ?: CodingSessionStatus.WORKING
             } else {
-                withPlanningState(CodingSessionUi(session, repo.messages(projectId, session.id))).status
+                withUnread(withPlanningState(CodingSessionUi(session, repo.messages(projectId, session.id)))).status
             }
         }
         _state.update {
@@ -708,17 +711,17 @@ class DefaultCodingService(
         val project = repo.all().firstOrNull { it.id == projectId } ?: return
         val sessions = repo.sessions(projectId)
         val worktreeCapability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
-        // Determine which session should have messages loaded: prefer current, else first.
-        val currentId = _state.value.coding.currentSessionId
-        val activeSessionId = sessions.firstOrNull { it.id == currentId }?.id ?: sessions.firstOrNull()?.id
-        val loaded = sessions.map { session ->
-            val messages = if (session.id == activeSessionId) repo.messages(projectId, session.id) else emptyList()
-            withPlanningState(CodingSessionUi(
-                session = session,
-                messages = messages,
-                running = codingJobs.value[session.id]?.isActive == true,
-                worktreeAvailability = worktreeCapability,
-            ))
+        // Every sidebar row needs its saved result, including sessions that are not selected.
+        val loaded = withContext(workerDispatcher) {
+            sessions.map { session ->
+                val messages = repo.messages(projectId, session.id)
+                withUnread(withPlanningState(CodingSessionUi(
+                    session = session,
+                    messages = messages,
+                    running = codingJobs.value[session.id]?.isActive == true,
+                    worktreeAvailability = worktreeCapability,
+                )))
+            }
         }
         currentCoroutineContext().ensureActive()
         _state.update { st ->
@@ -980,7 +983,7 @@ class DefaultCodingService(
 
     override fun selectCodingSession(id: String) {
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == id } ?: return
-        // Load messages on-demand if not already loaded (optimization: openCodingProject only loads active session).
+        // A newly published session can precede its first history snapshot.
         if (selected.messages.isEmpty() && !selected.running) {
             scope.launch {
                 val repo = codingProjects ?: return@launch
@@ -988,15 +991,46 @@ class DefaultCodingService(
                 updateCodingSession(id) { it.copy(messages = messages) }
             }
         }
-        markSessionRead(id)
         onOpenSession(selected.session.projectId, id)
     }
 
-    override fun markSessionRead(sessionId: String) {
+    override fun markSessionRead(sessionId: String, messageId: String) {
         val session = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         val lastAgent = session.messages.lastOrNull { it.role == CodingRole.AGENT && !it.systemContext && !it.systemNotice }
             ?: return
-        unreadTracker.markRead(sessionId, lastAgent.id)
+        if (lastAgent.id != messageId || unreadTracker.lastRead(sessionId) == messageId) return
+        val failureNotice = "Не удалось сохранить отметку прочтения. Откройте сессию повторно, чтобы повторить попытку."
+        scope.launch {
+            try {
+                unreadTracker.markRead(sessionId, messageId)
+                updateCodingSession(sessionId) { it }
+                _state.update { if (it.notice == failureNotice) it.copy(notice = null) else it }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                AppLog.error("coding", "read-marker.save.failed", error, mapOf("sessionId" to sessionId))
+                _state.update { it.copy(notice = failureNotice) }
+            }
+        }
+    }
+
+    override fun setSessionManuallyVerified(sessionId: String, responseId: String, verified: Boolean) {
+        val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        if (selected.completedResponseId != responseId) return
+        val failureNotice = "Не удалось сохранить отметку проверки. Повторите попытку."
+        scope.launch {
+            try {
+                updateStoredCodingSession(selected.session) { latest ->
+                    // The captured response ID cannot accept a newer result, even if a run starts while saving.
+                    latest.copy(manuallyVerifiedResponseId = if (verified) responseId else null)
+                }
+                AppLog.info("coding", "manual-verification.saved", mapOf("sessionId" to sessionId, "verified" to verified.toString()))
+                _state.update { if (it.notice == failureNotice) it.copy(notice = null) else it }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                AppLog.error("coding", "manual-verification.save.failed", error, mapOf("sessionId" to sessionId))
+                _state.update { it.copy(notice = failureNotice) }
+            }
+        }
     }
 
     override fun deleteAllCodingSessions(projectId: String) {

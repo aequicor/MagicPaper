@@ -25,7 +25,7 @@ data class CodingSessionUi(
     val failedRequest: Boolean = false,
     val interactions: List<UserInteractionRequest> = emptyList(),
     val immunityProposalPending: Boolean = false,
-    /** True when an agent replied while this session was not focused. */
+    /** True until the latest agent reply has been displayed at the end of the transcript. */
     val unread: Boolean = false,
     val worktreeAvailability: WorktreeAvailability = WorktreeAvailability(false, "Проверка Git…"),
 ) {
@@ -63,7 +63,23 @@ data class CodingSessionUi(
     /** Вопрос пользователю имеет приоритет; очередь исполнителей не требует ответа. */
     // This is an immutable snapshot. Re-reading a sidebar status must not rescan
     // its entire history on every layout; copy() creates a fresh cache when it changes.
-    val status: CodingSessionStatus by lazy { computeStatus() }
+    private val activityStatus: CodingSessionStatus by lazy { computeStatus() }
+    val completedResponseId: String? by lazy {
+        if (session.archived || activityStatus != CodingSessionStatus.IDLE ||
+            session.queuedPrompts.isNotEmpty() || interruptedRequest) null
+        else messages.lastOrNull { !it.systemContext && !it.systemNotice }
+            ?.takeIf { it.role == CodingRole.AGENT && !it.failed }?.id
+    }
+    val manuallyVerified: Boolean get() = completedResponseId != null &&
+        session.manuallyVerifiedResponseId == completedResponseId
+    val status: CodingSessionStatus by lazy {
+        when {
+            completedResponseId == null -> activityStatus
+            unread -> CodingSessionStatus.UNREAD
+            !manuallyVerified -> CodingSessionStatus.NEEDS_TESTING
+            else -> CodingSessionStatus.IDLE
+        }
+    }
 
     val blockingReason: String? by lazy {
         if (status != CodingSessionStatus.BLOCKED) null

@@ -668,6 +668,8 @@ private fun ImmunityDiamond(
         PaperActivityIndicator(
             tone = when (status) {
                 CodingSessionStatus.IDLE -> PaperActivityTone.READY
+                CodingSessionStatus.UNREAD -> PaperActivityTone.UNREAD
+                CodingSessionStatus.NEEDS_TESTING -> PaperActivityTone.ATTENTION
                 CodingSessionStatus.WORKING -> PaperActivityTone.WORKING
                 CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING,
                 CodingSessionStatus.CONFIRMATION -> PaperActivityTone.ATTENTION

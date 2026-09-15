@@ -15,11 +15,15 @@ val CodingSessionStatus.label: String
         CodingSessionStatus.QUEUED -> "ждёт родителя"
         CodingSessionStatus.SCHEDULED -> "ждёт события или времени"
         CodingSessionStatus.IDLE -> "ждёт запроса"
+        CodingSessionStatus.UNREAD -> "Работа завершена · результат не прочитан"
+        CodingSessionStatus.NEEDS_TESTING -> "Работа завершена · нужна ручная проверка"
     }
 
 private val CodingSessionStatus.activityTone: PaperActivityTone
     get() = when (this) {
         CodingSessionStatus.IDLE -> PaperActivityTone.READY
+        CodingSessionStatus.UNREAD -> PaperActivityTone.UNREAD
+        CodingSessionStatus.NEEDS_TESTING -> PaperActivityTone.ATTENTION
         CodingSessionStatus.WORKING -> PaperActivityTone.WORKING
         CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING, CodingSessionStatus.CONFIRMATION -> PaperActivityTone.ATTENTION
         CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED -> PaperActivityTone.QUEUED

@@ -14,7 +14,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-public enum class PaperActivityTone { READY, WORKING, ATTENTION, QUEUED }
+public enum class PaperActivityTone { READY, WORKING, ATTENTION, QUEUED, UNREAD }
 
 /**
  * Indicator silhouette. [DIAMOND] carries the same tones and motion as [CIRCLE]
@@ -31,6 +31,7 @@ public fun PaperColors.activityIndicatorColors(tone: PaperActivityTone): Pair<Co
     PaperActivityTone.ATTENTION -> activityYellow to activityYellowEdge
     PaperActivityTone.WORKING -> activityRed to error
     PaperActivityTone.QUEUED -> raisedSurface to secondaryText
+    PaperActivityTone.UNREAD -> selected to action
 }
 
 /** Indicator silhouette and tone; [running] adds the pulse on top of both shapes. */
