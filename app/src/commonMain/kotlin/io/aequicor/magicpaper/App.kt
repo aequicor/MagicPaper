@@ -91,8 +91,9 @@ private fun AppShellContent(runtime: MagicPaperRuntime, root: RootComponent<AppC
             if (config.showWelcome) {
                 Box(Modifier.fillMaxSize().safeDrawingPadding()) { (root as ApplicationRoot).welcome.Content() }
             } else {
-                // The bar overlays the content: transcripts run edge-to-edge behind it
-                // and the frost band keeps its buttons legible over scrolled messages.
+                // The bar overlays the content: transcripts run edge-to-edge behind it,
+                // the frost band keeps its buttons legible over scrolled messages and ends
+                // in a hairline; pinned surfaces keep a lane below that hairline.
                 val topInset = LocalWindowToolbarHeight.current ?: 56.dp
                 val edgeToEdge = navigation.route is AppRoute.Chat || navigation.route is AppRoute.Projects
                 Box(Modifier.fillMaxSize().navigationBarsPadding().paperTitleBarFrost(topInset)) {

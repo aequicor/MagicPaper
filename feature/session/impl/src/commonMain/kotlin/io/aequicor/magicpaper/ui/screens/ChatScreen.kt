@@ -23,7 +23,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import io.aequicor.magicpaper.designsystem.paperTranscriptFade
+import io.aequicor.magicpaper.designsystem.PaperTitleBarLaneGap
+import io.aequicor.magicpaper.designsystem.paperChatTopShadow
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -131,8 +132,10 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = paperStickToBottom(listState, session?.id)
     // Messages run edge-to-edge behind the title bar: the frost band blurs them
-    // there, and the transcript fade takes over right below it once scrolled.
+    // there and ends in a hairline; below it the transcript stays sharp, with a
+    // depth shadow once scrolled. Pinned messages keep a lane below the hairline.
     val topInset = LocalWindowToolbarHeight.current ?: 56.dp
+    val laneTop = topInset + PaperTitleBarLaneGap
     val scrolled by remember(listState) { derivedStateOf { listState.canScrollBackward } }
     var expandedMessages by rememberSaveable(session?.id) { mutableStateOf(emptyList<String>()) }
     val expandedParts = buildMap<String, PaperInlineMessageParts> {
@@ -159,13 +162,13 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(top = topInset)) { EmptyHint() }
+            Box(Modifier.fillMaxSize().padding(top = laneTop)) { EmptyHint() }
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
-                    .paperTranscriptFade(topShadowVisible = scrolled, topOffset = topInset),
-                contentPadding = PaddingValues(start = 16.dp, top = topInset + 16.dp, end = 16.dp, bottom = 16.dp),
+                    .paperChatTopShadow(scrolled, topOffset = topInset),
+                contentPadding = PaddingValues(start = 16.dp, top = laneTop + 16.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.Top,
             ) {
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
@@ -183,7 +186,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 }
             }
         }
-        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = topInset),
+        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = laneTop),
             browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp))
         AnimatedVisibility(

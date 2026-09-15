@@ -90,7 +90,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import io.aequicor.magicpaper.designsystem.paperChatTopShadow
-import io.aequicor.magicpaper.designsystem.paperTranscriptFade
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
@@ -964,19 +963,19 @@ internal fun CodingChat(
     val effectHeight = if (protectedBottom > 0.dp) maxOf(32.dp, protectedBottom + 12.dp) else 32.dp
     // The journal viewport reaches the window top so messages scroll behind the
     // title bar; when something pushes it down (approval panels), the frost band
-    // stays above it and the local fade starts from the journal's own edge.
+    // stays above it and the local lane starts from the journal's own edge.
     val titleBarInset = LocalWindowToolbarHeight.current ?: 56.dp
     var journalTopInWindow by remember { mutableStateOf(0f) }
     val localTopInset = with(density) { (titleBarInset - journalTopInWindow.toDp()).coerceAtLeast(0.dp) }
+    val laneTop = localTopInset + PaperTitleBarLaneGap
     BoxWithConstraints(modifier = Modifier.fillMaxSize()
         .onGloballyPositioned { journalTopInWindow = it.boundsInWindow().top }) {
             val questionHeight = maxHeight * 0.75f
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
-                    .paperChatTopShadow(scrolled, effectHeight = effectHeight, topOffset = localTopInset)
-                    .paperTranscriptFade(topShadowVisible = scrolled, effectHeight = effectHeight, topOffset = localTopInset),
-                contentPadding = PaddingValues(start = 8.dp, top = systemHeaderHeight + localTopInset + 12.dp,
+                    .paperChatTopShadow(scrolled, effectHeight = effectHeight, topOffset = localTopInset),
+                contentPadding = PaddingValues(start = 8.dp, top = systemHeaderHeight + laneTop + 12.dp,
                     end = 8.dp, bottom = footerHeight + 4.dp),
                 verticalArrangement = Arrangement.Top,
             ) {
@@ -1014,7 +1013,7 @@ internal fun CodingChat(
                 }
             }
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth()
-                .padding(top = localTopInset)
+                .padding(top = laneTop)
                 .onSizeChanged { systemHeaderHeight = with(density) { it.height.toDp() } }) {
                 if (showOrchestrationStatus)
                     OrchestrationStatus(session, planningService, onOpenSession, Modifier, scrolled = false)
@@ -1043,7 +1042,7 @@ internal fun CodingChat(
                     }
                 }
             }
-            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = systemHeaderHeight + localTopInset),
+            RequestPinsOverlay(pins, pinIndices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = systemHeaderHeight + laneTop),
                 browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null }, itemKeys = pinKeys, compact = true)
             PaperChatScrollToBottomButton(scroll,
                 Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = (footerHeight - 8.dp).coerceAtLeast(0.dp)))

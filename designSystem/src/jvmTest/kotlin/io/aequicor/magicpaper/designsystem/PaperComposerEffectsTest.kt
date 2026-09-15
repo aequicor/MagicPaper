@@ -80,23 +80,6 @@ class PaperComposerEffectsTest {
         }
     }
 
-    @Test fun transcriptRemainsOpaqueBehindComposer() {
-        ImageComposeScene(120, 200) {
-            Box(Modifier.fillMaxSize().background(Color.White)) {
-                Box(Modifier.fillMaxSize().paperTranscriptFade().background(Color.Black))
-            }
-        }.use { scene ->
-            val pixels = scene.render(0L).use { image ->
-                image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
-            }
-            fun red(y: Int) = (pixels.getRGB(60, y) shr 16) and 255
-            assertEquals(0, red(90))
-            assertEquals(0, red(118))
-            assertEquals(0, red(132))
-            assertEquals(0, red(150))
-        }
-    }
-
     @Test fun composerCastsShadowAboveMessages() {
         ImageComposeScene(300, 180) {
             PaperTheme {
@@ -117,11 +100,11 @@ class PaperComposerEffectsTest {
             }
         }
     }
-    @Test fun scrolledTopEdgeBlursMessagesOnlyWithin32Dp() {
+    @Test fun scrolledTopEdgeShadesSharpMessagesOnlyWithin32Dp() {
         ImageComposeScene(120, 80) {
             PaperTheme {
                 Box(Modifier.fillMaxSize().background(Color.White).paperChatTopShadow(true)) {
-                    Row(Modifier.fillMaxSize().paperTranscriptFade(topShadowVisible = true)) {
+                    Row(Modifier.fillMaxSize()) {
                         Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
                         Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
                     }
@@ -132,9 +115,11 @@ class PaperComposerEffectsTest {
                 image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
             }
             fun red(x: Int, y: Int) = (pixels.getRGB(x, y) shr 16) and 255
-            assertTrue(red(59, 0) > 40, "Black edge must actually blur")
-            assertTrue(red(60, 0) < 200, "White edge must actually blur")
-            assertTrue(red(59, 8) > red(59, 24), "Blur must weaken towards 32 dp")
+            assertTrue(red(59, 0) < 60, "The shadow must not blur the light column into the dark one")
+            assertTrue(red(59, 8) < 60, "The shadow must not blur the light column into the dark one")
+            assertTrue(red(60, 8) - red(59, 8) > 120, "The column boundary stays crisp below the title bar")
+            assertTrue(red(60, 0) < 240, "The light column must be shaded at the top edge")
+            assertTrue(red(60, 8) < red(60, 24), "Shade must weaken towards 32 dp")
             assertTrue(red(100, 20) < 255, "Shadow extends beyond the old 12 dp height")
             assertEquals(0, red(59, 33))
             assertEquals(255, red(60, 33))
@@ -142,10 +127,10 @@ class PaperComposerEffectsTest {
         }
     }
 
-    @Test fun titleBarFrostBlursContentAcrossTheStripAndFadesBelow() {
+    @Test fun titleBarFrostBlursContentInsideTheStripAndKeepsTheTranscriptSharpBelow() {
         ImageComposeScene(120, 120) {
             PaperTheme {
-                Box(Modifier.fillMaxSize().background(Color.White).paperTitleBarFrost(40.dp, fade = 16.dp)) {
+                Box(Modifier.fillMaxSize().background(Color.White).paperTitleBarFrost(40.dp)) {
                     Row(Modifier.fillMaxSize()) {
                         Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
                         Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
@@ -160,32 +145,11 @@ class PaperComposerEffectsTest {
             fun red(x: Int, y: Int) = (pixels.getRGB(x, y) shr 16) and 255
             assertTrue(red(59, 20) > 100, "Frost must cover dark content behind the title bar")
             assertTrue(kotlin.math.abs(red(59, 20) - red(60, 20)) < 40, "The strip boundary must be blurred")
-            assertTrue(red(59, 48) < red(59, 20), "Frost must weaken towards the fade below the strip")
+            assertTrue(red(60, 39) < 240, "A hairline must cut the band from the transcript")
+            assertEquals(0, red(59, 44), "Below the band the transcript stays sharp, never half-blurred")
+            assertEquals(255, red(60, 44))
             assertEquals(0, red(59, 62))
             assertEquals(255, red(60, 62))
-        }
-    }
-
-    @Test fun transcriptFadeTopOffsetKeepsTheTitleBarBandOutOfTheEffect() {
-        ImageComposeScene(120, 120) {
-            PaperTheme {
-                Row(Modifier.fillMaxSize()
-                    .paperTranscriptFade(topShadowVisible = true, effectHeight = 32.dp, topOffset = 40.dp)) {
-                    Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
-                    Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
-                }
-            }
-        }.use { scene ->
-            val pixels = scene.render(0L).use { image ->
-                image.encodeToData()!!.use { ImageIO.read(ByteArrayInputStream(it.bytes)) }
-            }
-            fun red(x: Int, y: Int) = (pixels.getRGB(x, y) shr 16) and 255
-            assertEquals(0, red(59, 20), "Above the offset the transcript stays sharp")
-            assertEquals(255, red(60, 20))
-            assertTrue(red(59, 44) > 40, "Blur must start at the offset")
-            assertTrue(red(60, 44) < 200, "Blur must start at the offset")
-            assertEquals(0, red(59, 80), "Below offset + effect the transcript stays sharp")
-            assertEquals(255, red(60, 80))
         }
     }
 
@@ -206,15 +170,13 @@ class PaperComposerEffectsTest {
         }
     }
 
-    @Test fun shadowStartsAtTopAndReachesBelowUnblurredCardsAtDifferentScales() {
+    @Test fun shadowStartsAtTopAndReachesBelowUnshadedCardsAtDifferentScales() {
         for (scale in listOf(1f, 2f)) for (cardHeight in listOf(40, 80)) {
             val extent = cardHeight + 12
             ImageComposeScene(240, 300, density = androidx.compose.ui.unit.Density(scale)) {
                 PaperTheme {
                     Box(Modifier.fillMaxSize()) {
-                        Row(Modifier.fillMaxSize()
-                            .paperChatTopShadow(true, effectHeight = extent.dp)
-                            .paperTranscriptFade(true, effectHeight = extent.dp)) {
+                        Row(Modifier.fillMaxSize().paperChatTopShadow(true, effectHeight = extent.dp)) {
                             Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
                             Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
                         }
@@ -230,9 +192,9 @@ class PaperComposerEffectsTest {
                 assertTrue(red(0, 0) > 0, "Shadow must touch the left and top boundaries")
                 assertTrue(red((110 * scale).toInt(), 0) < 220, "Shadow must start above the card bottom")
                 for (y in 0 until (cardHeight * scale).toInt()) {
-                    assertEquals(255, red(boundary, y), "Overlay must remain untouched by shadow and blur")
+                    assertEquals(255, red(boundary, y), "Overlay must remain untouched by the shadow")
                 }
-                assertTrue(red(boundary - 1, ((cardHeight + 1) * scale).toInt()) > 0, "Effect must continue below the card")
+                assertTrue(red(boundary, ((cardHeight + 1) * scale).toInt()) < 255, "Effect must continue below the card")
                 assertEquals(0, red(boundary - 1, ((extent + 1) * scale).toInt()))
                 assertEquals(255, red(boundary, ((extent + 1) * scale).toInt()))
             }

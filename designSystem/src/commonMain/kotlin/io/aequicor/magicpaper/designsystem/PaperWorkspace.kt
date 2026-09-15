@@ -14,16 +14,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.runtime.Composable
@@ -116,52 +111,12 @@ public fun PaperWorkspaceHeading(title: String, subtitle: String, modifier: Modi
 }
 
 /**
- * Blend blurred messages into the sharp transcript from [topOffset] across effectHeight.
- * [topOffset] keeps an overlaid band (the window title bar) outside this effect: the band
- * owns its own frost there. Place pinned surfaces above this layer.
+ * Breathing lane between the title bar hairline and the surfaces pinned below it
+ * (pinned requests, status headers): chrome and transcript never touch each other.
  */
-@Composable
-public fun Modifier.paperTranscriptFade(topShadowVisible: Boolean = false, effectHeight: Dp = 32.dp, topOffset: Dp = 0.dp): Modifier {
-    val blurred = rememberGraphicsLayer()
-    return graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-        .drawWithContent {
-            drawContent()
-            if (topShadowVisible) {
-                val start = topOffset.toPx().coerceIn(0f, size.height)
-                val edge = (start + effectHeight.toPx()).coerceAtLeast(start + 1f)
-                blurred.record { this@drawWithContent.drawContent() }
-                blurred.renderEffect = BlurEffect(6.dp.toPx(), 6.dp.toPx(), TileMode.Clamp)
-                clipRect(top = start, bottom = edge.coerceAtMost(size.height)) {
-                    drawRect(
-                        Brush.verticalGradient(
-                            0f to Color.Transparent,
-                            .25f to Color.White.copy(alpha = .15f),
-                            .5f to Color.White.copy(alpha = .5f),
-                            .75f to Color.White.copy(alpha = .85f),
-                            1f to Color.White,
-                            startY = start, endY = edge),
-                        blendMode = BlendMode.DstIn,
-                    )
-                    // Add complementary masks without leaving sharp glyphs behind transparent blur.
-                    drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint().apply { blendMode = BlendMode.Plus })
-                    drawLayer(blurred)
-                    drawRect(
-                        Brush.verticalGradient(
-                            0f to Color.White,
-                            .25f to Color.White.copy(alpha = .85f),
-                            .5f to Color.White.copy(alpha = .5f),
-                            .75f to Color.White.copy(alpha = .15f),
-                            1f to Color.Transparent,
-                            startY = start, endY = edge),
-                        blendMode = BlendMode.DstIn,
-                    )
-                    drawContext.canvas.restore()
-                }
-            }
-        }
-}
+public val PaperTitleBarLaneGap: Dp = 6.dp
 
-/** A shadow starting at [topOffset] (below an overlaid title bar band), extending below any overlaid cards. */
+/** A shadow starting at [topOffset] (the hairline below an overlaid title bar band), extending below any overlaid cards. */
 @Composable
 public fun Modifier.paperChatTopShadow(visible: Boolean, effectHeight: Dp = 32.dp, topOffset: Dp = 0.dp): Modifier {
     val color = LocalPaperColors.current.depthShadow
@@ -186,41 +141,38 @@ public fun Modifier.paperChatTopShadow(visible: Boolean, effectHeight: Dp = 32.d
 }
 
 /**
- * Frosted band under the window title bar: content that scrolls behind the bar
- * (message transcripts) is replaced by its blur plus a surface scrim, so chrome
- * buttons stay legible, and blends back to sharp content [fade] below the band.
+ * Frosted band of the window title bar: content that scrolls behind the bar
+ * (message transcripts) is replaced inside the band by its blur plus a surface
+ * scrim, so the chrome buttons stay legible, and a hairline at the band bottom
+ * cuts the chrome from the sharp transcript below it. Nothing is half-blurred
+ * under the bar: the blur lives strictly inside the band, and pinned surfaces
+ * keep their own lane below the hairline (see [PaperTitleBarLaneGap]).
  */
 @Composable
-public fun Modifier.paperTitleBarFrost(height: Dp, fade: Dp = 16.dp): Modifier {
+public fun Modifier.paperTitleBarFrost(height: Dp): Modifier {
     val blurred = rememberGraphicsLayer()
     val scrim = LocalPaperColors.current.surface
+    val hairline = LocalPaperColors.current.border
     return drawWithContent {
         drawContent()
         val strip = height.toPx().coerceIn(0f, size.height)
-        val end = (strip + fade.toPx()).coerceAtMost(size.height)
-        if (strip <= 0f || end <= strip) return@drawWithContent
-        val hold = (strip / end).coerceIn(0f, 1f)
+        if (strip <= 0f) return@drawWithContent
+        val line = 1f.coerceAtMost(strip)
         blurred.record { this@drawWithContent.drawContent() }
         blurred.renderEffect = BlurEffect(10.dp.toPx(), 10.dp.toPx(), TileMode.Clamp)
-        clipRect(top = 0f, bottom = end) {
-            drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint())
+        clipRect(top = 0f, bottom = strip) {
             drawLayer(blurred)
             drawRect(
                 Brush.verticalGradient(
-                    0f to Color.White,
-                    hold to Color.White,
-                    1f to Color.Transparent,
-                    startY = 0f, endY = end),
-                blendMode = BlendMode.DstIn,
-            )
-            drawContext.canvas.restore()
-            drawRect(
-                Brush.verticalGradient(
-                    0f to scrim.copy(alpha = .45f),
-                    hold to scrim.copy(alpha = .28f),
-                    1f to scrim.copy(alpha = 0f),
-                    startY = 0f, endY = end),
+                    0f to scrim.copy(alpha = .62f),
+                    1f to scrim.copy(alpha = .5f),
+                    startY = 0f, endY = strip),
             )
         }
+        drawRect(
+            hairline.copy(alpha = .55f),
+            topLeft = Offset(0f, strip - line),
+            size = androidx.compose.ui.geometry.Size(size.width, line),
+        )
     }
 }
