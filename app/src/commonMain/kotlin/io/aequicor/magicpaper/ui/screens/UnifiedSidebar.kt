@@ -87,7 +87,17 @@ internal data class ImmunityInfo(
 )
 
 internal val CodingSessionStatus.sidebarSubtitle: String?
-    get() = label.takeUnless { this == CodingSessionStatus.IDLE }
+    get() = when (this) {
+        CodingSessionStatus.WORKING -> "Работает"
+        CodingSessionStatus.WAITING -> "Ждёт ответа"
+        CodingSessionStatus.CONFIRMATION -> "Ждёт подтверждения"
+        CodingSessionStatus.BLOCKED -> "Работа остановлена"
+        CodingSessionStatus.QUEUED -> "Ждёт родителя"
+        CodingSessionStatus.SCHEDULED -> "Ждёт события"
+        CodingSessionStatus.UNREAD -> "Не прочитано"
+        CodingSessionStatus.NEEDS_TESTING -> "Нужна проверка"
+        CodingSessionStatus.IDLE -> null
+    }
 
 internal val CodingSessionStatus.pinnedInSidebar: Boolean
     get() = this == CodingSessionStatus.WORKING || this == CodingSessionStatus.WAITING

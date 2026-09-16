@@ -14,10 +14,16 @@ class UnifiedSidebarStatusTest {
     }
 
     @Test
-    fun everyNonGreenStateUsesItsStatusLabelAsSubtitle() {
+    fun everyNonGreenStateHasACompactSubtitle() {
         CodingSessionStatus.entries
             .filterNot { it == CodingSessionStatus.IDLE }
-            .forEach { status -> assertEquals(status.label, status.sidebarSubtitle, status.name) }
+            .forEach { status ->
+                val subtitle = status.sidebarSubtitle.orEmpty()
+                assertTrue(subtitle.isNotBlank(), status.name)
+                assertTrue(subtitle.split(Regex("\\s+")).size <= 2, "$status: $subtitle")
+            }
+        assertEquals("Ждёт ответа", CodingSessionStatus.WAITING.sidebarSubtitle)
+        assertEquals("Нужна проверка", CodingSessionStatus.NEEDS_TESTING.sidebarSubtitle)
     }
 
     @Test
