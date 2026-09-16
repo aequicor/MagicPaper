@@ -36,7 +36,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-public enum class PaperToolbarIcon { Sidebar, Settings, Archive, Immunity }
+public enum class PaperToolbarIcon { Sidebar, Settings, Search, Archive, Unarchive, Immunity }
 
 /** Монохромные значки без зависимости от платформенного emoji-шрифта. */
 @Composable
@@ -74,6 +74,17 @@ public fun PaperToolbarButton(
                         drawRoundRect(ink, Offset(2f, 5f), Size(12f, 9f), CornerRadius(1f), style = stroke)
                         drawRoundRect(ink, Offset(1f, 2f), Size(14f, 3f), CornerRadius(0.5f), style = stroke)
                         drawLine(ink, Offset(6f, 8f), Offset(10f, 8f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+                    }
+                    PaperToolbarIcon.Unarchive -> {
+                        drawRoundRect(ink, Offset(2f, 5f), Size(12f, 9f), CornerRadius(1f), style = stroke)
+                        drawRoundRect(ink, Offset(1f, 2f), Size(14f, 3f), CornerRadius(0.5f), style = stroke)
+                        drawLine(ink, Offset(8f, 12f), Offset(8f, 7f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+                        drawLine(ink, Offset(8f, 7f), Offset(5.5f, 9.5f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+                        drawLine(ink, Offset(8f, 7f), Offset(10.5f, 9.5f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+                    }
+                    PaperToolbarIcon.Search -> {
+                        drawCircle(ink, radius = 4.5f, center = Offset(6.5f, 6.5f), style = stroke)
+                        drawLine(ink, Offset(10f, 10f), Offset(14f, 14f), strokeWidth = 1.2f, cap = StrokeCap.Round)
                     }
                     PaperToolbarIcon.Settings -> {
                         drawPath(gear, ink, style = stroke)

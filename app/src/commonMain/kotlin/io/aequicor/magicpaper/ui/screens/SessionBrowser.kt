@@ -1,10 +1,16 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 import io.aequicor.magicpaper.designsystem.*
@@ -55,13 +61,53 @@ internal fun searchSessions(
 }
 
 @Composable
-internal fun SessionBrowserControls(query: String, onQueryChange: (String) -> Unit, archivesOnly: Boolean,
-    archiveCount: Int, onToggleArchive: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        PaperField(query, onQueryChange, "Поиск сессий", Modifier.fillMaxWidth())
-        if (query.isNotEmpty()) PaperTextAction({ onQueryChange("") }) { PaperText("Очистить поиск") }
-        PaperButton(if (archivesOnly) "← Все сессии" else "Архив ($archiveCount)", onToggleArchive,
-            Modifier.fillMaxWidth(), kind = PaperButtonKind.QUIET)
+internal fun SessionBrowserControls(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    searchExpanded: Boolean,
+    onToggleSearch: () -> Unit,
+    archivesOnly: Boolean,
+    archiveCount: Int,
+    onToggleArchive: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            PaperText("Сессии", role = PaperTextRole.TITLE, modifier = Modifier.weight(1f))
+            PaperTooltip(if (searchExpanded) "Закрыть поиск" else "Поиск сессий") {
+                PaperToolbarButton(
+                    icon = PaperToolbarIcon.Search,
+                    label = if (searchExpanded) "Закрыть поиск" else "Поиск сессий",
+                    size = 28.dp,
+                    selected = searchExpanded,
+                    onClick = onToggleSearch,
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            val archiveLabel = if (archivesOnly) "Вернуться ко всем сессиям" else "Архив: $archiveCount"
+            PaperTooltip(archiveLabel) {
+                PaperToolbarButton(
+                    icon = PaperToolbarIcon.Archive,
+                    label = archiveLabel,
+                    size = 28.dp,
+                    selected = archivesOnly,
+                    onClick = onToggleArchive,
+                )
+            }
+        }
+        if (searchExpanded) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                PaperField(query, onQueryChange, "Поиск сессий", Modifier.weight(1f))
+                if (query.isNotEmpty()) {
+                    Spacer(Modifier.width(4.dp))
+                    PaperTooltip("Очистить поиск") {
+                        PaperIconButton("Очистить поиск", { onQueryChange("") }) {
+                            PaperText("×", role = PaperTextRole.CHROME)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -80,13 +126,26 @@ internal fun SessionBrowserResults(results: List<SessionSearchResult>, archivesO
             PaperText(if (searching) "Сессии не найдены" else "Архив пуст", modifier = Modifier.padding(8.dp))
         }
         items(results, key = { "${it.isCoding}:${it.id}" }) { result ->
-            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val hoverInteraction = remember(result.id, result.isCoding) { MutableInteractionSource() }
+            val hovered by hoverInteraction.collectIsHoveredAsState()
+            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp).hoverable(hoverInteraction),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 PaperListRow(result.title, selected = result.id == selectedId && result.isCoding == viewingCoding,
-                    onClick = { onSelect(result) })
+                    onClick = { onSelect(result) }, trailing = {
+                        PaperHoverActions(visible = hovered && result.archived) {
+                            PaperTooltip("Разархивировать") {
+                                PaperToolbarButton(
+                                    icon = PaperToolbarIcon.Unarchive,
+                                    label = "Разархивировать",
+                                    size = 24.dp,
+                                    onClick = { onRestore(result) },
+                                )
+                            }
+                        }
+                    })
                 PaperText(listOfNotNull(result.project ?: "Чат", "В архиве".takeIf { result.archived }).joinToString(" · "),
                     role = PaperTextRole.LABEL, modifier = Modifier.padding(horizontal = 8.dp))
                 result.excerpt?.let { PaperText(it, role = PaperTextRole.LABEL, modifier = Modifier.padding(horizontal = 8.dp)) }
-                if (result.archived) PaperTextAction({ onRestore(result) }) { PaperText("Разархивировать") }
                 PaperDivider()
             }
         }
@@ -99,7 +158,7 @@ internal fun SessionBrowserResults(results: List<SessionSearchResult>, archivesO
 internal fun SessionArchivePreview() = PaperTheme {
     PaperSurface(Modifier.fillMaxSize()) {
         Column {
-            SessionBrowserControls("", {}, true, 1, {})
+            SessionBrowserControls("", {}, false, {}, true, 1, {})
             SessionBrowserResults(listOf(SessionSearchResult("archived", "Восстановление дочерних сессий после перезапуска", true,
                 true, 0, "MagicPaper")), true, false, null, false, {}, {}, Modifier.weight(1f))
         }
@@ -111,7 +170,7 @@ internal fun SessionArchivePreview() = PaperTheme {
 internal fun SessionSearchEmptyPreview() = PaperTheme {
     PaperSurface(Modifier.fillMaxSize()) {
         Column {
-            SessionBrowserControls("Неизвестная сессия", {}, false, 0, {})
+            SessionBrowserControls("Неизвестная сессия", {}, true, {}, false, 0, {})
             SessionBrowserResults(emptyList(), false, true, null, false, {}, {}, Modifier.weight(1f))
         }
     }

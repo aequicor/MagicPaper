@@ -346,6 +346,7 @@ internal fun UnifiedSidebar(
     recencyTracker: SessionRecencyTracker,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var searchExpanded by rememberSaveable { mutableStateOf(false) }
     var archivesOnly by rememberSaveable { mutableStateOf(false) }
     val browsing = archivesOnly || query.isNotBlank()
     val searchCoding = remember(coding.sessions) { coding.sessions.map { it.session to it.messages } }
@@ -363,13 +364,10 @@ internal fun UnifiedSidebar(
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
 
     Column(modifier.fillMaxHeight()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PaperText("Сессии", role = PaperTextRole.TITLE)
-        }
-        SessionBrowserControls(query, { query = it }, archivesOnly,
+        SessionBrowserControls(query, { query = it }, searchExpanded, {
+            searchExpanded = !searchExpanded
+            if (!searchExpanded) query = ""
+        }, archivesOnly,
             chatSessions.count { it.archived } + coding.sessions.count { it.session.archived },
             { archivesOnly = !archivesOnly })
         PaperDivider()

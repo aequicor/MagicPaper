@@ -7,6 +7,8 @@ import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.AnnotatedString
@@ -32,6 +34,7 @@ class SessionBrowserRenderTest {
     @Test fun archiveSearchSelectionAndRestoreUseVisibleControlsAtNarrowAndLargeTextSizes() {
         for ((width, fontScale) in listOf(320 to 1f, 240 to 1.5f)) {
             var query by mutableStateOf("")
+            var searchExpanded by mutableStateOf(false)
             var archives by mutableStateOf(true)
             var chat by mutableStateOf(ChatSession("archived", "Восстановление дочерних сессий после перезапуска", 1, 1,
                 messages = listOf(ChatMessage("m", ChatRole.USER, "Поиск по переписке: уникальное слово", 1)), archived = true))
@@ -42,7 +45,10 @@ class SessionBrowserRenderTest {
                     PaperTheme {
                         PaperSurface(Modifier.fillMaxSize()) {
                         Column(Modifier.fillMaxSize()) {
-                            SessionBrowserControls(query, { query = it }, archives, if (chat.archived) 1 else 0, { archives = !archives })
+                            SessionBrowserControls(query, { query = it }, searchExpanded, {
+                                searchExpanded = !searchExpanded
+                                if (!searchExpanded) query = ""
+                            }, archives, if (chat.archived) 1 else 0, { archives = !archives })
                             SessionBrowserResults(searchSessions(listOf(chat), emptyList(), emptyList(), query, archives),
                                 archives, query.isNotBlank(), selected, false,
                                 { selected = it.id }, { chat = chat.copy(archived = false) }, Modifier.weight(1f))
@@ -56,9 +62,18 @@ class SessionBrowserRenderTest {
                 fun nodes(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::nodes)
                 fun all() = scene.semanticsOwners.flatMap { nodes(it.rootSemanticsNode) }
                 fun hasText(text: String) = all().any { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true }
+                fun nodeWithDescription(description: String) = all().first {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(description) == true
+                }
                 fun click(text: String) {
                     val node = all().first { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true &&
                         it.config.getOrNull(SemanticsActions.OnClick) != null }
+                    assertTrue(node.boundsInRoot.width > 0 && node.boundsInRoot.height > 0)
+                    node.config[SemanticsActions.OnClick].action!!.invoke()
+                    draw()
+                }
+                fun clickDescription(description: String) {
+                    val node = nodeWithDescription(description)
                     assertTrue(node.boundsInRoot.width > 0 && node.boundsInRoot.height > 0)
                     node.config[SemanticsActions.OnClick].action!!.invoke()
                     draw()
@@ -75,17 +90,22 @@ class SessionBrowserRenderTest {
                 click(chat.title)
                 assertEquals("archived", selected)
                 assertTrue(chat.archived)
-                click("← Все сессии")
+                clickDescription("Вернуться ко всем сессиям")
+                clickDescription("Поиск сессий")
                 all().first { it.config.getOrNull(SemanticsActions.SetText) != null }
                     .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("уникальное"))
                 draw()
                 assertTrue(hasText("Чат · В архиве"))
                 capture("search")
-                click("Разархивировать")
+                val result = nodeWithDescription(chat.title)
+                scene.sendPointerEvent(PointerEventType.Move, result.boundsInRoot.center, type = PointerType.Mouse)
+                draw()
+                capture("restore-hover")
+                clickDescription("Разархивировать")
                 assertFalse(chat.archived)
-                assertFalse(hasText("Разархивировать"))
-                click("Очистить поиск")
-                click("Архив (0)")
+                assertFailsWith<NoSuchElementException> { nodeWithDescription("Разархивировать") }
+                clickDescription("Очистить поиск")
+                clickDescription("Архив: 0")
                 assertTrue(hasText("Архив пуст"))
                 registry.performSave()
                 capture("empty")
