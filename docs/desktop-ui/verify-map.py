@@ -2,9 +2,11 @@
 """Verify explicit surface assignments against Kotlin; never infer missing targets.
 
 --write renders the review table and evidence. --self-test checks rejection of
-missing bindings, unknown components, and invalid stages, in memory only.
+missing bindings, unknown components, and invalid stages, and acceptance of
+line-only source shifts, in memory only.
 """
 from pathlib import Path
+from collections import Counter
 import copy
 import json
 import re
@@ -28,7 +30,8 @@ PaperMarkdown PaperDialog PaperChoice PaperListRow PaperStatus PaperImage
 PaperAttachmentRow PaperAttachmentChip PaperCodeBlock PaperScroll PaperTooltip
 PaperApprovalDock PaperText PaperReader PaperLink PaperQuestionnaire PaperScheduleEditor
 PaperActivityIndicator PaperWorkspaceHeading PaperWorkspaceComposer PaperPromptField PaperWorkSurface
-PaperMenuToggleInfo PaperPage PaperTab PaperTreeRow PaperTreeGroupHeader PaperContentEntrance PaperSettingsSection PaperMenu'''.split())
+PaperMenuToggleInfo PaperPage PaperTab PaperTreeRow PaperTreeGroupHeader PaperContentEntrance PaperSettingsSection PaperMenu
+PaperExpandableImage PaperCheck'''.split())
 PATTERN = re.compile(
     r'@(?:androidx\.compose\.runtime\.)?Composable\s+'
     r'(?:@[\w.]+(?:\([^\n]*\))?\s+)*'
@@ -57,8 +60,13 @@ def discover():
 def validate(rows, expected):
     keys = [(r['path'], r['symbol'], r['annotationLine']) for r in rows]
     assert len(keys) == len(set(keys)), 'Duplicate surface binding'
-    missing, stale = expected-set(keys), set(keys)-expected
-    assert not missing and not stale, f'Missing: {sorted(missing)}; stale: {sorted(stale)}'
+    # Line numbers are review metadata, not declaration identity. Counts still
+    # distinguish overloads and duplicate names declared in the same source file.
+    actual_declarations = Counter((r['path'], r['symbol']) for r in rows)
+    expected_declarations = Counter((path, symbol) for path, symbol, _ in expected)
+    missing = expected_declarations - actual_declarations
+    stale = actual_declarations - expected_declarations
+    assert not missing and not stale, f'Missing: {sorted(missing.elements())}; stale: {sorted(stale.elements())}'
     for r in rows:
         assert r['stage'] in STAGES, f'Unknown stage: {r}'
         assert r['targets'] and set(r['targets']) <= COMPONENTS, f'Unknown/empty DS targets: {r}'
@@ -76,7 +84,7 @@ def validate(rows, expected):
 def render(rows):
     lines = ['# Экран/панель → DS-компоненты → этап', '',
              'Основное доказательство ac-research-map. Каждое объявление @Composable, включая полное имя аннотации, имеет отдельную явную запись в [surface-bindings.json](surface-bindings.json). Отсутствующее назначение — ошибка; компоненты не наследуются от файла и не подставляются проверкой автоматически.', '',
-             'Текущие владельцы: оболочка и сборка в :app, экраны в feature/*/impl, контракты в feature/*/api, платформенные entry в соответствующих host-модулях. Реализация Paper API принадлежит :designSystem и не входит в карту его потребителей. Paper* обозначает назначение компонентов дизайн-системы; исторические номера этапов сохранены. Общие layout helpers могут остаться в feature. Строка указывает аннотацию. Два Content в LocalExperiencePlugin различаются строкой: рабочая панель и unavailable fallback. Невизуальные composition helpers и SPI помечены отдельно.', '',
+             'Текущие владельцы: оболочка и сборка в :app, экраны в feature/*/impl, контракты в feature/*/api, платформенные entry в соответствующих host-модулях. Реализация Paper API принадлежит :designSystem и не входит в карту его потребителей. Paper* обозначает назначение компонентов дизайн-системы; исторические номера этапов сохранены. Общие layout helpers могут остаться в feature. Строка — диагностический снимок положения аннотации, а не идентичность объявления; одинаковые имена в одном файле проверяются с учётом количества объявлений. Два Content в LocalExperiencePlugin — рабочая панель и unavailable fallback. Невизуальные composition helpers и SPI помечены отдельно.', '',
              'Проверка: `python3 docs/desktop-ui/verify-map.py --self-test`. Исходные токены и поведение — [CONTRACT.md](CONTRACT.md); полный файл-level реестр с невизуальными функциями — [MIGRATION.md](MIGRATION.md).', '',
              '| Source set / файл | Экран, панель или entry | Вид | Конкретные DS API | Этап |',
              '|---|---|---|---|---|']
@@ -86,7 +94,7 @@ def render(rows):
     lines += ['', '## Постоянные ID этапов', '', '| Этап | taskId |', '|---|---|']
     lines += [f'| {k} | `{v}` |' for k,v in STAGES.items()]
     lines += ['', '## Граница новых составных API', '',
-              '`PaperImage`, `PaperAttachmentRow`, `PaperAttachmentChip` — доступный preview изображения, список вложений и отдельное вложение с удалением/открытием. `PaperLink` — фокусируемая ссылка с activation/context copy. `PaperScroll` — viewport/scrollbar и управление follow-end без потери пользовательской позиции. Эти API создаются как составные DS-компоненты до переноса соответствующих поверхностей этапа 6; базовые focus/semantics/controls предоставляет этап 3. Остальные Paper* и платформенные обязанности определены в CONTRACT.md.']
+              '`PaperImage`, `PaperExpandableImage`, `PaperAttachmentRow`, `PaperAttachmentChip` — доступный preview изображения, раскрываемая миниатюра, список вложений и отдельное вложение с удалением/открытием. `PaperLink` — фокусируемая ссылка с activation/context copy. `PaperScroll` — viewport/scrollbar и управление follow-end без потери пользовательской позиции. Эти API создаются как составные DS-компоненты до переноса соответствующих поверхностей этапа 6; базовые focus/semantics/controls предоставляет этап 3. Остальные Paper* и платформенные обязанности определены в CONTRACT.md.']
     return '\n'.join(lines)+'\n'
 
 def main():
@@ -95,6 +103,12 @@ def main():
     validate(rows, expected)
     negative = []
     if '--self-test' in sys.argv:
+        shifted = copy.deepcopy(rows)
+        for row in shifted:
+            if row['annotationLine'] is not None:
+                row['annotationLine'] += 10
+        validate(shifted, expected)
+        negative.append('line-shift-accepted')
         for case in ('missing-binding','unknown-component','unknown-stage'):
             bad = copy.deepcopy(rows)
             if case == 'missing-binding': bad.pop()

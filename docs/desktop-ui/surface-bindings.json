@@ -2778,6 +2778,38 @@
     "kind": "surface"
   },
   {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/AttachmentViews.kt",
+    "symbol": "ExpandableAttachmentImage",
+    "annotationLine": 448,
+    "targets": ["PaperExpandableImage"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt",
+    "symbol": "SessionResultReview",
+    "annotationLine": 8,
+    "targets": ["PaperText", "PaperCheck"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt",
+    "symbol": "SessionResultPendingPreview",
+    "annotationLine": 23,
+    "targets": ["PaperTheme", "PaperText", "PaperCheck"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt",
+    "symbol": "SessionResultVerifiedPreview",
+    "annotationLine": 29,
+    "targets": ["PaperTheme", "PaperText", "PaperCheck"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
     "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
     "symbol": "UnreadDot",
     "annotationLine": 685,
