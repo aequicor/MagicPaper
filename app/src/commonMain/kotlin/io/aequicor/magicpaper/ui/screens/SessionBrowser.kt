@@ -71,12 +71,12 @@ internal fun SessionBrowserResults(results: List<SessionSearchResult>, archivesO
     onRestore: (SessionSearchResult) -> Unit, modifier: Modifier = Modifier, loading: Boolean = false) {
     LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
+        item(key = "session-browser-heading") {
             PaperText(if (archivesOnly) "Архив" else "Результаты поиска", role = PaperTextRole.TITLE,
                 modifier = Modifier.padding(horizontal = 8.dp))
         }
-        if (loading) item { PaperText("Поиск…", modifier = Modifier.padding(8.dp)) }
-        else if (results.isEmpty()) item {
+        if (loading) item(key = "session-browser-loading") { PaperText("Поиск…", modifier = Modifier.padding(8.dp)) }
+        else if (results.isEmpty()) item(key = "session-browser-empty") {
             PaperText(if (searching) "Сессии не найдены" else "Архив пуст", modifier = Modifier.padding(8.dp))
         }
         items(results, key = { "${it.isCoding}:${it.id}" }) { result ->

@@ -111,7 +111,7 @@ private fun ResearchLibrary(
     val uriHandler = LocalUriHandler.current
     LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
         if (panel != "sources") {
-            item {
+            item(key = "research-questions-heading") {
                 if (panel == null) PaperText("Вопросы", role = PaperTextRole.TITLE, modifier = Modifier.padding(vertical = 8.dp))
                 if (state.questions.isEmpty()) PaperText("Здесь появится история вопросов", role = PaperTextRole.LABEL)
             }
@@ -127,7 +127,7 @@ private fun ResearchLibrary(
             }
         }
         if (panel != "questions") {
-            item {
+            item(key = "research-sources-controls") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (panel == null) PaperText("Источники", role = PaperTextRole.TITLE, modifier = Modifier.padding(top = 16.dp))
                     PaperText("Общие для всех вопросов", role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText)

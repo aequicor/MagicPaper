@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
+import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
@@ -18,6 +20,15 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class SessionBrowserRenderTest {
+    private fun platformSaveable(value: Any?): Boolean = when (value) {
+        null, is String, is Boolean, is Number, is Char -> true
+        is MutableState<*> -> platformSaveable(value.value)
+        is List<*> -> value.all(::platformSaveable)
+        is Array<*> -> value.all(::platformSaveable)
+        is Map<*, *> -> value.all { (key, item) -> platformSaveable(key) && platformSaveable(item) }
+        else -> false
+    }
+
     @Test fun archiveSearchSelectionAndRestoreUseVisibleControlsAtNarrowAndLargeTextSizes() {
         for ((width, fontScale) in listOf(320 to 1f, 240 to 1.5f)) {
             var query by mutableStateOf("")
@@ -25,8 +36,9 @@ class SessionBrowserRenderTest {
             var chat by mutableStateOf(ChatSession("archived", "Восстановление дочерних сессий после перезапуска", 1, 1,
                 messages = listOf(ChatMessage("m", ChatRole.USER, "Поиск по переписке: уникальное слово", 1)), archived = true))
             var selected: String? = null
+            val registry = SaveableStateRegistry(restoredValues = null, canBeSaved = ::platformSaveable)
             ImageComposeScene(width, 820) {
-                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale), LocalSaveableStateRegistry provides registry) {
                     PaperTheme {
                         PaperSurface(Modifier.fillMaxSize()) {
                         Column(Modifier.fillMaxSize()) {
@@ -75,6 +87,7 @@ class SessionBrowserRenderTest {
                 click("Очистить поиск")
                 click("Архив (0)")
                 assertTrue(hasText("Архив пуст"))
+                registry.performSave()
                 capture("empty")
             }
         }
