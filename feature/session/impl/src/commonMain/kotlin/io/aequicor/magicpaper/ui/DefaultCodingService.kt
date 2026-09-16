@@ -925,8 +925,16 @@ class DefaultCodingService(
             // The entity now exists. A later cleanup/presentation failure must not invite another create.
             _state.update { it.copy(coding = it.coding.copy(
                 sessions = listOf(CodingSessionUi(session = session)) + it.coding.sessions,
-                currentSessionId = session.id)) }
-            try { draft.clearIfUnchanged(point.version, _state.value.settings.defaultCodingEngine) }
+                currentSessionId = session.id),
+                settings = it.settings.copy(defaultCodingEngine = point.value)) }
+            try { settingsRepo.save(_state.value.settings) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "session.engine.preference.save.failed", failure,
+                    mapOf("projectId" to projectId, "sessionId" to session.id, "backend" to point.value.name))
+                _state.update { it.copy(notice = "Сессия создана. Не удалось запомнить выбранный движок.") }
+            }
+            try { draft.clearIfUnchanged(point.version, point.value) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 AppLog.error("coding", "session.creation.draft.clear.failed", failure, mapOf("projectId" to projectId, "sessionId" to session.id))

@@ -19,5 +19,6 @@ interface ChatService {
     fun resume(text: String = "", attachments: List<Attachment> = emptyList())
     fun clarify(text: String, attachments: List<Attachment> = emptyList())
     fun selectChatModel(selection: ModelSelection)
+    fun selectChatEngine(engine: CodingEngine)
     suspend fun close()
 }

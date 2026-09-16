@@ -62,7 +62,7 @@ class ChatTranscriptDesignTest {
                 repeat(20) { onUi { scene.render(it * 32_000_000L).close() }; Thread.sleep(5) }
                 onUi {
                     val input = scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
-                    val attach = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Прикрепить файлы") }
+                    val attach = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Инструменты и параметры сессии") }
                     val plus = scene.text("+")
                     assertTrue(plus.boundsInRoot.top >= attach.boundsInRoot.top && plus.boundsInRoot.bottom <= attach.boundsInRoot.bottom,
                         "Attachment glyph must fit the control at ${case.scale} text scale")

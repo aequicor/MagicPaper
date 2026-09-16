@@ -1681,6 +1681,7 @@ internal fun CodingComposer(
     onInteractionMode: ((CodingInteractionMode) -> Unit)? = null,
     modeSwitchEnabled: Boolean = true,
     engine: CodingEngine? = null,
+    onEngineChange: ((CodingEngine) -> Unit)? = null,
     searchProvider: SearchProvider = SearchProvider.AUTO,
     onSearchProvider: ((SearchProvider) -> Unit)? = null,
     onSend: (String, List<Attachment>) -> Unit,
@@ -1759,20 +1760,36 @@ internal fun CodingComposer(
                 Box {
                     var menuOpen by remember { mutableStateOf(false) }
                     var searchMenuOpen by remember { mutableStateOf(false) }
+                    var engineMenuOpen by remember { mutableStateOf(false) }
                     fun closeMenu() {
                         menuOpen = false
                         searchMenuOpen = false
+                        engineMenuOpen = false
                     }
                     PaperTextAction(onClick = {
                         if (directAttachmentAction) onPickAttachments(attachments.size) { attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE) }
-                        else { searchMenuOpen = false; menuOpen = true }
+                        else { searchMenuOpen = false; engineMenuOpen = false; menuOpen = true }
                     },
                         modifier = Modifier.widthIn(min = 32.dp).heightIn(min = 32.dp).semantics { contentDescription = if (directAttachmentAction) "Прикрепить файлы" else "Инструменты и параметры сессии" },
                         contentPadding = PaddingValues(0.dp)) {
                         PaperText("+", style = LocalPaperTypography.current.title, color = LocalPaperColors.current.action)
                     }
                     PaperMenuHost(menuOpen, ::closeMenu) {
-                        if (searchMenuOpen && onSearchProvider != null) {
+                        if (engineMenuOpen && onEngineChange != null) {
+                            PaperRichMenuAction(
+                                text = { PaperText("Backend движок") },
+                                leadingIcon = { PaperText("‹") },
+                                onClick = { engineMenuOpen = false },
+                            )
+                            PaperDivider()
+                            CodingEngine.entries.forEach { option ->
+                                PaperRichMenuAction(
+                                    text = { PaperText(option.title) },
+                                    trailingIcon = if (engine == option) { { PaperText("✓") } } else null,
+                                    onClick = { closeMenu(); onEngineChange(option) },
+                                )
+                            }
+                        } else if (searchMenuOpen && onSearchProvider != null) {
                             PaperRichMenuAction(
                                 text = { PaperText("Поисковый движок") },
                                 leadingIcon = { PaperText("‹") },
@@ -1859,7 +1876,17 @@ internal fun CodingComposer(
                                 )
                             }
                             if (engine != null) {
-                                Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                                if (onEngineChange != null) PaperRichMenuAction(
+                                    text = {
+                                        Column {
+                                            PaperText("Backend движок")
+                                            PaperText(engine.title, style = LocalPaperTypography.current.body,
+                                                color = LocalPaperColors.current.secondaryText)
+                                        }
+                                    },
+                                    trailingIcon = { PaperText("›") },
+                                    onClick = { engineMenuOpen = true },
+                                ) else Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
                                     PaperText("Движок", style = LocalPaperTypography.current.body)
                                     PaperText(engine.title, style = LocalPaperTypography.current.body,
                                         color = LocalPaperColors.current.secondaryText)

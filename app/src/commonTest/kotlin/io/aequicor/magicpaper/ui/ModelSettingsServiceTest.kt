@@ -8,6 +8,35 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ModelSettingsServiceTest {
+    @Test fun selectedChatEngineIsRememberedForNewSessions() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val fixture = ModelSettingsFixture()
+            val vm = fixture.prepareChat()
+            vm.selectChatEngine(CodingEngine.CODEX)
+            advanceUntilIdle()
+            assertEquals(CodingEngine.CODEX, fixture.settings.load().defaultCodingEngine)
+            assertEquals(CodingEngine.CODEX, vm.state.value.current?.engine)
+
+            vm.newSession()
+            assertEquals(CodingEngine.CODEX, vm.state.value.current?.engine)
+        } finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun chatEngineCannotChangeAfterExecutionHasStarted() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val fixture = ModelSettingsFixture()
+            val vm = fixture.prepareChat()
+            val before = vm.state.value.current?.engine
+            vm.send("Начать")
+            vm.selectChatEngine(CodingEngine.CODEX)
+            advanceUntilIdle()
+            assertNotEquals(CodingEngine.CODEX, fixture.chats.session("first")?.engine)
+            assertEquals(before ?: CodingEngine.PI, fixture.settings.load().defaultCodingEngine)
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun chatSelectionIsImmediateAndDoesNotChangeDefaultOrProvider() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {

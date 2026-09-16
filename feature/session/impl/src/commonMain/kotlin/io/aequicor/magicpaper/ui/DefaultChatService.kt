@@ -398,6 +398,37 @@ class DefaultChatService(
         }
     }
 
+    override fun selectChatEngine(engine: CodingEngine) {
+        if (_state.value.current == null) newSession()
+        val session = _state.value.current ?: return
+        if (session.messages.isNotEmpty() || session.pendingRun != null || session.nativeSessionId.isNotBlank()) return
+        val settings = _state.value.settings.copy(defaultCodingEngine = engine)
+        val updated = session.copy(engine = engine)
+        _state.update { state -> state.copy(
+            settings = settings,
+            current = updated,
+            sessions = state.sessions.map { if (it.id == updated.id) updated else it },
+        ) }
+        val creation = pendingCreations[session.id]
+        scope.launch {
+            try {
+                creation?.await()
+                updateChat(session.id) { latest ->
+                    check(latest.messages.isEmpty() && latest.pendingRun == null && latest.nativeSessionId.isBlank()) {
+                        "Backend cannot be changed after execution starts"
+                    }
+                    latest.copy(engine = engine)
+                }
+                settingsRepo.save(settings)
+                AppLog.info("chat", "engine.selected", mapOf("sessionId" to session.id, "backend" to engine.name))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("chat", "engine.select.failed", failure, mapOf("sessionId" to session.id, "backend" to engine.name))
+                _state.update { it.copy(notice = "Не удалось сохранить выбор движка. Повторите попытку.") }
+            }
+        }
+    }
+
 
     /** Drain this application's writers while retaining its reusable supervisor. */
     suspend fun prepareForReset() {

@@ -36,10 +36,14 @@ class ChatComposerAttachmentRenderTest {
             }
             fun render(frame: Long) { scene.render(frame).close() }
             render(16_000_000L)
-            val attach = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Прикрепить файлы") }
+            val tools = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Инструменты и параметры сессии") }
+            scene.sendPointerEvent(PointerEventType.Press, tools.boundsInRoot.center)
+            scene.sendPointerEvent(PointerEventType.Release, tools.boundsInRoot.center)
+            render(32_000_000L)
+            val attach = nodes().first { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Прикрепить файлы" } }
             scene.sendPointerEvent(PointerEventType.Press, attach.boundsInRoot.center)
             scene.sendPointerEvent(PointerEventType.Release, attach.boundsInRoot.center)
-            render(32_000_000L)
+            render(48_000_000L)
             picked!!.invoke(listOf(
                 Attachment("same", "first.png", "image/png", 3, "YWJj", AttachmentKind.IMAGE),
                 Attachment("same", "second.png", "image/png", 3, "ZGVm", AttachmentKind.IMAGE),

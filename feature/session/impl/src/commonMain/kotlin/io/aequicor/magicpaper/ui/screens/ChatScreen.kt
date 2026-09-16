@@ -44,6 +44,7 @@ import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
 import io.aequicor.magicpaper.domain.ChatSession
+import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.PinConversation
@@ -90,6 +91,8 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
                 activeProfileId = state.settings.activeLlmProfileId,
                 onSend = { text, attachments -> vm.send(text, attachments) },
                 onOpenSwitcher = { vm.toggleModelSwitcher(true) },
+                defaultEngine = state.settings.defaultCodingEngine,
+                onEngineChange = vm::selectChatEngine,
                 onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
                 onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
             )
@@ -289,6 +292,8 @@ internal fun Composer(
     activeProfileId: String,
     onSend: (String, List<Attachment>) -> Unit,
     onOpenSwitcher: () -> Unit,
+    defaultEngine: CodingEngine = CodingEngine.PI,
+    onEngineChange: ((CodingEngine) -> Unit)? = null,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
     onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
     draftSession: io.aequicor.magicpaper.data.storage.DraftSession<io.aequicor.magicpaper.domain.ComposerDraftData>? = null,
@@ -315,6 +320,9 @@ internal fun Composer(
         onResume = if (paused) { text, attachments -> accepted(onResume, text, attachments) } else null,
         onClarify = { text, attachments -> accepted(onClarify, text, attachments) },
         onAbort = onPause, onPickAttachments = onPickAttachments, onPasteAttachments = onPasteAttachments,
-        directAttachmentAction = true,
+        engine = session?.engine ?: defaultEngine,
+        onEngineChange = onEngineChange?.takeIf {
+            session == null || (session.messages.isEmpty() && session.pendingRun == null && session.nativeSessionId.isBlank())
+        },
     )
 }
