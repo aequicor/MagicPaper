@@ -25,9 +25,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -394,6 +396,46 @@ public fun PaperChoice(selected: Boolean, onSelect: () -> Unit, modifier: Modifi
         color = if (selected) LocalPaperColors.current.selected else LocalPaperColors.current.surface,
         shape = RoundedCornerShape(6.dp)) {
         Box(Modifier.padding(horizontal = 10.dp, vertical = 5.dp), contentAlignment = Alignment.Center) { content() }
+    }
+}
+
+/** Familiar radio/checkbox row used by questionnaires; the complete row is the hit target. */
+@Composable
+public fun PaperQuestionnaireChoice(
+    selected: Boolean,
+    multiple: Boolean,
+    onSelect: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    description: String? = null,
+) {
+    val colors = LocalPaperColors.current
+    val role = if (multiple) Role.Checkbox else Role.RadioButton
+    val markShape = if (multiple) RoundedCornerShape(4.dp) else CircleShape
+    Row(
+        modifier.fillMaxWidth()
+            .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
+            .paperToggleable(selected, enabled, role) { onSelect() }
+            .background(if (selected) colors.selected else Color.Transparent, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(18.dp).background(colors.surface, markShape)
+                .border(1.dp, if (enabled) colors.action else colors.disabled, markShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) {
+                if (multiple) PaperText("✓", role = PaperTextRole.CHROME, color = colors.action)
+                else Box(Modifier.size(8.dp).background(colors.action, CircleShape))
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            PaperText(label, color = if (enabled) colors.text else colors.secondaryText)
+            description?.let { PaperText(it, role = PaperTextRole.LABEL, color = colors.secondaryText) }
+        }
     }
 }
 

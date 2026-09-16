@@ -33,6 +33,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
@@ -99,18 +104,36 @@ public fun PaperWorkspaceComposer(modifier: Modifier = Modifier, content: @Compo
 @Composable
 public fun PaperPromptField(value: String, onValueChange: (String) -> Unit, placeholder: String,
     modifier: Modifier = Modifier, maxLines: Int = 6, enabled: Boolean = true,
-    visualTransformation: VisualTransformation = VisualTransformation.None) {
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    singleLine: Boolean = false, onSubmit: (() -> Unit)? = null, label: String? = null) {
     val source = LocalComposerInteraction.current ?: remember { MutableInteractionSource() }
-    BasicTextField(value, onValueChange, modifier.fillMaxWidth().semantics { contentDescription = placeholder }
-        .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
-        .padding(horizontal = 8.dp, vertical = 8.dp),
-        textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text),
-        cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = maxLines,
-        interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
-        decorationBox = { inner -> Box {
-            if (value.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
-            inner()
-        } })
+    val field: @Composable () -> Unit = {
+        BasicTextField(value, onValueChange, modifier.fillMaxWidth()
+            .onPreviewKeyEvent { event ->
+                if (enabled && onSubmit != null && event.key == Key.Enter) {
+                    if (event.type == KeyEventType.KeyDown && value.isNotBlank()) onSubmit()
+                    true
+                } else false
+            }
+            .semantics { contentDescription = placeholder }
+            .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+            textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text), singleLine = singleLine,
+            cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = if (singleLine) 1 else maxLines,
+            interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
+            decorationBox = { inner -> Box {
+                if (value.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
+                inner()
+            } })
+    }
+    if (label == null) field() else Column(
+        Modifier.fillMaxWidth().background(LocalPaperColors.current.surface, RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        PaperText(label, role = PaperTextRole.LABEL, color = LocalPaperColors.current.action)
+        field()
+    }
 }
 
 /** Selection-aware prompt field for callers that handle editing commands at the cursor. */

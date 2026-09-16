@@ -1138,8 +1138,7 @@ internal fun CodingChat(
                     CodingModeLabel(session.session.planningMode, session.session.researchMode)
                     UserInteractionDock(request, questionnaireDrafts[request.id] ?: QuestionnaireDraft(request.initialAnswers),
                         { onQuestionnaireDraft(request.id, it) }, { onQuestionnaireSubmit(request.id, it) },
-                        Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 8.dp, vertical = 4.dp),
-                        queuedCount = interactions.size - 1)
+                        Modifier.fillMaxWidth().heightIn(max = questionHeight).padding(horizontal = 8.dp, vertical = 4.dp))
                 } else
                 CodingComposer(
                     state = composerDraft,

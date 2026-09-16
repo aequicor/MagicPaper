@@ -16,21 +16,19 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import io.aequicor.magicpaper.designsystem.PaperAction
 import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
-import io.aequicor.magicpaper.designsystem.PaperChoice
 import io.aequicor.magicpaper.designsystem.PaperPromptField
 import io.aequicor.magicpaper.designsystem.PaperQuestionnaire
+import io.aequicor.magicpaper.designsystem.PaperQuestionnaireChoice
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.*
-import kotlinx.serialization.json.Json
 
-/** One surface replaces the composer. All changes are a draft until the review is confirmed. */
+/** One surface replaces the composer; multi-question flows keep a draft through their final review. */
 @Composable
 internal fun UserInteractionDock(
     request: UserInteractionRequest,
@@ -38,11 +36,10 @@ internal fun UserInteractionDock(
     onDraft: (QuestionnaireDraft) -> Unit,
     onSubmit: (List<PlanningAnswer>) -> Unit,
     modifier: Modifier = Modifier,
-    queuedCount: Int = 0,
 ) {
     Questionnaire(request.questions, draft, onDraft, onSubmit, modifier,
-        busy = request.submitting, context = request.context,
-        details = request.details, error = request.error, queuedCount = queuedCount)
+        busy = request.submitting, error = request.error,
+        decisionDetails = request.details.takeIf { request.kind == InteractionKind.APPROVAL }.orEmpty())
 }
 
 @Composable
@@ -61,75 +58,102 @@ internal fun PlanningQuestionWizard(
 private fun Questionnaire(
     questions: List<PlanningQuestion>, draft: QuestionnaireDraft, onDraft: (QuestionnaireDraft) -> Unit,
     onSubmit: (List<PlanningAnswer>) -> Unit, modifier: Modifier, busy: Boolean,
-    context: String = "", details: String = "", error: String? = null, queuedCount: Int = 0,
+    error: String? = null, decisionDetails: String = "",
 ) {
     if (questions.isEmpty()) return
     val index = draft.index.coerceIn(questions.indices)
     val question = questions[index]
-    var titleOverflow by remember(question.id, question.title, draft.reviewing) { mutableStateOf(false) }
+    val reviewing = draft.reviewing && questions.size > 1
     val answers = questions.map { q -> draft.answers.firstOrNull { it.questionId == q.id } ?: PlanningAnswer(q.id) }
     val answer = answers[index]
+    val answerComplete = answer.isComplete(question)
     fun change(value: PlanningAnswer, advance: Boolean = false) {
-        onDraft(draft.copy(answers = answers.map { if (it.questionId == value.questionId) value else it },
-            index = if (advance && index < questions.lastIndex) index + 1 else index,
-            reviewing = advance && index == questions.lastIndex))
+        val changed = answers.map { if (it.questionId == value.questionId) value else it }
+        when {
+            !advance -> onDraft(draft.copy(answers = changed, reviewing = false))
+            index < questions.lastIndex -> onDraft(draft.copy(answers = changed, index = index + 1, reviewing = false))
+            questions.size == 1 -> {
+                onDraft(draft.copy(answers = changed, index = 0, reviewing = false))
+                onSubmit(changed)
+            }
+            else -> onDraft(draft.copy(answers = changed, reviewing = true))
+        }
     }
     PaperQuestionnaire(modifier.testTag("questionnaire")) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                PaperText(if (draft.reviewing) "Проверьте ответы" else "${index + 1}/${questions.size} · ${question.title}",
-                    Modifier.weight(1f).testTag("questionnaire.title"), role = PaperTextRole.TITLE,
-                    maxLines = 4, overflow = TextOverflow.Ellipsis, onTextLayout = { titleOverflow = it.hasVisualOverflow })
-                if (!draft.reviewing) {
-                    PaperAction({ onDraft(draft.copy(index = index - 1)) }, enabled = index > 0 && !busy,
+            if (reviewing) {
+                PaperText("Проверьте ответы", Modifier.testTag("questionnaire.title"), role = PaperTextRole.TITLE)
+            } else if (questions.size > 1) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    PaperText("Вопрос ${index + 1} из ${questions.size}",
+                        Modifier.weight(1f), role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
+                    if (index > 0) PaperAction({ onDraft(draft.copy(index = index - 1)) }, enabled = !busy,
                         modifier = Modifier.testTag("questionnaire.back")) { PaperText("Назад", role = PaperTextRole.LABEL) }
-                    if (!answer.skipped && answer.isComplete(question)) {
+                    if (!answer.skipped && answerComplete) {
                         PaperAction({ change(answer, advance = true) }, enabled = !busy,
-                            modifier = Modifier.testTag("questionnaire.next")) { PaperText("Далее", role = PaperTextRole.LABEL) }
+                            modifier = Modifier.testTag("questionnaire.next")) {
+                            PaperText(if (index == questions.lastIndex) "Готово" else "Далее", role = PaperTextRole.LABEL)
+                        }
                     } else PaperAction({ change(PlanningAnswer(question.id, skipped = true), advance = true) }, enabled = question.canSkip && !busy,
                         modifier = Modifier.testTag("questionnaire.skip")) { PaperText("Пропустить", role = PaperTextRole.LABEL) }
                 }
+            } else if (question.kind != QuestionKind.SINGLE || (question.canSkip && !answerComplete)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    if (answerComplete) PaperAction({ change(answer, advance = true) }, enabled = !busy,
+                        modifier = Modifier.testTag("questionnaire.next")) { PaperText("Готово", role = PaperTextRole.LABEL) }
+                    else if (question.canSkip) PaperAction({ change(PlanningAnswer(question.id, skipped = true), advance = true) }, enabled = !busy,
+                        modifier = Modifier.testTag("questionnaire.skip")) { PaperText("Пропустить", role = PaperTextRole.LABEL) }
+                    else PaperAction({}, enabled = false, modifier = Modifier.testTag("questionnaire.next")) {
+                        PaperText("Готово", role = PaperTextRole.LABEL)
+                    }
+                }
             }
-            if (context.isNotBlank() || queuedCount > 0) PaperText(
-                listOfNotNull(context.takeIf { it.isNotBlank() }, "В очереди: $queuedCount".takeIf { queuedCount > 0 }).joinToString(" · "),
-                role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
-            key(if (draft.reviewing) "review" else question.id) {
+            key(if (reviewing) "review" else question.id) {
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (details.isNotBlank()) SelectionContainer { PaperText(details) }
-                    if (draft.reviewing) {
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (reviewing) {
                         questions.forEach { q ->
                             PaperText(interactionAnswerText(listOf(q), answers, redactSecrets = true))
                         }
                     } else {
-                        if (titleOverflow) PaperText(question.title)
-                        if (question.kind == QuestionKind.MULTIPLE) PaperText("Можно выбрать несколько вариантов", role = PaperTextRole.LABEL)
+                        PaperText(question.title, Modifier.fillMaxWidth().testTag("questionnaire.title"))
+                        if (decisionDetails.isNotBlank()) SelectionContainer {
+                            PaperText(decisionDetails, color = LocalPaperColors.current.secondaryText)
+                        }
+                        if (question.kind == QuestionKind.MULTIPLE) PaperText("Можно выбрать несколько",
+                            role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
                         question.options.forEach { option ->
                             val selected = option.id in answer.selected
-                            PaperChoice(selected = selected, enabled = !busy && option.enabled,
+                            PaperQuestionnaireChoice(selected = selected, multiple = question.kind == QuestionKind.MULTIPLE,
+                                enabled = !busy && option.enabled,
                                 modifier = Modifier.fillMaxWidth().testTag("questionnaire.option.${option.id}"),
                                 label = option.label, description = option.description.takeIf { it.isNotBlank() }, onSelect = {
                                     val chosen = if (question.kind == QuestionKind.MULTIPLE) {
                                         if (selected) answer.selected - option.id else answer.selected + option.id
                                     } else listOf(option.id)
-                                    change(answer.copy(selected = chosen, skipped = false),
-                                        advance = question.kind != QuestionKind.MULTIPLE && answer.text.isBlank())
+                                    change(answer.copy(selected = chosen,
+                                        text = if (question.kind == QuestionKind.SINGLE) "" else answer.text,
+                                        skipped = false), advance = question.kind == QuestionKind.SINGLE)
                                 })
                         }
-                        if (question.allowCustomInput) PaperPromptField(answer.text, { change(answer.copy(text = it, skipped = false)) },
-                            placeholder = "Свой вариант", enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().testTag("questionnaire.custom"), maxLines = 4,
+                        if (question.allowCustomInput) PaperPromptField(answer.text, { value ->
+                            change(answer.copy(selected = if (question.kind == QuestionKind.SINGLE) emptyList() else answer.selected,
+                                text = value, skipped = false))
+                        },
+                            placeholder = "Введите ответ и нажмите Enter", label = "Свой вариант", enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().testTag("questionnaire.custom"), singleLine = true,
+                            onSubmit = { if (answer.text.isNotBlank()) change(answer, advance = true) },
                             visualTransformation = if (question.secret) PasswordVisualTransformation() else VisualTransformation.None)
                     }
                 }
             }
-            // A rejected confirmation must remain visible while long request details scroll.
+            // A rejected submission remains visible without replacing the user's draft.
             if (error != null) PaperText(error,
                 modifier = Modifier.fillMaxWidth().testTag("questionnaire.error").semantics {
                     this.error(error)
                     liveRegion = LiveRegionMode.Polite
                 }, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL)
-            if (draft.reviewing) FlowRow(Modifier.fillMaxWidth(),
+            if (reviewing) FlowRow(Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     PaperAction({ onDraft(draft.copy(index = 0, reviewing = false)) }, enabled = !busy,
                         modifier = Modifier.testTag("questionnaire.return")) { PaperText("Вернуться", role = PaperTextRole.LABEL) }

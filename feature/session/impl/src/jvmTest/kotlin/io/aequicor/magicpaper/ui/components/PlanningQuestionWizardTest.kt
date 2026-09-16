@@ -5,7 +5,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.use
@@ -33,7 +37,7 @@ class PlanningQuestionWizardTest {
         File(dir, "$name.png").writeBytes(render(++frame * 16_000_000L).use { it.encodeToData()!!.use { d -> d.bytes } })
     }
 
-    @Test fun preservesChoicesAndCommentsAndOnlySubmitsAfterFinalReviewAtBothWidths() {
+    @Test fun preservesChoicesAndCommentsAndOnlyReviewsMultiQuestionFlowAtBothWidths() {
         for (width in listOf(390, 1000)) {
             val questions = listOf(
                 PlanningQuestion("format", "Формат результата?", QuestionKind.SINGLE, listOf(QuestionOption("pdf", "PDF"), QuestionOption("docx", "DOCX"))),
@@ -45,14 +49,19 @@ class PlanningQuestionWizardTest {
             val request = UserInteractionRequest("request", "p", "s", InteractionKind.QUESTION, questions, context = "Оркестратор · Этап 3")
             ImageComposeScene(width, 640) {
                 MagicPaperTheme { UserInteractionDock(request.copy(submitting = busy), draft, { draft = it }, { submitted = it },
-                    Modifier.fillMaxWidth().heightIn(max = 620.dp), queuedCount = 1) }
+                    Modifier.fillMaxWidth().heightIn(max = 620.dp)) }
             }.use { scene ->
                 scene.draw(); scene.snapshot("question-$width")
                 assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.next" })
-                assertEquals("1/3 · Формат результата?", scene.node("questionnaire.title").config[SemanticsProperties.Text].single().text)
-                assertNotNull(scene.node("questionnaire.back").config.getOrNull(SemanticsProperties.Disabled))
+                assertEquals("Формат результата?", scene.node("questionnaire.title").config[SemanticsProperties.Text].single().text)
+                assertEquals(Role.RadioButton, scene.node("questionnaire.option.pdf").config[SemanticsProperties.Role])
+                assertEquals(ToggleableState.Off, scene.node("questionnaire.option.pdf").config[SemanticsProperties.ToggleableState])
+                assertTrue(scene.nodes().none { node -> node.config.getOrNull(SemanticsProperties.Text)
+                    ?.any { it.text.contains("Оркестратор") } == true })
+                assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.back" })
                 scene.click("questionnaire.option.pdf")
                 assertEquals(1, draft.index); assertNull(submitted)
+                assertEquals(Role.Checkbox, scene.node("questionnaire.option.edit").config[SemanticsProperties.Role])
                 scene.click("questionnaire.option.edit"); scene.click("questionnaire.option.export")
                 assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.skip" })
                 assertEquals(scene.node("questionnaire.back").boundsInRoot.top, scene.node("questionnaire.next").boundsInRoot.top)
@@ -76,7 +85,7 @@ class PlanningQuestionWizardTest {
         }
     }
 
-    @Test fun permissionNeedsExplicitChoiceAndReviewHasNoFreeTextOrSkip() {
+    @Test fun singleQuestionChoiceSubmitsImmediatelyWithoutReview() {
         for (width in listOf(390, 1000)) {
             var draft by mutableStateOf(QuestionnaireDraft())
             var submitted = 0
@@ -88,15 +97,16 @@ class PlanningQuestionWizardTest {
             }.use { scene ->
                 scene.draw(); scene.snapshot("permission-$width")
                 assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.custom" })
-                assertNotNull(scene.node("questionnaire.skip").config.getOrNull(SemanticsProperties.Disabled))
-                scene.click("questionnaire.option.yes"); assertEquals(0, submitted)
-                scene.click("questionnaire.return"); scene.click("questionnaire.option.no"); assertEquals(0, submitted)
-                scene.click("questionnaire.confirm"); assertEquals(1, submitted)
+                assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.skip" })
+                scene.click("questionnaire.option.yes"); assertEquals(1, submitted)
+                assertFalse(draft.reviewing)
+                assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) in
+                    setOf("questionnaire.return", "questionnaire.confirm") })
             }
         }
     }
 
-    @Test fun longFailureKeepsHeaderAndConfirmationWithinPanel() {
+    @Test fun restoredSingleQuestionDraftBypassesLegacyReview() {
         for (width in listOf(390, 1000)) {
             val q = PlanningQuestion("recovery", "Выполнение остановлено. Как продолжить?", QuestionKind.SINGLE,
                 listOf(QuestionOption("retry", "Исправить и проверить"), QuestionOption("leave", "Оставить остановленной")))
@@ -106,11 +116,36 @@ class PlanningQuestionWizardTest {
                 MagicPaperTheme { UserInteractionDock(request, draft, {}, {}, Modifier.fillMaxWidth().heightIn(max = 500.dp)) }
             }.use { scene ->
                 scene.draw(); scene.snapshot("failure-$width")
-                for (tag in listOf("questionnaire.title", "questionnaire.return", "questionnaire.confirm")) {
+                assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) in
+                    setOf("questionnaire.return", "questionnaire.confirm") })
+                for (tag in listOf("questionnaire.title", "questionnaire.option.retry", "questionnaire.option.leave")) {
                     val bounds = scene.node(tag).boundsInRoot
                     assertTrue(bounds.top >= 0 && bounds.bottom <= 500 && bounds.left >= 0 && bounds.right <= width, "$tag: $bounds")
                 }
             }
+        }
+    }
+
+    @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
+    @Test fun enterInCustomAnswerAdvancesAndSingleQuestionSubmits() {
+        var draft by mutableStateOf(QuestionnaireDraft())
+        var submitted: List<PlanningAnswer>? = null
+        val question = PlanningQuestion("custom", "Каким должен быть результат?", QuestionKind.TEXT, canSkip = false)
+        val request = UserInteractionRequest("custom", "p", "s", InteractionKind.QUESTION, listOf(question))
+        ImageComposeScene(390, 320) {
+            MagicPaperTheme { UserInteractionDock(request, draft, { draft = it }, { submitted = it }) }
+        }.use { scene ->
+            scene.draw()
+            val field = scene.node("questionnaire.custom")
+            field.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Короткий отчёт"))
+            scene.draw()
+            scene.node("questionnaire.custom").config[SemanticsActions.RequestFocus].action!!.invoke()
+            scene.draw()
+            assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown)))
+            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))
+            scene.draw()
+            assertEquals(listOf(PlanningAnswer("custom", text = "Короткий отчёт")), submitted)
+            assertFalse(draft.reviewing)
         }
     }
 }

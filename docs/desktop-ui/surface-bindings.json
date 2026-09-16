@@ -314,6 +314,38 @@
     "annotationLine": 92
   },
   {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/QuestionnairePreviews.kt",
+    "symbol": "SingleChoiceQuestionnairePreview",
+    "annotationLine": 21,
+    "targets": ["PaperTheme", "PaperQuestionnaire", "PaperQuestionnaireChoice", "PaperPromptField"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/QuestionnairePreviews.kt",
+    "symbol": "MultipleChoiceQuestionnairePreview",
+    "annotationLine": 32,
+    "targets": ["PaperTheme", "PaperQuestionnaire", "PaperQuestionnaireChoice", "PaperPromptField"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/QuestionnairePreviews.kt",
+    "symbol": "TextQuestionnairePreview",
+    "annotationLine": 43,
+    "targets": ["PaperTheme", "PaperQuestionnaire", "PaperPromptField"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/QuestionnairePreviews.kt",
+    "symbol": "QuestionnairePreview",
+    "annotationLine": 50,
+    "targets": ["PaperTheme", "PaperQuestionnaire"],
+    "stage": "6",
+    "kind": "composition-helper"
+  },
+  {
     "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
     "symbol": "rememberUnifiedItems",
     "annotationLine": 108,
@@ -1486,8 +1518,8 @@
     "annotationLine": 34,
     "targets": [
       "PaperQuestionnaire",
-      "PaperField",
-      "PaperChoice",
+      "PaperPromptField",
+      "PaperQuestionnaireChoice",
       "PaperButton"
     ],
     "stage": "6",
@@ -1499,8 +1531,8 @@
     "annotationLine": 48,
     "targets": [
       "PaperQuestionnaire",
-      "PaperField",
-      "PaperChoice",
+      "PaperPromptField",
+      "PaperQuestionnaireChoice",
       "PaperButton"
     ],
     "stage": "6",
@@ -1512,8 +1544,8 @@
     "annotationLine": 60,
     "targets": [
       "PaperQuestionnaire",
-      "PaperField",
-      "PaperChoice",
+      "PaperPromptField",
+      "PaperQuestionnaireChoice",
       "PaperButton"
     ],
     "stage": "6",

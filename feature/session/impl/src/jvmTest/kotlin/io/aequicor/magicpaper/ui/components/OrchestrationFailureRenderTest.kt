@@ -63,8 +63,7 @@ class OrchestrationFailureRenderTest {
                     it.encodeToData()!!.use { data -> data.bytes }
                 })
                 click("questionnaire.option.skip_verification"); render()
-                assertTrue(submitted.isEmpty(), "Selecting an option is a draft")
-                click("questionnaire.confirm"); render()
+                assertTrue(nodes().none { it.config.getOrNull(SemanticsProperties.TestTag) == "questionnaire.confirm" })
                 assertEquals(listOf("skip_verification"), submitted.single().selected)
             }
         }
@@ -109,6 +108,7 @@ class OrchestrationFailureRenderTest {
             var submissions = 0
             val output = File("build/reports/orchestration").apply { mkdirs() }
             for (width in listOf(1000, 430)) {
+                submissions = 0
                 ImageComposeScene(width, 560) {
                     MagicPaperTheme { Surface { Column {
                         var draft by remember { mutableStateOf(QuestionnaireDraft()) }
@@ -124,8 +124,7 @@ class OrchestrationFailureRenderTest {
                         assertTrue(it.boundsInRoot.top >= 0 && it.boundsInRoot.bottom <= 560, "$label must be visible")
                         assertTrue(it.boundsInRoot.left >= 0 && it.boundsInRoot.right <= width, "$label must fit")
                     }
-                    visible("1/1 · Не удалось обработать сообщение")
-                    visible(input.error)
+                    visible("Не удалось обработать сообщение")
                     visible("Повторить обработку")
                     visible("Сейчас:")
                     visible("Подробнее")
@@ -136,7 +135,7 @@ class OrchestrationFailureRenderTest {
                     assertNull(retry.config.getOrNull(SemanticsProperties.Disabled))
                     retry.config[SemanticsActions.OnClick].action!!.invoke()
                     repeat(3) { scene.render(120_000_000L + it * 16_000_000L).close(); runCurrent() }
-                    assertEquals(0, submissions, "Selecting recovery must not execute it")
+                    assertEquals(1, submissions, "A single-choice recovery executes without a review step")
                     File(output, "input-failure-$width.png").writeBytes(scene.render(112_000_000L).use {
                         it.encodeToData()!!.use { data -> data.bytes }
                     })
