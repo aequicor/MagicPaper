@@ -14,6 +14,16 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CodingSystemPromptsTest {
+    @Test fun browserAndUiGuidesReachBothEnginesInEveryMode() {
+        for (engine in CodingEngine.entries) for ((planning, research) in listOf(false to false, true to false, false to true)) {
+            val prompt = codingSystemPrompt(engine, planning, "PROJECT RULES", research)
+            assertTrue("magicpaper_browser_" in prompt)
+            assertTrue("browser.validate_html" in prompt)
+            assertTrue("https://github.com/willyp713/awesome-ui-guides" in prompt)
+            assertTrue("PROJECT RULES" in prompt)
+        }
+    }
+
     @Test fun activeWorktreePolicyReachesBothEnginesAndRefreshesForNextTask() {
         val task = TaskWorktree("task", "/source", "feature/current", "base", "/pool/session", "codex/task")
         val session = CodingSession("session", "project", "Task", 1,

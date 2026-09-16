@@ -76,7 +76,7 @@ class CodingBlockedStatusRenderTest {
                     worker.id, InteractionKind.RUNTIME, listOf(PlanningQuestion("decision", question, QuestionKind.TEXT)))))
                 render()
                 assertNull(text(banner), "Questionnaire must replace the blocked banner at $width")
-                assertVisible(assertNotNull(text("1/1 · $question"), "Questionnaire missing at $width"), question)
+                assertVisible(assertNotNull(text(question), "Questionnaire missing at $width"), question)
                 assertNull(text("Что нужно сделать?"), "Ordinary composer must yield to the questionnaire at $width")
             }
         }

@@ -48,6 +48,8 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.oshi.core)
             implementation(libs.ktor.clientCio)
+            implementation(libs.playwright)
+            implementation(libs.html.validator)
         }
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
@@ -58,6 +60,7 @@ kotlin {
 }
 
 tasks.withType<Test>().configureEach {
+    systemProperty("magicpaper.browser.native", providers.gradleProperty("magicpaper.browser.native").getOrElse("false"))
     systemProperty("magicpaper.paperEditor.it", providers.gradleProperty("magicpaper.paperEditor.it").getOrElse("false"))
     val launcher = when {
         System.getProperty("os.name").startsWith("Mac") -> "PaperEditor.app/Contents/MacOS/PaperEditor"
@@ -71,6 +74,14 @@ tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
     systemProperty("magicpaper.application.native", providers.gradleProperty("magicpaper.application.native").getOrElse("false"))
     systemProperty("magicpaper.application.testInstallation", layout.buildDirectory.dir("application-use/native-acceptance").get().asFile.absolutePath)
+}
+
+val installAgentBrowser by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Install managed Chromium for the agent browser and its native tests."
+    classpath = configurations.getByName("jvmRuntimeClasspath")
+    mainClass.set("com.microsoft.playwright.CLI")
+    args("install", "chromium")
 }
 
 val nodeProtocolTest by tasks.registering(Exec::class) {
@@ -272,4 +283,3 @@ abstract class BundleCodingSearchToolsTask : DefaultTask() {
         val LICENSE_FILE_NAMES = setOf("LICENSE-MIT", "LICENSE-APACHE", "LICENSE-APACHE-2.0", "UNLICENSE", "COPYING")
     }
 }
-

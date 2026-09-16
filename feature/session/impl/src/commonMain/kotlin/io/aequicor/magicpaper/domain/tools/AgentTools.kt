@@ -79,9 +79,19 @@ class JsonToolCommand(
 }
 
 class ToolRegistry(commands: List<ToolCommand<*, *>>) {
-    private val commands = commands.associateBy { it.definition.id }.also { require(it.size == commands.size) { "Повтор инструмента" } }
-    fun available(context: ToolExecutionContext) = commands.values.map { it.definition }.filter { !it.native && it.allowed(context) }
-    fun command(name: String): ToolCommand<*, *> = commands[name] ?: commands.values.firstOrNull { it.definition.wireName == name }
+    private val commands = MutableStateFlow(commands.associateBy { it.definition.id }.also { require(it.size == commands.size) { "Повтор инструмента" } })
+    /** Native capabilities belong to a running bridge, while calls keep the session's executor and receipts. */
+    internal fun attach(additional: List<ToolCommand<*, *>>): () -> Unit {
+        val added = additional.associateBy { it.definition.id }
+        require(added.size == additional.size) { "Повтор инструмента" }
+        commands.update { current ->
+            require(added.keys.none { it in current }) { "Инструмент уже подключён" }
+            current + added
+        }
+        return { commands.update { current -> current.filterNot { (id, command) -> added[id] === command } } }
+    }
+    fun available(context: ToolExecutionContext) = commands.value.values.map { it.definition }.filter { !it.native && it.allowed(context) }
+    fun command(name: String): ToolCommand<*, *> = commands.value[name] ?: commands.value.values.firstOrNull { it.definition.wireName == name }
         ?: error("Неизвестный инструмент: $name")
 }
 

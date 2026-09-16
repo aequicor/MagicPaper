@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.tools
 
 import io.aequicor.magicpaper.domain.tools.*
+import io.aequicor.magicpaper.data.browser.BrowserToolSession
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -21,6 +22,7 @@ internal class AgentToolBridge(
     private val tools: ToolSession,
     /** Optimization 6 (AGENT_SPEED_BOOST): cache tools/list JSON response. */
     private val cacheToolDefinitions: Boolean = false,
+    private val browser: BrowserToolSession = BrowserToolSession(),
 ) : AutoCloseable {
     // JSON-RPC IDs belong to this transport, not to the durable worker turn. A resumed
     // turn opens a new bridge and Codex restarts its counter; those are new calls.
@@ -42,6 +44,7 @@ internal class AgentToolBridge(
     private var cachedToolsList: JsonObject? = null
     val token = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
     val url = "http://127.0.0.1:${server.address.port}/mcp"
+    private val detachBrowser = tools.registry.attach(if (tools.context.auxiliaryExecution) emptyList() else browser.commands)
     init {
         server.executor = executor
         server.createContext("/mcp") { exchange ->
@@ -109,7 +112,7 @@ internal class AgentToolBridge(
                         try {
                             val result = tools.call(callIdentity(id), name, args)
                             buildJsonObject {
-                                put("content", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", result.toString()) }) })
+                                put("content", toolResultContent(name, result))
                                 put("isError", false)
                             }
                         } catch (error: Exception) {
@@ -138,6 +141,7 @@ internal class AgentToolBridge(
         jobs.values.forEach { it.cancel() }
         server.stop(0)
         executor.shutdownNow()
+        try { browser.close() } finally { detachBrowser() }
     }
     private fun reply(exchange: HttpExchange, status: Int, body: JsonObject? = null) {
         exchange.responseHeaders.set("Cache-Control", "no-store")
@@ -172,4 +176,16 @@ internal class AgentToolBridge(
             }
         }
     }
+}
+
+/** Only the trusted screenshot command can emit image blocks; page text cannot forge MCP content. */
+internal fun toolResultContent(name: String, result: JsonElement): JsonArray = buildJsonArray {
+    val screenshot = name in setOf("browser.screenshot", "magicpaper_browser_screenshot")
+    val objectResult = result as? JsonObject
+    val image = if (screenshot) objectResult?.get("image") as? JsonObject else null
+    add(buildJsonObject {
+        put("type", "text")
+        put("text", if (image != null) JsonObject(objectResult!! - "image").toString() else result.toString())
+    })
+    if (image != null) add(image)
 }
