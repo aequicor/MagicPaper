@@ -40,11 +40,19 @@ internal fun ResearchWorkspace(vm: DefaultChatComponent, state: ChatState, conte
         state = state,
         questionsExpanded = presentation.questionsExpanded,
         sourcesExpanded = presentation.sourcesExpanded,
+        questionsWidth = presentation.questionsWidth,
+        sourcesWidth = presentation.sourcesWidth,
         onQuestionsExpandedChange = { value ->
             vm.workspacePresentation.update(notebookId) { it.copy(questionsExpanded = value) }
         },
         onSourcesExpandedChange = { value ->
             vm.workspacePresentation.update(notebookId) { it.copy(sourcesExpanded = value) }
+        },
+        onQuestionsWidthChange = { value ->
+            vm.workspacePresentation.update(notebookId) { it.copy(questionsWidth = value) }
+        },
+        onSourcesWidthChange = { value ->
+            vm.workspacePresentation.update(notebookId) { it.copy(sourcesWidth = value) }
         },
         saving = saving,
         error = error,
@@ -68,8 +76,12 @@ internal fun ResearchWorkspaceContent(
     state: ChatState,
     questionsExpanded: Boolean = true,
     sourcesExpanded: Boolean = true,
+    questionsWidth: Float = 252f,
+    sourcesWidth: Float = 304f,
     onQuestionsExpandedChange: (Boolean) -> Unit = {},
     onSourcesExpandedChange: (Boolean) -> Unit = {},
+    onQuestionsWidthChange: (Float) -> Unit = {},
+    onSourcesWidthChange: (Float) -> Unit = {},
     saving: Boolean = false,
     error: String? = null,
     onNewQuestion: () -> Unit = {},
@@ -89,10 +101,11 @@ internal fun ResearchWorkspaceContent(
             .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
     ) {
         val threeColumns = maxWidth >= 1180.dp
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxSize()) {
             if (threeColumns) {
                 if (questionsExpanded) {
-                    PaperResearchPane(Modifier.width(252.dp).fillMaxHeight()) {
+                    val width = questionsWidth.coerceIn(180f, 420f)
+                    PaperResearchPane(Modifier.width(width.dp).fillMaxHeight()) {
                         ResearchQuestionsPane(
                             state = state,
                             saving = saving,
@@ -101,6 +114,8 @@ internal fun ResearchWorkspaceContent(
                             onCollapse = { onQuestionsExpandedChange(false) },
                         )
                     }
+                    PaperResearchResizeHandle("Изменить ширину панели вопросов", width, 180f..420f,
+                        onQuestionsWidthChange)
                 } else {
                     PaperResearchRail(
                         title = "Вопросы",
@@ -117,6 +132,7 @@ internal fun ResearchWorkspaceContent(
                             enabled = !saving,
                         )
                     }
+                    Spacer(Modifier.width(12.dp))
                 }
             }
 
@@ -147,7 +163,10 @@ internal fun ResearchWorkspaceContent(
 
             if (threeColumns) {
                 if (sourcesExpanded) {
-                    PaperResearchPane(Modifier.width(304.dp).fillMaxHeight()) {
+                    val width = sourcesWidth.coerceIn(220f, 480f)
+                    PaperResearchResizeHandle("Изменить ширину панели источников", width, 220f..480f,
+                        onSourcesWidthChange, reverseDirection = true)
+                    PaperResearchPane(Modifier.width(width.dp).fillMaxHeight()) {
                         ResearchSourcesPane(
                             state = state,
                             saving = saving,
@@ -160,6 +179,7 @@ internal fun ResearchWorkspaceContent(
                         )
                     }
                 } else {
+                    Spacer(Modifier.width(12.dp))
                     PaperResearchRail(
                         title = "Источники",
                         count = state.notebook?.resources?.size ?: 0,

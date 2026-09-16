@@ -61,6 +61,8 @@ class DefaultChatComponentFactory(private val service: DefaultChatService, priva
 internal data class ChatWorkspacePresentation(
     val questionsExpanded: Boolean = true,
     val sourcesExpanded: Boolean = true,
+    val questionsWidth: Float = 252f,
+    val sourcesWidth: Float = 304f,
 )
 
 /** Shared by visit components so a notebook keeps its panel configuration while sessions change. */

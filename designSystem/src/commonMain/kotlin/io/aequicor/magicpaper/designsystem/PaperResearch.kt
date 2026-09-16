@@ -3,15 +3,20 @@ package io.aequicor.magicpaper.designsystem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -23,10 +28,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -79,6 +90,36 @@ public fun PaperResearchPane(
             .border(1.dp, colors.border.copy(alpha = .55f), shape),
         content = content,
     )
+}
+
+/** Pointer-sized drag lane between research panes; the visible grip stays deliberately quiet. */
+@Composable
+public fun PaperResearchResizeHandle(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    reverseDirection: Boolean = false,
+) {
+    val color = LocalPaperColors.current.border
+    val density = LocalDensity.current
+    fun update(delta: Float) {
+        val directed = if (reverseDirection) -delta else delta
+        onValueChange((value + directed).coerceIn(valueRange))
+    }
+    Box(
+        modifier.width(12.dp).fillMaxHeight()
+            .semantics {
+                contentDescription = label
+                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
+                setProgress { target -> onValueChange(target.coerceIn(valueRange)); true }
+            }
+            .draggable(rememberDraggableState { delta -> update(with(density) { delta.toDp().value }) }, Orientation.Horizontal),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.width(3.dp).height(28.dp).background(color, RoundedCornerShape(6.dp)))
+    }
 }
 
 /** A compact remnant of a collapsed research pane that keeps its frequent actions reachable. */

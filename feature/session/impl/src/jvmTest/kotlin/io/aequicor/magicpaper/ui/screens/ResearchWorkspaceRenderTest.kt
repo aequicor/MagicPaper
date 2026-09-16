@@ -147,6 +147,30 @@ class ResearchWorkspaceRenderTest {
         } finally { onUi { scene.close() } }
     }
 
+    @Test fun sidePanelWidthsAreAdjustableThroughAccessibleSemantics() {
+        val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview() } }
+        fun handle(label: String) = scene.nodes().first { node ->
+            node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().contains(label)
+        }
+        try {
+            repeat(4) { onUi { scene.render(it * 32_000_000L).close() } }
+            onUi {
+                assertTrue(handle("Изменить ширину панели вопросов")
+                    .config[SemanticsActions.SetProgress].action!!.invoke(336f))
+                assertTrue(handle("Изменить ширину панели источников")
+                    .config[SemanticsActions.SetProgress].action!!.invoke(412f))
+            }
+            repeat(4) { onUi { scene.render((it + 4) * 32_000_000L).close() } }
+            onUi {
+                assertEquals(336f, handle("Изменить ширину панели вопросов")
+                    .config[SemanticsProperties.ProgressBarRangeInfo].current)
+                assertEquals(412f, handle("Изменить ширину панели источников")
+                    .config[SemanticsProperties.ProgressBarRangeInfo].current)
+            }
+            scene.capture("resized-panels", 300_000_000L)
+        } finally { onUi { scene.close() } }
+    }
+
     @Test fun sourceMenuOffersValidationAndClosingWithoutLosingComposerDraft() {
         val scene = onUi { ImageComposeScene(720, 850) { ResearchEmptyPreview() } }
         var frame = 0L
