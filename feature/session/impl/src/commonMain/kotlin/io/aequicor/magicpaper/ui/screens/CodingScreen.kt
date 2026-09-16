@@ -126,11 +126,14 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1732,7 +1735,11 @@ internal fun CodingComposer(
     directAttachmentAction: Boolean = false,
 ) {
     var text by state.text
+    var editorValue by remember(state) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
     var attachments by state.attachments
+    LaunchedEffect(text) {
+        if (text != editorValue.text) editorValue = TextFieldValue(text, TextRange(text.length))
+    }
     val hasInput = text.isNotBlank() || attachments.isNotEmpty()
     val primaryAction = when {
         busy && hasInput && onClarify != null -> ComposerPrimaryAction.CLARIFY
@@ -1764,7 +1771,10 @@ internal fun CodingComposer(
                 attachments = attachments.filterIndexed { itemIndex, _ -> itemIndex != index }
             })
                 PaperPromptField(
-                    value = text, onValueChange = { text = it },
+                    value = editorValue, onValueChange = {
+                        editorValue = it
+                        text = it.text
+                    },
                     modifier = Modifier
                         .onPreviewKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown && event.key == Key.V &&
@@ -1773,9 +1783,9 @@ internal fun CodingComposer(
                                     attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
                                 }
                             } else if (event.type == KeyEventType.KeyDown && event.key == Key.Enter &&
-                                (event.isMetaPressed || event.isCtrlPressed)) {
-                                text += "\n"
-                                true
+                                event.isShiftPressed) {
+                                // Let BasicTextField insert at (or replace) its current selection.
+                                false
                             } else if (event.type == KeyEventType.KeyDown && event.key == Key.Enter &&
                                 primaryAction != ComposerPrimaryAction.PAUSE) {
                                 activatePrimaryAction()

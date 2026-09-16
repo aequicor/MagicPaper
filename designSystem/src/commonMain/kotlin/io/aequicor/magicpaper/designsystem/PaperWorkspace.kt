@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -108,6 +109,24 @@ public fun PaperPromptField(value: String, onValueChange: (String) -> Unit, plac
         interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
         decorationBox = { inner -> Box {
             if (value.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
+            inner()
+        } })
+}
+
+/** Selection-aware prompt field for callers that handle editing commands at the cursor. */
+@Composable
+public fun PaperPromptField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, placeholder: String,
+    modifier: Modifier = Modifier, maxLines: Int = 6, enabled: Boolean = true,
+    visualTransformation: VisualTransformation = VisualTransformation.None) {
+    val source = LocalComposerInteraction.current ?: remember { MutableInteractionSource() }
+    BasicTextField(value, onValueChange, modifier.fillMaxWidth().semantics { contentDescription = placeholder }
+        .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
+        .padding(horizontal = 8.dp, vertical = 8.dp),
+        textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text),
+        cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = maxLines,
+        interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
+        decorationBox = { inner -> Box {
+            if (value.text.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
             inner()
         } })
 }

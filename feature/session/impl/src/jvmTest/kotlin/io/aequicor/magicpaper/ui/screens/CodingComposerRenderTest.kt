@@ -30,7 +30,7 @@ import kotlin.test.*
 @OptIn(ExperimentalCoroutinesApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingComposerRenderTest {
     @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
-    @Test fun enterSendsWhileControlOrCommandEnterAddsANewLine() = runTest {
+    @Test fun shiftEnterAddsANewLineAtTheCursorWhileOtherEnterVariantsSend() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {
             val draft = io.aequicor.magicpaper.ui.components.CodingComposerDraft().apply {
@@ -46,18 +46,23 @@ class CodingComposerRenderTest {
                 val input = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                     .single { it.config.contains(SemanticsActions.SetText) }
                 assertTrue(input.config[SemanticsActions.RequestFocus].action?.invoke() == true)
+                assertTrue(input.config[SemanticsActions.SetSelection].action?.invoke(6, 6, false) == true)
+                scene.render(112_000_000L).close()
+                runCurrent()
 
-                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown)))
-                assertEquals(listOf("Первая строка"), sent)
-                assertEquals("Первая строка", draft.text.value)
-
-                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown, isCtrlPressed = true)))
-                assertEquals("Первая строка\n", draft.text.value)
-                assertEquals(1, sent.size, "Ctrl+Enter must edit the draft instead of sending it")
+                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown, isShiftPressed = true)))
+                assertEquals("Первая\n строка", draft.text.value)
+                assertTrue(sent.isEmpty(), "Shift+Enter must edit the draft instead of sending it")
 
                 assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown, isMetaPressed = true)))
-                assertEquals("Первая строка\n\n", draft.text.value)
-                assertEquals(1, sent.size, "Command+Enter must edit the draft instead of sending it")
+                assertEquals(listOf("Первая\n строка"), sent)
+                assertEquals("Первая\n строка", draft.text.value)
+
+                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown, isCtrlPressed = true)))
+                assertEquals(2, sent.size, "Ctrl+Enter must use the same send action as Enter")
+
+                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown)))
+                assertEquals(3, sent.size, "Enter must keep sending the draft")
             }
         } finally { Dispatchers.resetMain() }
     }
