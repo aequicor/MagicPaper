@@ -7,6 +7,9 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -26,6 +29,39 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingComposerRenderTest {
+    @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
+    @Test fun enterSendsWhileControlOrCommandEnterAddsANewLine() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val draft = io.aequicor.magicpaper.ui.components.CodingComposerDraft().apply {
+                text.value = "Первая строка"
+            }
+            val sent = mutableListOf<String>()
+            ImageComposeScene(600, 180) { MagicPaperTheme { Surface {
+                CodingComposer(state = draft, enabled = true, busy = false,
+                    onSend = { text, _ -> sent += text }, onAbort = {}, onPickAttachments = { _, _ -> })
+            } } }.use { scene ->
+                repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }
+                fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                val input = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    .single { it.config.contains(SemanticsActions.SetText) }
+                assertTrue(input.config[SemanticsActions.RequestFocus].action?.invoke() == true)
+
+                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown)))
+                assertEquals(listOf("Первая строка"), sent)
+                assertEquals("Первая строка", draft.text.value)
+
+                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown, isCtrlPressed = true)))
+                assertEquals("Первая строка\n", draft.text.value)
+                assertEquals(1, sent.size, "Ctrl+Enter must edit the draft instead of sending it")
+
+                assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown, isMetaPressed = true)))
+                assertEquals("Первая строка\n\n", draft.text.value)
+                assertEquals(1, sent.size, "Command+Enter must edit the draft instead of sending it")
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun plusMenuExposesWorktreeAndKeepsInfoAvailableWhileLocked() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

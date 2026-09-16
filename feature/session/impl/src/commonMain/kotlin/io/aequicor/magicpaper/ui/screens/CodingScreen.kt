@@ -1740,9 +1740,14 @@ internal fun CodingComposer(
                                 onPasteAttachments(attachments.size) {
                                     attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
                                 }
-                            } else if (event.type == KeyEventType.KeyDown && (event.isMetaPressed || event.isCtrlPressed) && event.key == Key.Enter) {
-                                if (primaryAction != ComposerPrimaryAction.PAUSE) activatePrimaryAction()
-                                primaryAction != ComposerPrimaryAction.PAUSE
+                            } else if (event.type == KeyEventType.KeyDown && event.key == Key.Enter &&
+                                (event.isMetaPressed || event.isCtrlPressed)) {
+                                text += "\n"
+                                true
+                            } else if (event.type == KeyEventType.KeyDown && event.key == Key.Enter &&
+                                primaryAction != ComposerPrimaryAction.PAUSE) {
+                                activatePrimaryAction()
+                                true
                             } else {
                                 false
                             }
