@@ -50,6 +50,9 @@ data class ChatSession(
     val queuedPrompts: List<CodingRunCheckpoint> = emptyList(),
     /** Invocation-only authority; persisted history and restored queues never grant desktop access. */
     @kotlinx.serialization.Transient val acquireComputerAccess: Boolean = false,
+    val archived: Boolean = false,
+    /** Restoring grants another inactivity interval without changing message recency. */
+    val archiveRestoredAt: Long? = null,
 )
 
 /** Доступные поисковые движки. */

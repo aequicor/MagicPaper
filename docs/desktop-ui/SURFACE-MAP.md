@@ -8,6 +8,10 @@
 
 | Source set / файл | Экран, панель или entry | Вид | Конкретные DS API | Этап |
 |---|---|---|---|---|
+| [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt) | `SessionBrowserControls:57` | surface | PaperField, PaperButton, PaperText | 6 |
+| [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt) | `SessionBrowserResults:68` | surface | PaperListRow, PaperButton, PaperText | 6 |
+| [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt) | `SessionArchivePreview:97` | surface | PaperTheme, PaperField, PaperListRow, PaperButton, PaperText | 6 |
+| [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt) | `SessionSearchEmptyPreview:109` | surface | PaperTheme, PaperField, PaperListRow, PaperButton, PaperText | 6 |
 | [feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt](../../feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt) | `ComputerSettings:13` | surface | PaperButton, PaperText, PaperPanel, PaperChoice, PaperFileTransfer | 5 |
 | [feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt](../../feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt) | `ComputerSettingsContent:26` | surface | PaperButton, PaperText, PaperPanel, PaperChoice, PaperFileTransfer | 5 |
 | [feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt](../../feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt) | `ComputerPermissionOnboarding:42` | surface | PaperButton, PaperText, PaperPanel, PaperFileTransfer | 5 |

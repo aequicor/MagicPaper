@@ -97,6 +97,8 @@ data class CodingSession(
     val lastStatus: CodingSessionStatus? = null,
     /** Time of [lastStatus]'s transition. Zero is a legacy marker and falls back to [createdAt]. */
     val statusChangedAt: Long = 0,
+    /** Start of continuous readiness; null in older records until first observation. */
+    val archiveReadySince: Long? = null,
 )
 
 @Serializable

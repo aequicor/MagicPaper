@@ -31,6 +31,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
@@ -49,6 +54,8 @@ class DefaultChatService(
     private val draftBlobs: io.aequicor.magicpaper.data.storage.DraftBlobStore = io.aequicor.magicpaper.data.storage.InMemoryDraftBlobStore(),
     private val layoutAgent: LayoutChatAgent? = null,
     private val layoutProject: (String?) -> CodingProject? = { null },
+    private val archiveClock: () -> Long = Id::now,
+    private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
 ) : ChatService {
     private val _state = MutableStateFlow(ChatState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -67,8 +74,9 @@ class DefaultChatService(
         sessionLocks.update { if (id in it) it else it + (id to Mutex()) }
         return sessionLocks.value.getValue(id).withLock {
             check(id !in deletedDraftSessionIds) { "Чат удалён" }
-            val saved = change(chats.session(id) ?: error("Чат не найден"))
-            chats.save(saved)
+            val latest = withContext(workerDispatcher) { chats.session(id) } ?: error("Чат не найден")
+            val saved = change(latest)
+            if (saved != latest) withContext(workerDispatcher) { chats.save(saved) }
             _state.update { state -> state.copy(
                 sessions = state.sessions.map { if (it.id == id) saved else it },
                 current = if (state.current?.id == id) saved else state.current) }
@@ -92,6 +100,41 @@ class DefaultChatService(
         }
         _state.update { it.copy(settings = settings, llmProfiles = profiles, sessions = sessions,
             current = it.current?.let { selected -> sessions.firstOrNull { s -> s.id == selected.id } }) }
+        observeAutoArchive()
+    }
+    private var archiveObserver: Job? = null
+    private fun observeAutoArchive() {
+        if (archiveObserver != null) return
+        archiveObserver = scope.launch {
+            combine(state.map { it.sessions }.distinctUntilChanged(), archiveTicks.onStart { emit(Unit) }) { sessions, _ -> sessions }
+                .collect { sessions ->
+                    sessions.filter { it.archiveDue(archiveClock()) }.forEach { session ->
+                        changeArchive(session.id, archived = true, automatic = true)
+                    }
+                }
+        }
+    }
+    override fun archiveSession(id: String) { scope.launch { changeArchive(id, archived = true) } }
+    override fun restoreSession(id: String) { scope.launch { changeArchive(id, archived = false) } }
+    private suspend fun changeArchive(id: String, archived: Boolean, automatic: Boolean = false) {
+        if (id in deletingSessions || id in changingHistory || id in controllingSessions) return
+        try {
+            pendingCreations[id]?.await()
+            val saved = updateChat(id) { latest ->
+                when {
+                    id in deletingSessions || archived && (id in chatJobs.value || latest.pendingRun != null || latest.queuedPrompts.isNotEmpty()) -> latest
+                    automatic && !latest.archiveDue(archiveClock()) -> latest
+                    else -> latest.copy(archived = archived, archiveRestoredAt = if (archived) latest.archiveRestoredAt else archiveClock())
+                }
+            }
+            if (saved.archived == archived) AppLog.info("chat", if (archived) "session.archived" else "session.unarchived", mapOf("sessionId" to id))
+            else if (!automatic) _state.update { it.copy(notice = "Дождитесь завершения запроса перед архивацией чата.") }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("chat", "session.archive.failed", failure, mapOf("sessionId" to id))
+            _state.update { it.copy(notice = if (automatic) "Не удалось архивировать чат. Повторная попытка будет выполнена автоматически."
+                else "Не удалось изменить архив чата. Повторите попытку.") }
+        }
     }
     override fun activate(id: String?) { visible.value = true; _state.update { it.copy(current = it.sessions.firstOrNull { session -> session.id == id }, busy = id in chatJobs.value) } }
     private val visible = MutableStateFlow(false)
@@ -173,9 +216,12 @@ class DefaultChatService(
             pendingCreations[id]?.await()
             queuedComputerRequests.update { requests -> requests.filterValues { it != id } }
             chats.session(id)?.let { runtime.deleteChatSession(it) }
-            chats.delete(id)
+            sessionLocks.update { if (id in it) it else it + (id to Mutex()) }
+            sessionLocks.value.getValue(id).withLock {
+                chats.delete(id)
+                deletedDraftSessionIds += id
+            }
             requestPins?.remove(PinConversation(id))
-            deletedDraftSessionIds += id
             composerSessions.remove("chat:$id")?.revoke()
             try { draftRepository.remove("chat:$id") }
             catch (error: CancellationException) { throw error }
@@ -257,7 +303,8 @@ class DefaultChatService(
         val now = Id.now()
         val fork = source.copy(id = Id.new(), title = "${source.title} — форк", createdAt = now, updatedAt = now,
             messages = source.messages.through(throughMessageId) { it.id }.map { it.copy(id = Id.new()) },
-            nativeSessionId = "", pendingRun = null, queuedPrompts = emptyList(), acquireComputerAccess = false)
+            nativeSessionId = "", pendingRun = null, queuedPrompts = emptyList(), acquireComputerAccess = false,
+            archived = false, archiveRestoredAt = null)
         chats.save(fork)
         _state.update { it.copy(sessions = listOf(fork) + it.sessions) }
         onOpenSession(fork.id)
@@ -378,7 +425,7 @@ class DefaultChatService(
             pendingRun = request,
             layoutProjectId = session.layoutProjectId ?: capturedProject?.id,
             title = if (session.messages.isEmpty()) trimmed.take(40) else session.title,
-            updatedAt = Id.now(),
+            updatedAt = Id.now(), archived = false,
         )
         val requestProfile = ProfileResolver.resolve(updated, settings, _state.value.availableLlmProfiles)
         val operationalProfile = ProfileResolver.resolve(null as ChatSession?, settings, _state.value.availableLlmProfiles)
@@ -396,7 +443,7 @@ class DefaultChatService(
                 creation?.await()
                 val accepted = updateChat(session.id) { latest -> latest.copy(
                     engine = updated.engine, layoutProjectId = updated.layoutProjectId,
-                    title = updated.title, updatedAt = updated.updatedAt, pendingRun = request,
+                    title = updated.title, updatedAt = updated.updatedAt, pendingRun = request, archived = false,
                     queuedPrompts = latest.queuedPrompts.filterNot { it.messageId == request.messageId },
                     messages = if (latest.messages.any { it.id == userMessage.id }) latest.messages else latest.messages + userMessage) }
                 queuedComputerRequests.update { it - request.messageId }
@@ -515,6 +562,7 @@ class DefaultChatService(
         children.forEach { it.join() }
         resetDrafts()
         pinObserver = null
+        archiveObserver = null
         visible.value = false
         chatJobs.value = emptyMap()
         pendingCreations.clear()

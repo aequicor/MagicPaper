@@ -1,5 +1,25 @@
 [
   {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt",
+    "symbol": "SessionBrowserControls", "annotationLine": 57,
+    "targets": ["PaperField", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt",
+    "symbol": "SessionBrowserResults", "annotationLine": 68,
+    "targets": ["PaperListRow", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt",
+    "symbol": "SessionArchivePreview", "annotationLine": 97,
+    "targets": ["PaperTheme", "PaperField", "PaperListRow", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionBrowser.kt",
+    "symbol": "SessionSearchEmptyPreview", "annotationLine": 109,
+    "targets": ["PaperTheme", "PaperField", "PaperListRow", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
     "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt",
     "symbol": "ComputerSettings", "annotationLine": 13,
     "targets": ["PaperButton", "PaperText", "PaperPanel", "PaperChoice", "PaperFileTransfer"], "stage": "5", "kind": "surface"

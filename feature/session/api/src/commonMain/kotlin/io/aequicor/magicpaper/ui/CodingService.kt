@@ -45,6 +45,8 @@ interface CodingService {
     fun setSessionManuallyVerified(sessionId: String, responseId: String, verified: Boolean)
     fun deleteAllCodingSessions(projectId: String)
     fun archiveCodingSession(id: String)
+    /** Return to the list without restarting execution. */
+    fun restoreCodingSession(id: String)
     fun deleteCodingSession(id: String)
     suspend fun editMessage(sessionId: String, messageId: String, text: String): Result<Unit>
     suspend fun deleteMessage(sessionId: String, messageId: String): Result<Unit>

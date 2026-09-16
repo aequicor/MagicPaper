@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,6 +60,9 @@ import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.SidebarActions
 import io.aequicor.magicpaper.designsystem.PaperToolbarButton
 import io.aequicor.magicpaper.designsystem.PaperToolbarIcon
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /** Элемент единого списка боковой панели. */
 internal data class UnifiedSidebarItem(
@@ -141,7 +145,7 @@ internal fun rememberUnifiedItems(
     recencyTracker: SessionRecencyTracker,
 ): List<UnifiedSidebarItem> {
     val chatItems = remember(chatSessions) {
-        chatSessions.map { session ->
+        chatSessions.filterNot { it.archived }.map { session ->
             UnifiedSidebarItem(
                 id = session.id,
                 displayName = session.title,
@@ -239,7 +243,8 @@ internal fun rememberUnifiedItems(
                 if (organismId != null) {
                     val organism = coding.organisms[organismId]
                     // Зигота организма — корневой элемент; остальные участники — дети.
-                    organism?.zygoteId == item.session.id
+                    organism?.zygoteId == item.session.id ||
+                        sessionById[organism?.zygoteId]?.session?.archived == true
                 } else {
                     parent == null || sessionById[parent]?.session?.archived == true
                 }
@@ -311,6 +316,17 @@ internal fun UnifiedSidebar(
     modifier: Modifier = Modifier,
     recencyTracker: SessionRecencyTracker,
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var archivesOnly by rememberSaveable { mutableStateOf(false) }
+    val browsing = archivesOnly || query.isNotBlank()
+    val searchCoding = remember(coding.sessions) { coding.sessions.map { it.session to it.messages } }
+    val results by produceState<List<SessionSearchResult>?>(null, query, archivesOnly, chatSessions, searchCoding, coding.projects) {
+        value = null
+        if (browsing) {
+            if (query.isNotBlank()) delay(150)
+            value = withContext(Dispatchers.Default) { searchSessions(chatSessions, searchCoding, coding.projects, query, archivesOnly) }
+        }
+    }
     val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding, recencyTracker)
     val codingByProject = items.filter { it.isCoding }.groupBy { it.projectId }
     val projectOrder = coding.projects.map { it.id }
@@ -326,8 +342,17 @@ internal fun UnifiedSidebar(
         ) {
             PaperText("Сессии", role = PaperTextRole.TITLE)
         }
+        SessionBrowserControls(query, { query = it }, archivesOnly,
+            chatSessions.count { it.archived } + coding.sessions.count { it.session.archived },
+            { archivesOnly = !archivesOnly })
         PaperDivider()
-        LazyColumn(
+        if (browsing) {
+            SessionBrowserResults(results.orEmpty(), archivesOnly, query.isNotBlank(), selectedId, viewingCoding,
+                onSelect = { vm.selectUnifiedSession(it.id, it.isCoding) },
+                onRestore = { vm.restoreSession(it.id, it.isCoding) },
+                modifier = Modifier.weight(1f), loading = results == null)
+        }
+        if (!browsing) LazyColumn(
             state = rememberLazyListState(),
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
@@ -441,7 +466,7 @@ internal fun UnifiedSidebar(
                         selected = selected,
                         onClick = { vm.selectUnifiedSession(item.id, false) },
                         onDelete = { vm.deleteSession(item.id) },
-                        onArchive = null,
+                        onArchive = { vm.archiveChatSession(item.id) },
                         onImmunityClick = null,
                     )
                 }

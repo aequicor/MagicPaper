@@ -5,6 +5,26 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class SessionOrganismServiceTest {
+    @Test fun archiveVisibilityAndReadinessSurviveRepeatedProjectionWithoutLaunchingWork() = runTest {
+        val f = SessionOrganismTestFixture(); f.initialize()
+        val id = f.root.organismId!!
+        val root = f.store.get(id).sessions.getValue(f.root.id)
+        f.store.observe(id, root.id, root.generation, SessionObservedState.COMPLETED)
+        var starts = 0
+        f.service.startChild = { _, _ -> starts++ }
+        f.projects.updateSession(f.project.id, root.id) { it.copy(archiveReadySince = 100) }
+        val session = f.projects.sessions(f.project.id).first { it.id == root.id }
+        f.service.setArchiveVisibility(session, true)
+        f.service.project(f.store.get(id))
+        assertTrue(f.projects.sessions(f.project.id).first { it.id == root.id }.archived)
+        f.service.setArchiveVisibility(session, false)
+        val restored = f.projects.sessions(f.project.id).first { it.id == root.id }
+        assertFalse(restored.archived)
+        assertEquals(100L, restored.archiveReadySince)
+        assertEquals(root.generation, restored.runtimeGeneration)
+        assertEquals(0, starts)
+    }
+
     @Test fun deliveryAppearsAtBothEndsWithSessionOriginAndSurvivesReplay() = runTest {
         val f = SessionOrganismTestFixture(); f.initialize()
         f.service.startChild = { _, _ -> }

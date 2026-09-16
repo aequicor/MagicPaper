@@ -54,6 +54,21 @@ class SessionOrganismStore(private val storage: KeyValueStore, private val clock
 
     suspend fun get(id: String): SessionOrganism = lock.withLock { read(id).also { state.value += id to it } }
 
+    /** List visibility only: never creates a generation, changes intent or resumes a task. */
+    suspend fun setArchiveVisibility(id: String, sessionId: String, generation: Long, archived: Boolean,
+        stillReady: () -> Boolean = { true }): SessionOrganism = lock.withLock {
+        val old = read(id)
+        val node = old.sessions.getValue(sessionId)
+        if (old.deletedAt != null || sessionId in old.historyDeletedIds || node.generation != generation ||
+            node.archived == archived) return@withLock old
+        if (archived && (!stillReady() || !node.settled && node.task != null || node.observed in setOf(
+                SessionObservedState.RUNNING, SessionObservedState.STOPPING, SessionObservedState.UNKNOWN))) return@withLock old
+        commit(old.copy(version = old.version + 1,
+            sessions = old.sessions + (sessionId to node.copy(archived = archived, version = node.version + 1)),
+            audit = old.audit + SessionAuditEvent(Id.new(), "APPLICATION", if (archived) "AUTO_ARCHIVE" else "UNARCHIVE",
+                setOf(sessionId), "Изменена видимость сессии в списке", clock())))
+    }
+
     private fun Int?.allows(value: Int): Boolean = this == null || value <= this
     private fun Int?.hasRoom(occupied: Int): Boolean = this == null || occupied < this
     private fun String.takeConfigured(limit: Int?): String = if (limit == null) this else take(limit)

@@ -56,6 +56,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.serialization.encodeToString
@@ -82,6 +85,8 @@ class DefaultCodingService(
     private val draftBlobs: io.aequicor.magicpaper.data.storage.DraftBlobStore = io.aequicor.magicpaper.data.storage.InMemoryDraftBlobStore(),
     private val taskWorktrees: TaskWorktreeService? = null,
     private val removePluginDrafts: suspend (projectId: String, planIds: Set<String>?) -> Unit = { _, _ -> },
+    private val archiveClock: () -> Long = Id::now,
+    private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
 ) : CodingService {
     private val _state = MutableStateFlow(CodingState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -404,6 +409,61 @@ class DefaultCodingService(
         restoreCodingRuns(projects)
         startPendingImmunityDiagnostics()
         _state.value.coding.sessions.forEach { startQueuedPrompt(it.session.id) }
+        observeAutoArchive()
+    }
+
+    private fun observeAutoArchive() {
+        val repo = codingProjects ?: return
+        scope.launch {
+            combine(combine(state, codingJobs) { current, jobs -> current.coding.sessions.map {
+                it.session to (current.coding.readyForArchive(it) && it.session.id !in jobs)
+            } }
+                .distinctUntilChanged(), archiveTicks.onStart { emit(Unit) }) { sessions, _ -> sessions }
+                .collect { sessions ->
+                    for ((snapshot, _) in sessions) {
+                        if (closing) return@collect
+                        try {
+                            val ui = state.value.coding.sessions.firstOrNull { it.session.id == snapshot.id } ?: continue
+                            val ready = readyForAutoArchive(ui.session.id)
+                            val now = archiveClock()
+                            val since = ui.session.archiveReadySince
+                            if ((!ready && since == null) || ui.session.archived) continue
+                            val due = ready && since != null && now - since >= CODING_ARCHIVE_DELAY
+                            if (ready && since != null && !due) continue
+                            val saved = repo.updateSession(snapshot.projectId, snapshot.id) { latest ->
+                                if (latest != ui.session || readyForAutoArchive(latest.id) != ready) latest
+                                else if (!ready) latest.copy(archiveReadySince = null)
+                                else if (since == null) latest.copy(archiveReadySince = now)
+                                else if (due && latest.organismId == null) latest.copy(archived = true)
+                                else latest
+                            }
+                            if (due && saved == ui.session && saved.organismId != null &&
+                                readyForAutoArchive(saved.id)) {
+                                val organisms = planningChat?.organisms ?: continue
+                                organisms.setArchiveVisibility(saved, true) { readyForAutoArchive(saved.id) }
+                            }
+                            val committed = if (saved.organismId != null && due)
+                                repo.sessions(saved.projectId).firstOrNull { it.id == saved.id } ?: continue else saved
+                            _state.update { current -> current.copy(coding = current.coding.copy(sessions = current.coding.sessions.map {
+                                if (it.session == ui.session) it.copy(session = committed) else it
+                            })) }
+                            if (committed.archived && !ui.session.archived) {
+                                AppLog.info("coding", "session.auto-archived", mapOf("sessionId" to saved.id))
+                                refreshProjectStatus(saved.projectId)
+                            }
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            AppLog.error("coding", "session.auto-archive.failed", failure, mapOf("sessionId" to snapshot.id))
+                            _state.update { it.copy(notice = "Не удалось архивировать сессию. Повторная попытка будет выполнена автоматически.") }
+                        }
+                    }
+                }
+        }
+    }
+    private fun readyForAutoArchive(id: String): Boolean {
+        val coding = state.value.coding
+        val item = coding.sessions.firstOrNull { it.session.id == id } ?: return false
+        return id !in codingJobs.value && id !in changingHistory && coding.readyForArchive(item)
     }
     private fun observeRuntime() {
         // Status recency belongs to the durable session, not to the Compose lifetime.
@@ -1165,6 +1225,31 @@ class DefaultCodingService(
                 ))
             }
             refreshProjectStatus(target.session.projectId)
+        }
+    }
+
+    override fun restoreCodingSession(id: String) {
+        val repo = codingProjects ?: return
+        val target = state.value.coding.sessions.firstOrNull { it.session.id == id }?.session ?: return
+        scope.launch {
+            try {
+                var saved = repo.updateSession(target.projectId, id) { latest ->
+                    latest.copy(archiveReadySince = archiveClock(), archived = if (latest.organismId == null) false else latest.archived)
+                }
+                if (saved.organismId != null) {
+                    requireNotNull(planningChat?.organisms).setArchiveVisibility(saved, false)
+                    saved = repo.sessions(saved.projectId).firstOrNull { it.id == id } ?: return@launch
+                }
+                _state.update { current -> current.copy(coding = current.coding.copy(sessions = current.coding.sessions.map {
+                    if (it.session.id == id) it.copy(session = saved) else it
+                })) }
+                refreshProjectStatus(saved.projectId)
+                AppLog.info("coding", "session.unarchived", mapOf("sessionId" to id))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "session.unarchive.failed", failure, mapOf("sessionId" to id))
+                _state.update { it.copy(notice = "Не удалось разархивировать сессию. Повторите попытку.") }
+            }
         }
     }
 

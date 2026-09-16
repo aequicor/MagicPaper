@@ -41,6 +41,7 @@ kotlin {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.ui)
+            implementation(libs.compose.uiToolingPreview)
             implementation(libs.kotlinx.serializationJson)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.coroutinesCore)

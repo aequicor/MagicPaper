@@ -366,6 +366,11 @@ class SessionOrganismService(
         project(store.restoreByUser(organism.id, session.id, Id.new(), settings.load().planningRules.snapshot(), sourceSnapshot(project)))
     }
 
+    suspend fun setArchiveVisibility(session: CodingSession, archived: Boolean, stillReady: () -> Boolean = { true }) {
+        val organismId = requireNotNull(session.organismId)
+        project(store.setArchiveVisibility(organismId, session.id, session.runtimeGeneration, archived, stillReady))
+    }
+
     /** Invoked only by the application's explicit rename control, never by a model tool adapter. */
     suspend fun renameByUser(session: CodingSession, name: String, operationId: String = Id.new()) {
         val organism = ensure(session)
@@ -731,6 +736,9 @@ class SessionOrganismService(
             if (old != projected) {
                 if (old != null && old.interactionMode != projected.interactionMode)
                     projects.updateSession(organism.projectId, projected.id) { projected }
+                else if (old != null) projects.updateSession(organism.projectId, projected.id) { latest ->
+                    projected.copy(archiveReadySince = latest.archiveReadySince)
+                }
                 else projects.saveSession(projected)
             }
         }

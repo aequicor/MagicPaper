@@ -11,6 +11,48 @@ import kotlinx.serialization.json.Json
 import kotlin.test.*
 
 class SessionOrganismStoreTest {
+    @Test fun manuallyArchivedRootCanAcceptANewExplicitRequestAfterUnarchiving() = runTest {
+        val f = Fixture(); f.initialize()
+        val id = f.organism.id
+        val stopping = f.store.requestUserStop(id, "root", "manual-archive", archive = true)
+        val affected = stopping.subtree("root")
+        for (sessionId in affected) {
+            val node = stopping.sessions.getValue(sessionId)
+            f.store.observe(id, sessionId, node.generation, SessionObservedState.STOPPED)
+        }
+        val archived = f.store.finishStop(id, affected)
+        val root = archived.sessions.getValue("root")
+        assertTrue(root.archived)
+        val restored = f.store.setArchiveVisibility(id, "root", root.generation, false)
+        assertFalse(restored.sessions.getValue("root").acceptsWork)
+        assertEquals(root.generation, restored.sessions.getValue("root").generation)
+        val requested = f.store.prepareUserTurn(id, "root", "new-request")
+        assertTrue(requested.sessions.getValue("root").acceptsWork)
+        assertEquals(root.generation + 1, requested.sessions.getValue("root").generation)
+    }
+
+    @Test fun archiveVisibilityRejectsLiveAndStaleRunsAndRestoresWithoutReplayingWork() = runTest {
+        val f = Fixture(); f.initialize()
+        val id = f.organism.id
+        val running = f.store.get(id).sessions.getValue("root")
+        assertFalse(f.store.setArchiveVisibility(id, "root", running.generation, true).sessions.getValue("root").archived)
+        f.store.observe(id, "root", running.generation, SessionObservedState.COMPLETED)
+        assertFalse(f.store.setArchiveVisibility(id, "root", running.generation, true) { false }.sessions.getValue("root").archived)
+        assertFalse(f.store.setArchiveVisibility(id, "root", running.generation - 1, true).sessions.getValue("root").archived)
+        val archived = f.store.setArchiveVisibility(id, "root", running.generation, true)
+        assertTrue(archived.sessions.getValue("root").archived)
+        val reopened = SessionOrganismStore(f.storage)
+        assertTrue(reopened.get(id).sessions.getValue("root").archived)
+        val restored = reopened.setArchiveVisibility(id, "root", running.generation, false)
+        val node = restored.sessions.getValue("root")
+        assertFalse(node.archived)
+        assertEquals(running.generation, node.generation)
+        assertEquals(SessionObservedState.COMPLETED, node.observed)
+        assertFalse(node.acceptsWork)
+        assertEquals(archived.outbox, restored.outbox)
+        assertEquals(archived.results, restored.results)
+    }
+
     private class FaultStore : KeyValueStore by InMemoryKeyValueStore() {
         private val backing = InMemoryKeyValueStore()
         var failure: String? = null
