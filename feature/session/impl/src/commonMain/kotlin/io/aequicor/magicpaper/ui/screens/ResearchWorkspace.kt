@@ -62,6 +62,8 @@ internal fun ResearchWorkspace(vm: DefaultChatComponent, state: ChatState, conte
             state.current?.id?.let { sessionId -> edit { vm.forkSession(sessionId).map {} } }
         },
         onAddWebsite = { url -> vm.addWebsite(rootId(), url) },
+        onSearchResources = vm::searchResources,
+        onAddSearchResult = { hit -> vm.addSearchResult(rootId(), hit) },
         onPickFiles = {
             val id = rootId()
             vm.pickAttachments(0) { files -> edit { vm.addResources(id, files) } }
@@ -88,6 +90,8 @@ internal fun ResearchWorkspaceContent(
     onSelectQuestion: (String) -> Unit = {},
     onForkQuestion: (() -> Unit)? = null,
     onAddWebsite: suspend (String) -> Result<Unit> = { Result.success(Unit) },
+    onSearchResources: suspend (String) -> Result<List<SearchHit>> = { Result.success(emptyList()) },
+    onAddSearchResult: suspend (SearchHit) -> Result<Unit> = { Result.success(Unit) },
     onPickFiles: () -> Unit = {},
     onRemoveResource: (String) -> Unit = {},
     content: @Composable () -> Unit,
@@ -173,6 +177,8 @@ internal fun ResearchWorkspaceContent(
                             showLinkField = sourceLinkEditorVisible,
                             onShowLinkFieldChange = { sourceLinkEditorVisible = it },
                             onAddWebsite = onAddWebsite,
+                            onSearchResources = onSearchResources,
+                            onAddSearchResult = onAddSearchResult,
                             onPickFiles = onPickFiles,
                             onRemoveResource = onRemoveResource,
                             onCollapse = { onSourcesExpandedChange(false) },
@@ -231,6 +237,8 @@ internal fun ResearchWorkspaceContent(
                     showLinkField = sourceLinkEditorVisible,
                     onShowLinkFieldChange = { sourceLinkEditorVisible = it },
                     onAddWebsite = onAddWebsite,
+                    onSearchResources = onSearchResources,
+                    onAddSearchResult = onAddSearchResult,
                     onPickFiles = onPickFiles,
                     onRemoveResource = onRemoveResource,
                     onCollapse = { modalPanel = null },
@@ -363,6 +371,8 @@ private fun ResearchSourcesPane(
     showLinkField: Boolean,
     onShowLinkFieldChange: (Boolean) -> Unit,
     onAddWebsite: suspend (String) -> Result<Unit>,
+    onSearchResources: suspend (String) -> Result<List<SearchHit>>,
+    onAddSearchResult: suspend (SearchHit) -> Result<Unit>,
     onPickFiles: () -> Unit,
     onRemoveResource: (String) -> Unit,
     onCollapse: () -> Unit,
@@ -373,6 +383,10 @@ private fun ResearchSourcesPane(
     var url by remember(state.notebook?.id) { mutableStateOf("") }
     var error by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
+    var searchQuery by remember(state.notebook?.id) { mutableStateOf("") }
+    var searchResults by remember(state.notebook?.id) { mutableStateOf<List<SearchHit>>(emptyList()) }
+    var searching by remember { mutableStateOf(false) }
+    var searchError by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
     LaunchedEffect(resources.map { it.id }) {
@@ -385,6 +399,68 @@ private fun ResearchSourcesPane(
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         PaperText("Общие для всех вопросов", role = PaperTextRole.LABEL,
             color = LocalPaperColors.current.secondaryText)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            PaperField(
+                searchQuery,
+                { searchQuery = it; searchResults = emptyList(); searchError = null },
+                "Поиск источников",
+                Modifier.weight(1f),
+                enabled = !searching && !saving,
+                errorMessage = searchError,
+            )
+            PaperButton(
+                if (searching) "Ищу…" else "Найти",
+                onClick = {
+                    val captured = searchQuery.trim()
+                    if (captured.isEmpty()) searchError = "Введите поисковый запрос."
+                    else {
+                        searching = true
+                        scope.launch {
+                            try {
+                                onSearchResources(captured).fold(
+                                    onSuccess = {
+                                        searchResults = it
+                                        searchError = if (it.isEmpty()) "Ничего не найдено." else null
+                                    },
+                                    onFailure = { searchError = it.message ?: "Не удалось выполнить поиск." },
+                                )
+                            } finally { searching = false }
+                        }
+                    }
+                },
+                enabled = !searching && !saving && searchQuery.isNotBlank(),
+                busy = searching,
+            )
+        }
+        if (searchResults.isNotEmpty()) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 180.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(searchResults, key = { "search:${it.url}" }) { hit ->
+                    val added = resources.any { it.url == hit.url }
+                    PaperListRow(
+                        label = hit.title.ifBlank { hit.url },
+                        secondary = hit.url.substringAfter("://").substringBefore('/').removePrefix("www."),
+                        enabled = !saving && !adding,
+                        onClick = {},
+                        trailing = {
+                            PaperButton(
+                                if (added) "Добавлен" else "Добавить",
+                                onClick = {
+                                    adding = true
+                                    scope.launch {
+                                        try { error = onAddSearchResult(hit).exceptionOrNull()?.message }
+                                        finally { adding = false }
+                                    }
+                                },
+                                kind = PaperButtonKind.QUIET,
+                                enabled = !added && !saving && !adding,
+                            )
+                        },
+                    )
+                }
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PaperButton("Ссылка", { onShowLinkFieldChange(!showLinkField) }, Modifier.weight(1f),
                 kind = PaperButtonKind.QUIET, accessibilityLabel = "Добавить ссылку")
@@ -456,7 +532,7 @@ private fun ResearchSourcesPane(
                 Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     PaperDivider()
                     Spacer(Modifier.height(2.dp))
-                    PaperText("Цитата $index", role = PaperTextRole.LABEL,
+                    PaperText("Источник $index", role = PaperTextRole.LABEL,
                         color = LocalPaperColors.current.action)
                     PaperText(selected.title, role = PaperTextRole.TITLE)
                     PaperPanel(kind = PaperSurfaceKind.SELECTED) {

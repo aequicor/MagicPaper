@@ -84,8 +84,10 @@ class ResearchWorkspaceRenderTest {
                     if (case.width >= 1180) {
                         assertTrue(scene.text("Вопросы").boundsInRoot.left >= 0)
                         assertTrue(scene.text("Источники").boundsInRoot.right <= case.width)
+                        assertTrue(scene.text("Поиск источников").boundsInRoot.width > 0)
+                        if (!empty) assertTrue(scene.text("Источники ответа").boundsInRoot.width > 0)
                     } else {
-                        for (label in listOf("Вопросы (${if (empty) 1 else 3})", "Источники (${if (empty) 0 else 4})")) {
+                        for (label in listOf("Вопросы (${if (empty) 1 else 3})", "Источники (${if (empty) 0 else 2})")) {
                             val bounds = scene.action(label).boundsInRoot
                             assertTrue(bounds.left >= 0 && bounds.right <= case.width, "$label clipped in ${case.name}")
                         }

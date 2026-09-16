@@ -100,7 +100,8 @@ class DefaultChatService(
                 val sites = history.flatMap { it.sources }.mapNotNull { hit -> researchUrl(hit.url)?.let {
                     if (it in original.excludedResourceUrls) null else ResearchResource(Id.new(), hit.title, it, discovered = true, snippet = hit.snippet)
                 } }
-                original.copy(resources = (original.resources + files + sites).distinctBy { it.url.ifEmpty { it.id } },
+                original.copy(resources = (original.resources + files).distinctBy { it.url.ifEmpty { it.id } },
+                    questionResources = (original.questionResources + sites).distinctBy { it.url.ifEmpty { it.id } },
                     researchResourcesInitialized = true).also { chats.save(it) }
             }
             if (session.modelSelection != null) session else {
@@ -309,6 +310,40 @@ class DefaultChatService(
         }
     }
 
+    override suspend fun searchResources(query: String): Result<List<SearchHit>> {
+        if (query.isBlank()) return Result.failure(IllegalArgumentException("Введите поисковый запрос."))
+        val search = researchSearch ?: return Result.failure(IllegalStateException("Поиск не настроен."))
+        val settings = state.value.settings
+        if (!search.isConfigured(settings)) return Result.failure(IllegalStateException("Поиск не настроен."))
+        return try {
+            val result = withTimeout(15_000) { search.searchWithDiagnostics(query.trim(), settings, limit = 8) }
+            if (result.hits.isEmpty() && result.issues.isNotEmpty()) {
+                Result.failure(IllegalStateException("Поиск недоступен. Повторите попытку."))
+            } else Result.success(result.hits.mapNotNull { hit -> researchUrl(hit.url)?.let { hit.copy(url = it) } }
+                .distinctBy { it.url })
+        } catch (_: TimeoutCancellationException) {
+            Result.failure(IllegalStateException("Поиск не ответил. Повторите попытку."))
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("chat", "research.source.search.failed", failure)
+            Result.failure(IllegalStateException("Поиск недоступен. Повторите попытку."))
+        }
+    }
+
+    override suspend fun addSearchResult(chatId: String, hit: SearchHit): Result<Unit> {
+        val normalized = researchUrl(hit.url) ?: return Result.failure(IllegalArgumentException("Источник содержит неверную ссылку."))
+        return researchChange("source.search-result.add") {
+            check(chatId !in deletingSessions)
+            pendingCreations[chatId]?.await()
+            updateChat(chatId) { root ->
+                require(root.researchParentId == null)
+                val resource = ResearchResource(Id.new(), hit.title.ifBlank { normalized }, normalized, snippet = hit.snippet)
+                root.copy(resources = if (root.resources.any { it.url == normalized }) root.resources else root.resources + resource,
+                    excludedResourceUrls = root.excludedResourceUrls - normalized)
+            }
+        }
+    }
+
     override suspend fun addResources(chatId: String, attachments: List<Attachment>): Result<Unit> = researchChange("files.add") {
         check(chatId !in deletingSessions)
         pendingCreations[chatId]?.await()
@@ -334,14 +369,14 @@ class DefaultChatService(
         }
     }
 
-    private suspend fun rememberSources(chatId: String, sources: List<SearchHit>) {
-        if (sources.isEmpty() || chatId in deletingSessions) return
-        updateChat(chatId) { root ->
+    private suspend fun rememberQuestionSources(questionId: String, sources: List<SearchHit>) {
+        if (sources.isEmpty() || questionId in deletingSessions) return
+        updateChat(questionId) { question ->
             val additions = sources.mapNotNull { hit -> researchUrl(hit.url)?.let { url ->
-                if (url in root.excludedResourceUrls) null else ResearchResource(Id.new(), hit.title.ifBlank { url }, url,
-                    discovered = true, snippet = hit.snippet)
+                ResearchResource(Id.new(), hit.title.ifBlank { url }, url, discovered = true, snippet = hit.snippet)
             } }
-            root.copy(resources = (root.resources + additions).distinctBy { if (it.url.isNotEmpty()) it.url else it.id })
+            question.copy(questionResources = (question.questionResources + additions)
+                .distinctBy { if (it.url.isNotEmpty()) it.url else it.id })
         }
     }
 
@@ -615,17 +650,25 @@ class DefaultChatService(
                 val answer = if (layoutRequest != null && layoutAgent != null) {
                     layoutAgent.answer(layoutRequest.project, session.id, userMessage.id, trimmed, historyBefore, requestProfile, visible)
                 } else {
-                    if (resumed == null) discoverResearchSources(session.researchChatId, trimmed, settings, operationFields)
+                    val initialSources = if (resumed == null) {
+                        discoverResearchSources(session.id, trimmed, settings, operationFields)
+                    } else checkNotNull(chats.session(session.id)).questionResources.mapNotNull { resource ->
+                        resource.url.takeIf { it.isNotEmpty() }?.let {
+                            SearchHit(resource.title, it, resource.snippet)
+                        }
+                    }
                     val shared = checkNotNull(chats.session(session.researchChatId)).resources
-                    val researchAttachments = (visible + shared.mapNotNull { it.attachment }).distinctBy { it.id }
+                    val questionResources = checkNotNull(chats.session(session.id)).questionResources
+                    val availableResources = (shared + questionResources).distinctBy { if (it.url.isNotEmpty()) it.url else it.id }
+                    val researchAttachments = (visible + availableResources.mapNotNull { it.attachment }).distinctBy { it.id }
                     val recorder = CodingRunRecorder()
                     var finished = false
-                    var sources = emptyList<SearchHit>()
+                    var sources = initialSources
                     var outputAttachments = emptyList<Attachment>()
                     val recovering = resumed != null && session.pendingRun?.messageId == resumed.messageId
                     val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                         "результаты команд и состояние файлов; не повторяй завершённые действия.\n\n" + trimmed else trimmed
-                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess, resources = shared), prompt, requestProfile, researchAttachments).collect { event ->
+                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess, resources = availableResources), prompt, requestProfile, researchAttachments).collect { event ->
                         if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                             updateChat(session.id) { it.copy(nativeSessionId = event.sessionId) }
                         }
@@ -633,7 +676,7 @@ class DefaultChatService(
                         val found = event.researchSources()
                         if (found.isNotEmpty()) {
                             sources = (sources + found).distinctBy { it.url }
-                            rememberSources(session.researchChatId, found)
+                            rememberQuestionSources(session.id, found)
                         }
                         if (event is CodingEvent.FinalText) { outputAttachments = event.attachments }
                         if (event is CodingEvent.Finished) finished = true
@@ -668,16 +711,17 @@ class DefaultChatService(
         job.start()
     }
 
-    private suspend fun discoverResearchSources(chatId: String, query: String, settings: AppSettings,
-        fields: Map<String, String>) {
-        val search = researchSearch ?: return
+    private suspend fun discoverResearchSources(questionId: String, query: String, settings: AppSettings,
+        fields: Map<String, String>): List<SearchHit> {
+        val search = researchSearch ?: return emptyList()
         try {
             val result = withTimeout(15_000) { search.searchWithDiagnostics(query, settings, limit = 5) }
-            if (result.hits.isNotEmpty()) rememberSources(chatId, result.hits)
+            if (result.hits.isNotEmpty()) rememberQuestionSources(questionId, result.hits)
             if (result.hits.isEmpty() && result.issues.isNotEmpty()) {
                 AppLog.info("chat", "research.search.unavailable", fields + mapOf("issueCount" to result.issues.size.toString()))
                 _state.update { it.copy(notice = "Поиск недоступен. Ответ будет подготовлен без новых источников.") }
             }
+            return result.hits
         } catch (_: TimeoutCancellationException) {
             AppLog.info("chat", "research.search.timeout", fields)
             _state.update { it.copy(notice = "Поиск не ответил. Исследование продолжится по доступным источникам.") }
@@ -686,6 +730,7 @@ class DefaultChatService(
             AppLog.error("chat", "research.search.failed", failure, fields)
             _state.update { it.copy(notice = "Поиск не ответил. Исследование продолжится по доступным источникам.") }
         }
+        return emptyList()
     }
 
     // ---- Настройки ---------------------------------------------------------

@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.ChatMessage
@@ -68,6 +69,10 @@ import io.aequicor.magicpaper.designsystem.paperResearchMessage
 import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.PaperResearchReadingMeasure
 import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
+import io.aequicor.magicpaper.designsystem.PaperPanel
+import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
+import io.aequicor.magicpaper.designsystem.PaperLink
+import io.aequicor.magicpaper.logging.AppLog
 
 /** Research workspace with shared sources and independently resumable questions. */
 @Composable
@@ -78,7 +83,6 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     ResearchWorkspace(vm, state) {
         PaperResearchReading {
             MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
-                researchSourceCount = state.notebook?.resources?.size ?: 0,
                 onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
                 onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
                 onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
@@ -108,7 +112,6 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
 
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
-    researchSourceCount: Int = 0,
     pins: List<RequestPinGroup> = emptyList(),
     onEdit: (suspend (String, String) -> Result<Unit>)? = null,
     onDelete: (suspend (String) -> Result<Unit>)? = null,
@@ -172,7 +175,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                     val message = fragment.message
                     PaperChatScrollItem(scroll, fragment.key) {
                         MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
-                            fragment = fragment, researchSourceCount = researchSourceCount, actions = { content ->
+                            fragment = fragment, actions = { content ->
                                 MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
                                     onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
                                     onDelete = onDelete?.let { action -> { action(message.id) } },
@@ -232,7 +235,6 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
 @Composable
 private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
     fragment: ChatMessageFragment = ChatMessageFragment(message),
-    researchSourceCount: Int = 0,
     actions: @Composable (@Composable () -> Unit) -> Unit = { it() }) {
     val isUser = message.role == ChatRole.USER
     Row(
@@ -254,8 +256,8 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 PaperBrandMark(Modifier.size(22.dp))
                                 PaperText("MagicPaper", role = PaperTextRole.LABEL)
-                                if (researchSourceCount > 0) PaperText(
-                                    "·  По ${researchSourceLabel(researchSourceCount)}",
+                                if (message.sources.isNotEmpty()) PaperText(
+                                    "·  ${message.sources.size} ${sourceFootnoteLabel(message.sources.size)}",
                                     role = PaperTextRole.CHROME,
                                     color = LocalPaperColors.current.secondaryText,
                                 )
@@ -266,6 +268,10 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                     if (fragment.parts != null) {
                         fragment.parts.Content(fragment.index)
                     } else if (message.text.isNotEmpty()) PaperText("Подготавливаю сообщение…", role = PaperTextRole.LABEL)
+                    if (!isUser && fragment.last && message.sources.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        ResearchSourceFootnotes(message)
+                    }
                     if (isUser && fragment.last) MessageAttachments(message.attachments)
                 }
             }
@@ -273,8 +279,38 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
     }
 }
 
-private fun researchSourceLabel(count: Int): String =
-    "$count ${if (count % 100 !in 11..14 && count % 10 == 1) "источнику" else "источникам"}"
+@Composable
+private fun ResearchSourceFootnotes(message: ChatMessage) {
+    val uriHandler = LocalUriHandler.current
+    val sources = remember(message.sources) { message.sources.distinctBy { it.url } }
+    PaperPanel(kind = PaperSurfaceKind.SUCCESS) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            PaperText("Источники ответа", role = PaperTextRole.LABEL)
+            sources.forEachIndexed { index, source ->
+                PaperLink("[${index + 1}] ${source.title.ifBlank { source.url }}", {
+                    try { uriHandler.openUri(source.url) }
+                    catch (failure: Exception) {
+                        AppLog.error("chat", "citation.open.failed", failure,
+                            mapOf("messageId" to message.id, "citationIndex" to (index + 1).toString()))
+                    }
+                })
+                if (source.snippet.isNotBlank()) PaperText(
+                    source.snippet,
+                    role = PaperTextRole.LABEL,
+                    color = LocalPaperColors.current.secondaryText,
+                )
+            }
+        }
+    }
+}
+
+private fun sourceFootnoteLabel(count: Int): String =
+    when {
+        count % 100 in 11..14 -> "сносок"
+        count % 10 == 1 -> "сноска"
+        count % 10 in 2..4 -> "сноски"
+        else -> "сносок"
+    }
 
 /** Чип текущей модели в композиции: тап открывает переключатель источника. */
 @Composable

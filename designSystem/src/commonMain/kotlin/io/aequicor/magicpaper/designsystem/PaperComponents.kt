@@ -248,6 +248,7 @@ public fun PaperSurface(
             PaperSurfaceKind.PANEL -> colors.surface
             PaperSurfaceKind.RAISED -> colors.raisedSurface
             PaperSurfaceKind.SELECTED -> colors.selected
+            PaperSurfaceKind.SUCCESS -> colors.successSurface
             PaperSurfaceKind.ERROR -> colors.errorSurface
         },
         shadowElevation = shadowElevation,

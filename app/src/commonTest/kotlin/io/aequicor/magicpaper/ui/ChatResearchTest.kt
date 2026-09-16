@@ -39,7 +39,7 @@ class ChatResearchTest {
             .also { it.start(); it.activate("first") }
     }
 
-    @Test fun searchResultsAreSharedBeforeTheNativeResearchStarts() = runTest {
+    @Test fun automaticSearchResultsStayWithQuestionAndBecomeAnswerFootnotes() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
         val runtime = Runtime()
@@ -54,10 +54,12 @@ class ChatResearchTest {
         try {
             service.send("android разработка")
             runCurrent()
-            assertEquals(hit.url, service.state.value.notebook?.resources?.single()?.url)
+            assertTrue(service.state.value.notebook?.resources.orEmpty().isEmpty())
+            assertEquals(hit.url, service.state.value.current?.questionResources?.single()?.url)
             assertEquals(hit.url, runtime.calls.single().session.resources.single().url)
             runtime.finish("first", "Обзор")
             advanceUntilIdle()
+            assertEquals(listOf(hit), service.state.value.current?.messages?.last()?.sources)
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
@@ -129,7 +131,7 @@ class ChatResearchTest {
         } finally { restored.close(); Dispatchers.resetMain() }
     }
 
-    @Test fun questionsShareSourcesButKeepDraftsHistoryAndLateRepliesIndependent() = runTest {
+    @Test fun questionsShareExplicitSourcesButKeepDiscoveredSourcesDraftsAndRepliesIndependent() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
         val runtime = Runtime()
@@ -143,7 +145,9 @@ class ChatResearchTest {
             runtime.events.getValue("first").send(CodingEvent.ToolFinished("web.search", false,
                 resultPreview = """[{"title":"Найденный отчёт","url":"https://example.org/found","snippet":"Evidence"}]"""))
             runCurrent()
-            assertEquals(3, service.state.value.notebook?.resources?.size, "Search results appear before the model finishes")
+            assertEquals(2, service.state.value.notebook?.resources?.size)
+            assertEquals(1, service.state.value.current?.questionResources?.size,
+                "Discovered resources belong to the active question")
             service.composerDraft("first").update(ComposerDraftData("Уточнение первого"))
             assertTrue(service.newQuestion().isSuccess)
             val second = service.state.value.current!!.id
@@ -153,7 +157,7 @@ class ChatResearchTest {
             service.composerDraft(second).update(ComposerDraftData("Второй вопрос")); runCurrent()
             service.send("Второй вопрос"); runCurrent()
             assertEquals(listOf(file), runtime.calls.last().attachments)
-            assertEquals(3, runtime.calls.last().session.resources.size)
+            assertEquals(2, runtime.calls.last().session.resources.size)
             assertEquals(listOf("Второй вопрос"), runtime.calls.last().session.messages.map { it.text })
             runtime.finish("first", "Ответ первому"); runCurrent()
             assertEquals(second, service.state.value.current?.id)
@@ -169,7 +173,8 @@ class ChatResearchTest {
             val reopened = service(f, runtime, JsonChatRepository(f.kv, f.json))
             try {
                 assertEquals(second, reopened.state.value.current?.id)
-                assertEquals(3, reopened.state.value.notebook?.resources?.size)
+                assertEquals(2, reopened.state.value.notebook?.resources?.size)
+                assertEquals(1, reopened.state.value.questions.first { it.id == "first" }.questionResources.size)
                 assertEquals(2, runtime.calls.size, "Restoration never runs a question")
             } finally { reopened.close() }
         } finally { if (!closed) service.close(); Dispatchers.resetMain() }
@@ -193,7 +198,7 @@ class ChatResearchTest {
             advanceUntilIdle()
             assertTrue(service.state.value.notebook!!.resources.isEmpty())
             service.send("Уточни вывод"); runCurrent()
-            assertTrue(runtime.calls.last().session.resources.isEmpty())
+            assertEquals(listOf(source.url), runtime.calls.last().session.resources.map { it.url })
             runtime.finish("first", "Уточнение"); advanceUntilIdle()
             service.close()
             closed = true
@@ -204,6 +209,39 @@ class ChatResearchTest {
                 assertEquals(1, reopened.state.value.notebook?.resources?.size)
             } finally { reopened.close() }
         } finally { if (!closed) service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun resourceSearchAddsOnlySelectedResultToSharedLibrary() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val hits = listOf(
+            SearchHit("Первый", "https://example.org/one", "One"),
+            SearchHit("Второй", "https://example.org/two", "Two"),
+        )
+        val search = object : SearchEngine {
+            override val provider = SearchProvider.WIKIPEDIA
+            override val displayName = "Fixture"
+            override fun isConfigured(settings: AppSettings) = true
+            override suspend fun search(query: String, settings: AppSettings, limit: Int) = hits
+        }
+        val service = service(f, runtime, search = search)
+        try {
+            assertEquals(hits, service.searchResources("выбор источника").getOrThrow())
+            assertTrue(service.state.value.notebook?.resources.orEmpty().isEmpty())
+            assertTrue(service.addSearchResult("first", hits[1]).isSuccess)
+            val added = service.state.value.notebook?.resources?.single()
+            assertEquals(hits[1].title, added?.title)
+            assertEquals(hits[1].url, added?.url)
+
+            assertTrue(service.newQuestion().isSuccess)
+            val second = checkNotNull(service.state.value.current).id
+            service.send("Вопрос с общим источником")
+            runCurrent()
+            assertTrue(hits[1].url in runtime.calls.single { it.session.id == second }.session.resources.map { it.url })
+            runtime.finish(second, "Ответ")
+            advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
     }
 
     @Test fun failedSourceWritePreservesLibraryAndReportsFailure() = runTest {

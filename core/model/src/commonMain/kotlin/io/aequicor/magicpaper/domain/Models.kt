@@ -51,7 +51,10 @@ data class ChatSession(
     /** Questions retain their existing execution/draft identities; the root owns shared resources. */
     val researchParentId: String? = null,
     val selectedQuestionId: String? = null,
+    /** Resources explicitly added to the notebook and available to every question. */
     val resources: List<ResearchResource> = emptyList(),
+    /** Resources discovered while answering only this question; rendered as answer citations. */
+    val questionResources: List<ResearchResource> = emptyList(),
     /** Explicit removals must survive late search results and reopening history. */
     val excludedResourceUrls: Set<String> = emptySet(),
     val researchResourcesInitialized: Boolean = false,

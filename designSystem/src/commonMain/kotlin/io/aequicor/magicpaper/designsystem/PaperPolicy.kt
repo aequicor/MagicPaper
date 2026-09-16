@@ -52,7 +52,7 @@ public enum class PaperControlState { NORMAL, HOVER, PRESSED, FOCUSED, DISABLED,
 
 public enum class PaperButtonKind { PRIMARY, SECONDARY, DESTRUCTIVE, QUIET }
 public enum class PaperTextRole { DISPLAY, HEADLINE, TITLE, BODY, LABEL, CODE, CHROME }
-public enum class PaperSurfaceKind { CANVAS, PANEL, RAISED, SELECTED, ERROR }
+public enum class PaperSurfaceKind { CANVAS, PANEL, RAISED, SELECTED, SUCCESS, ERROR }
 public enum class PaperProgressKind { LINEAR, CIRCULAR }
 
 /**

@@ -24,12 +24,12 @@ internal fun researchPreviewState(empty: Boolean = false, busy: Boolean = false)
                 "1. **Освойте Kotlin**\n   Разберитесь с типами, null-безопасностью и корутинами.\n\n" +
                 "2. **Создайте первый экран**\n   Соберите небольшой интерфейс в Jetpack Compose и научитесь управлять состоянием.\n\n" +
                 "3. **Соберите небольшое приложение**\n   Добавьте навигацию, локальное хранение и тесты.\n\n" +
-                "> **Первый проект**\n> Список задач: три экрана, хранение данных, навигация.", 2)),
+                "> **Первый проект**\n> Список задач: три экрана, хранение данных, навигация.", 2,
+                sources = listOf(
+                    SearchHit("Kotlin Documentation", "https://kotlinlang.org/docs/home.html", "Официальное руководство по языку Kotlin и корутинам."),
+                    SearchHit("Jetpack Compose", "https://developer.android.com/compose", "Документация по современному UI Android."),
+                ))),
         resources = if (empty) emptyList() else listOf(
-            ResearchResource("kotlin", "Kotlin Documentation", "https://kotlinlang.org/docs/home.html", discovered = true,
-                snippet = "Официальное руководство по языку Kotlin и корутинам."),
-            ResearchResource("compose", "Jetpack Compose", "https://developer.android.com/compose", discovered = true,
-                snippet = "Современный набор инструментов для создания интерфейсов Android."),
             ResearchResource("architecture", "Guide to app architecture", "https://developer.android.com/topic/architecture", discovered = true,
                 snippet = "Рекомендации Android по слоям, состоянию и потоку данных."),
             ResearchResource("plan", "План обучения.pdf", attachment =
@@ -73,7 +73,7 @@ internal fun ResearchWorkspacePreview(
                     onNewQuestion = onNewQuestion, onForkQuestion = {}, onPickFiles = onPickFiles) {
                     PaperResearchReading {
                         MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
-                            researchSourceCount = state.notebook?.resources?.size ?: 0, footer = {
+                            footer = {
                             Composer(enabled = true, busy = busy, session = state.current,
                                 profiles = emptyList(), activeProfileId = "", onSend = { _, _ -> },
                                 onOpenSwitcher = {}, onPickAttachments = { _, _ -> })
