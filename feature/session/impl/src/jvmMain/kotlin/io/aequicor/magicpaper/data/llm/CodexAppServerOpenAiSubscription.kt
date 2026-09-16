@@ -24,6 +24,7 @@ import io.aequicor.magicpaper.domain.OpenAiSubscriptionService
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.ReasoningEffort
 import io.aequicor.magicpaper.domain.decodeText
+import io.aequicor.magicpaper.logging.AppLog
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -247,7 +248,41 @@ class CodexAppServerOpenAiSubscription(
             }
             cursor = page.string("nextCursor")
         } while (!cursor.isNullOrBlank())
+        val cachedWindows = cachedContextWindows()
+        cachedWindows.forEach { (id, window) ->
+            metadata[id]?.let { metadata[id] = it.copy(contextWindow = window) }
+        }
         return ModelDefaults.discover(ProviderType.OPENAI_SUBSCRIPTION, ids, declarations).map { it.copy(metadata = metadata[it.id]) }
+    }
+
+    /** Apply the same native Codex budget to a Pi subscription run, including already saved profiles. */
+    internal fun withCachedContextWindow(profile: LlmProfile): LlmProfile {
+        if (profile.provider != ProviderType.OPENAI_SUBSCRIPTION) return profile
+        val source = profile.sourceModelId(profile.modelId)
+        val window = cachedContextWindows()[source] ?: return profile
+        val catalog = profile.modelCatalog.map { model ->
+            if (model.id == source) model.copy(contextWindow = window) else model
+        }
+        return profile.copy(
+            advanced = profile.advanced.copy(
+                contextLimit = window,
+                maxTokens = minOf(profile.advanced.maxTokens, window),
+            ),
+            modelCatalog = catalog,
+        )
+    }
+
+    private fun cachedContextWindows(): Map<String, Int> = try {
+        val cache = appHome.resolve("models_cache.json").toFile()
+        if (cache.isFile) codexCachedContextWindows(json, cache.readText()) else emptyMap()
+    } catch (failure: Exception) {
+        AppLog.error(
+            "CodexSubscription",
+            "model_cache_read_failed",
+            failure,
+            mapOf("recovery" to "context_window_unknown"),
+        )
+        emptyMap()
     }
 
     override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = completeWithActivity(profile, messages) {}
@@ -1183,3 +1218,26 @@ class CodexAppServerOpenAiSubscription(
 private fun JsonObject.string(name: String): String? = this[name]?.jsonPrimitive?.contentOrNull
 private fun JsonObject.requireString(name: String): String = string(name) ?: error("В ответе Codex нет поля $name.")
 private fun JsonArray?.orEmpty(): JsonArray = this ?: JsonArray(emptyList())
+
+/**
+ * Effective context windows from Codex's own model cache. `model/list` deliberately omits
+ * these fields, while `models_cache.json` is the same app-server's versioned provider fact.
+ * Pi needs the effective window, not the larger experimental maximum, so its compaction and
+ * usage denominator match native Codex (`context_window * effective_context_window_percent`).
+ */
+internal fun codexCachedContextWindows(json: Json, body: String): Map<String, Int> {
+    val root = json.parseToJsonElement(body) as? JsonObject ?: return emptyMap()
+    val models = root["models"] as? JsonArray ?: return emptyMap()
+    return buildMap {
+        models.forEach { element ->
+            val model = element as? JsonObject ?: return@forEach
+            val id = model.string("slug")?.takeIf { it.isNotBlank() } ?: return@forEach
+            val nominal = model["context_window"]?.jsonPrimitive?.intOrNull
+                ?.takeIf { it > 0 } ?: return@forEach
+            val percent = model["effective_context_window_percent"]?.jsonPrimitive?.intOrNull
+                ?.takeIf { it in 1..100 } ?: 100
+            val effective = (nominal.toLong() * percent / 100L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            if (effective > 0) put(id, effective)
+        }
+    }
+}

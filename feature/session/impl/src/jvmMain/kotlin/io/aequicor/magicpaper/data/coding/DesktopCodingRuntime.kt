@@ -174,7 +174,7 @@ class DesktopCodingRuntime(
             ownership.checkCurrent(lease)
             when (engine) {
                 CodingEngine.PI -> observeQuestionnaires(session.id, pi.questionnaires,
-                    pi.runPlanning(project, input.session, input.prompt, profile)).collect { emit(it) }
+                    pi.runPlanning(project, input.session, input.prompt, subscription.withCachedContextWindow(profile))).collect { emit(it) }
                 CodingEngine.CODEX -> {
                     val client = subscription.newCodingClient()
                     clients[session.id] = client
@@ -303,7 +303,7 @@ class DesktopCodingRuntime(
                         questionnaires.update { previous -> previous.filterNot { it.sessionId == session.id } + requests.filter { it.sessionId == session.id } }
                     } }
                     try {
-                        val events = pi.run(project, input.session, input.prompt, profile, attachments)
+                        val events = pi.run(project, input.session, input.prompt, subscription.withCachedContextWindow(profile), attachments)
                         AppLog.debug("session", "skills.dispatched", fields)
                         events.collect { emit(it) }
                     }
