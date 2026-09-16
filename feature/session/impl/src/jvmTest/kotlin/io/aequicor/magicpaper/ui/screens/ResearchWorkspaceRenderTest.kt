@@ -103,6 +103,50 @@ class ResearchWorkspaceRenderTest {
         }
     }
 
+    @Test fun collapsedPanelsKeepTheirExpandAndFrequentActions() {
+        var newQuestions = 0
+        var filePicks = 0
+        val scene = onUi { ImageComposeScene(1280, 850) {
+            ResearchWorkspacePreview(
+                onNewQuestion = { newQuestions++ },
+                onPickFiles = { filePicks++ },
+            )
+        } }
+        var frame = 0L
+        fun render() {
+            repeat(12) {
+                onUi { scene.render(++frame * 32_000_000L).close() }
+                Thread.sleep(5)
+            }
+        }
+        try {
+            render()
+            onUi {
+                scene.action("Скрыть вопросы").config[SemanticsActions.OnClick].action!!.invoke()
+                scene.action("Скрыть источники").config[SemanticsActions.OnClick].action!!.invoke()
+            }
+            render()
+            onUi {
+                assertTrue(scene.action("Развернуть вопросы").boundsInRoot.width > 0)
+                assertTrue(scene.action("Развернуть источники").boundsInRoot.width > 0)
+                scene.action("Новый вопрос").config[SemanticsActions.OnClick].action!!.invoke()
+                scene.action("Добавить файлы").config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(1, newQuestions)
+                assertEquals(1, filePicks)
+            }
+            scene.capture("collapsed-rails", ++frame * 32_000_000L)
+            onUi { scene.action("Развернуть вопросы").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi { assertTrue(scene.action("Скрыть вопросы").boundsInRoot.width > 0) }
+            onUi { scene.action("Добавить ссылку").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi {
+                assertTrue(scene.action("Скрыть источники").boundsInRoot.width > 0)
+                assertTrue(scene.text("Ссылка на сайт").boundsInRoot.width > 0)
+            }
+        } finally { onUi { scene.close() } }
+    }
+
     @Test fun sourceMenuOffersValidationAndClosingWithoutLosingComposerDraft() {
         val scene = onUi { ImageComposeScene(720, 850) { ResearchEmptyPreview() } }
         var frame = 0L

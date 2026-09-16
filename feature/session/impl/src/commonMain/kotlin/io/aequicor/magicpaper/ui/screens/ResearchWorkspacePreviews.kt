@@ -41,13 +41,19 @@ internal fun researchPreviewState(empty: Boolean = false, busy: Boolean = false)
 @Preview(name = "Narrow", group = "Research", widthDp = 390, heightDp = 780)
 @Preview(name = "Large text", group = "Research", widthDp = 720, heightDp = 1000, fontScale = 2f)
 @Composable
-internal fun ResearchWorkspacePreview(empty: Boolean = false, busy: Boolean = false, failed: Boolean = false) {
+internal fun ResearchWorkspacePreview(
+    empty: Boolean = false,
+    busy: Boolean = false,
+    failed: Boolean = false,
+    onNewQuestion: () -> Unit = {},
+    onPickFiles: () -> Unit = {},
+) {
     val state = researchPreviewState(empty, busy)
     PaperTheme {
         PaperSurface(Modifier.fillMaxSize(), kind = PaperSurfaceKind.CANVAS) {
             CompositionLocalProvider(LocalChatPresentation provides DefaultChatPresentation) {
                 ResearchWorkspaceContent(state, error = if (failed) "Не удалось сохранить изменение. Повторите попытку." else null,
-                    onForkQuestion = {}) {
+                    onNewQuestion = onNewQuestion, onForkQuestion = {}, onPickFiles = onPickFiles) {
                     PaperResearchReading {
                         MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
                             researchSourceCount = state.notebook?.resources?.size ?: 0, footer = {

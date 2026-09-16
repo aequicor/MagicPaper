@@ -6,6 +6,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.unit.dp
@@ -56,6 +61,60 @@ public fun PaperResearchPane(
             .border(1.dp, colors.border.copy(alpha = .55f), shape),
         content = content,
     )
+}
+
+/** A compact remnant of a collapsed research pane that keeps its frequent actions reachable. */
+@Composable
+public fun PaperResearchRail(
+    title: String,
+    count: Int,
+    expandLabel: String,
+    expandGlyph: String,
+    onExpand: () -> Unit,
+    modifier: Modifier = Modifier,
+    actions: @Composable ColumnScope.() -> Unit = {},
+) {
+    PaperResearchPane(modifier) {
+        Column(
+            Modifier.fillMaxSize().padding(vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            PaperTooltip(expandLabel) {
+                PaperIconButton(expandLabel, onExpand) {
+                    PaperText(expandGlyph, role = PaperTextRole.TITLE, color = LocalPaperColors.current.action)
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(104.dp), contentAlignment = Alignment.Center) {
+                PaperText(
+                    title,
+                    Modifier.rotate(-90f),
+                    role = PaperTextRole.LABEL,
+                    color = LocalPaperColors.current.secondaryText,
+                    maxLines = 1,
+                )
+            }
+            PaperResearchCountBadge(count.toString())
+            PaperDivider(Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            actions()
+        }
+    }
+}
+
+/** A labelled icon action intended for [PaperResearchRail]. */
+@Composable
+public fun PaperResearchRailAction(
+    label: String,
+    glyph: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    PaperTooltip(label, modifier) {
+        PaperIconButton(label, onClick, enabled = enabled) {
+            PaperText(glyph, role = PaperTextRole.CHROME, color = LocalPaperColors.current.action)
+        }
+    }
 }
 
 /** Small numerical marker shared by panel counters, sources and citations. */

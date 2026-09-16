@@ -181,7 +181,7 @@ private fun runMagicPaperWindow(
         val state = rememberWindowState(width = 1000.dp, height = 700.dp)
         Window(
             onCloseRequest = ::exitApplication,
-            title = "MagicPaper — Шалость удалась",
+            title = "MagicPaper",
             state = state,
             // macOS: native transparent titlebar (edge-to-edge), system decorations.
             // Windows + JBR: decorated frame, Compose bar merged via JBR WindowDecorations

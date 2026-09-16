@@ -85,7 +85,7 @@ private fun AppShellContent(
     val stack by root.stack.subscribeAsState()
     val slot by root.dialogSlot.subscribeAsState()
     var primarySidebarVisible by rememberSaveable { mutableStateOf(true) }
-    var chatSidebarVisible by rememberSaveable { mutableStateOf(false) }
+    var chatSidebarVisible by rememberSaveable { mutableStateOf(true) }
     val sidebarActions = remember(chat, coding) { SidebarActions(chat, coding) }
     val isCoding = navigation.route is AppRoute.Projects
     val isChat = navigation.route is AppRoute.Chat

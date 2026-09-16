@@ -69,6 +69,7 @@ internal fun ResearchWorkspaceContent(
     var modalPanel by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
     var questionsExpanded by remember(state.notebook?.id) { mutableStateOf(true) }
     var sourcesExpanded by remember(state.notebook?.id) { mutableStateOf(true) }
+    var sourceLinkEditorVisible by remember(state.notebook?.id) { mutableStateOf(false) }
     val inset = LocalWindowToolbarHeight.current ?: 56.dp
 
     BoxWithConstraints(
@@ -76,18 +77,34 @@ internal fun ResearchWorkspaceContent(
             .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
     ) {
         val threeColumns = maxWidth >= 1180.dp
-        val showQuestions = threeColumns && questionsExpanded
-        val showSources = threeColumns && sourcesExpanded
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (showQuestions) {
-                PaperResearchPane(Modifier.width(252.dp).fillMaxHeight()) {
-                    ResearchQuestionsPane(
-                        state = state,
-                        saving = saving,
-                        onNewQuestion = onNewQuestion,
-                        onSelectQuestion = onSelectQuestion,
-                        onCollapse = { questionsExpanded = false },
-                    )
+            if (threeColumns) {
+                if (questionsExpanded) {
+                    PaperResearchPane(Modifier.width(252.dp).fillMaxHeight()) {
+                        ResearchQuestionsPane(
+                            state = state,
+                            saving = saving,
+                            onNewQuestion = onNewQuestion,
+                            onSelectQuestion = onSelectQuestion,
+                            onCollapse = { questionsExpanded = false },
+                        )
+                    }
+                } else {
+                    PaperResearchRail(
+                        title = "Вопросы",
+                        count = state.questions.size,
+                        expandLabel = "Развернуть вопросы",
+                        expandGlyph = "›",
+                        onExpand = { questionsExpanded = true },
+                        modifier = Modifier.width(56.dp).fillMaxHeight(),
+                    ) {
+                        PaperResearchRailAction(
+                            label = "Новый вопрос",
+                            glyph = "+",
+                            onClick = onNewQuestion,
+                            enabled = !saving,
+                        )
+                    }
                 }
             }
 
@@ -96,8 +113,6 @@ internal fun ResearchWorkspaceContent(
                     state = state,
                     saving = saving,
                     wide = threeColumns,
-                    questionsVisible = showQuestions,
-                    sourcesVisible = showSources,
                     onNewQuestion = onNewQuestion,
                     onShowQuestions = { if (threeColumns) questionsExpanded = true else modalPanel = QUESTIONS_PANEL },
                     onShowSources = { if (threeColumns) sourcesExpanded = true else modalPanel = SOURCES_PANEL },
@@ -118,16 +133,45 @@ internal fun ResearchWorkspaceContent(
                 }
             }
 
-            if (showSources) {
-                PaperResearchPane(Modifier.width(304.dp).fillMaxHeight()) {
-                    ResearchSourcesPane(
-                        state = state,
-                        saving = saving,
-                        onAddWebsite = onAddWebsite,
-                        onPickFiles = onPickFiles,
-                        onRemoveResource = onRemoveResource,
-                        onCollapse = { sourcesExpanded = false },
-                    )
+            if (threeColumns) {
+                if (sourcesExpanded) {
+                    PaperResearchPane(Modifier.width(304.dp).fillMaxHeight()) {
+                        ResearchSourcesPane(
+                            state = state,
+                            saving = saving,
+                            showLinkField = sourceLinkEditorVisible,
+                            onShowLinkFieldChange = { sourceLinkEditorVisible = it },
+                            onAddWebsite = onAddWebsite,
+                            onPickFiles = onPickFiles,
+                            onRemoveResource = onRemoveResource,
+                            onCollapse = { sourcesExpanded = false },
+                        )
+                    }
+                } else {
+                    PaperResearchRail(
+                        title = "Источники",
+                        count = state.notebook?.resources?.size ?: 0,
+                        expandLabel = "Развернуть источники",
+                        expandGlyph = "‹",
+                        onExpand = { sourcesExpanded = true },
+                        modifier = Modifier.width(56.dp).fillMaxHeight(),
+                    ) {
+                        PaperResearchRailAction(
+                            label = "Добавить ссылку",
+                            glyph = "URL",
+                            onClick = {
+                                sourceLinkEditorVisible = true
+                                sourcesExpanded = true
+                            },
+                            enabled = !saving,
+                        )
+                        PaperResearchRailAction(
+                            label = "Добавить файлы",
+                            glyph = "▤",
+                            onClick = onPickFiles,
+                            enabled = !saving,
+                        )
+                    }
                 }
             }
         }
@@ -152,6 +196,8 @@ internal fun ResearchWorkspaceContent(
                 ResearchSourcesPane(
                     state = state,
                     saving = saving,
+                    showLinkField = sourceLinkEditorVisible,
+                    onShowLinkFieldChange = { sourceLinkEditorVisible = it },
                     onAddWebsite = onAddWebsite,
                     onPickFiles = onPickFiles,
                     onRemoveResource = onRemoveResource,
@@ -168,8 +214,6 @@ private fun ResearchChatHeader(
     state: ChatState,
     saving: Boolean,
     wide: Boolean,
-    questionsVisible: Boolean,
-    sourcesVisible: Boolean,
     onNewQuestion: () -> Unit,
     onShowQuestions: () -> Unit,
     onShowSources: () -> Unit,
@@ -207,16 +251,16 @@ private fun ResearchChatHeader(
                     }
                 }
             }
-            if (!wide || !questionsVisible || !sourcesVisible) {
+            if (!wide) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (!wide) PaperButton("+  Новый вопрос", onNewQuestion, enabled = !saving,
+                    PaperButton("+  Новый вопрос", onNewQuestion, enabled = !saving,
                         accessibilityLabel = "Новый вопрос")
-                    if (!questionsVisible) PaperButton(
+                    PaperButton(
                         "Вопросы (${state.questions.size})",
                         onShowQuestions,
                         kind = PaperButtonKind.SECONDARY,
                     )
-                    if (!sourcesVisible) PaperButton(
+                    PaperButton(
                         "Источники (${state.notebook?.resources?.size ?: 0})",
                         onShowSources,
                         kind = PaperButtonKind.SECONDARY,
@@ -273,6 +317,8 @@ private fun ResearchQuestionsPane(
 private fun ResearchSourcesPane(
     state: ChatState,
     saving: Boolean,
+    showLinkField: Boolean,
+    onShowLinkFieldChange: (Boolean) -> Unit,
     onAddWebsite: suspend (String) -> Result<Unit>,
     onPickFiles: () -> Unit,
     onRemoveResource: (String) -> Unit,
@@ -281,7 +327,6 @@ private fun ResearchSourcesPane(
 ) {
     val resources = state.notebook?.resources.orEmpty()
     var selectedId by remember(state.notebook?.id) { mutableStateOf<String?>(resources.firstOrNull()?.id) }
-    var showLinkField by remember(state.notebook?.id) { mutableStateOf(false) }
     var url by remember(state.notebook?.id) { mutableStateOf("") }
     var error by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -298,7 +343,7 @@ private fun ResearchSourcesPane(
         PaperText("Общие для всех вопросов", role = PaperTextRole.LABEL,
             color = LocalPaperColors.current.secondaryText)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PaperButton("Ссылка", { showLinkField = !showLinkField }, Modifier.weight(1f),
+            PaperButton("Ссылка", { onShowLinkFieldChange(!showLinkField) }, Modifier.weight(1f),
                 kind = PaperButtonKind.QUIET, accessibilityLabel = "Добавить ссылку")
             PaperButton("Файлы", onPickFiles, Modifier.weight(1f), enabled = !saving,
                 kind = PaperButtonKind.QUIET, accessibilityLabel = "Добавить файлы")
@@ -325,7 +370,7 @@ private fun ResearchSourcesPane(
                                 if (result.isSuccess) {
                                     if (url == captured) url = ""
                                     error = null
-                                    showLinkField = false
+                                    onShowLinkFieldChange(false)
                                 } else error = result.exceptionOrNull()?.message
                             } finally { adding = false }
                         }

@@ -94,6 +94,12 @@ class AppShellRenderTest {
                 root.back(); root.awaitIdle(); draw()
                 assertEquals(AppRoute.Docs(), root.navigationState.value.route)
                 assertTrue(scene.hasText("Документация"))
+                root.navigate(AppRoute.Chat()); root.awaitIdle(); draw()
+                assertTrue(scene.hasText("MagicPaper"))
+                assertTrue(scene.hasText("✦ Новый чат"), "The global session list is visible when a chat opens")
+                scene.render(frame * 16_000_000L).use { image ->
+                    File(directory, "chat-sidebar-visible.png").writeBytes(image.encodeToData()!!.use { it.bytes })
+                }
             }
             root.awaitIdle()
             val persisted = Json.parseToJsonElement(requireNotNull(runtime.koin.get<PersistenceStores>().navigation.load())).jsonObject
