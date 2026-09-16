@@ -9,7 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.IntOffset
 
 /** Flattened visible tree: ancestors are header keys, ordered from root to parent.
@@ -75,8 +75,9 @@ internal fun paperTreePins(
 
 /** Four-level sticky context over a lazy tree, with variable-height headers.
  * Foundation's single stickyHeader cannot keep ancestors pinned concurrently.
- * Only visible rows and up to four headers are composed. Pinned rows replace
- * their original with a size placeholder. Callbacks and state belong to callers.
+ * Only visible rows and up to four headers are composed. A pinned row overlays
+ * its natural copy so the transition has no empty measurement frame; the copy's
+ * semantics are hidden while it remains underneath. Callbacks and state belong to callers.
  * The row's second argument retains its current position before a disclosure
  * changes the visible entries, including when the row is currently pinned.
  */
@@ -88,7 +89,6 @@ public fun PaperStickyTree(
     row: @Composable (key: String, retainPosition: () -> Unit) -> Unit,
 ) {
     val heights = remember { mutableStateMapOf<String, Int>() }
-    val density = LocalDensity.current
     val pins by remember(entries, state) {
         derivedStateOf {
             paperTreePins(entries, state.layoutInfo.visibleItemsInfo.map { PaperTreeVisibleEntry(it.index, it.offset) }, heights)
@@ -106,8 +106,8 @@ public fun PaperStickyTree(
         LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
             items(entries, key = { it.key }, contentType = { it.header }) { entry ->
                 val pinned = pins.any { it.key == entry.key }
-                if (pinned) Spacer(Modifier.fillMaxWidth().height(with(density) { (heights[entry.key] ?: 0).toDp() }))
-                else Box(Modifier.fillMaxWidth()
+                Box(Modifier.fillMaxWidth()
+                    .then(if (pinned) Modifier.clearAndSetSemantics { } else Modifier)
                     .then(if (entry.header) Modifier.onSizeChanged { heights[entry.key] = it.height } else Modifier)
                 ) { row(entry.key) { retainPosition(entry.key) } }
             }

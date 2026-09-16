@@ -71,10 +71,10 @@ class UnifiedSessionFeedRenderTest {
             val before = state.firstVisibleItemIndex
             assertTrue(before > 0)
             val target = sidebarFeedRows(sidebarPreviewGroups(), emptySet())[before].session!!
-            scene.nodes().single { node ->
+            scene.nodes().filter { node ->
                 node.config.getOrNull(SemanticsActions.OnClick) != null &&
                     node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == target.displayName } == true }
-            }.config[SemanticsActions.OnClick].action!!.invoke()
+            }.maxBy { it.boundsInRoot.top }.config[SemanticsActions.OnClick].action!!.invoke()
             scene.settle()
             assertEquals(target.id, selected.value)
             assertEquals(before, state.firstVisibleItemIndex)
@@ -258,12 +258,12 @@ class UnifiedSessionFeedRenderTest {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
     }
-    private fun ImageComposeScene.text(value: String) = nodes().single {
+    private fun ImageComposeScene.text(value: String) = nodes().filter {
         it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == value
-    }
-    private fun ImageComposeScene.description(value: String) = nodes().single {
+    }.maxBy { it.boundsInRoot.top }
+    private fun ImageComposeScene.description(value: String) = nodes().filter {
         it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(value) == true
-    }
+    }.maxBy { it.boundsInRoot.top }
     private fun ImageComposeScene.clickDescription(value: String) {
         assertTrue(description(value).config[SemanticsActions.OnClick].action!!.invoke())
     }
