@@ -67,6 +67,9 @@ class MagicPaperRuntime internal constructor(
                 // Native skill adapters must exist before restoration can launch a coding run.
                 koin.get<PluginService>().also { pluginService = it }.start()
                 chat.start()
+                // Recover orchestration and child-session projections before coding.start()
+                // consumes durable run checkpoints.
+                codingGraph?.start()
                 coding.start()
                 scope.launch {
                     settings.state.collect { state ->
@@ -74,7 +77,6 @@ class MagicPaperRuntime internal constructor(
                         coding.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available, state.openAiSubscription.account?.signedIn == true)
                     }
                 }
-                codingGraph?.start()
                 onPlatformStarted()
                 _ready.value = RuntimeState.Ready
                 AppLog.info("runtime", "ready")

@@ -136,9 +136,13 @@ class CodingRuntimeGraph(
         planningExecution.resumeAfterReset()
     }
 
-    fun start() {
+    suspend fun start() {
         planningChat?.bootstrap()
         planningExecution.bootstrap()
+        // Coding-run restoration inspects the recovered organism projection. Do not let
+        // DefaultCodingService restart a parent while its interrupted children still look RUNNING:
+        // recoverUnknownChildren intentionally admits only UNKNOWN nodes after a process crash.
+        planningChat?.awaitReady()
     }
     suspend fun close() {
         planningChat?.shutdown()
