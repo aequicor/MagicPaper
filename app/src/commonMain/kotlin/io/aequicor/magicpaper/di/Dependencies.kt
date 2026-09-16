@@ -144,7 +144,6 @@ internal fun buildRuntime(
         single { DefaultCodingService(get(), get(), get(), get(), get(), get(), dirPicker,
             get(), get<CodingRuntimeGraph>().planningChat, get(), get(),
             onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },
-            onCreateSession = { project -> get<NavigationEvents>().dialog(DialogRoute("new-session", project)) },
             draftRepository = get(), draftBlobs = get(),
             taskWorktrees = get<CodingRuntimeGraph>().taskWorktrees,
             removePluginDrafts = { project, plans -> get<PluginService>().removeProjectDrafts(project, plans) }) }

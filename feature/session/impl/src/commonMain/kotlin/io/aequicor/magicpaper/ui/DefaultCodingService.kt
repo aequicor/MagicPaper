@@ -77,7 +77,6 @@ class DefaultCodingService(
     val usage: UsageLedger,
     private val workerDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
     private val onOpenSession: (String?, String?) -> Unit = { _, _ -> },
-    private val onCreateSession: (String?) -> Unit = {},
     private val draftRepository: io.aequicor.magicpaper.data.storage.DraftRepository = io.aequicor.magicpaper.data.storage.InMemoryDraftRepository(),
     private val draftBlobs: io.aequicor.magicpaper.data.storage.DraftBlobStore = io.aequicor.magicpaper.data.storage.InMemoryDraftBlobStore(),
     private val taskWorktrees: TaskWorktreeService? = null,
@@ -597,9 +596,16 @@ class DefaultCodingService(
     // ---- Навигация -------------------------------------------------------
 
 
-    override fun requestCodingSession() { onCreateSession(_state.value.coding.current?.id) }
+    override fun requestCodingSession() {
+        val projectId = _state.value.coding.current?.id ?: return
+        createCodingSessionWithRememberedEngine(projectId)
+    }
     override fun requestCodingSessionInProject(projectId: String) {
-        scope.launch { openCodingProject(projectId); onOpenSession(projectId, null); onCreateSession(projectId) }
+        scope.launch {
+            openCodingProject(projectId)
+            onOpenSession(projectId, null)
+            createCodingSessionWithRememberedEngine(projectId)
+        }
     }
     override fun cancelCodingSessionCreation() { _state.value.coding.current?.id?.let { discardCodingSessionDraft(it) {} } }
     override fun refreshCodingEngines() {
@@ -610,6 +616,36 @@ class DefaultCodingService(
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { AppLog.error("coding", "engine.status.failed", e); RuntimeStatus(RuntimePhase.ERROR, "Не удалось проверить движок.") }
                 _state.update { it.copy(coding = it.coding.copy(engines = it.coding.engines + (engine to status))) }
+            }
+        }
+    }
+
+    override fun selectDefaultCodingEngine(engine: CodingEngine) {
+        val settings = _state.value.settings.copy(defaultCodingEngine = engine)
+        _state.update { it.copy(settings = settings) }
+        scope.launch {
+            try {
+                settingsRepo.save(settings)
+                AppLog.info("coding", "default.engine.selected", mapOf("backend" to engine.name))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "default.engine.select.failed", failure, mapOf("backend" to engine.name))
+                _state.update { it.copy(notice = "Не удалось сохранить выбор движка. Повторите попытку.") }
+            }
+        }
+    }
+
+    private fun createCodingSessionWithRememberedEngine(projectId: String) {
+        val draft = sessionCreationDraft(projectId) ?: return
+        draft.update(_state.value.settings.defaultCodingEngine)
+        scope.launch {
+            try {
+                draft.awaitSaved()
+                createCodingSession(projectId) { onOpenSession(projectId, it) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "session.creation.preference.failed", failure, mapOf("projectId" to projectId))
+                _state.update { it.copy(notice = "Не удалось создать сессию. Повторите попытку.") }
             }
         }
     }

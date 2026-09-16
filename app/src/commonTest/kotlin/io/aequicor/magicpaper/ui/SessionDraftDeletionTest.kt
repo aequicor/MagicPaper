@@ -13,6 +13,25 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionDraftDeletionTest {
+    @Test fun sessionRequestCreatesImmediatelyWithRememberedEngine() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val fixture = ModelSettingsFixture()
+            val projects = JsonCodingProjectRepository(fixture.kv, fixture.json)
+            projects.save(CodingProject("p", "Проект", "/test/p", 1))
+            projects.sessions("p").forEach { projects.deleteSession("p", it.id) }
+            val service = fixture.prepareCoding(QuestionnaireRuntime(), projects)
+            try {
+                service.selectDefaultCodingEngine(CodingEngine.CODEX)
+                advanceUntilIdle()
+                service.requestCodingSession()
+                advanceUntilIdle()
+                assertEquals(CodingEngine.CODEX, projects.sessions("p").single().engine)
+                assertEquals(projects.sessions("p").single().id, service.state.value.coding.currentSessionId)
+            } finally { service.close() }
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun sessionEngineDraftRestoresAndCapturedCreateCannotClearANewerChoice() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

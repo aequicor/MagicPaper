@@ -216,6 +216,7 @@ fun CodingScreen(
     panelPlugin: CodingSessionPanel? = null,
     profiles: List<LlmProfile> = emptyList(),
     activeProfileId: String = "",
+    defaultEngine: CodingEngine = CodingEngine.PI,
     showProjectsPanel: Boolean = true,
     globalFeatureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
 ) {
@@ -264,6 +265,7 @@ fun CodingScreen(
                         panelPlugin = panelPlugin,
                         profiles = profiles,
                         activeProfileId = activeProfileId,
+                        defaultEngine = defaultEngine,
                         globalFeatureFlags = globalFeatureFlags,
                     )
                 }
@@ -288,6 +290,7 @@ fun CodingScreen(
                         panelPlugin = panelPlugin,
                         profiles = profiles,
                         activeProfileId = activeProfileId,
+                        defaultEngine = defaultEngine,
                         globalFeatureFlags = globalFeatureFlags,
                     )
                 }
@@ -307,6 +310,7 @@ private fun SessionArea(
     panelPlugin: CodingSessionPanel?,
     profiles: List<LlmProfile>,
     activeProfileId: String,
+    defaultEngine: CodingEngine,
     globalFeatureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
 ) {
     val sessionInfo = active.session
@@ -386,6 +390,8 @@ private fun SessionArea(
                     }
                 },
                 onSkills = onSkills,
+                defaultEngine = defaultEngine,
+                onDefaultEngineChange = vm::selectDefaultCodingEngine,
                 quarantineRecovery = quarantineOrganism?.let { organism -> {
                     io.aequicor.magicpaper.ui.components.SessionQuarantineRecoveryTrigger(organism, sessionInfo.id,
                         quarantineRecoveryState, Modifier.fillMaxWidth()) { quarantineOpen = true }
@@ -915,6 +921,8 @@ internal fun CodingChat(
     onApproval: (String, CodingApprovalDecision) -> Unit = { _, _ -> },
     onStopApproval: (String) -> Unit = {},
     onSkills: (() -> Unit)? = null,
+    defaultEngine: CodingEngine = CodingEngine.PI,
+    onDefaultEngineChange: ((CodingEngine) -> Unit)? = null,
     onSearchProvider: ((SearchProvider) -> Unit)? = null,
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     onClarify: ((String, List<Attachment>) -> Unit)? = null,
@@ -1123,7 +1131,8 @@ internal fun CodingChat(
                     onInteractionMode = onInteractionMode,
                     modeSwitchEnabled = modeSwitchEnabled && !busy && !session.awaitingUser,
                     onPlanning = onPlanning,
-                    engine = session.session.engine,
+                    engine = defaultEngine,
+                    onEngineChange = onDefaultEngineChange,
                     searchProvider = session.session.searchProvider,
                     onSearchProvider = onSearchProvider,
                     onSend = onSend,
