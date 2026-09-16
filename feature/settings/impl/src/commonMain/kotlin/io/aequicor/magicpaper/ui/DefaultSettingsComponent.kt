@@ -23,6 +23,9 @@ class DefaultSettingsComponent(
 ) : SettingsComponent, SettingsService by service {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val drafts get() = service.drafts
+    internal val computerPermissions = ComputerPermissionController(coding.computerPermissions, scope)
+    internal fun saveComputerAccess(settings: AppSettings) = service.saveComputerAccess(settings.computerAccess, settings.applicationAccess)
+    internal fun saveOverviewSettings(settings: AppSettings) = service.saveOverviewSettings(settings)
     private var draftCreationError by mutableStateOf(false)
     private var profileCreationCandidate: LlmProfile? = null
     fun createProfileDraft() {
@@ -51,9 +54,11 @@ class DefaultSettingsComponent(
     fun openDocs() = onOutput(SettingsOutput.Docs)
     fun openModelsSettings() = onOutput(SettingsOutput.Models)
     fun openEnginesSettings() = onOutput(SettingsOutput.Engines)
+    fun openComputerSettings() = onOutput(SettingsOutput.Computer)
     fun closeModelsSettings() = onOutput(SettingsOutput.Back)
     fun closeLlmProfileEditor() = onOutput(SettingsOutput.Back)
     fun closeEnginesSettings() = onOutput(SettingsOutput.Back)
+    fun closeComputerSettings() = onOutput(SettingsOutput.Back)
     fun editLlmProfile(id: String) = onOutput(SettingsOutput.Profile(id))
     fun togglePlugin(id: String, enabled: Boolean) = plugins.togglePlugin(id, enabled)
     fun prepareCodingRuntime(engine: CodingEngine) = coding.prepareCodingRuntime(engine)
@@ -78,6 +83,7 @@ class DefaultSettingsComponent(
             SettingsPage.OVERVIEW -> SettingsScreen(this, current)
             SettingsPage.MODELS -> ModelsSettings(this, current)
             SettingsPage.ENGINES -> EnginesSettings(this, current)
+            SettingsPage.COMPUTER -> ComputerSettings(this, current)
             SettingsPage.WELCOME -> WelcomeScreen(this, current)
             SettingsPage.PROFILE -> {
                 var restored by remember(input.profileId) { mutableStateOf<LlmProfile?>(null) }

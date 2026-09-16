@@ -133,11 +133,20 @@ class DefaultSettingsService(
     /** Вернуться к туториалу (кнопка в настройках). */
     override fun restartOnboarding() = _state.update { it.copy(showWelcome = true) }
 
-    override fun saveSettings(settings: AppSettings) {
+    /** The overview draft does not own automation policy; never replay its old permissions. */
+    internal fun saveOverviewSettings(settings: AppSettings) = saveSettings(settings.copy(
+        computerAccess = _state.value.settings.computerAccess, applicationAccess = _state.value.settings.applicationAccess))
+
+    internal fun saveComputerAccess(computer: ComputerAccess, application: ComputerAccess) =
+        saveSettings(_state.value.settings.copy(computerAccess = computer, applicationAccess = application), clearOverviewDraft = false)
+
+    override fun saveSettings(settings: AppSettings) = saveSettings(settings, clearOverviewDraft = true)
+
+    private fun saveSettings(settings: AppSettings, clearOverviewDraft: Boolean) {
         if (_state.value.settingsSaving) return
         _state.update { it.copy(settingsSaving = true) }
         AppLog.info("SettingsService", "save_settings_requested")
-        val draftPoint = drafts.capture(SettingsDrafts.SETTINGS)
+        val draftPoint = if (clearOverviewDraft) drafts.capture(SettingsDrafts.SETTINGS) else null
         scope.launch {
             try {
             val applied = try {

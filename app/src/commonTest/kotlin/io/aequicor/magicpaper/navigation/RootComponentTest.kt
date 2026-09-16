@@ -24,6 +24,33 @@ class RootComponentTest {
     }
     private data class Child(val route: AppRoute)
 
+    @Test fun computerSettingsUsesJournalBackForwardAndRestoration() = runTest {
+        val store = Store()
+        val lifecycle = LifecycleRegistry()
+        val route = AppRoute.Settings(SettingsSection.COMPUTER)
+        val root = DefaultRootComponent(DefaultComponentContext(lifecycle), store,
+            FeatureComponentFactory { visit, _, _ -> Child(visit.route) }, initialWelcomeRequired = false,
+            dispatcher = StandardTestDispatcher(testScheduler), persistenceDispatcher = StandardTestDispatcher(testScheduler))
+        try {
+            root.awaitIdle()
+            root.navigate(AppRoute.Settings()); root.awaitIdle()
+            root.handleDeepLink("magicpaper://settings/computer"); root.awaitIdle()
+            assertEquals(route, root.stack.value.active.instance.route)
+            root.back(); root.awaitIdle()
+            assertEquals(AppRoute.Settings(), root.stack.value.active.instance.route)
+            root.forward(); root.awaitIdle()
+            assertEquals(route, root.stack.value.active.instance.route)
+        } finally { lifecycle.destroy() }
+        val restoredLifecycle = LifecycleRegistry()
+        val restored = DefaultRootComponent(DefaultComponentContext(restoredLifecycle), store,
+            FeatureComponentFactory { visit, _, _ -> Child(visit.route) }, initialWelcomeRequired = false,
+            dispatcher = StandardTestDispatcher(testScheduler), persistenceDispatcher = StandardTestDispatcher(testScheduler))
+        try {
+            restored.awaitIdle()
+            assertEquals(route, restored.stack.value.active.instance.route)
+        } finally { restoredLifecycle.destroy() }
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun slowPresentationSaveDoesNotDelayNavigationAndFlushKeepsLatestCompleteJournal() = runTest {
         val release = CompletableDeferred<Unit>()

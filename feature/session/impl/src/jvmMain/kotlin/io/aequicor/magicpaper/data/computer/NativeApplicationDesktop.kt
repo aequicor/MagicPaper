@@ -23,6 +23,8 @@ internal class NativeApplicationDesktop(
     private var closed = false
     private var process: Process? = null
     private var directory: Path? = null
+    internal var executablePath: Path? = null
+        private set
     private val reader = Executors.newSingleThreadExecutor { r -> Thread(r, "application-use-response").apply { isDaemon = true } }
 
     private fun start(): Process = synchronized(lock) {
@@ -42,6 +44,7 @@ internal class NativeApplicationDesktop(
         if (!Files.exists(script)) Files.write(script, bytes, java.nio.file.StandardOpenOption.CREATE_NEW)
         check(Files.readAllBytes(script).contentEquals(bytes)) { "Application adapter integrity check failed" }
         if (mac) Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"))
+        executablePath = script
         val command = if (mac) listOf(script.toString()) else listOf(
             Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe").toString(),
             // Process-only policy for the checksum-verified bundled helper; machine/enterprise policy is unchanged.

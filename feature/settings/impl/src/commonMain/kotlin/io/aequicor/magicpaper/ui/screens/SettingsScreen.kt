@@ -55,7 +55,6 @@ import io.aequicor.magicpaper.util.Id
 /** Экран настроек: хаб разделов + источники, поиск, профиль. Черновик редактируется локально. */
 @Composable
 fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
-    val coding by vm.coding.state.collectAsState()
     val settings = state.settings
     val draftSession = vm.drafts.settings(settings)
     var draft by draftSession.field({ it.settings ?: settings }, { value, settings -> value.copy(settings = settings) })
@@ -121,6 +120,7 @@ fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
 
         NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }
         NavEntry("⚙", "Движки", "pi, Codex и движок новых сессий") { vm.openEnginesSettings() }
+        NavEntry("▣", "Управление компьютером", "Доступ к экрану, приложениям и разрешения системы") { vm.openComputerSettings() }
 
         Spacer(Modifier.height(12.dp))
         PlanningRulesSettingsSection(draft.planningRules) { draft = draft.copy(planningRules = it) }
@@ -128,34 +128,13 @@ fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
         Spacer(Modifier.height(12.dp))
         AgentLimitsSettingsSection(agentLimits) { agentLimits = it }
 
-        if (coding.coding.computerSupported) {
-            Spacer(Modifier.height(12.dp))
-            Section("Доступ к экрану")
-            val active = coding.coding.currentSession
-            val session = active?.session
-            if (session != null && !session.planningMode && !session.researchMode && session.stageId == null) {
-                PaperText("Сессия: ${session.name}", style = paperTextStyle(PaperTextRole.LABEL))
-                io.aequicor.magicpaper.ui.components.ComputerUsePanel(
-                    state = coding.coding.computer, sessionId = session.id, running = active.running,
-                    onEnable = { vm.enableComputerUse(session.id, it) },
-                    onDisable = { vm.disableComputerUse(session.id) },
-                    onPreview = { vm.previewComputerUse(session.id) },
-                    onSettings = vm::openComputerSystemSettings,
-                )
-            } else {
-                PaperText("Выберите сессию кодинга без планирования или исследования.",
-                    color = LocalPaperColors.current.secondaryText)
-                PaperAction({ vm.openProjects() }) { PaperText("Проекты и код") }
-            }
-        }
-
         Spacer(Modifier.height(12.dp))
         Section("Поисковый движок")
         SearchApiSettings(draft, vm::checkSearchConnection) { draft = it }
 
         Spacer(Modifier.height(16.dp))
         PaperAction(
-            onClick = { agentLimits.limits()?.let { vm.saveSettings(draft.copy(agentLimits = it)) } },
+            onClick = { agentLimits.limits()?.let { vm.saveOverviewSettings(draft.copy(agentLimits = it)) } },
             enabled = agentLimits.valid,
             modifier = Modifier.heightIn(min = 48.dp),
         ) { PaperText("Сохранить настройки") }

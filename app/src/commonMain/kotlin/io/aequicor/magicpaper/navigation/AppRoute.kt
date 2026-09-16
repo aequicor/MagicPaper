@@ -20,7 +20,7 @@ sealed interface AppRoute {
 }
 
 @Serializable
-enum class SettingsSection { OVERVIEW, MODELS, ENGINES, PROFILE }
+enum class SettingsSection { OVERVIEW, MODELS, ENGINES, PROFILE, COMPUTER }
 
 /** Canonical, platform-independent route codec. Decode each segment exactly once. */
 object AppRouteCodec {
@@ -35,6 +35,7 @@ object AppRouteCodec {
             SettingsSection.OVERVIEW -> "/settings"
             SettingsSection.MODELS -> "/settings/models"
             SettingsSection.ENGINES -> "/settings/engines"
+            SettingsSection.COMPUTER -> "/settings/computer"
             SettingsSection.PROFILE -> "/settings/profiles/${encode(requireNotNull(route.profileId))}"
         }
         is AppRoute.Docs -> "/docs" + route.articleId.suffix()
@@ -65,6 +66,7 @@ object AppRouteCodec {
                 segments.size == 1 -> AppRoute.Settings()
                 segments.size == 2 && segments[1] == "models" -> AppRoute.Settings(SettingsSection.MODELS)
                 segments.size == 2 && segments[1] == "engines" -> AppRoute.Settings(SettingsSection.ENGINES)
+                segments.size == 2 && segments[1] == "computer" -> AppRoute.Settings(SettingsSection.COMPUTER)
                 segments.size == 3 && segments[1] == "profiles" -> AppRoute.Settings(SettingsSection.PROFILE, segments[2])
                 else -> null
             }

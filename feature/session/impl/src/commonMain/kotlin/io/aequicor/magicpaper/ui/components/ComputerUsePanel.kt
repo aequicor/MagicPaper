@@ -43,7 +43,7 @@ fun renderComputerUsePanel(
                         state.applicationAccess == ComputerAccess.CONTROL -> "Управление приложением в фоне"
                         else -> "Просмотр приложения включён"
                     }
-                } else if (other) "Компьютер занят другой сессией" else "Доступ задаётся в настройках → Движки",
+                } else if (other) "Компьютер занят другой сессией" else "Настройки → Управление компьютером",
                     modifier = Modifier.weight(1f), style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome)
                 if (enabled) {
                     if (state.access != ComputerAccess.OFF) PaperAction(onPreview, enabled = !state.busy) { PaperText("Снимок", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }

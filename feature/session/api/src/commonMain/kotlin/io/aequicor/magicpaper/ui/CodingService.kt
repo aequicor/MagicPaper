@@ -8,6 +8,7 @@ data class SessionCreationStatus(val busy: Boolean = false, val error: String? =
 
 interface CodingService {
     val state: StateFlow<CodingState>
+    val computerPermissions: ComputerPermissions? get() = null
     val sessionCreationStatus: StateFlow<Map<String, SessionCreationStatus>>
     fun sessionCreationDraft(projectId: String): DraftSession<CodingEngine>?
     fun createCodingSession(projectId: String, onCreated: (String) -> Unit)

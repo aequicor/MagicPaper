@@ -26,6 +26,7 @@ class DesktopComputerUse internal constructor(
     override val state = mutableState.asStateFlow()
     override val supported get() = desktop.supported
     override val applicationSupported get() = NativeApplicationDesktop.supported
+    override val permissions: ComputerPermissions by lazy { DesktopComputerPermissions() }
     private val lock = Any()
     private val operations = Mutex()
     private var generation = 0L
@@ -107,7 +108,7 @@ class DesktopComputerUse internal constructor(
     private fun checkActive(sessionId: String, epoch: Long, control: Boolean = false, applicationTool: Boolean = false) = synchronized(lock) {
         val access = if (applicationTool) state.value.applicationAccess else state.value.access
         check(epoch == generation && state.value.sessionId == sessionId && access != ComputerAccess.OFF) {
-            "Доступ отключён. Проверьте настройки MagicPaper → Движки и отправьте новый запрос."
+            "Доступ отключён. Проверьте настройки MagicPaper → Управление компьютером и отправьте новый запрос."
         }
         check(!control || access == ComputerAccess.CONTROL) { "Разрешён только просмотр. Управление выключено." }
     }

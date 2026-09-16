@@ -1703,6 +1703,7 @@ class DefaultCodingService(
     override fun disableComputerUse(sessionId: String) { codingRuntime?.computerUse?.disable(sessionId) }
     override fun previewComputerUse(sessionId: String) { scope.launch { codingRuntime?.computerUse?.preview(sessionId) } }
     override fun openComputerSystemSettings() { codingRuntime?.computerUse?.openSystemSettings() }
+    override val computerPermissions: ComputerPermissions? get() = codingRuntime?.computerUse?.permissions
 
     /** Точечное обновление сессии в состоянии (по id, где бы она ни лежала). */
     private fun updateCodingSession(sessionId: String, transform: (CodingSessionUi) -> CodingSessionUi) {

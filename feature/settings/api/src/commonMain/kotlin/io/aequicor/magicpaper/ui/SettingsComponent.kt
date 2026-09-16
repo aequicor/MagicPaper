@@ -5,7 +5,7 @@ import com.arkivanov.decompose.ComponentContext
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.flow.StateFlow
 
-enum class SettingsPage { OVERVIEW, MODELS, ENGINES, PROFILE, WELCOME }
+enum class SettingsPage { OVERVIEW, MODELS, ENGINES, PROFILE, WELCOME, COMPUTER }
 data class SettingsInput(val page: SettingsPage = SettingsPage.OVERVIEW, val profileId: String? = null)
 sealed interface SettingsOutput {
     data object Back : SettingsOutput
@@ -15,6 +15,7 @@ sealed interface SettingsOutput {
     data object Docs : SettingsOutput
     data object Models : SettingsOutput
     data object Engines : SettingsOutput
+    data object Computer : SettingsOutput
     data class Profile(val id: String) : SettingsOutput
 }
 sealed interface SettingsAction {

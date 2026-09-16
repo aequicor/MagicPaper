@@ -130,6 +130,7 @@ fun createAppRoot(runtime: MagicPaperRuntime, componentContext: ComponentContext
                             SettingsSection.OVERVIEW -> SettingsPage.OVERVIEW
                             SettingsSection.MODELS -> SettingsPage.MODELS
                             SettingsSection.ENGINES -> SettingsPage.ENGINES
+                            SettingsSection.COMPUTER -> SettingsPage.COMPUTER
                             SettingsSection.PROFILE -> SettingsPage.PROFILE
                         }
                         val component = koin.get<SettingsComponent.Factory>(FeatureFactoryQualifiers.settings).create(attemptContext, SettingsInput(page, route.profileId), events::settingsOutput)
@@ -224,6 +225,7 @@ internal fun NavigationEvents.settingsOutput(output: SettingsOutput) {
         SettingsOutput.Docs -> navigate(AppRoute.Docs())
         SettingsOutput.Models -> navigate(AppRoute.Settings(SettingsSection.MODELS))
         SettingsOutput.Engines -> navigate(AppRoute.Settings(SettingsSection.ENGINES))
+        SettingsOutput.Computer -> navigate(AppRoute.Settings(SettingsSection.COMPUTER))
         is SettingsOutput.Profile -> navigate(AppRoute.Settings(SettingsSection.PROFILE, output.id))
     }
 }

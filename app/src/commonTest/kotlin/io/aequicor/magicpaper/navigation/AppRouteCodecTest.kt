@@ -8,7 +8,8 @@ class AppRouteCodecTest {
     @Test fun routesRoundTripWithEncodedIds() {
         listOf(AppRoute.Chat(), AppRoute.Chat("сессия+ one"), AppRoute.Projects(),
             AppRoute.Projects("p", "s"), AppRoute.Settings(), AppRoute.Settings(SettingsSection.MODELS),
-            AppRoute.Settings(SettingsSection.ENGINES), AppRoute.Settings(SettingsSection.PROFILE, "profile"),
+            AppRoute.Settings(SettingsSection.ENGINES), AppRoute.Settings(SettingsSection.COMPUTER),
+            AppRoute.Settings(SettingsSection.PROFILE, "profile"),
             AppRoute.Docs("guide"), AppRoute.Plugins("local-skills")).forEach { route ->
             assertEquals(route, AppRouteCodec.parsePath(AppRouteCodec.path(route)))
             assertEquals(route, AppRouteCodec.parseDeepLink(AppRouteCodec.deepLink(route)))

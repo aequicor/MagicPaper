@@ -1,5 +1,50 @@
 [
   {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt",
+    "symbol": "ComputerSettings", "annotationLine": 13,
+    "targets": ["PaperButton", "PaperText", "PaperPanel", "PaperChoice", "PaperFileTransfer"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt",
+    "symbol": "ComputerSettingsContent", "annotationLine": 26,
+    "targets": ["PaperButton", "PaperText", "PaperPanel", "PaperChoice", "PaperFileTransfer"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt",
+    "symbol": "ComputerPermissionOnboarding", "annotationLine": 42,
+    "targets": ["PaperButton", "PaperText", "PaperPanel", "PaperFileTransfer"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettingsPreviews.kt",
+    "symbol": "ComputerSettingsPreview", "annotationLine": 21,
+    "targets": ["PaperTheme", "PaperButton", "PaperText", "PaperChoice", "PaperFileTransfer"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettingsPreviews.kt",
+    "symbol": "ComputerPermissionMissingPreview", "annotationLine": 28,
+    "targets": ["PaperTheme", "PaperButton", "PaperText", "PaperFileTransfer"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettingsPreviews.kt",
+    "symbol": "ComputerPermissionGrantedPreview", "annotationLine": 36,
+    "targets": ["PaperTheme", "PaperButton", "PaperText", "PaperFileTransfer"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettingsPreviews.kt",
+    "symbol": "ComputerPermissionLoadingPreview", "annotationLine": 42,
+    "targets": ["PaperTheme", "PaperText"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettingsPreviews.kt",
+    "symbol": "ComputerPermissionErrorPreview", "annotationLine": 48,
+    "targets": ["PaperTheme", "PaperButton", "PaperText"], "stage": "5", "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettingsPreviews.kt",
+    "symbol": "ComputerPermissionWindowsPreview", "annotationLine": 54,
+    "targets": ["PaperTheme", "PaperButton", "PaperText", "PaperPanel"], "stage": "5", "kind": "surface"
+  },
+  {
     "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/AutomationSettings.kt",
     "symbol": "AutomationSettings", "annotationLine": 13,
     "targets": ["PaperPanel", "PaperText", "PaperChoice"], "stage": "5", "kind": "surface"

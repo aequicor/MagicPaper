@@ -12,6 +12,7 @@ interface ComputerUse {
     val supported: Boolean
     val applicationSupported: Boolean get() = false
     val state: StateFlow<ComputerUseState>
+    val permissions: ComputerPermissions? get() = null
     /** Changing policy revokes current leases, but never starts work or grants access by itself. */
     fun configure(computer: ComputerAccess, application: ComputerAccess) = Unit
     suspend fun enable(sessionId: String, access: ComputerAccess)
