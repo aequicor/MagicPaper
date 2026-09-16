@@ -122,7 +122,8 @@ class DesktopCodingRuntime(
         val history = if (session.nativeSessionId.isBlank()) session.messages.dropLast(1).map {
             CodingMessage(it.id, if (it.role == ChatRole.USER) CodingRole.USER else CodingRole.AGENT, it.text, createdAt = it.createdAt)
         } else emptyList()
-        val seeded = researchContextSeed(history, profile?.advanced?.contextMessages ?: 20, "") + researchPrompt(prompt, session.resources)
+        val request = researchRequest(session.messages.lastOrNull { it.role == ChatRole.USER }?.text ?: prompt)
+        val seeded = researchContextSeed(history, profile?.advanced?.contextMessages ?: 20, "") + researchPrompt(prompt, session.resources, request)
         run(project, coding, seeded, profile?.forModel()?.let { it.copy(codingModelId = "") }, attachments).collect { emit(it) }
     }
 

@@ -24,6 +24,7 @@ class CodingRuntimeGraph(
     private val search: SearchEngine,
     draftRepository: DraftRepository = InMemoryDraftRepository(),
     taskWorkspace: TaskWorkspace = UnavailableTaskWorkspace,
+    private val sourceAccess: ResearchSourceAccess = ResearchSourceAccess(),
 ) {
     val taskWorktrees = codingProjects?.let { TaskWorktreeService(it, taskWorkspace, planningWorkspace) }
     val toolHost = ToolHost(StoredToolReceipts(store), io.aequicor.magicpaper.domain.RuntimeQuestionnaires(
@@ -113,9 +114,14 @@ class CodingRuntimeGraph(
             val diagnosis = result.issues.ifEmpty { listOf("Поиск не нашёл результатов по запросу «$query».") }
             error(diagnosis.joinToString("; "))
         }
-        kotlinx.serialization.json.buildJsonArray { result.hits.forEach { hit -> add(kotlinx.serialization.json.buildJsonObject {
+        val checked = if (context.mode == CodingInteractionMode.RESEARCH) sourceAccess.check(result.hits.map {
+            ResearchResource(io.aequicor.magicpaper.util.Id.new(), it.title, it.url)
+        }).readableSources() else null
+        if (checked != null && checked.isEmpty()) error("Найденные страницы недоступны для чтения. Сниппеты исключены; попробуй другой запрос или источник.")
+        kotlinx.serialization.json.buildJsonArray { result.hits.filter { hit -> checked == null || checked.any { it.url == hit.url } }.forEach { hit -> add(kotlinx.serialization.json.buildJsonObject {
             put("title", kotlinx.serialization.json.JsonPrimitive(hit.title))
-            put("snippet", kotlinx.serialization.json.JsonPrimitive(hit.snippet))
+            if (checked == null) put("snippet", kotlinx.serialization.json.JsonPrimitive(hit.snippet))
+            else put("text", kotlinx.serialization.json.JsonPrimitive(checked.first { it.url == hit.url }.readableText.orEmpty()))
             put("url", kotlinx.serialization.json.JsonPrimitive(hit.url))
         }) } }
     }

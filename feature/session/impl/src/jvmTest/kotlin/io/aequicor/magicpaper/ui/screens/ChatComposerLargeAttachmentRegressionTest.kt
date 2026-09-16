@@ -34,7 +34,7 @@ class ChatComposerLargeAttachmentRegressionTest {
             }
             fun render(frame: Long) { scene.render(frame).close() }
             render(16_000_000L)
-            val tools = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Инструменты и параметры сессии") }
+            val tools = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Файлы и параметры вопроса") }
             scene.sendPointerEvent(PointerEventType.Press, tools.boundsInRoot.center)
             scene.sendPointerEvent(PointerEventType.Release, tools.boundsInRoot.center)
             render(32_000_000L)

@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.first
 import com.mikepenz.markdown.model.markdownAnnotator
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.ast.LeafASTNode
 import org.intellij.markdown.MarkdownElementTypes as Element
 import org.intellij.markdown.MarkdownTokenTypes as Token
 import org.intellij.markdown.flavours.gfm.GFMElementTypes as Gfm
@@ -27,6 +29,88 @@ class MarkdownBlocksTest {
         annotator = markdownAnnotator(),
         referenceLinkHandler = runBlocking { parseMarkdownFlow(doc.source).filterIsInstance<State.Success>().first().referenceLinkHandler },
     )
+
+    @Test fun inlineGroupsPreserveNodeIdentityAndKeepSpacingWithItsVisibleBlock() {
+        val content = document("First paragraph.\n\n## Heading\n\nLast paragraph.")
+            .blocks.filterNot { it.type == Token.EOL || it.type == Token.WHITE_SPACE }
+        val leadingSpace = LeafASTNode(Token.WHITE_SPACE, 0, 1)
+        val leadingLine = LeafASTNode(Token.EOL, 1, 2)
+        val firstLine = LeafASTNode(Token.EOL, 3, 4)
+        val firstSpace = LeafASTNode(Token.WHITE_SPACE, 4, 5)
+        val secondLine = LeafASTNode(Token.EOL, 6, 7)
+        val trailingSpace = LeafASTNode(Token.WHITE_SPACE, 8, 9)
+        val trailingLine = LeafASTNode(Token.EOL, 9, 10)
+        val original = listOf(leadingSpace, leadingLine, content[0], firstLine, firstSpace,
+            content[1], secondLine, content[2], trailingSpace, trailingLine)
+
+        val groups = markdownInlineBlocks(original)
+
+        assertEquals(3, groups.size, "Spacing must not become an independent message/menu row")
+        assertSameNodes(original, groups.flatten())
+        assertSameNodes(listOf(leadingSpace, leadingLine, content[0], firstLine, firstSpace), groups[0])
+        assertSameNodes(listOf(content[1], secondLine), groups[1])
+        assertSameNodes(listOf(content[2], trailingSpace, trailingLine), groups[2])
+    }
+
+    @Test fun emptyAndShortSpacingOnlyInlineDocumentsHaveNoExtraRows() {
+        assertTrue(markdownInlineBlocks(emptyList()).isEmpty())
+        val spacing = listOf(LeafASTNode(Token.EOL, 0, 1), LeafASTNode(Token.WHITE_SPACE, 1, 4),
+            LeafASTNode(Token.EOL, 4, 5))
+
+        val groups = markdownInlineBlocks(spacing)
+
+        assertEquals(1, groups.size, "A short spacing-only document needs only one fragment")
+        assertSameNodes(spacing, groups.single())
+    }
+
+    @Test fun thousandsOfBlankLinesKeepInlineCompositionBoundedWithoutLosingNodes() {
+        val spacing = (0..1024).map { LeafASTNode(Token.EOL, it, it + 1) }
+        val content = document("First paragraph.\n\nLast paragraph.").blocks
+            .filterNot { it.type == Token.EOL || it.type == Token.WHITE_SPACE }
+        val surroundedContent = spacing.take(400) + content.first() + spacing.drop(400).take(400) +
+            content.last() + spacing.drop(800)
+        for (original in listOf(spacing, surroundedContent)) {
+            val groups = markdownInlineBlocks(original)
+
+            assertSameNodes(original, groups.flatten())
+            assertTrue(groups.size > 1, "Long blank runs must remain lazy")
+            assertTrue(groups.all { it.size in 1..32 }, "One fragment must not compose an unbounded number of spacers")
+            assertTrue(groups.all { group ->
+                group.count { it.type != Token.EOL && it.type != Token.WHITE_SPACE } <= 1
+            }, "Capping blank runs must not merge independent content blocks")
+        }
+    }
+
+    @Test fun inlineGroupingRetainsLongParagraphListAndTablePartitionBoundaries() {
+        val source = "\n\n" + "Long **formatted** paragraph with details. ".repeat(300) + "\n\n" +
+            (7..106).joinToString("\n") { "$it. Item $it **formatted**" } + "\n\n" +
+            "| Name | Value |\n| :--- | ---: |\n" +
+            (1..100).joinToString("\n") { "| Row $it | **$it** |" } + "\n\n"
+        val document = document(source)
+        val visible = document.blocks.filterNot { it.type == Token.EOL || it.type == Token.WHITE_SPACE }
+
+        val groups = markdownInlineBlocks(document.blocks)
+
+        assertSameNodes(document.blocks, groups.flatten())
+        assertEquals(visible.size, groups.size)
+        assertSameNodes(visible, groups.map { group ->
+            group.single { it.type != Token.EOL && it.type != Token.WHITE_SPACE }
+        })
+        val paragraphs = visible.filter { it.type == Element.PARAGRAPH }
+        assertTrue(paragraphs.size > 3)
+        assertTrue(paragraphs.all { it.endOffset - it.startOffset <= MESSAGE_BLOCK_CHARS })
+        val listItems = visible.filter { it.type == Element.ORDERED_LIST }
+        assertEquals((7..106).toList(), listItems.map { (it as MarkdownBlockNode).listNumber })
+        val tables = visible.filter { it.type == Gfm.TABLE }
+        assertTrue(tables.size > 1)
+        assertTrue(tables.all { node -> node.children.count { it.type == Gfm.ROW } in 1..16 })
+        assertEquals(100, tables.sumOf { node -> node.children.count { it.type == Gfm.ROW } })
+    }
+
+    private fun assertSameNodes(expected: List<ASTNode>, actual: List<ASTNode>) {
+        assertEquals(expected.size, actual.size)
+        expected.indices.forEach { index -> assertSame(expected[index], actual[index], "Node $index changed or moved") }
+    }
 
     @Test fun longInlineFormattingRetainsEveryCharacterAndItsStyle() {
         val body = "fragment😀 ".repeat(700).trimEnd()

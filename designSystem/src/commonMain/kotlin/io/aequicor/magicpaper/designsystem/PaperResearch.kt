@@ -3,12 +3,18 @@ package io.aequicor.magicpaper.designsystem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -17,12 +23,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
@@ -31,14 +42,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,18 +76,18 @@ public fun PaperResearchReading(content: @Composable () -> Unit) {
         LocalPaperTypography provides typography.copy(
             // A compact book rhythm keeps prose readable without spreading each
             // paragraph across the viewport. Use the same sturdy face for headings.
-            body = typography.body.copy(fontSize = 17.sp, lineHeight = 25.sp),
+            body = typography.body.copy(fontSize = 15.sp, lineHeight = 23.sp, fontWeight = FontWeight.Normal),
             headline = typography.headline.copy(
                 fontFamily = PaperFonts.text,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 26.sp,
-                lineHeight = 32.sp,
+                fontSize = 22.sp,
+                lineHeight = 28.sp,
             ),
             title = typography.title.copy(
                 fontFamily = PaperFonts.text,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 21.sp,
-                lineHeight = 28.sp,
+                fontSize = 19.sp,
+                lineHeight = 25.sp,
             ),
         ),
         LocalPaperResearchReading provides true,
@@ -89,6 +112,156 @@ public fun PaperResearchPane(
             .border(1.dp, colors.border.copy(alpha = .55f), shape),
         content = content,
     )
+}
+
+/** A question is a compact numbered navigation item, with room for two lines. */
+@Composable
+public fun PaperResearchQuestionRow(number: Int, title: String, selected: Boolean, onClick: () -> Unit,
+    modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val colors = LocalPaperColors.current
+    Row(modifier.fillMaxWidth().heightIn(min = 44.dp)
+        .background(if (selected) colors.selected else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(6.dp))
+        .paperClickable(enabled = enabled, onClick = onClick)
+        .semantics { role = Role.Tab; this.selected = selected; contentDescription = "Вопрос $number: $title" }
+        .padding(horizontal = 8.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Top) {
+        PaperText(number.toString(), Modifier.widthIn(min = 16.dp), role = PaperTextRole.CHROME,
+            color = colors.secondaryText, maxLines = 1)
+        PaperText(title, Modifier.weight(1f), role = PaperTextRole.CHROME, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** The title uses the full text column; metadata and its independent action share the next row. */
+@Composable
+public fun PaperResearchSourceRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier, enabled: Boolean = true, keepActionsVisible: Boolean = false,
+    detail: String? = null, file: Boolean = false, icon: ImageBitmap? = null,
+    readProblem: String? = null,
+    trailing: @Composable RowScope.() -> Unit = {}) {
+    val colors = LocalPaperColors.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var actionFocused by remember { mutableStateOf(false) }
+    val inputMode = LocalInputModeManager.current
+    var touch by remember { mutableStateOf(false) }
+    val showActions = hovered || keepActionsVisible || touch ||
+        LocalPaperPlatformPolicy.current.platform == PaperPlatform.ANDROID ||
+        (actionFocused && inputMode.inputMode == InputMode.Keyboard)
+    Row(modifier.fillMaxWidth().heightIn(min = 40.dp).hoverable(interaction)
+        .pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) if (awaitPointerEvent(PointerEventPass.Initial).changes.any { it.type == PointerType.Touch }) touch = true
+            }
+        }, verticalAlignment = Alignment.CenterVertically) {
+        PaperCheck(checked, onCheckedChange, Modifier.semantics { contentDescription = "Использовать источник: $title" }, enabled)
+        Column(Modifier.weight(1f).padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            PaperAction({ onCheckedChange(!checked) }, Modifier.fillMaxWidth(), enabled = enabled,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp)) {
+                PaperText(title, Modifier.fillMaxWidth(), role = PaperTextRole.CHROME, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, color = when {
+                        readProblem != null -> colors.error
+                        checked -> colors.text
+                        else -> colors.secondaryText
+                    })
+            }
+            Row(Modifier.fillMaxWidth().padding(start = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    if (detail != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (icon != null && !file) PaperImage(icon, null, Modifier.size(14.dp), scale = PaperImageScale.FIT)
+                        else PaperResearchSourceIcon(file)
+                        PaperText(detail, Modifier.weight(1f), style = LocalPaperTypography.current.chrome.copy(
+                            fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
+                            color = LocalPaperColors.current.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                // Reserve actions beside metadata only. Hover and Tab do not resize the title.
+                Row(Modifier.onFocusChanged { actionFocused = it.hasFocus }.graphicsLayer {
+                    alpha = if (showActions) 1f else 0f
+                }, verticalAlignment = Alignment.CenterVertically, content = trailing)
+            }
+            if (readProblem != null) PaperText("Не используется: $readProblem", Modifier.padding(horizontal = 2.dp),
+                style = LocalPaperTypography.current.chrome.copy(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
+                color = colors.error)
+        }
+    }
+}
+
+@Composable
+private fun PaperResearchSourceIcon(file: Boolean) {
+    val color = LocalPaperColors.current.secondaryText
+    Canvas(Modifier.size(14.dp)) {
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx())
+        if (file) {
+            val page = Path().apply {
+                moveTo(size.width * .25f, size.height * .1f)
+                lineTo(size.width * .6f, size.height * .1f)
+                lineTo(size.width * .8f, size.height * .3f)
+                lineTo(size.width * .8f, size.height * .9f)
+                lineTo(size.width * .25f, size.height * .9f)
+                close()
+                moveTo(size.width * .6f, size.height * .1f)
+                lineTo(size.width * .6f, size.height * .3f)
+                lineTo(size.width * .8f, size.height * .3f)
+            }
+            drawPath(page, color, style = stroke)
+        } else {
+            drawCircle(color, size.width * .4f, style = stroke)
+            drawOval(color, Offset(size.width * .3f, size.height * .1f),
+                androidx.compose.ui.geometry.Size(size.width * .4f, size.height * .8f), style = stroke)
+            drawLine(color, Offset(size.width * .1f, size.height * .5f), Offset(size.width * .9f, size.height * .5f), stroke.width)
+        }
+    }
+}
+
+/** Selection, disclosure and file addition are independent sibling actions. */
+@Composable
+public fun PaperResearchSourceGroupHeader(title: String, expanded: Boolean, onToggle: () -> Unit,
+    modifier: Modifier = Modifier, selectedCount: Int = 0, totalCount: Int = 0,
+    onSelectionChange: (Boolean) -> Unit = {}, enabled: Boolean = true,
+    trailing: @Composable RowScope.() -> Unit = {}) {
+    val colors = LocalPaperColors.current
+    val allSelected = totalCount > 0 && selectedCount == totalCount
+    val partiallySelected = selectedCount > 0 && selectedCount < totalCount
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        PaperCheck(allSelected, onSelectionChange, Modifier.semantics {
+            contentDescription = if (allSelected) "Снять выбор со всех: $title" else "Выбрать все: $title"
+            stateDescription = when {
+                allSelected -> "Выбраны все"
+                partiallySelected -> "Выбрана часть"
+                else -> "Ничего не выбрано"
+            }
+        }, enabled = enabled && totalCount > 0, indeterminate = partiallySelected)
+        PaperAction(onToggle, Modifier.weight(1f).semantics {
+            contentDescription = if (expanded) "Свернуть: $title" else "Развернуть: $title"
+            stateDescription = if (expanded) "Развёрнуто" else "Свёрнуто"
+        }.onPreviewKeyEvent { event ->
+            if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
+                if (event.type == KeyEventType.KeyDown && expanded != (event.key == Key.DirectionRight)) onToggle()
+                true
+            } else false
+        }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                PaperText(title, Modifier.weight(1f), role = PaperTextRole.CHROME,
+                    color = colors.secondaryText, maxLines = 2)
+                Canvas(Modifier.width(12.dp).height(12.dp)) {
+                    val path = Path().apply {
+                        if (expanded) {
+                            moveTo(size.width * .2f, size.height * .35f)
+                            lineTo(size.width * .5f, size.height * .65f)
+                            lineTo(size.width * .8f, size.height * .35f)
+                        } else {
+                            moveTo(size.width * .35f, size.height * .2f)
+                            lineTo(size.width * .65f, size.height * .5f)
+                            lineTo(size.width * .35f, size.height * .8f)
+                        }
+                    }
+                    drawPath(path, colors.secondaryText, style = androidx.compose.ui.graphics.drawscope.Stroke(1.4.dp.toPx()))
+                }
+            }
+        }
+        trailing()
+    }
 }
 
 /** Pointer-sized drag lane between research panes; the visible grip stays deliberately quiet. */

@@ -4,14 +4,34 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.runtime.snapshots.SnapshotMutableState
+import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import io.aequicor.magicpaper.data.storage.StorageException
 import io.aequicor.magicpaper.data.storage.logPersistenceFailure
 import kotlinx.serialization.json.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 
 /** An allowlist for presentation savers. Domain objects and arbitrary platform serialization are excluded. */
 internal object PresentationCodec {
-    fun canSave(value: Any?): Boolean = runCatching { encodeValue(value) }.isSuccess
-    fun encode(values: Map<String, List<Any?>>): String = JsonObject(values.mapValues { (_, items) -> JsonArray(items.map(::encodeValue)) }).toString()
+    // SaveableStateRegistry calls this for every provider, including while lazy items
+    // detach. Validation must not allocate a serialized copy of the entire screen.
+    fun canSave(value: Any?): Boolean = when (value) {
+        null, is String, is Boolean, is Char, is IntArray, is LongArray,
+        is FloatArray, is DoubleArray, is BooleanArray -> true
+        is Number -> value::class in numberTypes
+        is SnapshotMutableState<*> -> supportedPolicy(value) && canSave(value.value)
+        is List<*> -> value.all(::canSave)
+        is Pair<*, *> -> canSave(value.first) && canSave(value.second)
+        is Map<*, *> -> value.all { (key, item) -> canSave(key) && canSave(item) }
+        else -> false
+    }
+    private val numberTypes = setOf(Int::class, Long::class, Float::class, Double::class, Short::class, Byte::class)
+    private fun supportedPolicy(value: SnapshotMutableState<*>) =
+        value.policy == structuralEqualityPolicy<Any?>() || value.policy == referentialEqualityPolicy<Any?>() ||
+            value.policy == neverEqualPolicy<Any?>()
+
+    fun encode(values: Map<String, List<Any?>>): String = Json.encodeToString(JsonObject.serializer(),
+        JsonObject(values.mapValues { (_, items) -> JsonArray(items.map(::encodeValue)) }))
     fun decode(snapshot: String?): Map<String, List<Any?>> {
         if (snapshot == null) return emptyMap()
         return try { Json.parseToJsonElement(snapshot).jsonObject.mapValues { (_, items) -> items.jsonArray.map(::decodeValue) } }
@@ -137,8 +157,7 @@ class VisitPresentationState(snapshot: String?, private val onError: (String) ->
         }
         LaunchedEffect(registry) {
             try {
-                snapshotFlow { registry.registrationVersion; PresentationCodec.encode(registry.performSave()) }
-                    .collect { registry.save(registry.performSave()) }
+                registry.trackChanges()
             }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (failure: Exception) {
@@ -159,6 +178,7 @@ internal class TrackingSaveableRegistry(
     private val delegate = SaveableStateRegistry(restored, PresentationCodec::canSave)
     private val detached = mutableMapOf<String, List<Any?>>()
     private val counts = mutableMapOf<String, Int>()
+    private val providers = mutableMapOf<String, MutableList<() -> Any?>>()
     private val detaching = mutableMapOf<String, List<Any?>>()
     var registrationVersion by mutableIntStateOf(0)
         private set
@@ -173,6 +193,9 @@ internal class TrackingSaveableRegistry(
     }
     override fun registerProvider(key: String, valueProvider: () -> Any?): SaveableStateRegistry.Entry {
         val entry = delegate.registerProvider(key, valueProvider)
+        // Each registration needs its own identity, even when callbacks are shared.
+        val provider = { valueProvider() }
+        providers.getOrPut(key) { mutableListOf() }.add(provider)
         counts[key] = (counts[key] ?: 0) + 1
         detaching.remove(key)
         registrationVersion++
@@ -181,17 +204,50 @@ internal class TrackingSaveableRegistry(
             override fun unregister() {
                 if (!registered) return
                 registered = false
-                detaching.getOrPut(key) { delegate.performSave()[key].orEmpty() }
+                // Only this key is leaving. Saving the whole delegate here makes a
+                // viewport of N disposed rememberSaveable providers cost N full saves.
+                detaching.getOrPut(key) { providers.getValue(key).map { it() } }
                 entry.unregister()
+                providers.getValue(key).remove(provider)
                 val remaining = (counts[key] ?: 1) - 1
                 if (remaining == 0) {
                     counts.remove(key)
+                    providers.remove(key)
                     detached[key] = detaching.remove(key).orEmpty()
                 } else counts[key] = remaining
-                save(performSave())
+                registrationVersion++
             }
         }
     }
     override fun performSave(): Map<String, List<Any?>> = detached + delegate.performSave()
     fun save(values: Map<String, List<Any?>>) = onSave(values)
+
+    /** Observe saver reads without serializing every scroll offset. Navigation/disposal
+     * still calls the owner's synchronous flush; autosaves coalesce a burst of changes. */
+    suspend fun trackChanges() {
+        val invalidations = Channel<Unit>(Channel.CONFLATED)
+        val observer = SnapshotStateObserver { it() }
+        val changed: (TrackingSaveableRegistry) -> Unit = { invalidations.trySend(Unit) }
+        observer.start()
+        try {
+            while (true) {
+                var values: Map<String, List<Any?>> = emptyMap()
+                observer.observeReads(this, changed) {
+                    registrationVersion
+                    values = performSave()
+                    // Detached values can themselves be MutableState saver results.
+                    // Keep observing their contents as well as active providers.
+                    values.values.forEach { it.forEach(PresentationCodec::canSave) }
+                }
+                save(values)
+                invalidations.receive()
+                delay(250)
+                invalidations.tryReceive()
+            }
+        } finally {
+            observer.stop()
+            observer.clear()
+            invalidations.close()
+        }
+    }
 }

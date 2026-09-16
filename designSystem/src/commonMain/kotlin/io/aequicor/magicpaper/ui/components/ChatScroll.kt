@@ -35,11 +35,15 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 /** Disclosure changes are reader actions, so they must take precedence over following output. */
 class PaperChatScrollState(private val listState: LazyListState) {
@@ -171,24 +175,16 @@ class PaperChatScrollState(private val listState: LazyListState) {
 /** Wheel/drag input immediately hands control back to the reader during a pin jump. */
 fun Modifier.paperChatScrollInput(scroll: PaperChatScrollState): Modifier = composed {
     val scope = rememberCoroutineScope()
-    val settle = remember(scroll) { ChatScrollSettle() }
-    DisposableEffect(scroll) {
-        onDispose {
-            settle.job?.cancel()
-            scroll.updateUserScrolling(false)
-        }
+    val settle = remember(scroll, scope) { ChatScrollSettle(scope, scroll::updateUserScrolling) }
+    DisposableEffect(settle) {
+        onDispose { settle.dispose() }
     }
-    nestedScroll(remember(scroll, scope) {
+    nestedScroll(remember(scroll, settle) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.UserInput && available != Offset.Zero) {
                     scroll.onUserScroll(available.y)
-                    scroll.updateUserScrolling(true)
-                    settle.job?.cancel()
-                    settle.job = scope.launch {
-                        delay(USER_SCROLL_SETTLE_MILLIS)
-                        scroll.updateUserScrolling(false)
-                    }
+                    settle.onInput()
                 }
                 return Offset.Zero
             }
@@ -196,9 +192,45 @@ fun Modifier.paperChatScrollInput(scroll: PaperChatScrollState): Modifier = comp
     })
 }
 
-private class ChatScrollSettle { var job: Job? = null }
+/** A gesture owns one timer; subsequent deltas only move its quiet-period deadline. */
+internal class ChatScrollSettle(
+    private val scope: CoroutineScope,
+    private val onScrollingChanged: (Boolean) -> Unit,
+    private val clock: TimeSource = TimeSource.Monotonic,
+) {
+    private var lastInput: TimeMark? = null
+    private var job: Job? = null
+    private var disposed = false
 
-internal val LocalPaperChatScrolling = staticCompositionLocalOf { false }
+    fun onInput() {
+        if (disposed) return
+        lastInput = clock.markNow()
+        if (job != null) return
+        onScrollingChanged(true)
+        job = scope.launch {
+            try {
+                while (true) {
+                    val remaining = USER_SCROLL_SETTLE_MILLIS.milliseconds - checkNotNull(lastInput).elapsedNow()
+                    if (!remaining.isPositive()) break
+                    delay(remaining)
+                }
+            } finally {
+                job = null
+                if (!disposed) onScrollingChanged(false)
+            }
+        }
+    }
+
+    fun dispose() {
+        if (disposed) return
+        disposed = true
+        job?.cancel()
+        job = null
+        onScrollingChanged(false)
+    }
+}
+
+internal val LocalPaperChatScrolling = androidx.compose.runtime.compositionLocalOf { false }
 
 private val LocalChatDisclosure = staticCompositionLocalOf<(LayoutCoordinates?) -> Unit> { {} }
 

@@ -25,6 +25,51 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalComposeUiApi::class)
 class ChatTranscriptDesignTest {
+    @Test fun followUpButtonsSendTheirWholeQuestionAndDisableDuringTheAnswer() {
+        val questions = listOf("Разобрать мою последнюю попытку знакомства и найти конкретное препятствие",
+            "Составить несколько естественных фраз для знакомства", "Написать статью: как начать отношения")
+        for (scale in listOf(1f, 2f)) {
+            val sent = mutableListOf<Pair<String, String>>()
+            val busy = androidx.compose.runtime.mutableStateOf(false)
+            val session = io.aequicor.magicpaper.domain.ChatSession("question", "Вопрос", 1, 2,
+                messages = listOf(ChatMessage("answer", ChatRole.AGENT, "Начните с конкретной ситуации.", 2, followUps = questions)))
+            val scene = onUi { ImageComposeScene(360, if (scale == 1f) 650 else 1100) {
+                io.aequicor.magicpaper.designsystem.PaperTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, scale)) {
+                        io.aequicor.magicpaper.designsystem.PaperSurface {
+                            MessagesList(session, busy.value, onFollowUp = { id, question -> sent += id to question; busy.value = true })
+                        }
+                    }
+                }
+            } }
+            var frame = 0L
+            fun render() { repeat(20) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+            try {
+                render()
+                onUi {
+                    kotlin.test.assertTrue(sent.isEmpty(), "Rendering a suggestion must not submit it")
+                    for (question in questions) {
+                        val button = scene.action("Задать вопрос: $question")
+                        assertTrue(button.boundsInRoot.left >= 0 && button.boundsInRoot.right <= 360)
+                        val layout = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                        scene.text(question).config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layout)
+                        kotlin.test.assertFalse(layout.single().hasVisualOverflow, "The complete question must fit at scale $scale")
+                    }
+                }
+                scene.capture("follow-ups-$scale", ++frame * 32_000_000L)
+                onUi { scene.action("Задать вопрос: ${questions.first()}").config[SemanticsActions.OnClick].action!!.invoke() }
+                render()
+                kotlin.test.assertEquals(listOf("answer" to questions.first()), sent)
+                onUi {
+                    val button = scene.action("Задать вопрос: ${questions.last()}")
+                    assertTrue(button.config.contains(SemanticsProperties.Disabled))
+                    button.config[SemanticsActions.OnClick].action!!.invoke()
+                }
+                kotlin.test.assertEquals(1, sent.size)
+            } finally { onUi { scene.close() } }
+        }
+    }
+
     private fun <T> onUi(block: () -> T): T {
         if (EventQueue.isDispatchThread()) return block()
         var result: Result<T>? = null
@@ -70,7 +115,7 @@ class ChatTranscriptDesignTest {
                 repeat(20) { onUi { scene.render(it * 32_000_000L).close() }; Thread.sleep(5) }
                 onUi {
                     val input = scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
-                    val attach = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Инструменты и параметры сессии") }
+                    val attach = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Файлы и параметры вопроса") }
                     val plus = scene.text("+")
                     assertTrue(plus.boundsInRoot.top >= attach.boundsInRoot.top && plus.boundsInRoot.bottom <= attach.boundsInRoot.bottom,
                         "Attachment glyph must fit the control at ${case.scale} text scale")
@@ -86,7 +131,7 @@ class ChatTranscriptDesignTest {
                     } else {
                         val transcript = scene.nodes().first { it.config.contains(SemanticsProperties.VerticalScrollAxisRange) }
                         assertTrue(transcript.boundsInRoot.bottom > input.boundsInRoot.bottom, "Messages scroll behind composer")
-                        val last = scene.text(if (case.name == "busy") "Исследую вопрос…" else "Сначала разберём задачи на понедельник.")
+                        val last = scene.text(if (case.name == "busy") "Ожидаю ответ агента" else "Сначала разберём задачи на понедельник.")
                         assertTrue(last.boundsInRoot.bottom <= input.boundsInRoot.top - 12, "Last content is covered by composer: ${case.name}")
                     }
                 }

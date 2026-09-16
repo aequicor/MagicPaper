@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.ui.components
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
+import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
@@ -154,8 +157,13 @@ class MessageHistoryActionsRenderTest {
                 val complete = "Полный текст\n".repeat(2000)
                 var edited: String? = null
                 var deleted = false
+                val saved = SaveableStateRegistry(null) { true }
+                fun savedStrings(): List<String> = saved.performSave().values.flatten().mapNotNull {
+                    (if (it is MutableState<*>) it.value else it) as? String
+                }
                 ImageComposeScene(if (scale == 1f) 430 else 760, 900, coroutineContext = Dispatchers.Unconfined) {
-                    CompositionLocalProvider(LocalClipboardManager provides clipboard, LocalDensity provides Density(1f, scale)) {
+                    CompositionLocalProvider(LocalClipboardManager provides clipboard, LocalDensity provides Density(1f, scale),
+                        LocalSaveableStateRegistry provides saved) {
                         PaperTheme {
                             Column(Modifier.fillMaxSize().background(LocalPaperColors.current.canvas).padding(12.dp)) {
                                 PaperText("Сообщение пользователя")
@@ -187,15 +195,19 @@ class MessageHistoryActionsRenderTest {
                         render()
                     }
                     render("actions")
+                    assertFalse("Исходный запрос" in savedStrings(), "An unopened editor must not persist a copy of the message")
                     click("Действия с сообщением")
                     click("Копировать целиком")
                     assertEquals(complete, clipboardText?.text)
                     click("Действия с сообщением"); render("menu")
                     click("Редактировать"); render("editor")
                     val field = nodes().single { it.config.getOrNull(SemanticsActions.SetText) != null }
+                    assertEquals("Исходный запрос", field.config[SemanticsProperties.EditableText].text)
                     field.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Исправленный запрос")); render()
+                    assertTrue("Исправленный запрос" in savedStrings(), "An open editor must preserve its unsent draft")
                     click("Сохранить и отправить")
                     assertEquals("Исправленный запрос", edited)
+                    assertFalse("Исправленный запрос" in savedStrings(), "A closed editor no longer needs a persisted draft")
                     click("Действия с сообщением"); click("Удалить из истории и контекста"); render("delete")
                     assertFalse(deleted)
                     click("Удалить")

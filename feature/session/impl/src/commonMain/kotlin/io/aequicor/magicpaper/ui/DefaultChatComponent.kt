@@ -17,6 +17,7 @@ class DefaultChatComponent internal constructor(
     filePicker: FilePicker,
     private val onOutput: (ChatOutput) -> Unit,
     internal val workspacePresentation: ChatWorkspacePresentationStore,
+    internal val sourceIcons: ResearchSiteIcons? = null,
 ) : ChatComponent, ChatService by service {
     constructor(
         context: ComponentContext,
@@ -27,6 +28,7 @@ class DefaultChatComponent internal constructor(
     ) : this(context, service, input, filePicker, onOutput, ChatWorkspacePresentationStore())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val picker = AttachmentSelection(filePicker, scope)
+    val usage get() = service.usage
     val composerDraft get() = service.composerDraft(state.value.current?.id ?: input.sessionId)
     init {
         context.lifecycle.doOnResume { service.activate(input.sessionId) }
@@ -52,17 +54,20 @@ class DefaultChatComponent internal constructor(
     }
 }
 
-class DefaultChatComponentFactory(private val service: DefaultChatService, private val filePicker: FilePicker) : ChatComponent.Factory {
+class DefaultChatComponentFactory(private val service: DefaultChatService, private val filePicker: FilePicker,
+    private val sourceIcons: ResearchSiteIcons? = null) : ChatComponent.Factory {
     private val workspacePresentation = ChatWorkspacePresentationStore()
     override fun create(context: ComponentContext, input: ChatInput, onOutput: (ChatOutput) -> Unit): ChatComponent =
-        DefaultChatComponent(context, service, input, filePicker, onOutput, workspacePresentation)
+        DefaultChatComponent(context, service, input, filePicker, onOutput, workspacePresentation, sourceIcons)
 }
 
 internal data class ChatWorkspacePresentation(
     val questionsExpanded: Boolean = true,
     val sourcesExpanded: Boolean = true,
-    val questionsWidth: Float = 252f,
-    val sourcesWidth: Float = 304f,
+    val sharedSourcesExpanded: Boolean = true,
+    val questionSourcesExpanded: Boolean = true,
+    val questionsWidth: Float = 216f,
+    val sourcesWidth: Float = 272f,
 )
 
 /** Shared by visit components so a notebook keeps its panel configuration while sessions change. */
@@ -70,9 +75,9 @@ internal class ChatWorkspacePresentationStore {
     private val values = mutableStateMapOf<String, ChatWorkspacePresentation>()
 
     fun state(notebookId: String?): ChatWorkspacePresentation =
-        notebookId?.let { values[it] } ?: ChatWorkspacePresentation()
+        values[notebookId ?: "new"] ?: ChatWorkspacePresentation()
 
     fun update(notebookId: String?, change: (ChatWorkspacePresentation) -> ChatWorkspacePresentation) {
-        if (notebookId != null) values[notebookId] = change(state(notebookId))
+        values[notebookId ?: "new"] = change(state(notebookId))
     }
 }

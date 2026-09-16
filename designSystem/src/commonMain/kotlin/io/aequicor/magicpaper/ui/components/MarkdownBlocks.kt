@@ -9,6 +9,26 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes as GfmToken
 
 internal const val MESSAGE_BLOCK_CHARS = 1536
 internal const val MESSAGE_PREVIEW_CHARS = 6000
+private const val INLINE_GROUP_MAX_NODES = 32
+
+/** Keep Markdown spacing, but do not give each empty line its own selectable chat row and menu. */
+internal fun markdownInlineBlocks(blocks: List<ASTNode>): List<List<ASTNode>> = buildList {
+    var group = mutableListOf<ASTNode>()
+    var hasContent = false
+    for (node in blocks) {
+        val spacing = node.type == Token.EOL || node.type == Token.WHITE_SPACE
+        // Even a response containing thousands of blank lines must retain lazy
+        // composition instead of building every spacer inside one message row.
+        if ((!spacing && hasContent) || group.size >= INLINE_GROUP_MAX_NODES) {
+            add(group)
+            group = mutableListOf()
+            hasContent = false
+        }
+        group.add(node)
+        if (!spacing) hasContent = true
+    }
+    if (group.isNotEmpty()) add(group)
+}
 
 /** Source ranges remain relative to the original document, including reference links. */
 internal class MarkdownBlockNode(

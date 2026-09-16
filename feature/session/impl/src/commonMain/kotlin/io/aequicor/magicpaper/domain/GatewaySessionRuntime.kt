@@ -15,6 +15,8 @@ class GatewaySessionRuntime(
     override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = kotlinx.coroutines.flow.flow {
         val result = answer(session.messages.dropLast(1), prompt, settings(), profile, attachments,
             researchResources = session.resources,
+            requestText = session.messages.lastOrNull { it.role == ChatRole.USER }?.text ?: prompt,
+            sourcesPrepared = true,
             onSearchResults = { emit(CodingEvent.ToolFinished("web.search", false, sources = it)) })
         emit(CodingEvent.FinalText(result.text, sources = result.sources, attachments = result.attachments))
         emit(CodingEvent.Finished)
@@ -32,88 +34,90 @@ class GatewaySessionRuntime(
         layoutRequest: LayoutChatRequest? = null,
         researchResources: List<ResearchResource>? = null,
         onSearchResults: suspend (List<SearchHit>) -> Unit = {},
+        requestText: String = userText,
+        sourcesPrepared: Boolean = false,
     ): SessionAnswer {
         val trimmed = userText.trim()
         val sourceProblems = mutableListOf<String>()
-        val researchContext = researchResources?.let { resources ->
-            buildString {
-                appendLine(researchPrompt("", resources))
-                for (resource in resources.filter { it.url.isNotEmpty() }) {
-                    if (readResearchPage == null) {
-                        sourceProblems += "Не удалось прочитать источник «${resource.title}»: чтение сайтов недоступно в этом подключении."
-                        appendLine("Содержимое ${resource.url} недоступно: чтение сайтов не поддерживается этим подключением.")
-                    } else {
-                        try { appendLine("Источник ${resource.url}:\n${readResearchPage.invoke(resource.url)}") }
-                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                        catch (failure: Exception) {
-                            io.aequicor.magicpaper.logging.AppLog.error("chat", "source.read.failed", failure, mapOf("resourceId" to resource.id))
-                            appendLine("Источник ${resource.url} не удалось прочитать. Сообщи об этом в ответе.")
-                            sourceProblems += "Не удалось прочитать источник «${resource.title}». Можно повторить запрос или убрать источник."
-                        }
-                    }
-                }
-                if (attachments.any { it.kind == AttachmentKind.FILE }) {
-                    sourceProblems += "Это подключение читает текстовые файлы и изображения. Для остальных файлов выберите движок на компьютере или загрузите текстовую версию."
-                    appendLine(sourceProblems.last())
-                }
+        val request = researchRequest(requestText)
+        val sourceAccess = ResearchSourceAccess(readResearchPage)
+        val checked = researchResources?.let {
+            sourceAccess.check(if (sourcesPrepared) it else request.sources(it, attachments)).toMutableList()
+        }
+        fun recordProblems(checks: List<ResearchSourceCheck>) {
+            checks.filter { it.problem != null }.forEach {
+                sourceProblems += "Не удалось прочитать источник «${it.resource.title}»: ${it.problem}. Можно повторить запрос или убрать источник."
             }
+        }
+        checked?.let(::recordProblems)
+        fun researchContext(): String? = checked?.let {
+            researchPrompt("", it.readableSources(), request) + "\n" + it.unavailableSourceContext(allowSearch = !request.sourceTask)
+        }
+        fun verifiedReferences(): List<SearchHit> = checked.orEmpty().readableSources().mapNotNull {
+            it.url.takeIf(String::isNotBlank)?.let { url -> SearchHit(it.title, url) }
+        }.distinctBy { it.url }
+        if (checked != null && attachments.any { it.kind == AttachmentKind.FILE }) {
+            sourceProblems += "Это подключение читает текстовые файлы и изображения. Для остальных файлов выберите движок на компьютере или загрузите текстовую версию."
         }
         layoutRequest?.let { request ->
             return LayoutChatAgent(gateway, layoutEditor).answer(request.project, request.conversationId, request.requestId,
                 trimmed, history, profile, attachments)
         }
-        if (researchResources.isNullOrEmpty()) packageRuntime?.answer(trimmed, history, profile, attachments)?.let { return SessionAnswer(it) }
+        if (researchResources == null) packageRuntime?.answer(trimmed, history, profile, attachments)?.let { return SessionAnswer(it) }
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
         // они усиливают любую ветку (доки, поиск, свободный диалог).
         val skills = skillSelector.select(trimmed, skillLibrary.relevantFor(trimmed))
 
-        if (looksLikeAppQuestion(trimmed) && (researchResources.isNullOrEmpty() || trimmed.contains("magicpaper", ignoreCase = true))) {
+        if (!request.sourceTask && looksLikeAppQuestion(trimmed) && (researchResources.isNullOrEmpty() || trimmed.contains("magicpaper", ignoreCase = true))) {
             val matches = docs.search(trimmed)
             if (matches.isNotEmpty()) {
                 val context = matches.joinToString("\n\n") { "${it.article.title}\n${it.article.body}" }
                 return tryModel(
                     profile = operationalProfile,
                     system = SYSTEM_PROMPT,
-                    context = listOfNotNull(researchContext, "Документация приложения:\n$context").joinToString("\n\n"),
+                    context = listOfNotNull(researchContext(), "Документация приложения:\n$context").joinToString("\n\n"),
                     skills = skills,
                     history = history,
                     userText = trimmed,
-                    sources = emptyList(),
+                    sources = verifiedReferences(),
                     attachments = attachments,
                     sourceProblems = sourceProblems,
                 )
             }
         }
 
-        if (looksLikeSearchRequest(trimmed)) {
+        // ChatService owns initial discovery. Do not perform a second search after it prepared the run.
+        if (!sourcesPrepared && !request.sourceTask && looksLikeSearchRequest(requestText)) {
             val hits = searchEngine.search(trimmed, settings, limit = 5)
+            if (checked != null) {
+                val newResources = hits.mapNotNull { hit -> researchUrl(hit.url)?.let { ResearchResource(it, hit.title, it) } }
+                    .filterNot { resource -> checked.any { it.resource.key == resource.key } }
+                val extra = sourceAccess.check(newResources)
+                checked += extra
+                recordProblems(extra)
+                val references = verifiedReferences()
+                onSearchResults(references.filter { reference -> hits.any { researchUrl(it.url) == reference.url } })
+                return tryModel(profile, SYSTEM_PROMPT, researchContext(), skills, history, trimmed,
+                    references, attachments, sourceProblems)
+            }
             onSearchResults(hits)
             if (hits.isNotEmpty()) {
                 val context = hits.joinToString("\n\n") { hit ->
                     "[${hit.provider}] ${hit.title}\n${hit.snippet}\n${hit.url}"
                 }
-                return tryModel(
-                    profile = profile,
-                    system = SYSTEM_PROMPT,
-                    context = listOfNotNull(researchContext, "Результаты поиска:\n$context").joinToString("\n\n"),
-                    skills = skills,
-                    history = history,
-                    userText = trimmed,
-                    sources = hits,
-                    attachments = attachments,
-                    sourceProblems = sourceProblems,
-                )
+                return tryModel(profile, SYSTEM_PROMPT, "Результаты поиска:\n$context", skills, history,
+                    trimmed, hits, attachments, sourceProblems)
             }
         }
 
         return tryModel(
             profile = profile,
             system = SYSTEM_PROMPT,
-            context = researchContext,
+            context = researchContext(),
             skills = skills,
             history = history,
             userText = trimmed,
-            sources = emptyList(),
+            sources = verifiedReferences(),
             attachments = attachments,
             sourceProblems = sourceProblems,
         )

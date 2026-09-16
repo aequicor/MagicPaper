@@ -10,6 +10,8 @@ data class ResearchResource(
     val attachment: Attachment? = null,
     val discovered: Boolean = false,
     val snippet: String = "",
+    /** Read by the application for this run only; page bodies never enter saved notebooks. */
+    @kotlinx.serialization.Transient val readableText: String? = null,
 )
 
 /** Only navigable HTTP(S) references are admitted; credentials and whitespace are rejected. */
@@ -25,3 +27,20 @@ fun researchUrl(value: String): String? {
 }
 
 val ChatSession.researchChatId: String get() = researchParentId ?: id
+
+enum class ResearchResourceScope { SHARED, QUESTION }
+
+/** URL identity survives discovery and promotion; file identity survives renaming. */
+val ResearchResource.key: String get() = if (url.isNotEmpty()) "url:$url" else "file:${attachment?.id ?: id}"
+
+fun ChatSession.availableResearchResources(notebook: ChatSession): List<ResearchResource> =
+    (notebook.resources + questionResources.filterNot {
+        it.url in excludedQuestionResourceUrls || it.discovered && it.url in notebook.excludedResourceUrls
+    }).distinctBy { it.key }.filterNot { it.key in disabledResourceKeys }
+
+/** Activity is an observable operation log, not a copy of private model reasoning or the answer. */
+fun List<CodingStep>.researchActivity(): List<CodingStep> = filterNot { it.kind == CodingStepKind.ANSWER }
+    .map { if (it.kind == CodingStepKind.THINKING || it.kind == CodingStepKind.SUMMARY)
+        it.copy(title = "Анализирую материалы", result = "")
+        else if (it.kind == CodingStepKind.ERROR) it.copy(title = "Не удалось выполнить действие", result = "")
+        else it.copy(result = "") }

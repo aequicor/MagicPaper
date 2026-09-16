@@ -48,12 +48,9 @@ public fun PaperMessageActions(
     }
     val scrolling = LocalPaperChatScrolling.current
     LaunchedEffect(scrolling) { if (scrolling) open = false }
-    if (scrolling) {
-        Column(Modifier.fillMaxWidth().padding(end = LocalPaperPlatformPolicy.current.density.controlHeight + 4.dp)) {
-            content()
-        }
-        return
-    }
+    // Keep the message at the same composition slot during wheel/trackpad gestures.
+    // Replacing Box with Column here used to dispose markdown, images and disclosures
+    // twice per gesture, causing layout stalls and resetting expanded activity.
     var focused by remember { mutableStateOf(false) }
     val platform = LocalPaperPlatformPolicy.current.platform
     var touch by remember { mutableStateOf(platform == PaperPlatform.ANDROID) }
@@ -78,7 +75,7 @@ public fun PaperMessageActions(
                 // Keep the opener in focus traversal even while hidden from the pointer.
                 PaperIconButton(label = "Действия с сообщением", onClick = { open = true },
                     modifier = Modifier.onFocusChanged { focused = it.hasFocus }
-                        .graphicsLayer { alpha = if (hovered || focused || open || touch) 1f else 0f }) {
+                        .graphicsLayer { alpha = if (!scrolling && (hovered || focused || open || touch)) 1f else 0f }) {
                     PaperText("⋯", role = PaperTextRole.LABEL)
                 }
                 PaperMenu(open, { open = false }, buildList {

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -201,6 +202,32 @@ class PaperComposerEffectsTest {
             assertEquals(255, red(60, 44))
             assertEquals(0, red(59, 62))
             assertEquals(255, red(60, 62))
+        }
+    }
+
+    @Test fun insetPageChromeDoesNotReplayThePageForAnInvisibleBackdrop() {
+        var pageDraws = 0
+        ImageComposeScene(120, 160) {
+            PaperTheme {
+                Box(Modifier.fillMaxSize().background(Color.White).paperTitleBarFrost(40.dp, blurContent = false)) {
+                    Box(Modifier.fillMaxSize().drawBehind { pageDraws++ }.padding(top = 46.dp)) {
+                        Row(Modifier.fillMaxSize()) {
+                            Box(Modifier.width(60.dp).fillMaxHeight().background(Color.Black))
+                            Box(Modifier.weight(1f).fillMaxHeight().background(Color.White))
+                        }
+                    }
+                }
+            }
+        }.use { scene ->
+            val bytes = scene.render(0L).use { image -> image.encodeToData()!!.use { it.bytes } }
+            assertEquals(1, pageDraws, "Inset articles must be drawn once, without a second full-window capture")
+            java.io.File("build/reports/design-effects").apply { mkdirs() }
+                .resolve("titlebar-inset.png").writeBytes(bytes)
+            val pixels = ImageIO.read(ByteArrayInputStream(bytes))
+            fun red(x: Int, y: Int) = (pixels.getRGB(x, y) shr 16) and 255
+            assertTrue(red(60, 39) < 240, "The title bar still has its divider")
+            assertEquals(0, red(59, 60), "The article remains sharp")
+            assertEquals(255, red(60, 60))
         }
     }
 

@@ -11,6 +11,128 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatResearchTest {
+    @Test fun followUpSendsOnceInItsQuestionAndPreservesTheComposerDraft() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.send("Помоги разобраться")
+            advanceUntilIdle()
+            runtime.finish("first", "Ответ.\n\n<!-- magicpaper:follow-ups\n[\"Разобрать пример\",\"Написать статью: Kotlin\"]\n-->")
+            advanceUntilIdle()
+            val answer = service.state.value.current!!.messages.last()
+            assertEquals("Ответ.", answer.text)
+            assertEquals(listOf("Разобрать пример", "Написать статью: Kotlin"), answer.followUps)
+            assertEquals(answer.followUps, f.chats.session("first")!!.messages.last().followUps)
+            val draft = service.composerDraft("first")
+            draft.update(ComposerDraftData("Мой незавершённый вопрос"))
+            service.sendFollowUp("first", answer.id, "Произвольный запрос")
+            service.newQuestion().getOrThrow()
+            service.sendFollowUp("first", answer.id, answer.followUps.first())
+            advanceUntilIdle()
+            assertEquals(1, runtime.calls.size, "An old view cannot send into a newly selected question")
+            service.selectQuestion("first").getOrThrow()
+            service.sendFollowUp("first", answer.id, answer.followUps.first())
+            service.sendFollowUp("first", answer.id, answer.followUps.first())
+            advanceUntilIdle()
+            assertEquals(2, runtime.calls.size, "A double click must not queue another request")
+            assertEquals("Разобрать пример", service.state.value.current!!.messages.last().text)
+            assertTrue(service.state.value.current!!.queuedPrompts.isEmpty())
+            assertEquals("first", runtime.calls.last().session.id)
+            assertEquals("Мой незавершённый вопрос", draft.state.value.value.text)
+            runtime.finish("first", "Разбор примера")
+            advanceUntilIdle()
+            service.sendFollowUp("first", answer.id, answer.followUps.last())
+            advanceUntilIdle()
+            assertEquals(2, runtime.calls.size, "Only the current answer exposes continuation actions")
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun aLinkedSummaryReadsOnlyTheRequestedPageAndDoesNotSearchOrAddUnrelatedSources() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        var searches = 0
+        val reads = mutableListOf<String>()
+        val search = object : SearchEngine {
+            override val provider = SearchProvider.AUTO
+            override val displayName = "Fixture"
+            override fun isConfigured(settings: AppSettings) = true
+            override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> {
+                searches++; return listOf(SearchHit("Unrelated result", "https://example.org/unrelated"))
+            }
+        }
+        val service = service(f, runtime, search = search,
+            sourceAccess = ResearchSourceAccess { reads += it; "Readable requested paper" })
+        val url = "https://pubmed.ncbi.nlm.nih.gov/37396145/"
+        try {
+            service.addWebsite("first", "https://example.org/old", ResearchResourceScope.SHARED)
+            service.send("$url\nкраткий пересказ")
+            advanceUntilIdle()
+            assertEquals(0, searches)
+            assertEquals(listOf(url), reads)
+            assertEquals(listOf(url), runtime.calls.single().session.resources.map { it.url })
+            assertEquals(listOf(url), service.state.value.current!!.questionResources.map { it.url })
+            runtime.events.getValue("first").send(CodingEvent.ToolFinished("web_search", false,
+                sources = listOf(SearchHit("Unrelated native result", "https://example.org/unrequested"))))
+            runtime.finish("first", "Пересказ [указанной страницы]($url)")
+            advanceUntilIdle()
+            assertEquals(listOf(url), service.state.value.current!!.messages.last().sources.map { it.url })
+            assertEquals(listOf(url), reads, "Unrequested native references must not expand a source task")
+            assertEquals(listOf("https://example.org/old"), service.state.value.notebook!!.resources.map { it.url },
+                "A direct source stays with its question instead of becoming shared automatically")
+            assertEquals(listOf(url), service.state.value.current!!.questionResources.map { it.url })
+            service.send("Уточни последний вывод")
+            advanceUntilIdle()
+            assertEquals(0, searches, "A follow-up is not automatic discovery")
+            runtime.finish("first", "Уточнение")
+            advanceUntilIdle()
+            service.send("Найди ещё исследования")
+            advanceUntilIdle()
+            assertEquals(1, searches, "Explicit search remains available")
+            runtime.finish("first", "Сравнение")
+            advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun unreadablePagesAreExcludedBeforeTheNativeRunAndRecheckedOnTheNextQuestion() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        var unlocked = false
+        val access = ResearchSourceAccess { url ->
+            if (url.endsWith("blocked") && !unlocked) "Verify you are human to continue" else "Verified full page evidence"
+        }
+        val service = service(f, runtime, sourceAccess = access)
+        try {
+            service.addWebsite("first", "https://example.org/readable")
+            service.addWebsite("first", "https://example.org/blocked")
+            service.send("Сравни материалы")
+            advanceUntilIdle()
+            val call = runtime.calls.single()
+            assertEquals(listOf("https://example.org/readable"), call.session.resources.map { it.url })
+            assertEquals("Verified full page evidence", call.session.resources.single().readableText)
+            assertContains(call.prompt, "Недоступные источники исключены")
+            assertFalse("Verify you are human" in call.prompt)
+            assertContains(service.state.value.sourceReadProblems.getValue("first").getValue("url:https://example.org/blocked"), "CAPTCHA")
+            runtime.finish("first", "UNSUPPORTED_ASSERTION [Статья](https://example.org/blocked)")
+            advanceUntilIdle()
+            val answer = service.state.value.current!!.messages.last()
+            assertFalse("UNSUPPORTED_ASSERTION" in answer.text)
+            assertTrue(answer.sources.none { it.url.endsWith("blocked") })
+            assertEquals(2, service.state.value.notebook!!.resources.size, "Read failures must not delete user sources")
+            unlocked = true
+            service.send("Повтори проверку")
+            advanceUntilIdle()
+            assertEquals(2, runtime.calls.last().session.resources.size)
+            assertTrue(service.state.value.sourceReadProblems.getValue("first").isEmpty())
+            runtime.finish("first", "Вывод по двум прочитанным страницам")
+            advanceUntilIdle()
+            assertEquals(2, service.state.value.current!!.messages.last().sources.size)
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
     private class Runtime : CodingRuntime by NoopCodingRuntime {
         data class Call(val session: ChatSession, val prompt: String, val attachments: List<Attachment>)
         val calls = mutableListOf<Call>()
@@ -31,15 +153,44 @@ class ChatResearchTest {
     }
 
     private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatRepository = f.chats,
-        search: SearchEngine? = null): DefaultChatService {
+        search: SearchEngine? = null, pins: RequestPinService? = null,
+        sourceAccess: ResearchSourceAccess = ResearchSourceAccess { "Readable fixture evidence" }): DefaultChatService {
         f.seed()
-        return DefaultChatService(runtime, repository, f.settings, f.profiles, null,
+        return DefaultChatService(runtime, repository, f.settings, f.profiles, pins,
             workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs,
-            researchSearch = search)
+            researchSearch = search, sourceAccess = sourceAccess)
             .also { it.start(); it.activate("first") }
     }
 
-    @Test fun automaticSearchResultsStayWithQuestionAndBecomeAnswerFootnotes() = runTest {
+    @Test fun researchDoesNotGenerateHiddenPinSummaries() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        var syncs = 0
+        var removals = 0
+        val pins = object : RequestPinService {
+            override val groups = kotlinx.coroutines.flow.MutableStateFlow<Map<PinConversation, List<RequestPinGroup>>>(emptyMap())
+            override fun isTracking(conversation: PinConversation) = true
+            override fun sync(conversation: PinConversation, messages: List<PinMessage>, profile: LlmProfile?, reopened: Boolean) { syncs++ }
+            override fun remove(conversation: PinConversation) { removals++ }
+            override fun clear() { removals++ }
+        }
+        val service = service(f, runtime, pins = pins)
+        try {
+            service.setVisible(true)
+            service.send("Исследовательский вопрос")
+            runCurrent()
+            runtime.finish("first", "Ответ")
+            advanceUntilIdle()
+            service.setVisible(false)
+            service.activate("first")
+            runCurrent()
+            assertEquals(0, syncs, "Reading and streaming research must not request obsolete pin summaries")
+            assertEquals(0, removals, "Existing stored pins are not deleted by opening a research chat")
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun firstSearchBuildsSharedLibraryAndBecomesAnswerFootnotes() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
         val runtime = Runtime()
@@ -54,12 +205,13 @@ class ChatResearchTest {
         try {
             service.send("android разработка")
             runCurrent()
-            assertTrue(service.state.value.notebook?.resources.orEmpty().isEmpty())
-            assertEquals(hit.url, service.state.value.current?.questionResources?.single()?.url)
+            assertEquals(hit.url, service.state.value.notebook?.resources?.single()?.url)
+            assertTrue(service.state.value.current?.questionResources.orEmpty().isEmpty())
             assertEquals(hit.url, runtime.calls.single().session.resources.single().url)
             runtime.finish("first", "Обзор")
             advanceUntilIdle()
-            assertEquals(listOf(hit), service.state.value.current?.messages?.last()?.sources)
+            assertEquals(listOf(hit.copy(snippet = "")), service.state.value.current?.messages?.last()?.sources,
+                "Only the checked page is cited; the search snippet is not evidence")
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
@@ -141,6 +293,8 @@ class ChatResearchTest {
             val file = Attachment.fromBytes("notes.txt", "text/plain", "Observations".encodeToByteArray())
             assertTrue(service.addResources("first", listOf(file)).isSuccess)
             assertTrue(service.addWebsite("first", "https://example.org/report").isSuccess)
+            service.send("Исходный вопрос"); runCurrent()
+            runtime.finish("first", "Исходная база"); advanceUntilIdle()
             service.send("Первый вопрос"); runCurrent()
             runtime.events.getValue("first").send(CodingEvent.ToolFinished("web.search", false,
                 resultPreview = """[{"title":"Найденный отчёт","url":"https://example.org/found","snippet":"Evidence"}]"""))
@@ -175,7 +329,7 @@ class ChatResearchTest {
                 assertEquals(second, reopened.state.value.current?.id)
                 assertEquals(2, reopened.state.value.notebook?.resources?.size)
                 assertEquals(1, reopened.state.value.questions.first { it.id == "first" }.questionResources.size)
-                assertEquals(2, runtime.calls.size, "Restoration never runs a question")
+                assertEquals(3, runtime.calls.size, "Restoration never runs a question")
             } finally { reopened.close() }
         } finally { if (!closed) service.close(); Dispatchers.resetMain() }
     }
@@ -198,7 +352,7 @@ class ChatResearchTest {
             advanceUntilIdle()
             assertTrue(service.state.value.notebook!!.resources.isEmpty())
             service.send("Уточни вывод"); runCurrent()
-            assertEquals(listOf(source.url), runtime.calls.last().session.resources.map { it.url })
+            assertTrue(runtime.calls.last().session.resources.isEmpty(), "Late discoveries must not resurrect removed resources")
             runtime.finish("first", "Уточнение"); advanceUntilIdle()
             service.close()
             closed = true
@@ -306,4 +460,245 @@ class ChatResearchTest {
             assertTrue(service.state.value.notebook!!.resources.isEmpty())
         } finally { service.close(); Dispatchers.resetMain() }
     }
+    @Test fun scopedFilesAndSelectionsSurviveReopenWithoutChangingOtherQuestionsOrCitations() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        var closed = false
+        try {
+            val shared = Attachment.fromBytes("shared.txt", "text/plain", "Shared".encodeToByteArray())
+            val local = Attachment.fromBytes("local.txt", "text/plain", "Local".encodeToByteArray())
+            service.addResources("first", listOf(shared)).getOrThrow()
+            service.addWebsite("first", "https://example.org/shared").getOrThrow()
+            service.newQuestion().getOrThrow()
+            val second = service.state.value.current!!.id
+            service.addResources(second, listOf(local), ResearchResourceScope.QUESTION).getOrThrow()
+            val source = service.state.value.notebook!!.resources.first { it.url.isNotBlank() }
+            service.send("Второй вопрос"); runCurrent()
+            assertEquals(setOf(shared.id, local.id), runtime.calls.last().attachments.map { it.id }.toSet())
+            runtime.finish(second, "Ответ со ссылкой"); advanceUntilIdle()
+            val historicalSources = service.state.value.current!!.messages.last().sources
+            service.setResourceEnabled(second, source.key, false).getOrThrow()
+            service.setResourceEnabled(second, "file:${shared.id}", false).getOrThrow()
+            service.send("Уточнение"); runCurrent()
+            assertEquals(listOf(local.id), runtime.calls.last().attachments.map { it.id })
+            assertTrue(runtime.calls.last().session.resources.none { it.url == source.url })
+            runtime.finish(second, "Ответ только по локальному файлу"); advanceUntilIdle()
+            service.selectQuestion("first").getOrThrow()
+            service.send("Первый вопрос"); runCurrent()
+            assertEquals(listOf(shared.id), runtime.calls.last().attachments.map { it.id })
+            assertTrue(runtime.calls.last().session.resources.any { it.url == source.url })
+            runtime.finish("first", "Ответ первому"); advanceUntilIdle()
+            service.close(); closed = true
+            val restored = service(f, runtime, JsonChatRepository(f.kv, f.json))
+            try {
+                restored.selectQuestion(second).getOrThrow()
+                assertEquals(setOf(source.key, "file:${shared.id}"), restored.state.value.current!!.disabledResourceKeys)
+                assertEquals(historicalSources, restored.state.value.current!!.messages[1].sources)
+                assertEquals(local.id, restored.state.value.current!!.questionResources.single().attachment?.id)
+            } finally { restored.close() }
+        } finally { if (!closed) service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun groupSelectionIsAtomicAndKeepsOtherGroupsAndQuestionsIndependent() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        var writes = 0
+        val repository = object : ChatRepository by f.chats {
+            override suspend fun save(session: ChatSession) { writes++; f.chats.save(session) }
+        }
+        val service = service(f, runtime, repository)
+        var closed = false
+        try {
+            val sharedFile = Attachment.fromBytes("shared.txt", "text/plain", "Shared".encodeToByteArray())
+            service.addResources("first", listOf(sharedFile)).getOrThrow()
+            service.addWebsite("first", "https://example.org/shared").getOrThrow()
+            service.newQuestion().getOrThrow()
+            val second = service.state.value.current!!.id
+            service.addWebsite(second, "https://example.org/local-1", ResearchResourceScope.QUESTION).getOrThrow()
+            service.addWebsite(second, "https://example.org/local-2", ResearchResourceScope.QUESTION).getOrThrow()
+            val sharedKeys = service.state.value.notebook!!.resources.map { it.key }.toSet()
+            val localKeys = service.state.value.current!!.questionResources.map { it.key }.toSet()
+            val disabledLocal = localKeys.first()
+            service.setResourceEnabled(second, disabledLocal, false).getOrThrow()
+
+            writes = 0
+            service.setResourcesEnabled(second, sharedKeys, false).getOrThrow()
+            assertEquals(1, writes, "A group change is one durable edit, not one write per source")
+            assertEquals(sharedKeys + disabledLocal, service.state.value.current!!.disabledResourceKeys)
+            assertEquals(localKeys - disabledLocal, service.state.value.current!!
+                .availableResearchResources(service.state.value.notebook!!).map { it.key }.toSet())
+
+            service.setResourcesEnabled(second, sharedKeys, true).getOrThrow()
+            assertEquals(setOf(disabledLocal), service.state.value.current!!.disabledResourceKeys,
+                "Selecting shared sources must preserve the local group's partial selection")
+            service.setResourcesEnabled(second, localKeys, false).getOrThrow()
+            assertEquals(localKeys, service.state.value.current!!.disabledResourceKeys)
+            service.setResourcesEnabled(second, localKeys, true).getOrThrow()
+            assertTrue(service.state.value.current!!.disabledResourceKeys.isEmpty())
+
+            writes = 0
+            assertTrue(service.setResourcesEnabled(second, sharedKeys + "url:https://example.org/missing", false).isFailure)
+            assertEquals(0, writes, "An invalid selection cannot partially disable the valid sources")
+            assertTrue(service.state.value.current!!.disabledResourceKeys.isEmpty())
+            assertNotNull(service.state.value.notice)
+            service.setResourcesEnabled(second, sharedKeys, false).getOrThrow()
+            service.selectQuestion("first").getOrThrow()
+            assertTrue(service.state.value.current!!.disabledResourceKeys.isEmpty(),
+                "Disabling shared sources in one question must not disable them in other questions")
+            assertEquals(sharedKeys, service.state.value.current!!
+                .availableResearchResources(service.state.value.notebook!!).map { it.key }.toSet())
+            assertTrue(runtime.calls.isEmpty(), "Changing source selection must not start a request")
+
+            service.close(); closed = true
+            val restored = service(f, runtime, JsonChatRepository(f.kv, f.json))
+            try {
+                restored.selectQuestion(second).getOrThrow()
+                assertEquals(sharedKeys, restored.state.value.current!!.disabledResourceKeys)
+                assertEquals(localKeys, restored.state.value.current!!
+                    .availableResearchResources(restored.state.value.notebook!!).map { it.key }.toSet())
+            } finally { restored.close() }
+        } finally { if (!closed) service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun promotionDeduplicatesResourcesAndKeepsDisabledSelectionInOriginalQuestion() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.newQuestion().getOrThrow()
+            val second = service.state.value.current!!.id
+            service.addWebsite(second, "https://example.org/local", ResearchResourceScope.QUESTION).getOrThrow()
+            val resource = service.state.value.current!!.questionResources.single()
+            service.setResourceEnabled(second, resource.key, false).getOrThrow()
+            service.shareResource(second, resource.id).getOrThrow()
+            assertTrue(service.state.value.current!!.questionResources.isEmpty())
+            assertEquals(listOf(resource), service.state.value.notebook!!.resources)
+            assertTrue(service.state.value.current!!.availableResearchResources(service.state.value.notebook!!).isEmpty())
+            service.selectQuestion("first").getOrThrow()
+            assertEquals(listOf(resource), service.state.value.current!!.availableResearchResources(service.state.value.notebook!!))
+            service.addWebsite("first", resource.url).getOrThrow()
+            assertEquals(1, service.state.value.notebook!!.resources.size)
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun laterSearchIsLocalAndCannotReenableADisabledSharedSource() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val common = SearchHit("Обзор", "https://example.org/overview")
+        val extra = SearchHit("Детали", "https://example.org/details")
+        var hits = listOf(common)
+        val search = object : SearchEngine {
+            override val provider = SearchProvider.WIKIPEDIA
+            override val displayName = "Fixture"
+            override fun isConfigured(settings: AppSettings) = true
+            override suspend fun search(query: String, settings: AppSettings, limit: Int) = hits
+        }
+        val service = service(f, runtime, search = search)
+        try {
+            service.send("Общая тема"); runCurrent()
+            runtime.finish("first", "Обзор"); advanceUntilIdle()
+            val resource = service.state.value.notebook!!.resources.single()
+            assertTrue(service.state.value.current!!.messages.last().researchActivity.any { it.tool == "web.search" && !it.running })
+            service.newQuestion().getOrThrow()
+            val second = service.state.value.current!!.id
+            service.setResourceEnabled(second, resource.key, false).getOrThrow()
+            hits = listOf(common, extra)
+            service.send("Узкий вопрос"); runCurrent()
+            assertEquals(listOf(extra.url), runtime.calls.last().session.resources.map { it.url })
+            assertEquals(listOf(resource), service.state.value.notebook!!.resources)
+            assertEquals(listOf(extra.url), service.state.value.current!!.questionResources.map { it.url })
+            runtime.finish(second, "Детали"); advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun liveOperationsAndInterruptedActivityBelongToTheirQuestionAndPersist() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.send("Исследуй"); runCurrent()
+            runtime.events.getValue("first").send(CodingEvent.ToolStarted("web.search", "", "search", title = "Ищу источники"))
+            runtime.events.getValue("first").send(CodingEvent.ThinkingDelta("Private detailed reasoning"))
+            runtime.events.getValue("first").send(CodingEvent.TextDelta("Начало ответа"))
+            runCurrent()
+            val live = service.state.value.drafts.getValue("first")
+            assertTrue(live.steps.any { it.tool == "web.search" && it.running })
+            service.newQuestion().getOrThrow()
+            assertNull(service.state.value.drafts[service.state.value.current?.id])
+            service.selectQuestion("first").getOrThrow()
+            service.pause(); advanceUntilIdle()
+            val saved = f.chats.session("first")!!
+            assertEquals(ExecutionIntent.STOP, saved.pendingRun?.intent)
+            assertTrue(saved.pendingActivity.any { it.tool == "web.search" && !it.running })
+            assertFalse(saved.pendingActivity.any { it.title.contains("Private") })
+            assertFalse(service.state.value.busy)
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun removingRootQuestionLocalSourceDoesNotExcludeItFromOtherQuestions() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.send("Общая тема"); runCurrent()
+            runtime.finish("first", "Обзор"); advanceUntilIdle()
+            service.addWebsite("first", "https://example.org/local", ResearchResourceScope.QUESTION).getOrThrow()
+            val local = service.state.value.current!!.questionResources.single()
+            service.removeResource("first", local.id, ResearchResourceScope.QUESTION).getOrThrow()
+            assertTrue(service.state.value.notebook!!.excludedResourceUrls.isEmpty())
+            service.newQuestion().getOrThrow()
+            val second = service.state.value.current!!.id
+            service.send("Другой вопрос"); runCurrent()
+            runtime.events.getValue(second).send(CodingEvent.ToolFinished("web.search", false,
+                sources = listOf(SearchHit("Материал", local.url))))
+            runCurrent()
+            assertEquals(local.url, service.state.value.current!!.questionResources.single().url)
+            runtime.finish(second, "Ответ"); advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun firstQueryFromANewQuestionStillBuildsSharedBase() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.newQuestion().getOrThrow()
+            val second = service.state.value.current!!.id
+            service.send("Первый запрос всего исследования"); runCurrent()
+            runtime.events.getValue(second).send(CodingEvent.ToolFinished("web.search", false,
+                sources = listOf(SearchHit("База", "https://example.org/base"))))
+            runCurrent()
+            assertEquals("https://example.org/base", service.state.value.notebook!!.resources.single().url)
+            assertTrue(service.state.value.current!!.questionResources.isEmpty())
+            runtime.finish(second, "Ответ"); advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun choosingLocalSearchResultForSharedScopeMovesItWithoutDuplicateOrDisabledCopy() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.newQuestion().getOrThrow()
+            val question = service.state.value.current!!.id
+            val hit = SearchHit("Материал", "https://example.org/report")
+            service.addSearchResult(question, hit, ResearchResourceScope.QUESTION).getOrThrow()
+            val source = service.state.value.current!!.questionResources.single()
+            service.setResourceEnabled(question, source.key, false).getOrThrow()
+            service.addSearchResult(question, hit, ResearchResourceScope.SHARED).getOrThrow()
+            assertTrue(service.state.value.current!!.questionResources.isEmpty())
+            assertTrue(service.state.value.current!!.disabledResourceKeys.isEmpty())
+            assertEquals(hit.url, service.state.value.notebook!!.resources.single().url)
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
 }

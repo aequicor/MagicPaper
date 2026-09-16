@@ -3,6 +3,7 @@
 package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.Image
+import androidx.compose.ui.input.key.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -167,7 +168,13 @@ public fun PaperTab(label: String, selected: Boolean, onClick: () -> Unit, modif
 
 @Composable
 public fun PaperMenuHost(expanded: Boolean, onDismissRequest: () -> Unit, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest, modifier = modifier, content = content)
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest,
+        modifier = modifier.onPreviewKeyEvent { event ->
+            if (event.key == Key.Escape) {
+                if (event.type == KeyEventType.KeyDown) onDismissRequest()
+                true
+            } else false
+        }, content = content)
 }
 
 @Composable

@@ -2,9 +2,46 @@ package io.aequicor.magicpaper.navigation
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.snapshots.Snapshot
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.*
 import kotlin.test.*
 
 class VisitPresentationTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun autosaveCoalescesScrollAndFlushKeepsTheLatestDraftBeforeItsTimer() = runTest {
+        var snapshot: String? = null
+        var writes = 0
+        var reads = 0
+        val owner = VisitPresentationState(null) { snapshot = it; writes++ }
+        val registry = owner.registry()
+        val scroll = mutableStateOf(0)
+        val draft = mutableStateOf("draft")
+        registry.registerProvider("scroll") { reads++; scroll.value }
+        registry.registerProvider("draft") { draft }
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { registry.trackChanges() }
+        assertEquals(1, writes)
+        repeat(100) {
+            scroll.value = it + 1
+            draft.value = "draft $it"
+            Snapshot.sendApplyNotifications()
+            advanceTimeBy(1)
+        }
+        assertEquals(1, writes, "A burst of scroll offsets must not serialize every offset")
+        assertEquals(1, reads, "Observation must not collect every saver on each frame")
+        advanceTimeBy(200)
+        runCurrent()
+        assertEquals(2, writes)
+        assertEquals(100, PresentationCodec.decode(snapshot).getValue("scroll").single())
+        scroll.value = 101
+        draft.value = "latest unsent draft"
+        Snapshot.sendApplyNotifications()
+        owner.flush()
+        val restored = PresentationCodec.decode(snapshot)
+        assertEquals(101, restored.getValue("scroll").single())
+        assertEquals("latest unsent draft", (restored.getValue("draft").single() as MutableState<*>).value)
+    }
     @Test fun floatingPointBoundariesAndSignedZeroRoundTripExactly() {
         val doubles = listOf(1.2345678901234567, 2147483648.0, 9007199254740991.0,
             Double.MIN_VALUE, Double.MAX_VALUE, -0.0, 0.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)
@@ -46,6 +83,7 @@ class VisitPresentationTest {
         expanded.value = listOf("first", "last")
         scrollEntry.unregister()
         expandedEntry.unregister()
+        owner.flush()
         val revisited = owner.registry()
         assertEquals(42, revisited.consumeRestored("scroll"))
         assertEquals(listOf("first", "last"), revisited.consumeRestored("expanded"))
@@ -78,10 +116,14 @@ class VisitPresentationTest {
     @Test fun visitsKeepIndependentPresentation() {
         var a = ""
         var b = ""
-        val first = VisitPresentationState(null) { a = it }.registry()
-        val second = VisitPresentationState(null) { b = it }.registry()
+        val firstOwner = VisitPresentationState(null) { a = it }
+        val secondOwner = VisitPresentationState(null) { b = it }
+        val first = firstOwner.registry()
+        val second = secondOwner.registry()
         first.registerProvider("scroll") { 20 }.unregister()
         second.registerProvider("scroll") { 70 }.unregister()
+        firstOwner.flush()
+        secondOwner.flush()
         assertEquals(20, VisitPresentationState(a) {}.registry().consumeRestored("scroll"))
         assertEquals(70, VisitPresentationState(b) {}.registry().consumeRestored("scroll"))
     }
@@ -95,4 +137,32 @@ class VisitPresentationTest {
         assertEquals(0, writes)
     }
     private enum class TestDomain { SECRET }
+
+    @Test fun disposingOneLazyItemDoesNotReadOrSaveUnrelatedProviders() {
+        var unrelatedReads = 0
+        var writes = 0
+        val registry = TrackingSaveableRegistry(emptyMap()) { writes++ }
+        registry.registerProvider("composer") { unrelatedReads++; "unsent draft" }
+        val item = registry.registerProvider("offscreen") { "expanded" }
+        item.unregister()
+        assertEquals(0, unrelatedReads)
+        assertEquals(0, writes)
+        assertEquals("expanded", registry.consumeRestored("offscreen"))
+        registry.save(registry.performSave())
+        assertEquals(1, writes)
+        assertEquals(1, unrelatedReads)
+    }
+
+    @Test fun detachedNullSlotsAndReusedKeysKeepRestorationOrder() {
+        val registry = TrackingSaveableRegistry(emptyMap()) {}
+        val first = registry.registerProvider("row") { null }
+        val second = registry.registerProvider("row") { "second" }
+        second.unregister()
+        first.unregister()
+        assertNull(registry.consumeRestored("row"))
+        assertEquals("second", registry.consumeRestored("row"))
+        val next = registry.registerProvider("row") { "new value" }
+        next.unregister()
+        assertEquals("new value", registry.consumeRestored("row"))
+    }
 }

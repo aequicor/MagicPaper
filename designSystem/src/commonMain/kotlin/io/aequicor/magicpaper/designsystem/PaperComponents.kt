@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.triStateToggleable
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardActions
@@ -206,25 +208,34 @@ public fun PaperToggle(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, 
     PaperToggleMark(checked, onCheckedChange, modifier, enabled, true)
 }
 
+/** Indeterminate represents a partial group selection; activating it requests checked = true. */
 @Composable
-public fun PaperCheck(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    PaperToggleMark(checked, onCheckedChange, modifier, enabled, false)
+public fun PaperCheck(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier,
+    enabled: Boolean = true, indeterminate: Boolean = false) {
+    PaperToggleMark(checked, onCheckedChange, modifier, enabled, false, indeterminate)
 }
 
 @Composable
-private fun PaperToggleMark(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier, enabled: Boolean, switch: Boolean) {
+private fun PaperToggleMark(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier, enabled: Boolean, switch: Boolean,
+    indeterminate: Boolean = false) {
     val colors = LocalPaperColors.current
     val source = remember { MutableInteractionSource() }
     val shape = if (switch) RoundedCornerShape(50) else RoundedCornerShape(4.dp)
     val height = LocalPaperPlatformPolicy.current.density.controlHeight
+    val state = if (indeterminate) ToggleableState.Indeterminate else ToggleableState(checked)
     Box(modifier.sizeIn(minWidth = height, minHeight = height)
         .paperFeedback(source, RoundedCornerShape(6.dp), enabled)
-        .then(if (onCheckedChange == null) Modifier else Modifier.toggleable(checked, source, null, enabled, if (switch) Role.Switch else Role.Checkbox, onCheckedChange)),
+        .then(when {
+            onCheckedChange == null -> Modifier
+            switch -> Modifier.toggleable(checked, source, null, enabled, Role.Switch, onCheckedChange)
+            else -> Modifier.triStateToggleable(state, source, null, enabled, Role.Checkbox) { onCheckedChange(state != ToggleableState.On) }
+        }),
         contentAlignment = Alignment.Center) {
         Box(Modifier.sizeIn(minWidth = if (switch) 32.dp else 18.dp, minHeight = 18.dp)
-            .background(if (checked) colors.selected else colors.surface, shape)
+            .background(if (checked || indeterminate) colors.selected else colors.surface, shape)
             .border(1.dp, if (enabled) colors.action else colors.disabled, shape), contentAlignment = if (switch) { if (checked) Alignment.CenterEnd else Alignment.CenterStart } else Alignment.Center) {
             if (switch) Box(Modifier.padding(3.dp).sizeIn(minWidth = 12.dp, minHeight = 12.dp).background(if (enabled) colors.action else colors.disabled, RoundedCornerShape(50)))
+            else if (indeterminate) Box(Modifier.size(10.dp, 2.dp).background(if (enabled) colors.text else colors.disabled))
             else if (checked) PaperText("✓", role = PaperTextRole.CHROME, color = colors.text)
         }
     }
@@ -267,6 +278,7 @@ public fun PaperButton(
     state: PaperControlState = if (enabled) PaperControlState.NORMAL else PaperControlState.DISABLED,
     accessibilityLabel: String = label,
     focusRequester: FocusRequester? = null,
+    maxLines: Int = 1,
 ) {
     val colors = LocalPaperColors.current
     val policy = LocalPaperPlatformPolicy.current
@@ -293,7 +305,7 @@ public fun PaperButton(
     ) {
         Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
             if (loading) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), color = foreground, strokeWidth = 2.dp)
-            else PaperText(label, role = PaperTextRole.CHROME, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = if (!active || state == PaperControlState.SELECTED || state == PaperControlState.ERROR) colors.text else foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            else PaperText(label, role = PaperTextRole.CHROME, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = if (!active || state == PaperControlState.SELECTED || state == PaperControlState.ERROR) colors.text else foreground, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
         }
     }
 }

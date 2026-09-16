@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.use
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
@@ -15,6 +16,100 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class PaperResearchTest {
+    @Test fun followUpPreviewsKeepTheCompleteQuestionAtNarrowAndLargeTextSizes() {
+        for (scale in listOf(1f, 2f)) {
+            val scene = onPaperUi { ImageComposeScene(if (scale == 1f) 640 else 320, if (scale == 1f) 240 else 900) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale)) { PaperResearchFollowUpsPreview() }
+            } }
+            try {
+                repeat(6) { onPaperUi { scene.render(it * 32_000_000L).close() } }
+                onPaperUi {
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    val answer = nodes.single { it.config.getOrNull(SemanticsProperties.Text).orEmpty()
+                        .any { text -> text.text == "Начните с небольшой задачи и проверьте результат на практике." } }
+                    val questionTexts = listOf("Как выбрать первый проект?", "Сравнить Kotlin и Compose на практическом примере",
+                        "Написать статью: от первого экрана до Android-приложения")
+                    val questions = nodes.filter { it.config.getOrNull(SemanticsProperties.Text).orEmpty()
+                        .any { text -> text.text in questionTexts } }
+                    assertEquals(questionTexts.size, questions.size)
+                    val questionLayouts = questions.map { question ->
+                        assertEquals(answer.boundsInRoot.left, question.boundsInRoot.left, .5f,
+                            "Each suggestion shares the answer's leading edge at text scale $scale")
+                        val layouts = mutableListOf<TextLayoutResult>()
+                        question.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+                        layouts.single().also { layout ->
+                            assertFalse(layout.hasVisualOverflow)
+                            for (line in 0 until layout.lineCount) {
+                                assertEquals(0f, layout.getLineLeft(line), .5f,
+                                    "Wrapped suggestion lines remain left-aligned at text scale $scale")
+                            }
+                        }
+                    }
+                    if (scale == 2f) assertTrue(questionLayouts.any { it.lineCount > 1 },
+                        "The large-text fixture exercises wrapping")
+                    val directory = java.io.File("build/reports/research-follow-ups").apply { mkdirs() }
+                    java.io.File(directory, "questions-$scale.png").writeBytes(scene.render(240_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } })
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
+    @Test fun activityPreviewsUseCompactSourcesAndExposeOperationStates() {
+        for (scale in listOf(1f, 2f)) {
+            val scene = onPaperUi { ImageComposeScene(if (scale == 1f) 440 else 320, if (scale == 1f) 700 else 1600) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale)) {
+                    Column {
+                        PaperResearchActivityPreview()
+                        PaperResearchActivityStatesPreview()
+                    }
+                }
+            } }
+            try {
+                repeat(8) { onPaperUi { scene.render(it * 32_000_000L).close() } }
+                onPaperUi {
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    assertTrue(nodes.mapNotNull { it.config.getOrNull(SemanticsProperties.StateDescription) }
+                        .containsAll(listOf("Завершено", "Выполняется", "Приостановлено", "Ошибка")))
+                    val link = nodes.first { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == "Kotlin Documentation" } }
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    link.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+                    assertEquals(11f, layouts.single().layoutInput.style.fontSize.value)
+                    assertEquals(androidx.compose.ui.text.font.FontFamily.SansSerif, layouts.single().layoutInput.style.fontFamily)
+                    assertFalse(layouts.single().hasVisualOverflow)
+                    val directory = java.io.File("build/reports/research-activity").apply { mkdirs() }
+                    java.io.File(directory, "states-$scale.png").writeBytes(scene.render(300_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } })
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
+    @Test fun compactResearchRowsExposeSelectionAndKeepLongTitlesToTwoLines() {
+        for (scale in listOf(1f, 2f)) {
+            val scene = onPaperUi { ImageComposeScene(340, 520) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale)) { PaperResearchRowsPreview() }
+            } }
+            try {
+                repeat(4) { onPaperUi { scene.render(it * 32_000_000L).close() } }
+                onPaperUi {
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    val row = nodes.first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.any { label -> label.startsWith("Вопрос 1:") } == true }
+                    assertTrue(row.config[SemanticsProperties.Selected])
+                    assertTrue(row.boundsInRoot.height >= 44f)
+                    val title = nodes.first { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text.startsWith("Как организовать") } == true }
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    title.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+                    assertEquals(2, layouts.single().lineCount)
+                    assertTrue(nodes.any { it.config.getOrNull(SemanticsProperties.ContentDescription)?.any { label -> label == "Использовать источник: Отключённый источник" } == true })
+                    val directory = java.io.File("build/reports/research-rows").apply { mkdirs() }
+                    java.io.File(directory, "rows-$scale.png").writeBytes(scene.render(200_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } })
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
     @Test fun bookTypeStaysDenseAndAlignedWithoutChangingOtherScreens() {
         for (scale in listOf(1f, 2f)) {
             val scene = onPaperUi { ImageComposeScene(390, 900) {

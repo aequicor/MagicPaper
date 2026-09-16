@@ -25,6 +25,10 @@ data class ChatMessage(
     val sources: List<SearchHit> = emptyList(),
     /** Прикреплённые пользователем файлы (изображения и текст уходят модели). */
     val attachments: List<Attachment> = emptyList(),
+    /** Actual execution events retained with the answer, without replaying work on restore. */
+    val researchActivity: List<CodingStep> = emptyList(),
+    /** Suggested next user messages; displayed as actions, never executed on restoration. */
+    val followUps: List<String> = emptyList(),
 )
 
 /** Сессия (свиток) чата. */
@@ -63,6 +67,12 @@ data class ChatSession(
     val archived: Boolean = false,
     /** Restoring grants another inactivity interval without changing message recency. */
     val archiveRestoredAt: Long? = null,
+    /** Stable resource keys disabled only for this question, including shared resources. */
+    val disabledResourceKeys: Set<String> = emptySet(),
+    /** Last observed activity of an interrupted run; its checkpoint owns resume. */
+    val pendingActivity: List<CodingStep> = emptyList(),
+    /** Local removals must not suppress discovery in another question, including the root. */
+    val excludedQuestionResourceUrls: Set<String> = emptySet(),
 )
 
 /** Доступные поисковые движки. */

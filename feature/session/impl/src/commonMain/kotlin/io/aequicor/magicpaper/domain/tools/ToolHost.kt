@@ -31,6 +31,21 @@ class ToolHost(val receipts: ToolReceiptStore, val questions: RuntimeQuestionnai
         return json.encodeToJsonElement(answers)
     }
 
+    /** Research chats are owned by ChatService, not the project/plan registry.
+     * Only search and questions cross this boundary; cancellation revokes the run. */
+    internal fun researchChatSession(context: ToolExecutionContext, allowSearch: Boolean = true): ToolSession {
+        require(context.role == ToolRole.CHAT && context.mode == CodingInteractionMode.RESEARCH && context.planId == null)
+        val commands = buildList {
+            search?.takeIf { allowSearch }?.let { find -> add(JsonToolCommand(ToolCatalog.get("web.search")) { ctx, _, args ->
+                find(ctx, json.decodeFromJsonElement<ToolSearch>(args).query.also { require(it.isNotBlank()) })
+            }) }
+            add(JsonToolCommand(ToolCatalog.get("questionnaire")) { ctx, id, args -> askQuestionnaire(ctx, id, args) })
+        }
+        val registry = ToolRegistry(commands)
+        return ToolSession(context, registry, ToolExecutor(registry, receipts,
+            checkScope = { currentCoroutineContext().ensureActive() }, knownSecrets = { knownSecrets() }), knownSecrets = { knownSecrets() })
+    }
+
     fun session(context: ToolExecutionContext, overrides: Map<String, suspend (ToolExecutionContext, String, JsonObject) -> JsonElement> = emptyMap()): ToolSession {
         val scopedContext = contextDefaults(context)
         val commands = ToolCatalog.definitions.filter { !it.native && (it.id != "web.search" || search != null) }.map { definition ->

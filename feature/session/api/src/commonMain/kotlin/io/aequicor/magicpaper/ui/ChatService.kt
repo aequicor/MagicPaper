@@ -15,11 +15,15 @@ interface ChatService {
     fun selectSession(id: String)
     suspend fun newQuestion(): Result<Unit>
     suspend fun selectQuestion(id: String): Result<Unit>
-    suspend fun addWebsite(chatId: String, url: String): Result<Unit>
+    suspend fun addWebsite(questionId: String, url: String, scope: ResearchResourceScope = ResearchResourceScope.SHARED): Result<Unit>
     suspend fun searchResources(query: String): Result<List<SearchHit>>
-    suspend fun addSearchResult(chatId: String, hit: SearchHit): Result<Unit>
-    suspend fun addResources(chatId: String, attachments: List<Attachment>): Result<Unit>
-    suspend fun removeResource(chatId: String, resourceId: String): Result<Unit>
+    suspend fun addSearchResult(questionId: String, hit: SearchHit, scope: ResearchResourceScope = ResearchResourceScope.SHARED): Result<Unit>
+    suspend fun addResources(questionId: String, attachments: List<Attachment>, scope: ResearchResourceScope = ResearchResourceScope.SHARED): Result<Unit>
+    suspend fun removeResource(questionId: String, resourceId: String, scope: ResearchResourceScope = ResearchResourceScope.SHARED): Result<Unit>
+    suspend fun setResourceEnabled(questionId: String, resourceKey: String, enabled: Boolean): Result<Unit>
+    /** Changes the whole selection in one saved edit, for this question only. */
+    suspend fun setResourcesEnabled(questionId: String, resourceKeys: Set<String>, enabled: Boolean): Result<Unit>
+    suspend fun shareResource(questionId: String, resourceId: String): Result<Unit>
     fun deleteSession(id: String)
     fun archiveSession(id: String)
     fun restoreSession(id: String)
@@ -27,6 +31,8 @@ interface ChatService {
     suspend fun deleteMessage(sessionId: String, messageId: String): Result<Unit>
     suspend fun forkSession(sessionId: String, throughMessageId: String? = null): Result<String>
     fun send(text: String, attachments: List<Attachment> = emptyList())
+    /** Sends a displayed continuation in its original question, preserving the composer draft. */
+    fun sendFollowUp(sessionId: String, messageId: String, question: String)
     fun pause()
     fun resume(text: String = "", attachments: List<Attachment> = emptyList())
     fun clarify(text: String, attachments: List<Attachment> = emptyList())

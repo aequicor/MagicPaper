@@ -16,9 +16,40 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class, androidx.compose.ui.InternalComposeUiApi::class)
 class PaperMessageActionsTest {
+    @Test fun scrollingDoesNotDisposeMessageContent() {
+        val scrolling = androidx.compose.runtime.mutableStateOf(false)
+        var mounts = 0
+        var disposals = 0
+        val scene = onPaperUi { ImageComposeScene(430, 300) {
+            PaperTheme {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    io.aequicor.magicpaper.ui.components.LocalPaperChatScrolling provides scrolling.value) {
+                    PaperMessageActions({}) {
+                        androidx.compose.runtime.DisposableEffect(Unit) {
+                            mounts++
+                            onDispose { disposals++ }
+                        }
+                        PaperText("Ответ с состоянием раскрытого исследования")
+                    }
+                }
+            }
+        } }
+        try {
+            var frame = 0L
+            fun render() = onPaperUi { repeat(3) { scene.render(++frame * 32_000_000L).close() } }
+            render()
+            repeat(5) {
+                onPaperUi { scrolling.value = true }; render()
+                onPaperUi { scrolling.value = false }; render()
+            }
+            assertEquals(1, mounts, "Wheel/trackpad gestures must retain the message subtree")
+            assertEquals(0, disposals, "Scrolling must not restart markdown, activity or image work")
+        } finally { onPaperUi { scene.close() } }
+    }
+
     @Test fun hoverFocusAndSecondaryClickExposeActionsWithoutMovingText() {
         var forks = 0
-        ImageComposeScene(430, 300) {
+        val scene = onPaperUi { ImageComposeScene(430, 300) {
             PaperTheme {
                 PaperSurface(Modifier.fillMaxSize()) {
                     Column(Modifier.padding(16.dp)) {
@@ -28,17 +59,18 @@ class PaperMessageActionsTest {
                     }
                 }
             }
-        }.use { scene ->
+        } }
+        try {
             var frame = 0L
             fun render(name: String): ByteArray {
-                repeat(5) { scene.render(++frame * 32_000_000L).close() }
-                return scene.render(++frame * 32_000_000L).use { image ->
+                repeat(5) { onPaperUi { scene.render(++frame * 32_000_000L).close() } }
+                return onPaperUi { scene.render(++frame * 32_000_000L).use { image ->
                     image.encodeToData()!!.use { data -> data.bytes.also {
                         val file = File("build/reports/message-actions/$name.png")
                         file.parentFile.mkdirs()
                         file.writeBytes(it)
                     } }
-                }
+                } }
             }
             fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
             fun nodes() = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }
@@ -46,33 +78,57 @@ class PaperMessageActionsTest {
                 it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == label } == true
             }
             val idle = render("idle")
-            val bounds = text("Ответ с выделяемым текстом").boundsInRoot
-            assertTrue(nodes().none { it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == "Копировать целиком" } == true })
-            scene.sendPointerEvent(PointerEventType.Move, bounds.center, type = PointerType.Mouse)
+            val ownerCount = onPaperUi { scene.semanticsOwners.size }
+            fun awaitMenuDisposed() {
+                repeat(60) {
+                    if (onPaperUi { scene.semanticsOwners.size == ownerCount && nodes().none { node ->
+                        node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == "Форк до этого сообщения" }
+                    } }) return
+                    onPaperUi { scene.render(++frame * 32_000_000L).close() }
+                }
+                fail("The closed menu must finish disposing before the next pointer action")
+            }
+            val bounds = onPaperUi { text("Ответ с выделяемым текстом").boundsInRoot }
+            onPaperUi {
+                assertTrue(nodes().none { it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == "Копировать целиком" } == true })
+                scene.sendPointerEvent(PointerEventType.Move, bounds.center, type = PointerType.Mouse)
+            }
             val hover = render("hover")
             assertFalse(idle.contentEquals(hover), "Hover reveals the menu opener")
-            assertEquals(bounds, text("Ответ с выделяемым текстом").boundsInRoot)
-            scene.sendPointerEvent(PointerEventType.Move, Offset(420f, 280f), type = PointerType.Mouse)
+            onPaperUi {
+                assertEquals(bounds, text("Ответ с выделяемым текстом").boundsInRoot)
+                scene.sendPointerEvent(PointerEventType.Move, Offset(420f, 280f), type = PointerType.Mouse)
+            }
             render("exit")
-            val opener = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Действия с сообщением") == true }
-            assertTrue(opener.config[SemanticsActions.RequestFocus].action!!.invoke())
+            onPaperUi {
+                val opener = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Действия с сообщением") == true }
+                assertTrue(opener.config[SemanticsActions.RequestFocus].action!!.invoke())
+            }
             val focused = render("focus")
             assertFalse(idle.contentEquals(focused))
-            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown))
-            scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))
+            onPaperUi {
+                scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown))
+                scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))
+            }
             render("keyboard-menu")
-            assertTrue(text("Удалить из истории и контекста").config.contains(SemanticsProperties.Disabled))
-            text("Форк до этого сообщения").config[SemanticsActions.OnClick].action!!.invoke()
+            onPaperUi {
+                assertTrue(text("Удалить из истории и контекста").config.contains(SemanticsProperties.Disabled))
+                text("Форк до этого сообщения").config[SemanticsActions.OnClick].action!!.invoke()
+            }
+            awaitMenuDisposed()
             render("closed")
             assertEquals(1, forks)
-            scene.sendPointerEvent(PointerEventType.Press, bounds.center, type = PointerType.Mouse,
-                buttons = PointerButtons(isSecondaryPressed = true), button = PointerButton.Secondary)
-            scene.sendPointerEvent(PointerEventType.Release, bounds.center, type = PointerType.Mouse,
-                buttons = PointerButtons(), button = PointerButton.Secondary)
+            onPaperUi {
+                scene.sendPointerEvent(PointerEventType.Press, bounds.center, type = PointerType.Mouse,
+                    buttons = PointerButtons(isSecondaryPressed = true), button = PointerButton.Secondary)
+                scene.sendPointerEvent(PointerEventType.Release, bounds.center, type = PointerType.Mouse,
+                    buttons = PointerButtons(), button = PointerButton.Secondary)
+            }
             render("context-menu")
-            text("Форк до этого сообщения").config[SemanticsActions.OnClick].action!!.invoke()
+            onPaperUi { text("Форк до этого сообщения").config[SemanticsActions.OnClick].action!!.invoke() }
+            awaitMenuDisposed()
             render("context-closed")
             assertEquals(2, forks, "Secondary click on selectable message text opens the same actions")
-        }
+        } finally { onPaperUi { scene.close() } }
     }
 }

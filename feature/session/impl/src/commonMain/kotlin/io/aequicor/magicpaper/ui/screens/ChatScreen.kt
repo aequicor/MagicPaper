@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import io.aequicor.magicpaper.designsystem.PaperTitleBarLaneGap
@@ -35,6 +34,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.Attachment
 import io.aequicor.magicpaper.domain.ChatMessage
 import io.aequicor.magicpaper.domain.ChatRole
@@ -42,22 +42,14 @@ import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProfileResolver
-import io.aequicor.magicpaper.domain.PinConversation
-import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.DefaultChatComponent
 import io.aequicor.magicpaper.ui.ChatState
 import io.aequicor.magicpaper.ui.components.MessageAttachments
-import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.paperStickToBottom
 import io.aequicor.magicpaper.ui.components.PaperChatScrollItem
 import io.aequicor.magicpaper.ui.components.PaperChatScrollToBottomButton
-import io.aequicor.magicpaper.ui.components.RequestPinsOverlay
-import io.aequicor.magicpaper.ui.components.MessagePinColumn
-import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.paperChatScrollInput
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
-import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
-import io.aequicor.magicpaper.designsystem.PaperActivityTone
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.fullCopyText
@@ -69,7 +61,8 @@ import io.aequicor.magicpaper.designsystem.paperResearchMessage
 import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.PaperResearchReadingMeasure
 import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
-import io.aequicor.magicpaper.designsystem.PaperLink
+import io.aequicor.magicpaper.designsystem.PaperResearchSourceLink
+import io.aequicor.magicpaper.designsystem.PaperResearchFollowUps
 import io.aequicor.magicpaper.logging.AppLog
 
 /** Research workspace with shared sources and independently resumable questions. */
@@ -77,17 +70,26 @@ import io.aequicor.magicpaper.logging.AppLog
 fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
-    val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
+    val usage = vm.usage?.state?.collectAsState()?.value
+    val profile = ProfileResolver.resolve(state.current, state.settings, state.availableLlmProfiles)
+    val draft = state.current?.id?.let { state.drafts[it] }
+    val context = usage?.contexts?.get("chat:${state.current?.id}")?.takeIf { it.model == profile?.modelId }
+    val activeSources = state.current?.let { question -> state.notebook?.let { question.availableResearchResources(it) } }.orEmpty()
+        .mapNotNull { resource -> resource.url.takeIf { it.isNotBlank() }?.let { SearchHit(resource.title, it) } }
     ResearchWorkspace(vm, state) {
         PaperResearchReading {
-            MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+            MessagesList(state.current, state.busy, draft = draft, activitySources = activeSources, modifier = Modifier.fillMaxSize(),
                 onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
                 onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
                 onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
-                pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty(), footer = {
+                onFollowUp = { id, question -> vm.sendFollowUp(checkNotNull(state.current).id, id, question) },
+                onPause = vm::pause, onResume = { vm.resume("", emptyList()) }, footer = {
                     Composer(
                         draftSession = vm.composerDraft,
                         enabled = true,
+                        resolvedProfile = profile,
+                        contextUsage = context,
+                        contextCompacting = draft?.steps?.any { it.systemEvent?.phase == CompactionPhase.STARTED && it.running } == true,
                         busy = state.busy,
                         paused = state.current?.pendingRun != null && !state.busy,
                         onPause = vm::pause,
@@ -110,10 +112,14 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
 
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
-    pins: List<RequestPinGroup> = emptyList(),
+    draft: CodingDraft? = null,
+    activitySources: List<SearchHit> = emptyList(),
+    onPause: (() -> Unit)? = null,
+    onResume: (() -> Unit)? = null,
     onEdit: (suspend (String, String) -> Result<Unit>)? = null,
     onDelete: (suspend (String) -> Result<Unit>)? = null,
     onFork: (suspend (String?) -> Result<String>)? = null,
+    onFollowUp: ((String, String) -> Unit)? = null,
     bottomContentPadding: androidx.compose.ui.unit.Dp = 16.dp,
     floatingControlsBottomPadding: androidx.compose.ui.unit.Dp = 12.dp,
     listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.runtime.key(session?.id) {
@@ -121,14 +127,26 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     },
     footer: @Composable () -> Unit = {},
 ) {
-    val messages = session?.messages.orEmpty()
+    val liveSteps = draft?.steps ?: session?.pendingActivity.orEmpty()
+    val pendingId = session?.pendingRun?.responseId?.ifBlank { null } ?: CHAT_WORKING_STATUS_KEY
+    val liveMessage = if (busy || session?.pendingRun != null) ChatMessage(pendingId, ChatRole.AGENT,
+        researchReply(liveSteps.filter { it.kind == CodingStepKind.ANSWER }.joinToString("\n\n") { it.title }, streaming = true).text,
+        session?.updatedAt ?: 0, researchActivity = liveSteps.researchActivity()) else null
+    val savedMessages = remember(session?.messages) {
+        session?.messages.orEmpty().map { message ->
+            val reply = message.researchReply()
+            if (message.text == reply.text && message.followUps == reply.followUps) message
+            else message.copy(text = reply.text, followUps = reply.followUps)
+        }
+    }
+    val messages = savedMessages + listOfNotNull(liveMessage)
     val historyEnabled = !busy && session?.pendingRun?.intent != ExecutionIntent.RUN && session?.queuedPrompts.orEmpty().isEmpty()
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = paperStickToBottom(listState, session?.id)
     // Messages run edge-to-edge behind the title bar: the frost band blurs them
     // there and ends in a hairline; below it the transcript stays sharp, with a
-    // depth shadow once scrolled. Pinned messages keep a lane below the hairline.
+    // depth shadow once scrolled. Research has no sticky message or pin overlay.
     val topInset = LocalWindowToolbarHeight.current ?: 56.dp
     val laneTop = topInset + PaperTitleBarLaneGap
     val scrolled by remember(listState) { derivedStateOf { listState.canScrollBackward } }
@@ -148,13 +166,6 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             else (0 until parts.size).map { ChatMessageFragment(message, parts, it) }
         }
     }
-    val indices = remember(fragments) {
-        fragments.mapIndexedNotNull { index, fragment ->
-            if (fragment.index == 0) fragment.message.id to index else null
-        }.toMap()
-    }
-    val pinNumbers = remember(pins, indices) { requestPinNumbers(pins, indices.keys) }
-    var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     val density = LocalDensity.current
     var footerHeight by remember { mutableStateOf(0.dp) }
     // External overlays and the measured footer reserve the same bottom lane.
@@ -169,35 +180,33 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 contentPadding = PaddingValues(start = 12.dp, top = laneTop + 12.dp, end = 12.dp, bottom = transcriptBottomPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
-                items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
+                items(fragments, key = { it.key }, contentType = { it.contentType }) { fragment ->
                     val message = fragment.message
                     PaperChatScrollItem(scroll, fragment.key) {
-                        MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
-                            fragment = fragment, actions = { content ->
+                        MessageBubble(message,
+                            fragment = fragment, working = message.id == pendingId && busy,
+                            paused = message.id == pendingId && !busy && session?.pendingRun != null,
+                            failed = message.id == pendingId && draft?.failedMessage != null,
+                            liveSources = if (message.id == pendingId) activitySources else message.sources,
+                            showFollowUps = message.id == savedMessages.lastOrNull()?.id,
+                            onFollowUp = onFollowUp?.takeIf { historyEnabled && session?.pendingRun == null &&
+                                message.id == savedMessages.lastOrNull()?.id }?.let { send -> { question -> send(message.id, question) } },
+                            onPause = onPause, onResume = onResume, actions = { content ->
                                 MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
                                     onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
                                     onDelete = onDelete?.let { action -> { action(message.id) } },
-                                    onFork = onFork?.let { action -> { action(message.id) } }, content = content)
+                                    onFork = onFork?.takeIf { message.id != pendingId }?.let { action -> { action(message.id) } }, content = content)
                             })
                     }
                 }
-                if (busy) item(key = CHAT_WORKING_STATUS_KEY, contentType = "status") {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PaperActivityIndicator(PaperActivityTone.WORKING, "Исследую вопрос", running = true)
-                        PaperText("Исследую вопрос…", role = PaperTextRole.CHROME,
-                            color = LocalPaperColors.current.secondaryText)
-                    }
-                }
+
             }
         }
-        RequestPinsOverlay(pins, indices, listState, scroll, Modifier.align(Alignment.TopEnd).offset(y = laneTop),
-            browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
             .padding(end = 8.dp, bottom = controlsBottomPadding))
         Column(Modifier.align(paperResearchComposerAlignment(messages.isEmpty() && !busy))
             .widthIn(max = PaperResearchReadingMeasure).fillMaxWidth()
+            .padding(horizontal = 16.dp)
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
             if (messages.isEmpty() && !busy) PaperContentEntrance(animate = true) { EmptyHint() }
             footer()
@@ -228,11 +237,16 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
     val key: String get() = if (index == 0) message.id else "${message.id}:text:$index"
     val first: Boolean get() = index == 0
     val last: Boolean get() = parts == null || index == parts.size - 1
+    val contentType = Triple(message.role, parts?.contentType(index), first to last)
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
+private fun MessageBubble(message: ChatMessage,
     fragment: ChatMessageFragment = ChatMessageFragment(message),
+    working: Boolean = false, paused: Boolean = false, failed: Boolean = false, liveSources: List<SearchHit> = emptyList(),
+    onPause: (() -> Unit)? = null, onResume: (() -> Unit)? = null,
+    onFollowUp: ((String) -> Unit)? = null,
+    showFollowUps: Boolean = false,
     actions: @Composable (@Composable () -> Unit) -> Unit = { it() }) {
     val isUser = message.role == ChatRole.USER
     Row(
@@ -241,28 +255,12 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
     ) {
         Box(Modifier.widthIn(max = PaperResearchReadingMeasure).fillMaxWidth()) {
             actions {
-                MessagePinColumn(
-                    number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
-                    modifier = Modifier.fillMaxWidth()
+                Column(modifier = Modifier.fillMaxWidth()
                         .paperResearchMessage(fragment.first, fragment.last, isUser),
                 ) {
-                    if (fragment.first) {
-                        if (isUser) {
-                            PaperText("Вопрос", role = PaperTextRole.CHROME,
-                                color = LocalPaperColors.current.secondaryText)
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                PaperText("Ответ", role = PaperTextRole.CHROME,
-                                    color = LocalPaperColors.current.secondaryText)
-                                if (message.sources.isNotEmpty()) PaperText(
-                                    "·  ${message.sources.size} ${sourceFootnoteLabel(message.sources.size)}",
-                                    role = PaperTextRole.CHROME,
-                                    color = LocalPaperColors.current.secondaryText,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(4.dp))
+                    if (fragment.first && !isUser && (message.researchActivity.isNotEmpty() || working || paused)) {
+                        ResearchActivity(message.researchActivity, working, paused, failed, liveSources, onPause, onResume,
+                            answering = message.text.isNotBlank())
                     }
                     if (fragment.parts != null) {
                         fragment.parts.Content(fragment.index)
@@ -272,6 +270,10 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                         ResearchSourceFootnotes(message)
                     }
                     if (isUser && fragment.last) MessageAttachments(message.attachments)
+                    if (!isUser && fragment.last && showFollowUps && message.followUps.isNotEmpty()) {
+                        Spacer(Modifier.height(16.dp))
+                        PaperResearchFollowUps(message.followUps, { onFollowUp?.invoke(it) }, enabled = onFollowUp != null)
+                    }
                 }
             }
         }
@@ -281,47 +283,25 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
 @Composable
 private fun ResearchSourceFootnotes(message: ChatMessage) {
     val uriHandler = LocalUriHandler.current
+    var openError by remember(message.id) { mutableStateOf(false) }
     val sources = remember(message.sources) { message.sources.distinctBy { it.url } }
     Column {
         PaperDivider()
         Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             PaperText("Источники ответа", role = PaperTextRole.CHROME)
+            if (openError) PaperText("Не удалось открыть источник. Повторите попытку.", role = PaperTextRole.LABEL, color = LocalPaperColors.current.error)
             sources.forEachIndexed { index, source ->
-                PaperLink("[${index + 1}] ${source.title.ifBlank { source.url }}", {
+                PaperResearchSourceLink(source.title.ifBlank { source.url }, {
                     try { uriHandler.openUri(source.url) }
                     catch (failure: Exception) {
                         AppLog.error("chat", "citation.open.failed", failure,
                             mapOf("messageId" to message.id, "citationIndex" to (index + 1).toString()))
+                        openError = true
                     }
-                })
-                if (source.snippet.isNotBlank()) PaperText(
-                    source.snippet,
-                    role = PaperTextRole.LABEL,
-                    color = LocalPaperColors.current.secondaryText,
-                )
+                }, number = index + 1)
             }
         }
     }
-}
-
-private fun sourceFootnoteLabel(count: Int): String =
-    when {
-        count % 100 in 11..14 -> "сносок"
-        count % 10 == 1 -> "сноска"
-        count % 10 in 2..4 -> "сноски"
-        else -> "сносок"
-    }
-
-/** Чип текущей модели в композиции: тап открывает переключатель источника. */
-@Composable
-private fun ModelChip(
-    session: ChatSession?,
-    profiles: List<LlmProfile>,
-    activeProfileId: String,
-    onClick: () -> Unit,
-) {
-    val resolved = ProfileResolver.resolve(session, io.aequicor.magicpaper.domain.AppSettings(activeLlmProfileId = activeProfileId), profiles)
-    CodingModelChip(resolved, overridden = session?.llmProfileId != null, onClick = onClick)
 }
 
 @Composable
@@ -342,6 +322,9 @@ internal fun Composer(
     onPause: () -> Unit = {},
     onResume: (String, List<Attachment>) -> Unit = onSend,
     onClarify: (String, List<Attachment>) -> Unit = onSend,
+    contextUsage: ContextUsageSnapshot? = null,
+    contextCompacting: Boolean = false,
+    resolvedProfile: LlmProfile? = ProfileResolver.resolve(session, AppSettings(activeLlmProfileId = activeProfileId), profiles),
 ) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val draft = remember(session?.id, draftSession) {
@@ -353,16 +336,16 @@ internal fun Composer(
         if (draftSession == null) { draft.text.value = ""; draft.attachments.value = emptyList() }
     }
     draft.error.value?.let { PaperText("Не удалось сохранить черновик", color = LocalPaperColors.current.error) }
-    CodingComposer(
-        state = draft, enabled = enabled, busy = busy,
-        documentComposer = true,
-        compactPrimaryAction = false,
-        promptPlaceholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
-        controls = { ModelChip(session, profiles, activeProfileId, onOpenSwitcher) },
+    ResearchComposer(
+        state = draft, enabled = enabled, busy = busy, paused = paused,
+        profile = resolvedProfile,
+        contextUsage = contextUsage, contextCompacting = contextCompacting,
+        placeholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
+        onOpenSwitcher = onOpenSwitcher,
         onSend = { text, attachments -> accepted(onSend, text, attachments) },
-        onResume = if (paused) { text, attachments -> accepted(onResume, text, attachments) } else null,
+        onResume = { text, attachments -> accepted(onResume, text, attachments) },
         onClarify = { text, attachments -> accepted(onClarify, text, attachments) },
-        onAbort = onPause, onPickAttachments = onPickAttachments, onPasteAttachments = onPasteAttachments,
+        onPause = onPause, onPickAttachments = onPickAttachments, onPasteAttachments = onPasteAttachments,
         engine = session?.engine ?: defaultEngine,
         onEngineChange = onEngineChange?.takeIf {
             session == null || (session.messages.isEmpty() && session.pendingRun == null && session.nativeSessionId.isBlank())

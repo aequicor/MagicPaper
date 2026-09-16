@@ -64,6 +64,9 @@ internal fun buildRuntime(
         single<RequestPinRepository> { JsonRequestPinRepository(get(), get()) }
         single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get())) }
         single { appHttpClient() } onClose { it?.close() }
+        single { ResearchSiteIcons(get()) }
+        single { io.aequicor.magicpaper.data.ResearchPageReader(get()) }
+        single { ResearchSourceAccess(get<io.aequicor.magicpaper.data.ResearchPageReader>()::read) }
         single<SearchEngine> { CompositeSearchEngine(listOf(
             WikipediaSearchEngine(get(), get(), get()),
             QueritSearchEngine(get(), get(), get()),
@@ -101,10 +104,10 @@ internal fun buildRuntime(
         single { val settings = get<SettingsRepository>()
             GatewaySessionRuntime(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(),
                 layoutEditor = layoutEditor, settings = { settings.load() },
-                readResearchPage = io.aequicor.magicpaper.data.ResearchPageReader(get())::read) }
+                readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read) }
         single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
         single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
-            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get(), taskWorkspace = taskWorkspace).also { graph ->
+            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get(), taskWorkspace = taskWorkspace, sourceAccess = get()).also { graph ->
                 graph.toolHost.orchestration = io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(
                     io.aequicor.magicpaper.domain.tools.OrchestrationActions { context, operation, tool, arguments ->
                         graph.toolHost.receiver(context, operation, tool, arguments)
@@ -124,7 +127,7 @@ internal fun buildRuntime(
                     draftRepository = get(), applicationScope = applicationScope))
                 .apply { platformPlugins.forEach(::register) }
         }
-        factory<ChatComponent.Factory>(FeatureFactoryQualifiers.chat) { DefaultChatComponentFactory(get(), get()) }
+        factory<ChatComponent.Factory>(FeatureFactoryQualifiers.chat) { DefaultChatComponentFactory(get(), get(), get()) }
         factory<CodingComponent.Factory>(FeatureFactoryQualifiers.coding) { DefaultCodingComponentFactory(get(), get(), getOrNull()) }
         factory<SettingsComponent.Factory>(FeatureFactoryQualifiers.settings) { DefaultSettingsComponentFactory(get(), get(), get(), get(), get()) }
         factory<DocsComponent.Factory>(FeatureFactoryQualifiers.docs) { DefaultDocsComponentFactory(get()) }
@@ -138,7 +141,7 @@ internal fun buildRuntime(
             layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
-            researchSearch = get(),
+            researchSearch = get(), usage = get(), sourceAccess = get(),
             layoutProject = { boundId ->
                 val coding = get<CodingService>().state.value.coding
                 if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }

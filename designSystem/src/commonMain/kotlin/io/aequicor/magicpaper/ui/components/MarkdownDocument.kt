@@ -13,6 +13,7 @@ internal class ChatMarkdownDocument(val document: PaperMarkdownDocument, val blo
     val source: String get() = document.source
     val node: ASTNode get() = document.node
     val preview: List<ASTNode> = markdownPreviewBlocks(blocks)
+    val inlineBlocks: List<List<ASTNode>> = markdownInlineBlocks(blocks)
 }
 
 /** Bounded cache survives lazy-item disposal; scrolling back does not parse the same answer again. */

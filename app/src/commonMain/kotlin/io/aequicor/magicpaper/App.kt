@@ -134,7 +134,9 @@ private fun AppShellContent(
                 // in a hairline; pinned surfaces keep a lane below that hairline.
                 val topInset = LocalWindowToolbarHeight.current ?: 56.dp
                 val edgeToEdge = navigation.route is AppRoute.Chat || navigation.route is AppRoute.Projects
-                Box(Modifier.fillMaxSize().navigationBarsPadding().paperTitleBarFrost(topInset)) {
+                // Research panes start below the title bar; only edge-to-edge coding
+                // transcripts need their content captured again for backdrop blur.
+                Box(Modifier.fillMaxSize().navigationBarsPadding().paperTitleBarFrost(topInset, blurContent = isCoding)) {
                     PaperResizablePanels(sidebarVisible = sidebarVisible,
                         preferredWidth = if (isChat) chatSidebarWidth else primarySidebarWidth,
                         onPreferredWidthChange = if (isChat) onChatSidebarWidthChange else onPrimarySidebarWidthChange,
@@ -159,9 +161,6 @@ private fun AppShellContent(
                     selectedId = if (isChat) chats.current?.id else selectedId,
                     isCoding = isCoding,
                     workspaceTitle = if (isChat) chats.notebook?.title ?: chats.current?.title else null,
-                    statusText = if (isChat && chats.current != null) {
-                        if (chats.busy) "Исследование…" else "Сохранено"
-                    } else null,
                     onToggleSidebar = {
                         if (isChat) onChatSidebarVisibleChange(!chatSidebarVisible)
                         else onPrimarySidebarVisibleChange(!primarySidebarVisible)
@@ -217,7 +216,6 @@ private fun TopBar(
     selectedId: String?,
     isCoding: Boolean,
     workspaceTitle: String?,
-    statusText: String?,
     onToggleSidebar: () -> Unit,
 ) {
     val navigation by root.navigationState.collectAsState()
@@ -250,13 +248,6 @@ private fun TopBar(
                     }, Modifier.weight(1f), role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            }
-            statusText?.let {
-                PaperText("✓  $it", role = PaperTextRole.CHROME, color = LocalPaperColors.current.action,
-                    maxLines = 1)
-                Spacer(Modifier.width(8.dp))
-                PaperVerticalDivider(Modifier.height(22.dp))
-                Spacer(Modifier.width(4.dp))
             }
             val usageState by usage.state.collectAsState()
             val usageFailure by usage.failure.collectAsState()

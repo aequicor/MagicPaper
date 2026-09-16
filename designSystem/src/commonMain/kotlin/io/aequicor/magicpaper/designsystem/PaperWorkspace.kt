@@ -152,16 +152,17 @@ public fun PaperPromptField(value: String, onValueChange: (String) -> Unit, plac
 @Composable
 public fun PaperPromptField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, placeholder: String,
     modifier: Modifier = Modifier, maxLines: Int = 6, enabled: Boolean = true,
-    visualTransformation: VisualTransformation = VisualTransformation.None) {
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    style: androidx.compose.ui.text.TextStyle = LocalPaperTypography.current.body) {
     val source = LocalComposerInteraction.current ?: remember { MutableInteractionSource() }
     BasicTextField(value, onValueChange, modifier.fillMaxWidth().semantics { contentDescription = placeholder }
         .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
         .padding(horizontal = 8.dp, vertical = 8.dp),
-        textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text),
+        textStyle = style.copy(color = LocalPaperColors.current.text),
         cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = maxLines,
         interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
         decorationBox = { inner -> Box {
-            if (value.text.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
+            if (value.text.isEmpty()) PaperText(placeholder, style = style, color = LocalPaperColors.current.secondaryText)
             inner()
         } })
 }
@@ -223,10 +224,14 @@ public fun Modifier.paperChatTopShadow(visible: Boolean, effectHeight: Dp = 32.d
  * cuts the chrome from the sharp transcript below it. Nothing is half-blurred
  * under the bar: the blur lives strictly inside the band, and pinned surfaces
  * keep their own lane below the hairline (see [PaperTitleBarLaneGap]).
+ * Inset pages set [blurContent] to false to retain the scrim and divider without
+ * capturing a page that never passes behind this band.
  */
 @Composable
-public fun Modifier.paperTitleBarFrost(height: Dp): Modifier {
-    val blurred = rememberGraphicsLayer()
+public fun Modifier.paperTitleBarFrost(height: Dp, blurContent: Boolean = true): Modifier {
+    // Inset pages have no content behind the title bar. Do not replay/blur their
+    // entire surface on every scroll frame just to shade an empty strip.
+    val blurred = if (blurContent) rememberGraphicsLayer() else null
     val scrim = LocalPaperColors.current.surface
     val hairline = LocalPaperColors.current.border
     return drawWithContent {
@@ -234,10 +239,12 @@ public fun Modifier.paperTitleBarFrost(height: Dp): Modifier {
         val strip = height.toPx().coerceIn(0f, size.height)
         if (strip <= 0f) return@drawWithContent
         val line = 1f.coerceAtMost(strip)
-        blurred.record { this@drawWithContent.drawContent() }
-        blurred.renderEffect = BlurEffect(10.dp.toPx(), 10.dp.toPx(), TileMode.Clamp)
+        if (blurred != null) {
+            blurred.record { this@drawWithContent.drawContent() }
+            blurred.renderEffect = BlurEffect(10.dp.toPx(), 10.dp.toPx(), TileMode.Clamp)
+        }
         clipRect(top = 0f, bottom = strip) {
-            drawLayer(blurred)
+            if (blurred != null) drawLayer(blurred)
             drawRect(
                 Brush.verticalGradient(
                     0f to scrim.copy(alpha = .62f),

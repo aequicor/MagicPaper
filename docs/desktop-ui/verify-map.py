@@ -32,7 +32,7 @@ PaperApprovalDock PaperText PaperReader PaperLink PaperQuestionnaire PaperSchedu
 PaperActivityIndicator PaperWorkspaceHeading PaperWorkspaceComposer PaperPromptField PaperWorkSurface
 PaperMenuToggleInfo PaperPage PaperTab PaperTreeRow PaperTreeGroupHeader PaperContentEntrance PaperSettingsSection PaperMenu
 PaperExpandableImage PaperCheck PaperFileTransfer PaperMessageActions PaperQuestionnaireChoice
-PaperResearchPane PaperResearchCountBadge PaperBrandMark PaperWideDialog PaperDivider PaperMenuHost
+PaperResearchFollowUps PaperResearchSourceGroupHeader PaperResearchActivityPanel PaperResearchActivityStep PaperResearchSourceLink PaperComposerExpandButton PaperAction PaperResearchQuestionRow PaperResearchSourceRow PaperResearchPane PaperResearchCountBadge PaperBrandMark PaperWideDialog PaperDivider PaperMenuHost
 PaperSessionRow PaperStickyTree'''.split())
 PATTERN = re.compile(
     r'@(?:androidx\.compose\.runtime\.)?Composable\s+'

@@ -17,6 +17,182 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class ResearchWorkspaceRenderTest {
+    @Test fun groupSelectionIsIndependentOfDisclosureAndTheOtherGroup() {
+        val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview() } }
+        var frame = 0L
+        fun render() { repeat(8) { onUi { scene.render(++frame * 32_000_000L).close() } } }
+        fun click(label: String) { onUi { scene.action(label).config[SemanticsActions.OnClick].action!!.invoke() }; render() }
+        fun checked(label: String) = scene.action(label).config[SemanticsProperties.ToggleableState]
+        try {
+            render()
+            onUi { assertEquals(androidx.compose.ui.state.ToggleableState.Indeterminate, checked("Выбрать все: Общие для чата")) }
+            click("Выбрать все: Общие для чата")
+            onUi {
+                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: Guide to app architecture"))
+                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Снять выбор со всех: Только этот вопрос"))
+            }
+            click("Свернуть: Общие для чата")
+            click("Снять выбор со всех: Общие для чата")
+            onUi {
+                assertEquals(androidx.compose.ui.state.ToggleableState.Off, checked("Выбрать все: Общие для чата"))
+                assertTrue(scene.action("Развернуть: Общие для чата").boundsInRoot.height > 0)
+                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: Jetpack Compose"))
+            }
+            click("Снять выбор со всех: Только этот вопрос")
+            click("Выбрать все: Общие для чата")
+            click("Развернуть: Общие для чата")
+            onUi {
+                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: План обучения.pdf"))
+                assertEquals(androidx.compose.ui.state.ToggleableState.Off, checked("Использовать источник: Jetpack Compose"))
+            }
+            scene.capture("source-group-selection", ++frame * 32_000_000L)
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun completedReadUsesTimelineDetailWhileTheAgentIsStillPending() {
+        val busy = androidx.compose.runtime.mutableStateOf(true)
+        val paused = androidx.compose.runtime.mutableStateOf(false)
+        var pauses = 0
+        val steps = listOf(io.aequicor.magicpaper.domain.CodingStep(io.aequicor.magicpaper.domain.CodingStepKind.TOOL,
+            "Прочитано источников: 4; недоступно: 2", tool = "web.read", id = "checked"))
+        val scene = onUi { ImageComposeScene(640, 300) {
+            io.aequicor.magicpaper.designsystem.PaperTheme {
+                io.aequicor.magicpaper.designsystem.PaperSurface {
+                    ResearchActivity(steps, busy.value, paused.value,
+                        onPause = { pauses++; busy.value = false; paused.value = true },
+                        onResume = { busy.value = true; paused.value = false })
+                }
+            }
+        } }
+        var frame = 0L
+        fun render() { repeat(5) { onUi { scene.render(++frame * 32_000_000L).close() } } }
+        fun click(label: String) = onUi { scene.action(label).config[SemanticsActions.OnClick].action!!.invoke() }
+        try {
+            render()
+            onUi {
+                val title = scene.text("Проверка выбранных источников")
+                val detail = scene.text("Прочитано источников: 4; недоступно: 2")
+                assertTrue(detail.boundsInRoot.top > title.boundsInRoot.bottom)
+                assertEquals(title.boundsInRoot.left, detail.boundsInRoot.left)
+                assertTrue(scene.text("Ожидаю ответ агента").boundsInRoot.height > 0)
+                val layout = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                scene.text("Остановить").config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layout)
+                assertEquals(11f, layout.single().layoutInput.style.fontSize.value)
+            }
+            scene.capture("activity-waiting", ++frame * 32_000_000L)
+            click("Свернуть ход исследования"); render()
+            onUi { assertFalse(scene.nodes().any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == "Проверка выбранных источников" } }) }
+            click("Развернуть ход исследования"); render()
+            click("Остановить"); render()
+            assertEquals(1, pauses)
+            onUi { assertTrue(scene.text("Исследование приостановлено").boundsInRoot.height > 0) }
+            scene.capture("activity-paused", ++frame * 32_000_000L)
+            click("Продолжить"); render()
+            assertTrue(busy.value)
+            val entries = researchActivityEntries(steps, busy = false, paused = false)
+            assertEquals(1, entries.size, "A completed request has no invented pending stages")
+            assertEquals("Прочитано источников: 4", entries.single().detail)
+            assertEquals("недоступно: 2", entries.single().detailProblem)
+            for (title in listOf("Прочитано источников: 4", "Прочитано источников: 4; недоступно: 0")) {
+                val readable = researchActivityEntries(listOf(steps.single().copy(title = title)), false, false).single()
+                assertEquals(title, readable.detail)
+                assertNull(readable.detailProblem, "A successful check must not show an unavailable-source warning")
+            }
+            val unrelated = researchActivityEntries(listOf(steps.single().copy(tool = "web.search")), false, false).single()
+            assertNull(unrelated.detailProblem, "Only source readability results contain these counts")
+            val streaming = researchActivityEntries(steps, busy = true, paused = false, answering = true)
+            assertEquals("Готовлю ответ", streaming.last().heading, "Streaming text must not be labelled as waiting for the answer")
+            val searching = researchActivityEntries(listOf(io.aequicor.magicpaper.domain.CodingStep(
+                io.aequicor.magicpaper.domain.CodingStepKind.TOOL, "Ищу источники", tool = "web.search", running = true)), true, false)
+            assertEquals(1, searching.size, "A running search must not acquire a simultaneous guessed answer stage")
+            assertEquals("Ищу дополнительные источники", searching.single().heading)
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun documentHeadingFollowsTheSelectedQuestion() {
+        val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview() } }
+        var frame = 0L
+        fun render() { repeat(12) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+        fun heading() = scene.nodes().first { it.config.contains(SemanticsProperties.Heading) }
+            .config[SemanticsProperties.Text].single().text
+        try {
+            render()
+            onUi { assertEquals("С чего начать Android-разработку?", heading()) }
+            onUi { scene.action("Вопрос 2: Архитектура приложения").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi { assertEquals("Архитектура приложения", heading()) }
+            scene.capture("selected-question-heading", ++frame * 32_000_000L)
+            onUi { scene.action("Вопрос 1: С чего начать Android-разработку?").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi { assertEquals("С чего начать Android-разработку?", heading()) }
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun sourceGroupsCollapseIndependentlyAndKeepFileActionsAvailable() {
+        val picks = mutableListOf<io.aequicor.magicpaper.domain.ResearchResourceScope>()
+        val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview(onPickFiles = { picks += it }) } }
+        var frame = 0L
+        fun render() { repeat(12) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+        fun source(label: String) = scene.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)
+            .orEmpty().contains("Использовать источник: $label") }
+        fun click(label: String) = onUi { scene.action(label).config[SemanticsActions.OnClick].action!!.invoke() }
+        try {
+            render()
+            click("Свернуть: Общие для чата"); render()
+            onUi { assertFalse(source("План обучения.pdf")); assertTrue(source("Jetpack Compose")) }
+            click("Добавить файлы: Общие для чата"); render()
+            onUi {
+                assertFalse(source("План обучения.pdf"), "Adding a file must not toggle the collapsed group")
+                assertEquals(listOf(io.aequicor.magicpaper.domain.ResearchResourceScope.SHARED), picks)
+            }
+            click("Свернуть: Только этот вопрос"); render()
+            onUi { assertFalse(source("Jetpack Compose")) }
+            scene.capture("collapsed-source-groups", ++frame * 32_000_000L)
+            click("Скрыть источники"); render()
+            click("Развернуть источники"); render()
+            onUi { assertFalse(source("План обучения.pdf")); assertFalse(source("Jetpack Compose")) }
+            click("Развернуть: Общие для чата"); render()
+            onUi { assertTrue(source("План обучения.pdf")); assertFalse(source("Jetpack Compose")) }
+            click("Развернуть: Только этот вопрос"); render()
+            onUi {
+                assertTrue(source("Jetpack Compose"))
+                val check = scene.nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription)
+                    .orEmpty().contains("Использовать источник: Guide to app architecture") }
+                assertEquals(androidx.compose.ui.state.ToggleableState.Off, check.config[SemanticsProperties.ToggleableState],
+                    "Collapsing must preserve source selection")
+            }
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun emptyAndShortDraftsExpandWithoutReplacingTheEditor() {
+        for (draft in listOf("", "Короткий вопрос")) {
+            val scene = onUi { ImageComposeScene(720, 650) { ResearchWorkspacePreview() } }
+            var frame = 0L
+            fun render() { repeat(12) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+            fun input() = scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
+            try {
+                render()
+                onUi { input().config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(draft)) }
+                render()
+                val before = onUi { input().id to input().boundsInRoot.height }
+                onUi { scene.action("Развернуть поле ввода").config[SemanticsActions.OnClick].action!!.invoke() }
+                render()
+                scene.capture(if (draft.isEmpty()) "expanded-empty" else "expanded-short", ++frame * 32_000_000L)
+                onUi {
+                    assertEquals(before.first, input().id)
+                    assertEquals(draft, input().config[SemanticsProperties.EditableText].text)
+                    assertTrue(input().boundsInRoot.height >= 180f, "Even an empty editor must visibly expand: ${input().boundsInRoot}")
+                    assertTrue(input().boundsInRoot.height > before.second + 100f)
+                    assertTrue(scene.action("Отправить").boundsInRoot.bottom <= 650)
+                }
+                scene.capture(if (draft.isEmpty()) "expanded-empty" else "expanded-short", ++frame * 32_000_000L)
+                onUi { scene.action("Свернуть поле ввода").config[SemanticsActions.OnClick].action!!.invoke() }
+                render()
+                onUi { assertEquals(before.second, input().boundsInRoot.height, 1f) }
+            } finally { onUi { scene.close() } }
+        }
+    }
+
     private fun <T> onUi(block: () -> T): T {
         if (EventQueue.isDispatchThread()) return block()
         var result: Result<T>? = null
@@ -66,34 +242,41 @@ class ResearchWorkspaceRenderTest {
         data class Case(val name: String, val width: Int, val height: Int, val scale: Float = 1f)
         for (case in listOf(Case("reading", 1280, 850), Case("empty", 1280, 850),
             Case("narrow", 390, 780), Case("empty-narrow", 390, 780), Case("large-text", 720, 1000, 2f),
-            Case("working", 1280, 850), Case("error", 390, 780))) {
+            Case("working", 1280, 850), Case("error", 390, 780), Case("unreadable-source", 1280, 850))) {
             val empty = case.name.startsWith("empty")
             val scene = onUi { ImageComposeScene(case.width, case.height) {
                 CompositionLocalProvider(LocalDensity provides Density(1f, case.scale)) {
-                    ResearchWorkspacePreview(empty, busy = case.name == "working", failed = case.name == "error")
+                    ResearchWorkspacePreview(empty, busy = case.name == "working", failed = case.name == "error",
+                        unreadableSource = case.name == "unreadable-source")
                 }
             } }
             try {
                 repeat(24) { onUi { scene.render(it * 32_000_000L).close() }; Thread.sleep(5) }
                 onUi {
-                    for (label in listOf("Новый вопрос", if (case.name == "working") "Пауза" else "Отправить")) {
+                    for (label in listOf(if (case.name == "working") "Пауза" else "Отправить")) {
                         val bounds = scene.action(label).boundsInRoot
                         assertTrue(bounds.left >= 0 && bounds.right <= case.width, "$label clipped in ${case.name}")
                         assertTrue(bounds.top >= 0 && bounds.bottom <= case.height, "$label outside ${case.name}")
                     }
-                    val sendLabel = scene.text(if (case.name == "working") "Пауза" else "Отправить").boundsInRoot
-                    assertTrue(sendLabel.width > 0 && sendLabel.right <= case.width,
-                        "The primary action needs a visible verb, not only an accessible icon label")
                     assertFalse(scene.nodes().any {
                         it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Создать ветку" }
                     }, "Branch creation belongs in the chat menu, leaving the page clear")
-                    if (case.width >= 1180) {
+                    if (case.width >= 1000) {
                         assertTrue(scene.text("Вопросы").boundsInRoot.left >= 0)
                         assertTrue(scene.text("Источники").boundsInRoot.right <= case.width)
-                        assertTrue(scene.text("Поиск источников").boundsInRoot.width > 0)
-                        if (!empty) assertTrue(scene.text("Источники ответа").boundsInRoot.width > 0)
+                        assertTrue(scene.text("Общие для чата").boundsInRoot.width > 0)
+                        if (case.name == "unreadable-source") {
+                            val problem = scene.text("Не используется: CAPTCHA или защита сайта")
+                            assertTrue(problem.boundsInRoot.right <= case.width)
+                            assertTrue(problem.boundsInRoot.bottom < scene.text("План обучения.pdf").boundsInRoot.top)
+                        }
+                        if (!empty) {
+                            assertTrue(scene.text("Источники ответа").boundsInRoot.width > 0)
+                            assertTrue(scene.text("developer.android.com").boundsInRoot.width > 0)
+                            assertTrue(scene.text("PDF").boundsInRoot.top > scene.text("План обучения.pdf").boundsInRoot.bottom)
+                        }
                     } else {
-                        for (label in listOf("Вопросы (${if (empty) 1 else 3})", "Источники (${if (empty) 0 else 2})")) {
+                        for (label in listOf("Развернуть вопросы", "Развернуть источники")) {
                             val bounds = scene.action(label).boundsInRoot
                             assertTrue(bounds.left >= 0 && bounds.right <= case.width, "$label clipped in ${case.name}")
                         }
@@ -104,20 +287,20 @@ class ResearchWorkspaceRenderTest {
                         assertTrue(input.boundsInRoot.center.y in (case.height * .3f)..(case.height * .75f))
                         assertTrue(scene.text("Что будем исследовать?").boundsInRoot.bottom < input.boundsInRoot.top)
                     }
-                    if (case.width >= 1180) assertTrue(input.boundsInRoot.right < scene.text("Источники").boundsInRoot.left)
+                    if (case.width >= 1000) assertTrue(input.boundsInRoot.right < scene.text("Источники").boundsInRoot.left)
                 }
                 scene.capture(case.name, 900_000_000L)
             } finally { onUi { scene.close() } }
         }
     }
 
-    @Test fun collapsedPanelsKeepTheirExpandAndFrequentActions() {
+    @Test fun collapsedPanelsMoveTogglesIntoTitleAndScopedFileActionsStayReachable() {
         var newQuestions = 0
-        var filePicks = 0
+        val filePicks = mutableListOf<io.aequicor.magicpaper.domain.ResearchResourceScope>()
         val scene = onUi { ImageComposeScene(1280, 850) {
             ResearchWorkspacePreview(
                 onNewQuestion = { newQuestions++ },
-                onPickFiles = { filePicks++ },
+                onPickFiles = { filePicks += it },
             )
         } }
         var frame = 0L
@@ -137,20 +320,24 @@ class ResearchWorkspaceRenderTest {
             onUi {
                 assertTrue(scene.action("Развернуть вопросы").boundsInRoot.width > 0)
                 assertTrue(scene.action("Развернуть источники").boundsInRoot.width > 0)
-                scene.action("Новый вопрос").config[SemanticsActions.OnClick].action!!.invoke()
-                scene.action("Добавить файлы").config[SemanticsActions.OnClick].action!!.invoke()
-                assertEquals(1, newQuestions)
-                assertEquals(1, filePicks)
+                val title = scene.nodes().first { it.config.contains(SemanticsProperties.Heading) }.boundsInRoot
+                assertTrue(scene.action("Развернуть вопросы").boundsInRoot.right <= title.left)
+                assertTrue(scene.action("Развернуть источники").boundsInRoot.left >= title.right)
+                assertFalse(scene.nodes().any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Вопросы" } })
             }
-            scene.capture("collapsed-rails", ++frame * 32_000_000L)
+            scene.capture("collapsed-panels", ++frame * 32_000_000L)
             onUi { scene.action("Развернуть вопросы").config[SemanticsActions.OnClick].action!!.invoke() }
             render()
-            onUi { assertTrue(scene.action("Скрыть вопросы").boundsInRoot.width > 0) }
-            onUi { scene.action("Добавить ссылку").config[SemanticsActions.OnClick].action!!.invoke() }
+            onUi {
+                scene.action("Новый вопрос").config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(1, newQuestions)
+                scene.action("Развернуть источники").config[SemanticsActions.OnClick].action!!.invoke()
+            }
             render()
             onUi {
-                assertTrue(scene.action("Скрыть источники").boundsInRoot.width > 0)
-                assertTrue(scene.text("Ссылка на сайт").boundsInRoot.width > 0)
+                scene.action("Добавить файлы: Общие для чата").config[SemanticsActions.OnClick].action!!.invoke()
+                scene.action("Добавить файлы: Только этот вопрос").config[SemanticsActions.OnClick].action!!.invoke()
+                assertEquals(io.aequicor.magicpaper.domain.ResearchResourceScope.entries.toList(), filePicks)
             }
         } finally { onUi { scene.close() } }
     }
@@ -164,22 +351,22 @@ class ResearchWorkspaceRenderTest {
             repeat(4) { onUi { scene.render(it * 32_000_000L).close() } }
             onUi {
                 assertTrue(handle("Изменить ширину панели вопросов")
-                    .config[SemanticsActions.SetProgress].action!!.invoke(336f))
+                    .config[SemanticsActions.SetProgress].action!!.invoke(260f))
                 assertTrue(handle("Изменить ширину панели источников")
-                    .config[SemanticsActions.SetProgress].action!!.invoke(412f))
+                    .config[SemanticsActions.SetProgress].action!!.invoke(320f))
             }
             repeat(4) { onUi { scene.render((it + 4) * 32_000_000L).close() } }
             onUi {
-                assertEquals(336f, handle("Изменить ширину панели вопросов")
+                assertEquals(260f, handle("Изменить ширину панели вопросов")
                     .config[SemanticsProperties.ProgressBarRangeInfo].current)
-                assertEquals(412f, handle("Изменить ширину панели источников")
+                assertEquals(320f, handle("Изменить ширину панели источников")
                     .config[SemanticsProperties.ProgressBarRangeInfo].current)
             }
             scene.capture("resized-panels", 300_000_000L)
         } finally { onUi { scene.close() } }
     }
 
-    @Test fun sourceMenuOffersValidationAndClosingWithoutLosingComposerDraft() {
+    @Test fun sourceSearchReportsEmptyResultsAndClosingPreservesComposerDraft() {
         val scene = onUi { ImageComposeScene(720, 850) { ResearchEmptyPreview() } }
         var frame = 0L
         fun render() { repeat(16) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
@@ -188,20 +375,22 @@ class ResearchWorkspaceRenderTest {
             onUi {
                 scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
                     .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Мой исследовательский вопрос"))
-                scene.action("Источники (0)").config[SemanticsActions.OnClick].action!!.invoke()
+                scene.action("Развернуть источники").config[SemanticsActions.OnClick].action!!.invoke()
             }
             render()
-            onUi { scene.action("Добавить ссылку").config[SemanticsActions.OnClick].action!!.invoke() }
+            onUi { scene.action("Найти ещё").config[SemanticsActions.OnClick].action!!.invoke() }
             render()
             onUi {
                 scene.nodes().last { it.config.contains(SemanticsActions.SetText) }
-                    .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("не ссылка"))
+                    .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Материалы исследования"))
             }
             render()
-            onUi { scene.action("Добавить").config[SemanticsActions.OnClick].action!!.invoke() }
+            onUi { scene.action("Найти").config[SemanticsActions.OnClick].action!!.invoke() }
             render()
-            onUi { assertTrue(scene.text("Введите ссылку: https://…").boundsInRoot.height > 0) }
+            onUi { assertTrue(scene.text("Ничего не найдено. Измените запрос.").boundsInRoot.height > 0) }
             scene.capture("source-validation", ++frame * 32_000_000L)
+            onUi { scene.action("Закрыть поиск источников").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
             onUi { scene.action("Скрыть источники").config[SemanticsActions.OnClick].action!!.invoke() }
             render()
             onUi {
@@ -212,4 +401,34 @@ class ResearchWorkspaceRenderTest {
             scene.capture("ready-to-send", ++frame * 32_000_000L)
         } finally { onUi { scene.close() } }
     }
+    @Test fun expandingComposerKeepsTextAndFooterControlsOnSameRow() {
+        val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview() } }
+        var frame = 0L
+        fun render() { repeat(12) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
+        try {
+            render()
+            val draft = "Первая строка\nВторая строка\nТретья строка\nЧетвёртая строка\nПятая строка"
+            onUi { scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
+                .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(draft)) }
+            render()
+            val before = onUi { scene.nodes().first { it.config.contains(SemanticsActions.SetText) }.boundsInRoot.height }
+            onUi { scene.action("Развернуть поле ввода").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi {
+                val input = scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
+                assertEquals(draft, input.config[SemanticsProperties.EditableText].text)
+                assertTrue(input.boundsInRoot.height > before)
+                val send = scene.action("Отправить").boundsInRoot
+                val context = scene.action("Заполненность контекста: 24%").boundsInRoot
+                assertEquals(send.center.y, context.center.y, 1f)
+                assertTrue(context.right <= send.left)
+            }
+            scene.capture("expanded-composer", ++frame * 32_000_000L)
+            onUi { scene.action("Свернуть поле ввода").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi { assertEquals(draft, scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
+                .config[SemanticsProperties.EditableText].text) }
+        } finally { onUi { scene.close() } }
+    }
+
 }

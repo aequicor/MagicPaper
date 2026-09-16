@@ -17,6 +17,14 @@ class ToolEnabledCodingRuntime(private val delegate: CodingRuntime, private val 
     override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> =
         ownedRun(project, session, prompt, profile, attachments, planning = false)
 
+    override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> = flow {
+        val context = ToolExecutionContext("chat-${session.id}", session.id, session.id,
+            session.pendingRun?.runId ?: io.aequicor.magicpaper.util.Id.new(), ToolRole.CHAT, CodingInteractionMode.RESEARCH)
+        val request = researchRequest(session.messages.lastOrNull { it.role == ChatRole.USER }?.text ?: prompt)
+        delegate.runChat(session, prompt, profile, attachments)
+            .withTools(host.researchChatSession(context, allowSearch = !request.sourceTask)).collect { emit(it) }
+    }
+
     override fun runPlanning(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile): Flow<CodingEvent> = flow {
         // RuntimePlanningGateway supplies the authenticated owner; the native alias still
         // needs a durable lifetime, generation fence and the owner's resource limits.

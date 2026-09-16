@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.ui.components
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -26,7 +27,11 @@ internal fun MessageHistoryActions(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var dialog by rememberSaveable(messageId) { mutableStateOf<String?>(null) }
-    var edited by rememberSaveable(messageId) { mutableStateOf(text) }
+    // Every lazy fragment has actions. Keeping the whole answer as an unopened
+    // editor draft duplicated it in each fragment's persisted presentation state.
+    var edited by rememberSaveable(messageId, stateSaver = Saver(
+        save = { if (dialog == "edit") it else "" }, restore = { it },
+    )) { mutableStateOf("") }
     var busy by remember(messageId) { mutableStateOf(false) }
     var error by remember(messageId) { mutableStateOf<String?>(null) }
     Column(if (content != null) Modifier.fillMaxWidth() else Modifier) {

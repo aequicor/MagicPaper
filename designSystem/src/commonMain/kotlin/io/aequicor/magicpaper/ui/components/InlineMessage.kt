@@ -21,16 +21,21 @@ class PaperInlineMessageParts internal constructor(
     internal val document: ChatMarkdownDocument?,
     val ranges: List<IntRange>,
 ) {
-    val size: Int get() = document?.blocks?.size ?: ranges.size
+    val size: Int get() = document?.inlineBlocks?.size ?: ranges.size
+
+    /** Opaque structural key for lazy reuse; paragraphs should not recycle table or heading trees. */
+    fun contentType(index: Int): String = document?.inlineBlocks?.get(index)?.firstOrNull {
+        it.type != org.intellij.markdown.MarkdownTokenTypes.EOL &&
+            it.type != org.intellij.markdown.MarkdownTokenTypes.WHITE_SPACE
+    }?.type?.toString() ?: "plain-text"
 
     @Composable
     fun Content(index: Int, style: TextStyle = LocalPaperTypography.current.body,
         color: Color = LocalPaperColors.current.text) {
-        val scrolling = LocalPaperChatScrolling.current
-        if (document != null) MarkdownDocumentBody(document, listOf(document.blocks[index]), selectable = !scrolling)
-        else if (scrolling) {
-            PaperText(source.substring(ranges[index]), style = style, color = color)
-        } else {
+        // Lazy fragments already bound visible work. Preserve selection/layout rather
+        // than rebuilding the text tree at both ends of every scroll gesture.
+        if (document != null) MarkdownDocumentBody(document, document.inlineBlocks[index])
+        else {
             androidx.compose.foundation.text.selection.SelectionContainer {
                 PaperText(source.substring(ranges[index]), style = style, color = color)
             }

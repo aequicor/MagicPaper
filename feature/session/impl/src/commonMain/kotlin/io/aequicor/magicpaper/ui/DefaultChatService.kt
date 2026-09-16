@@ -57,6 +57,8 @@ class DefaultChatService(
     private val researchSearch: SearchEngine? = null,
     private val archiveClock: () -> Long = Id::now,
     private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
+    val usage: UsageLedger? = null,
+    private val sourceAccess: ResearchSourceAccess = ResearchSourceAccess(),
 ) : ChatService {
     private val _state = MutableStateFlow(ChatState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -89,7 +91,6 @@ class DefaultChatService(
         _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn) }
     }
     override suspend fun start() {
-        observePins()
         val settings = settingsRepo.load()
         val profiles = profileRepo.load()
         val stored = chats.sessions()
@@ -113,7 +114,8 @@ class DefaultChatService(
         _state.update { it.copy(settings = settings, llmProfiles = profiles, sessions = sessions,
             current = it.current?.let { selected -> sessions.firstOrNull { s -> s.id == selected.id } }) }
         restoreChatRuns(sessions)
-        sessions.forEach { startNextChat(it.id) }
+        // An orphaned queue is restored as data. A running checkpoint resumes its own
+        // queue on completion; otherwise the next explicit request starts it.
         observeAutoArchive()
     }
 
@@ -169,45 +171,15 @@ class DefaultChatService(
     private var selectionGeneration = 0L
     override fun activate(id: String?) {
         selectionGeneration++
-        visible.value = true
         _state.update { state ->
             val root = state.sessions.firstOrNull { it.id == id }
             val selected = state.sessions.firstOrNull { it.id == root?.selectedQuestionId && it.researchChatId == root.id } ?: root
             state.copy(current = selected, busy = selected?.id in chatJobs.value)
         }
     }
-    private val visible = MutableStateFlow(false)
-    private var pinObserver: Job? = null
-    override fun setVisible(visible: Boolean) { this.visible.value = visible }
-    private fun observePins() {
-        val pins = requestPins ?: return
-        if (pinObserver != null) return
-        pinObserver = scope.launch {
-            var previousOpen: PinConversation? = null
-            var previousProfile: LlmProfile? = null
-            val sources = mutableMapOf<PinConversation, Any>()
-            kotlinx.coroutines.flow.combine(state, visible) { current, shown -> current to shown }.collect { (current, shown) ->
-                val profile = ProfileResolver.resolve(null as ChatSession?, current.settings, current.availableLlmProfiles)
-                    ?.takeIf { it.provider != ProviderType.OPENAI_SUBSCRIPTION || current.subscriptionSignedIn }
-                if (profile != previousProfile) sources.clear()
-                previousProfile = profile
-                val opened = current.current?.takeIf { shown }?.let { PinConversation(it.id) }
-                sources.keys.retainAll(current.sessions.map { PinConversation(it.id) }.toSet())
-                current.sessions.forEach { stored ->
-                    val session = current.current?.takeIf { it.id == stored.id } ?: stored
-                    val key = PinConversation(session.id)
-                    if (key == opened || pins.isTracking(key)) {
-                        val reopened = key == opened && key != previousOpen
-                        if (reopened || sources[key] !== session.messages) {
-                            pins.sync(key, session.pinMessages(), profile, reopened)
-                            sources[key] = session.messages
-                        }
-                    }
-                }
-                previousOpen = opened
-            }
-        }
-    }
+    // Research has no pinned-message surface. Keep the lifecycle contract without
+    // launching hidden summary requests or rescanning all histories on streamed updates.
+    override fun setVisible(visible: Boolean) = Unit
     override fun dismissNotice() { _state.update { it.copy(notice = null) } }
     private val pendingCreations = mutableMapOf<String, CompletableDeferred<Unit>>()
     override fun newSession() {
@@ -247,8 +219,8 @@ class DefaultChatService(
 
     /** Durable edits belong to the application service, even when their screen disappears. */
     private val researchEdits = Mutex()
-    private suspend fun researchChange(operation: String, block: suspend () -> Unit): Result<Unit> = scope.async {
-        val fields = mapOf("operationId" to Id.new(), "sessionId" to state.value.notebook?.id.orEmpty())
+    private suspend fun researchChange(operation: String, questionId: String? = state.value.current?.id, block: suspend () -> Unit): Result<Unit> = scope.async {
+        val fields = mapOf("operationId" to Id.new(), "sessionId" to questionId.orEmpty())
         try {
             researchEdits.withLock { block() }
             AppLog.info("chat", "research.$operation.completed", fields)
@@ -296,17 +268,10 @@ class DefaultChatService(
         }
     }
 
-    override suspend fun addWebsite(chatId: String, url: String): Result<Unit> {
+    override suspend fun addWebsite(questionId: String, url: String, scope: ResearchResourceScope): Result<Unit> {
         val normalized = researchUrl(url) ?: return Result.failure(IllegalArgumentException("Введите ссылку на сайт: https://…"))
-        return researchChange("source.add") {
-            check(chatId !in deletingSessions)
-            pendingCreations[chatId]?.await()
-            updateChat(chatId) { root ->
-                require(root.researchParentId == null)
-                root.copy(resources = if (root.resources.any { it.url == normalized }) root.resources else
-                    root.resources + ResearchResource(Id.new(), normalized, normalized),
-                    excludedResourceUrls = root.excludedResourceUrls - normalized)
-            }
+        return researchChange("source.add", questionId) {
+            addResearchResources(questionId, scope, listOf(ResearchResource(Id.new(), normalized, normalized)))
         }
     }
 
@@ -330,55 +295,108 @@ class DefaultChatService(
         }
     }
 
-    override suspend fun addSearchResult(chatId: String, hit: SearchHit): Result<Unit> {
+    override suspend fun addSearchResult(questionId: String, hit: SearchHit, scope: ResearchResourceScope): Result<Unit> {
         val normalized = researchUrl(hit.url) ?: return Result.failure(IllegalArgumentException("Источник содержит неверную ссылку."))
-        return researchChange("source.search-result.add") {
-            check(chatId !in deletingSessions)
-            pendingCreations[chatId]?.await()
-            updateChat(chatId) { root ->
-                require(root.researchParentId == null)
-                val resource = ResearchResource(Id.new(), hit.title.ifBlank { normalized }, normalized, snippet = hit.snippet)
-                root.copy(resources = if (root.resources.any { it.url == normalized }) root.resources else root.resources + resource,
-                    excludedResourceUrls = root.excludedResourceUrls - normalized)
+        return researchChange("source.search-result.add", questionId) {
+            addResearchResources(questionId, scope, listOf(
+                ResearchResource(Id.new(), hit.title.ifBlank { normalized }, normalized, snippet = hit.snippet)))
+        }
+    }
+
+    override suspend fun addResources(questionId: String, attachments: List<Attachment>, scope: ResearchResourceScope): Result<Unit> =
+        researchChange("files.add", questionId) { addResearchResources(questionId, scope, attachments.map {
+            ResearchResource(it.id, it.name, attachment = it)
+        }) }
+
+    private suspend fun researchQuestion(questionId: String): ChatSession {
+        check(questionId !in deletingSessions)
+        pendingCreations[questionId]?.await()
+        val question = checkNotNull(chats.session(questionId))
+        check(question.researchChatId !in deletingSessions)
+        return question
+    }
+
+    /** Called under researchEdits: user changes and late discoveries share one ordering. */
+    private suspend fun addResearchResources(questionId: String, scope: ResearchResourceScope, additions: List<ResearchResource>) {
+        val question = researchQuestion(questionId)
+        val target = if (scope == ResearchResourceScope.SHARED) question.researchChatId else questionId
+        updateChat(target) { stored ->
+            val keys = additions.map { it.key }.toSet()
+            val urls = additions.map { it.url }.toSet()
+            if (scope == ResearchResourceScope.SHARED) stored.copy(
+                resources = (stored.resources + additions).distinctBy { it.key },
+                questionResources = stored.questionResources.filterNot { it.key in keys },
+                excludedResourceUrls = stored.excludedResourceUrls - urls)
+            else stored.copy(questionResources = (stored.questionResources + additions).distinctBy { it.key },
+                excludedQuestionResourceUrls = stored.excludedQuestionResourceUrls - urls)
+        }
+        updateChat(questionId) { stored ->
+            val keys = additions.map { it.key }.toSet()
+            stored.copy(disabledResourceKeys = stored.disabledResourceKeys - keys,
+                questionResources = if (scope == ResearchResourceScope.SHARED)
+                    stored.questionResources.filterNot { it.key in keys } else stored.questionResources)
+        }
+    }
+
+    private suspend fun attachQuestionFiles(questionId: String, attachments: List<Attachment>) = researchEdits.withLock {
+        addResearchResources(questionId, ResearchResourceScope.QUESTION, attachments.map {
+            ResearchResource(it.id, it.name, attachment = it)
+        })
+    }
+
+    override suspend fun setResourceEnabled(questionId: String, resourceKey: String, enabled: Boolean): Result<Unit> =
+        setResourcesEnabled(questionId, setOf(resourceKey), enabled)
+
+    override suspend fun setResourcesEnabled(questionId: String, resourceKeys: Set<String>, enabled: Boolean): Result<Unit> =
+        researchChange("source.selection", questionId) {
+            val question = researchQuestion(questionId)
+            val root = checkNotNull(chats.session(question.researchChatId))
+            val availableKeys = (root.resources + question.questionResources).mapTo(mutableSetOf()) { it.key }
+            require(availableKeys.containsAll(resourceKeys))
+            updateChat(questionId) { it.copy(disabledResourceKeys = if (enabled) it.disabledResourceKeys - resourceKeys
+                else it.disabledResourceKeys + resourceKeys) }
+        }
+
+    override suspend fun shareResource(questionId: String, resourceId: String): Result<Unit> = researchChange("source.share", questionId) {
+        val question = researchQuestion(questionId)
+        val source = question.questionResources.first { it.id == resourceId }
+        // Save the shared copy first. A failed local cleanup cannot lose the source; rendering deduplicates it.
+        updateChat(question.researchChatId) { it.copy(resources = (it.resources + source).distinctBy { resource -> resource.key },
+            excludedResourceUrls = it.excludedResourceUrls - source.url) }
+        updateChat(questionId) { it.copy(questionResources = it.questionResources.filterNot { resource -> resource.key == source.key }) }
+    }
+
+    override suspend fun removeResource(questionId: String, resourceId: String, scope: ResearchResourceScope): Result<Unit> =
+        researchChange("source.remove", questionId) {
+            val question = researchQuestion(questionId)
+            val target = if (scope == ResearchResourceScope.SHARED) question.researchChatId else questionId
+            updateChat(target) { stored ->
+                val resources = if (scope == ResearchResourceScope.SHARED) stored.resources else stored.questionResources
+                val removed = resources.firstOrNull { it.id == resourceId }
+                val remaining = resources.filterNot { it.id == resourceId }
+                val urls = listOfNotNull(removed?.url?.takeIf { it.isNotEmpty() })
+                if (scope == ResearchResourceScope.SHARED) stored.copy(resources = remaining,
+                    excludedResourceUrls = stored.excludedResourceUrls + urls)
+                else stored.copy(questionResources = remaining,
+                    excludedQuestionResourceUrls = stored.excludedQuestionResourceUrls + urls)
             }
         }
-    }
 
-    override suspend fun addResources(chatId: String, attachments: List<Attachment>): Result<Unit> = researchChange("files.add") {
-        check(chatId !in deletingSessions)
-        pendingCreations[chatId]?.await()
-        shareFiles(chatId, attachments)
-    }
-
-    private suspend fun shareFiles(chatId: String, attachments: List<Attachment>) {
-        updateChat(chatId) { root ->
-            require(root.researchParentId == null)
-            root.copy(resources = (root.resources + attachments.map {
-                ResearchResource(it.id, it.name, attachment = it)
-            }).distinctBy { it.id })
-        }
-    }
-
-    override suspend fun removeResource(chatId: String, resourceId: String): Result<Unit> = researchChange("source.remove") {
-        check(chatId !in deletingSessions)
-        updateChat(chatId) { root ->
-            require(root.researchParentId == null)
-            val removed = root.resources.firstOrNull { it.id == resourceId }
-            root.copy(resources = root.resources.filterNot { it.id == resourceId },
-                excludedResourceUrls = root.excludedResourceUrls + listOfNotNull(removed?.url?.takeIf { it.isNotEmpty() }))
-        }
-    }
-
-    private suspend fun rememberQuestionSources(questionId: String, sources: List<SearchHit>) {
-        if (sources.isEmpty() || questionId in deletingSessions) return
-        updateChat(questionId) { question ->
-            val additions = sources.mapNotNull { hit -> researchUrl(hit.url)?.let { url ->
+    private suspend fun rememberQuestionSources(questionId: String, sources: List<SearchHit>, shared: Boolean = false) =
+        researchEdits.withLock {
+            if (sources.isEmpty() || questionId in deletingSessions) return@withLock
+            val question = researchQuestion(questionId)
+            val root = checkNotNull(chats.session(question.researchChatId))
+            val excluded = root.excludedResourceUrls + question.excludedQuestionResourceUrls
+            val additions = sources.mapNotNull { hit -> researchUrl(hit.url)?.takeUnless { it in excluded }?.let { url ->
                 ResearchResource(Id.new(), hit.title.ifBlank { url }, url, discovered = true, snippet = hit.snippet)
-            } }
-            question.copy(questionResources = (question.questionResources + additions)
-                .distinctBy { if (it.url.isNotEmpty()) it.url else it.id })
+            } }.filterNot { resource -> root.resources.any { it.key == resource.key } }
+            // Discovery never re-enables a source the user disabled during this run.
+            updateChat(if (shared) root.id else questionId) { stored ->
+                if (shared) stored.copy(resources = (stored.resources + additions).distinctBy { it.key })
+                else stored.copy(questionResources = (stored.questionResources + additions).distinctBy { it.key })
+            }
         }
-    }
 
     override fun deleteSession(id: String) {
         val initialIds = state.value.sessions.filter { it.researchParentId == id }.map { it.id } + id
@@ -417,7 +435,7 @@ class DefaultChatService(
             _state.update { it.copy(notice = "Чат удалён. Не удалось удалить черновик.") }
         }
         val rest = chats.sessions()
-        _state.update { state -> state.copy(sessions = rest,
+        _state.update { state -> state.copy(sessions = rest, drafts = state.drafts - id, sourceReadProblems = state.sourceReadProblems - id,
             current = if (state.current?.id == id) rest.firstOrNull { it.researchParentId == null && it.id !in deletingIds } else state.current,
             busy = if (state.current?.id == id) false else state.busy) }
     }
@@ -488,7 +506,7 @@ class DefaultChatService(
         val now = Id.now()
         val fork = source.copy(id = Id.new(), title = "${source.title} — форк", createdAt = now, updatedAt = now,
             messages = source.messages.through(throughMessageId) { it.id }.map { it.copy(id = Id.new()) },
-            nativeSessionId = "", pendingRun = null, queuedPrompts = emptyList(), acquireComputerAccess = false,
+            nativeSessionId = "", pendingRun = null, pendingActivity = emptyList(), queuedPrompts = emptyList(), acquireComputerAccess = false,
             archived = false, archiveRestoredAt = null,
             researchParentId = null, selectedQuestionId = null,
             resources = chats.session(source.researchChatId)?.resources.orEmpty())
@@ -510,12 +528,22 @@ class DefaultChatService(
             scope.launch {
                 pendingCreations[session.id]?.await()
                 updateChat(session.id) { it.copy(queuedPrompts = it.queuedPrompts + request) }
-                if (visible.isNotEmpty()) shareFiles(session.researchChatId, visible)
+                if (visible.isNotEmpty()) attachQuestionFiles(session.id, visible)
                 queuedComputerRequests.update { it + (request.messageId to session.id) }
                 draft.clearIfUnchanged(version)
                 startNextChat(session.id)
             }
         } else startChat(text, attachments)
+    }
+
+    override fun sendFollowUp(sessionId: String, messageId: String, question: String) {
+        val session = _state.value.current?.takeIf { it.id == sessionId } ?: return
+        if (session.id in chatJobs.value || session.pendingRun != null || session.queuedPrompts.isNotEmpty() ||
+            session.id in controllingSessions || session.id in changingHistory) return
+        val answer = session.messages.lastOrNull()?.takeIf { it.id == messageId && it.role == ChatRole.AGENT } ?: return
+        if (question !in answer.researchReply().followUps) return
+        AppLog.info("chat", "follow-up.selected", mapOf("sessionId" to sessionId, "messageId" to messageId))
+        startChat(question, emptyList(), targetId = sessionId, clearDraft = false)
     }
 
     private fun startNextChat(sessionId: String) {
@@ -624,7 +652,20 @@ class DefaultChatService(
                 sessions = st.sessions.map { if (it.id == updated.id) updated else it },
             )
         }
+        val recorder = CodingRunRecorder()
+        val previousActivity = if (resumed != null) session.pendingActivity else emptyList()
+        val sharedDiscovery = _state.value.sessions.filter { it.researchChatId == session.researchChatId }
+            .all { question -> question.messages.none { it.role == ChatRole.USER && it.id != request.messageId } }
+        var lastDraftUpdate = 0L
+        fun publishDraft(force: Boolean = true) {
+            val now = Id.now()
+            if (!force && now - lastDraftUpdate < 80) return
+            lastDraftUpdate = now
+            val draft = recorder.draft(active = true)
+            _state.update { it.copy(drafts = it.drafts + (session.id to draft.copy(steps = previousActivity + draft.steps))) }
+        }
         val operationFields = mapOf("sessionId" to session.id, "requestId" to userMessage.id)
+        publishDraft()
         AppLog.info("chat", "send.started", operationFields)
         val job = scope.launch(workerDispatcher + io.aequicor.magicpaper.domain.UsageOwner(io.aequicor.magicpaper.domain.UsageScope.chat(session.id)), start = CoroutineStart.LAZY) {
             try {
@@ -632,10 +673,11 @@ class DefaultChatService(
                 val accepted = updateChat(session.id) { latest -> latest.copy(
                     engine = updated.engine, layoutProjectId = updated.layoutProjectId,
                     title = updated.title, updatedAt = updated.updatedAt, pendingRun = request, archived = false,
+                    pendingActivity = previousActivity,
                     queuedPrompts = latest.queuedPrompts.filterNot { it.messageId == request.messageId },
                     messages = if (latest.messages.any { it.id == userMessage.id }) latest.messages else latest.messages + userMessage) }
                 if (resumed == null && visible.isNotEmpty()) {
-                    shareFiles(session.researchChatId, visible)
+                    attachQuestionFiles(session.id, visible)
                 }
                 if (session.researchParentId != null) updateChat(session.researchChatId) { it.copy(updatedAt = updated.updatedAt) }
                 queuedComputerRequests.update { it - request.messageId }
@@ -650,40 +692,114 @@ class DefaultChatService(
                 val answer = if (layoutRequest != null && layoutAgent != null) {
                     layoutAgent.answer(layoutRequest.project, session.id, userMessage.id, trimmed, historyBefore, requestProfile, visible)
                 } else {
-                    val initialSources = if (resumed == null) {
-                        discoverResearchSources(session.id, trimmed, settings, operationFields)
-                    } else checkNotNull(chats.session(session.id)).questionResources.mapNotNull { resource ->
-                        resource.url.takeIf { it.isNotEmpty() }?.let {
-                            SearchHit(resource.title, it, resource.snippet)
-                        }
+                    val researchRequest = researchRequest(trimmed)
+                    val storedQuestion = checkNotNull(chats.session(session.id))
+                    val storedRoot = checkNotNull(chats.session(session.researchChatId))
+                    val autoSearch = researchRequest.autoSearch(
+                        hasHistory = historyBefore.isNotEmpty(),
+                        hasSources = storedQuestion.availableResearchResources(storedRoot).isNotEmpty(),
+                        hasAttachments = visible.isNotEmpty())
+                    AppLog.debug("chat", "research.search.decision", operationFields + mapOf(
+                        "automatic" to autoSearch.toString(), "sourceTask" to researchRequest.sourceTask.toString()))
+                    if (resumed == null && autoSearch && researchSearch?.isConfigured(settings) == true) {
+                        val searchId = "research-search:${request.messageId}"
+                        recorder.apply(CodingEvent.ToolStarted("web.search", "", searchId,
+                            title = if (sharedDiscovery) "Ищу общие источники" else "Ищу источники для вопроса"))
+                        publishDraft()
+                        val result = discoverResearchSources(session.id, trimmed, settings, operationFields, sharedDiscovery)
+                        recorder.apply(CodingEvent.ToolFinished("web.search", result.isFailure, searchId,
+                            title = result.fold({ "Найдено источников: ${it.size}" }, { "Поиск недоступен" })))
+                        publishDraft()
                     }
-                    val shared = checkNotNull(chats.session(session.researchChatId)).resources
-                    val questionResources = checkNotNull(chats.session(session.id)).questionResources
-                    val availableResources = (shared + questionResources).distinctBy { if (it.url.isNotEmpty()) it.url else it.id }
+                    if (resumed == null && researchRequest.urls.isNotEmpty()) researchEdits.withLock {
+                        val direct = researchRequest.urls.map { url ->
+                            (storedRoot.resources + storedQuestion.questionResources).firstOrNull { it.url == url }
+                                ?: ResearchResource(Id.new(), url, url)
+                        }
+                        addResearchResources(session.id, ResearchResourceScope.QUESTION, direct)
+                    }
+                    val question = checkNotNull(chats.session(session.id))
+                    val root = checkNotNull(chats.session(session.researchChatId))
+                    val candidates = researchRequest.sources(question.availableResearchResources(root), visible, includeNewLinks = false)
+                    val readId = "research-read:${request.messageId}"
+                    val checksWebSources = candidates.any { it.url.isNotBlank() }
+                    if (checksWebSources) {
+                        recorder.apply(CodingEvent.ToolStarted("web.read", "", readId,
+                            title = if (researchRequest.sourceTask) "Читаю указанные источники" else "Проверяю доступность источников"))
+                        publishDraft()
+                    }
+                    val sourceChecks = sourceAccess.check(candidates).associateBy { it.resource.key }.toMutableMap()
+                    fun publishSourceProblems() {
+                        val problems = sourceChecks.values.filter { it.problem != null }.associate { it.resource.key to it.problem!! }
+                        _state.update { it.copy(sourceReadProblems = it.sourceReadProblems + (session.id to problems)) }
+                    }
+                    publishSourceProblems()
+                    val availableResources = sourceChecks.values.toList().readableSources()
+                    val unreadableCount = sourceChecks.values.count { it.problem != null }
+                    if (checksWebSources) {
+                        recorder.apply(CodingEvent.ToolFinished("web.read", false, readId,
+                            title = "Прочитано источников: ${availableResources.count { it.url.isNotBlank() }}" +
+                                if (unreadableCount > 0) "; недоступно: $unreadableCount" else ""))
+                        publishDraft()
+                    }
+                    val initialSources = availableResources.mapNotNull { resource -> resource.url.takeIf { it.isNotEmpty() }?.let {
+                        SearchHit(resource.title, it, resource.snippet)
+                    } }
                     val researchAttachments = (visible + availableResources.mapNotNull { it.attachment }).distinctBy { it.id }
-                    val recorder = CodingRunRecorder()
                     var finished = false
                     var sources = initialSources
                     var outputAttachments = emptyList<Attachment>()
                     val recovering = resumed != null && session.pendingRun?.messageId == resumed.messageId
-                    val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
+                    val userPrompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                         "результаты команд и состояние файлов; не повторяй завершённые действия.\n\n" + trimmed else trimmed
+                    val excluded = sourceChecks.values.toList().unavailableSourceContext(allowSearch = !researchRequest.sourceTask)
+                    val prompt = if (excluded.isEmpty()) userPrompt else "$excluded\n\nВопрос пользователя:\n$userPrompt"
                     runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess, resources = availableResources), prompt, requestProfile, researchAttachments).collect { event ->
                         if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                             updateChat(session.id) { it.copy(nativeSessionId = event.sessionId) }
                         }
                         recorder.apply(event)
-                        val found = event.researchSources()
+                        publishDraft(event !is CodingEvent.TextDelta && event !is CodingEvent.ThinkingDelta && event !is CodingEvent.ToolProgress)
+                        if (event is CodingEvent.ToolStarted || event is CodingEvent.ToolFinished) {
+                            updateChat(session.id) { it.copy(pendingActivity = previousActivity + recorder.draft(true).steps.researchActivity()) }
+                        }
+                        val candidatesFound = event.researchSources().filter { hit ->
+                            !researchRequest.sourceTask || researchUrl(hit.url)?.let { "url:$it" in sourceChecks } == true
+                        }
+                        val unchecked = candidatesFound.mapNotNull { hit -> researchUrl(hit.url)?.let { url ->
+                            ResearchResource(Id.new(), hit.title, url)
+                        } }.filterNot { it.key in sourceChecks }
+                        sourceAccess.check(unchecked).forEach { sourceChecks[it.resource.key] = it }
+                        if (unchecked.isNotEmpty()) publishSourceProblems()
+                        val found = candidatesFound.filter { hit ->
+                            val checked = researchUrl(hit.url)?.let { sourceChecks["url:$it"] }
+                            checked != null && checked.problem == null
+                        }.map { it.copy(snippet = "") }
                         if (found.isNotEmpty()) {
                             sources = (sources + found).distinctBy { it.url }
-                            rememberQuestionSources(session.id, found)
+                            rememberQuestionSources(session.id, found, sharedDiscovery && !researchRequest.sourceTask)
                         }
                         if (event is CodingEvent.FinalText) { outputAttachments = event.attachments }
                         if (event is CodingEvent.Finished) finished = true
                     }
                     val response = recorder.message(Id.new(), Id.now())
                     check(finished && !response.failed) { "Движок не завершил ответ" }
-                    SessionAnswer(response.text, sources, outputAttachments)
+                    val unavailable = sourceChecks.values.filter { it.problem != null }
+                    val citesUnavailable = researchReferences(response.text).any { hit ->
+                        val checked = sourceChecks["url:${hit.url}"]
+                        checked?.problem != null || (researchRequest.sourceTask && checked == null)
+                    }
+                    val verifiedAnswer = if (citesUnavailable) {
+                        AppLog.error("chat", "answer.unreadable-citation", operationFields)
+                        "Ответ содержит ссылки на непрочитанные страницы, поэтому его не удалось подтвердить. " +
+                            "Повторите запрос по доступным источникам или добавьте текст нужного материала файлом."
+                    } else response.text
+                    val readNotice = if (unavailable.isEmpty()) "" else unavailable.joinToString("\n", prefix =
+                        "\n\nНедоступные источники исключены из ссылок ответа. Можно повторить запрос для новой проверки:\n") {
+                        "- ${it.resource.title}: ${it.problem}."
+                    }
+                    val reply = researchReply(verifiedAnswer)
+                    SessionAnswer(reply.text + readNotice, sources, outputAttachments, previousActivity + response.steps.researchActivity(), reply.followUps)
                 }
                 val agentMessage = ChatMessage(
                     id = request.responseId.ifBlank { Id.new() },
@@ -692,19 +808,44 @@ class DefaultChatService(
                     createdAt = Id.now(),
                     sources = answer.sources,
                     attachments = answer.attachments,
+                    researchActivity = answer.activity,
+                    followUps = answer.followUps,
                 )
-                updateChat(session.id) { latest -> latest.copy(messages = latest.messages.filterNot { it.id == agentMessage.id } + agentMessage, updatedAt = Id.now(), pendingRun = null) }
+                updateChat(session.id) { latest -> latest.copy(messages = latest.messages.filterNot { it.id == agentMessage.id } + agentMessage, updatedAt = Id.now(), pendingRun = null, pendingActivity = emptyList()) }
+                _state.update { it.copy(drafts = it.drafts - session.id) }
                 AppLog.info("chat", "send.completed", operationFields)
-            } catch (e: CancellationException) { runtime.abort(session.id); AppLog.info("chat", "send.cancelled", operationFields); throw e }
+            } catch (e: CancellationException) {
+                runtime.abort(session.id)
+                AppLog.info("chat", "send.cancelled", operationFields)
+                throw e
+            }
             catch (e: Exception) {
                 try { updateChat(session.id) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP)) } }
                 catch (failure: CancellationException) { throw failure }
                 catch (failure: Exception) { AppLog.error("chat", "checkpoint.failed", failure, operationFields) }
+                recorder.apply(CodingEvent.Failed("Не удалось завершить исследование"))
                 AppLog.error("chat", "send.failed", e, operationFields); _state.update { it.copy(notice = "Не удалось завершить отправку. Проверьте подключение и повторите попытку.") } }
             finally {
-                chatJobs.update { it - session.id }
-                _state.update { it.copy(busy = it.current?.id in chatJobs.value) }
-                withContext(NonCancellable + Dispatchers.Main.immediate) { startNextChat(session.id) }
+                try {
+                    withContext(NonCancellable) {
+                        if (state.value.sessions.firstOrNull { it.id == session.id }?.pendingRun != null && session.id !in deletingSessions) {
+                            val stopped = recorder.message(request.responseId, Id.now())
+                            val activity = previousActivity + stopped.steps.researchActivity()
+                            _state.update { it.copy(drafts = it.drafts + (session.id to CodingDraft(
+                                steps = previousActivity + stopped.steps, failedMessage = if (stopped.failed) "Не удалось завершить исследование" else null))) }
+                            try { updateChat(session.id) { it.copy(pendingActivity = activity) } }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) {
+                                AppLog.error("chat", "activity.save.failed", failure, operationFields)
+                                _state.update { it.copy(notice = "Не удалось сохранить ход исследования. Можно продолжить вопрос.") }
+                            }
+                        }
+                    }
+                } finally {
+                    chatJobs.update { it - session.id }
+                    _state.update { it.copy(busy = it.current?.id in chatJobs.value) }
+                    withContext(NonCancellable + Dispatchers.Main.immediate) { startNextChat(session.id) }
+                }
             }
         }
         chatJobs.update { it + (session.id to job) }
@@ -712,25 +853,25 @@ class DefaultChatService(
     }
 
     private suspend fun discoverResearchSources(questionId: String, query: String, settings: AppSettings,
-        fields: Map<String, String>): List<SearchHit> {
-        val search = researchSearch ?: return emptyList()
+        fields: Map<String, String>, shared: Boolean): Result<List<SearchHit>> {
+        val search = checkNotNull(researchSearch)
         try {
             val result = withTimeout(15_000) { search.searchWithDiagnostics(query, settings, limit = 5) }
-            if (result.hits.isNotEmpty()) rememberQuestionSources(questionId, result.hits)
             if (result.hits.isEmpty() && result.issues.isNotEmpty()) {
                 AppLog.info("chat", "research.search.unavailable", fields + mapOf("issueCount" to result.issues.size.toString()))
-                _state.update { it.copy(notice = "Поиск недоступен. Ответ будет подготовлен без новых источников.") }
+            } else {
+                rememberQuestionSources(questionId, result.hits, shared)
+                return Result.success(result.hits)
             }
-            return result.hits
         } catch (_: TimeoutCancellationException) {
             AppLog.info("chat", "research.search.timeout", fields)
-            _state.update { it.copy(notice = "Поиск не ответил. Исследование продолжится по доступным источникам.") }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             AppLog.error("chat", "research.search.failed", failure, fields)
-            _state.update { it.copy(notice = "Поиск не ответил. Исследование продолжится по доступным источникам.") }
         }
-        return emptyList()
+        val message = "Поиск недоступен. Исследование продолжится по доступным источникам."
+        _state.update { it.copy(notice = message) }
+        return Result.failure(IllegalStateException(message))
     }
 
     // ---- Настройки ---------------------------------------------------------
@@ -791,9 +932,7 @@ class DefaultChatService(
         children.forEach { it.cancel() }
         children.forEach { it.join() }
         resetDrafts()
-        pinObserver = null
         archiveObserver = null
-        visible.value = false
         chatJobs.value = emptyMap()
         pendingCreations.clear()
         _state.value = ChatState()

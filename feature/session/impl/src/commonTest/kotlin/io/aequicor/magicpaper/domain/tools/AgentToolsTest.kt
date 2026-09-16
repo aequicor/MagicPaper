@@ -10,6 +10,47 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentToolsTest {
+    @Test fun aSourceTaskCannotInvokeApplicationSearchEvenThroughAnExplicitToolCall() = runTest {
+        var searches = 0
+        val host = ToolHost(MemoryToolReceiptStore()).apply { search = { _, _ -> searches++; JsonArray(emptyList()) } }
+        val native = object : CodingRuntime by io.aequicor.magicpaper.data.coding.NoopCodingRuntime {
+            override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
+                val tools = assertNotNull(currentCoroutineContext()[ToolSession])
+                assertEquals(setOf("questionnaire"), tools.definitions.map { it.id }.toSet())
+                assertFailsWith<IllegalArgumentException> {
+                    tools.call("search", "web.search", buildJsonObject { put("query", "other studies") })
+                }
+                emit(CodingEvent.Finished)
+            }
+        }
+        val session = ChatSession("summary", "Summary", 1, 1, messages = listOf(
+            ChatMessage("request", ChatRole.USER, "https://example.org/paper краткий пересказ", 1)))
+        ToolEnabledCodingRuntime(native, host).runChat(session, "Service notice mentioning: найди другие источники", null).toList()
+        assertEquals(0, searches)
+    }
+
+    @Test fun researchChatHasSearchButCannotReachProjectMutationOrOrchestration() = runTest {
+        val host = ToolHost(MemoryToolReceiptStore()).apply {
+            checkScope = { error("Project ownership must not be used for research chat") }
+            search = { ctx, _ ->
+                assertEquals("chat-chat-one", ctx.projectId)
+                JsonArray(emptyList())
+            }
+        }
+        val native = object : CodingRuntime by io.aequicor.magicpaper.data.coding.NoopCodingRuntime {
+            override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
+                val tools = assertNotNull(currentCoroutineContext()[ToolSession])
+                assertEquals(setOf("web.search", "questionnaire"), tools.definitions.map { it.id }.toSet())
+                tools.call("search", "web.search", buildJsonObject { put("query", "evidence") })
+                assertFailsWith<IllegalArgumentException> { tools.call("write", "file.write", JsonObject(emptyMap())) }
+                emit(CodingEvent.Finished)
+            }
+        }
+        val runtime = ToolEnabledCodingRuntime(native, host)
+        val events = runtime.runChat(ChatSession("chat-one", "Research", 1, 1), "Question", null).toList()
+        assertTrue(events.any { it is CodingEvent.ToolFinished && it.tool == "web.search" && !it.isError })
+    }
+
     private val context = ToolExecutionContext("p", "s", "s", "request", ToolRole.ORCHESTRATOR, CodingInteractionMode.PLANNING, "plan", "run")
     private val empty = JsonObject(emptyMap())
     private fun session(receipts: ToolReceiptStore = MemoryToolReceiptStore(), ctx: ToolExecutionContext = context,
