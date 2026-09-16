@@ -79,6 +79,19 @@ class JsonCodingProjectRepositoryTest {
         assertEquals(listOf("newer", "older"), JsonCodingProjectRepository(store, json).sessions("p").map { it.id })
     }
 
+    @Test fun sessionStatusRecencySurvivesRepositoryReopen() = runTest {
+        repo.save(CodingProject("p", "Project", "/p", 1))
+        repo.saveSession(CodingSession("session", "p", "Task", 2))
+        repo.updateSession("p", "session") {
+            it.copy(lastStatus = CodingSessionStatus.WAITING, statusChangedAt = 50)
+        }
+
+        val restored = JsonCodingProjectRepository(store, json).sessions("p").single()
+
+        assertEquals(CodingSessionStatus.WAITING, restored.lastStatus)
+        assertEquals(50, restored.statusChangedAt)
+    }
+
     @Test
     fun projectsRoundTripAndDelete() = runTest {
         val a = CodingProject(id = "a", name = "app", path = "/tmp/app", createdAt = 1L)

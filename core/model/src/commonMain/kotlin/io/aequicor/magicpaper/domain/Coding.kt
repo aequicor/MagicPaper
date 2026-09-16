@@ -93,6 +93,10 @@ data class CodingSession(
     val taskWorktree: TaskWorktree? = null,
     /** Manual acceptance belongs to a specific response, never to future runs. */
     val manuallyVerifiedResponseId: String? = null,
+    /** Last status observed by the session owner; used to retain sidebar recency after restart. */
+    val lastStatus: CodingSessionStatus? = null,
+    /** Time of [lastStatus]'s transition. Zero is a legacy marker and falls back to [createdAt]. */
+    val statusChangedAt: Long = 0,
 )
 
 @Serializable
@@ -126,6 +130,7 @@ fun List<CodingMessage>.interruptedCodingRequest(): CodingMessage? =
  * Состояние активности кодинг-сессии для индикатора-кружка.
  * Сводный приоритет задаёт aggregateCodingStatus: ожидание пользователя выше фоновой работы.
  */
+@Serializable
 enum class CodingSessionStatus {
     /** Агент выполняет прогон — красный. */
     WORKING,

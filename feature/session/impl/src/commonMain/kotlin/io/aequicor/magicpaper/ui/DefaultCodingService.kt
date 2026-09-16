@@ -383,6 +383,7 @@ class DefaultCodingService(
         get() = closingState.value
         set(value) { closingState.value = value }
     private val idleCodingDraft = CodingDraft()
+    private val statusRecencySaveFailure = "Не удалось сохранить порядок сессий. Повторите изменение статуса."
     private fun removeCodingJob(id: String): Job? = codingJobs.getAndUpdate { it - id }[id]
 
 
@@ -405,6 +406,41 @@ class DefaultCodingService(
         _state.value.coding.sessions.forEach { startQueuedPrompt(it.session.id) }
     }
     private fun observeRuntime() {
+        // Status recency belongs to the durable session, not to the Compose lifetime.
+        // Initial observation seeds legacy sessions without making them look newly active.
+        codingProjects?.let { scope.launch {
+            _state.collect { current ->
+                current.coding.sessions.forEach { item ->
+                    val observed = item.status
+                    if (item.session.lastStatus == observed) return@forEach
+                    try {
+                        updateStoredCodingSession(item.session) { latest ->
+                            if (latest.lastStatus == observed) latest
+                            else latest.copy(
+                                lastStatus = observed,
+                                statusChangedAt = if (latest.lastStatus == null) {
+                                    latest.statusChangedAt.takeIf { it > 0 } ?: latest.createdAt
+                                } else {
+                                    Id.now()
+                                },
+                            )
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        AppLog.error(
+                            "coding",
+                            "session.status-recency.save.failed",
+                            failure,
+                            mapOf("sessionId" to item.session.id),
+                        )
+                        _state.update {
+                            it.copy(notice = statusRecencySaveFailure)
+                        }
+                    }
+                }
+            }
+        } }
         taskWorktrees?.let { worktrees -> scope.launch {
             worktrees.changes.collect {
                 val saved = _state.value.coding.projects.flatMap { codingProjects?.sessions(it.id).orEmpty() }.associateBy { it.id }
@@ -1404,6 +1440,9 @@ class DefaultCodingService(
             val repo = codingProjects ?: error("Хранилище сессий недоступно")
             repo.updateSession(session.projectId, session.id, change).also { saved ->
                 updateCodingSession(saved.id) { it.copy(session = saved) }
+                _state.update { state ->
+                    if (state.notice == statusRecencySaveFailure) state.copy(notice = null) else state
+                }
             }
         }
     }

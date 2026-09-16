@@ -8,6 +8,40 @@ import kotlin.test.*
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionResultServiceTest {
+    @Test fun statusTransitionRecencySurvivesServiceRestart() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val fixture = ModelSettingsFixture()
+            val repo = JsonCodingProjectRepository(fixture.kv, fixture.json)
+            repo.save(CodingProject("p", "Project", "/fixture", 1))
+            repo.saveSession(CodingSession("s", "p", "Task", 1, engine = CodingEngine.PI))
+            repo.saveMessages("p", "s", listOf(CodingMessage("a", CodingRole.AGENT, "Done", createdAt = 2)))
+            val first = fixture.prepareCoding(codingProjects = repo)
+            service = first
+            advanceUntilIdle()
+            first.markSessionRead("s", "a")
+            advanceUntilIdle()
+
+            val saved = JsonCodingProjectRepository(fixture.kv, fixture.json).sessions("p").single()
+            assertEquals(CodingSessionStatus.NEEDS_TESTING, saved.lastStatus)
+            assertTrue(saved.statusChangedAt > saved.createdAt)
+
+            first.close()
+            val second = fixture.prepareCoding(
+                codingProjects = JsonCodingProjectRepository(fixture.kv, fixture.json),
+            )
+            service = second
+            advanceUntilIdle()
+            val restored = second.state.value.coding.sessions.single().session
+            assertEquals(saved.statusChangedAt, restored.statusChangedAt)
+            assertEquals(CodingSessionStatus.NEEDS_TESTING, restored.lastStatus)
+        } finally {
+            service?.close()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun failedVerificationSaveKeepsUncheckedStateAndOffersRetry() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var service: DefaultCodingService? = null

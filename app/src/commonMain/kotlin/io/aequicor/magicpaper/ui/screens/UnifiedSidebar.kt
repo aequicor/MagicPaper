@@ -89,16 +89,33 @@ internal data class ImmunityInfo(
 internal val CodingSessionStatus.sidebarSubtitle: String?
     get() = label.takeUnless { this == CodingSessionStatus.IDLE }
 
+internal val CodingSessionStatus.pinnedInSidebar: Boolean
+    get() = this == CodingSessionStatus.WORKING || this == CodingSessionStatus.WAITING
+
+internal val unifiedSidebarItemComparator =
+    compareByDescending<UnifiedSidebarItem> { it.codingStatus?.pinnedInSidebar == true }
+        .thenByDescending { it.sortTime }
+
 /** Keeps a runtime recency timestamp: creation first, then every visible status transition. */
 internal class SessionRecencyTracker(private val now: () -> Long) {
     private val statuses = mutableMapOf<String, CodingSessionStatus>()
     private val activityTimes = mutableMapOf<String, Long>()
 
-    fun observe(id: String, status: CodingSessionStatus, createdAt: Long): Long {
+    fun observe(
+        id: String,
+        status: CodingSessionStatus,
+        createdAt: Long,
+        persistedStatus: CodingSessionStatus? = null,
+        persistedStatusChangedAt: Long = 0,
+    ): Long {
         val previous = statuses.put(id, status)
         return when {
-            previous == null -> activityTimes.getOrPut(id) { createdAt }
+            previous == null -> activityTimes.getOrPut(id) {
+                if (persistedStatus == status && persistedStatusChangedAt > 0) persistedStatusChangedAt else createdAt
+            }
             previous != status -> now().also { activityTimes[id] = it }
+            persistedStatus == status && persistedStatusChangedAt > activityTimes.getValue(id) ->
+                persistedStatusChangedAt.also { activityTimes[id] = it }
             else -> activityTimes.getValue(id)
         }
     }
@@ -185,7 +202,13 @@ internal fun rememberUnifiedItems(
                 val childItem = UnifiedSidebarItem(
                     id = childUi.session.id,
                     displayName = childUi.session.sidebarTitle(),
-                    sortTime = recencyTracker.observe(childUi.session.id, childUi.status, childUi.session.createdAt),
+                    sortTime = recencyTracker.observe(
+                        childUi.session.id,
+                        childUi.status,
+                        childUi.session.createdAt,
+                        childUi.session.lastStatus,
+                        childUi.session.statusChangedAt,
+                    ),
                     isCoding = true,
                     projectId = childUi.session.projectId,
                     codingStatus = childUi.status,
@@ -217,7 +240,7 @@ internal fun rememberUnifiedItems(
                 if (organism != null && sessionUi.session.id == organism.zygoteId) {
                     val excludeIds = setOfNotNull(organism.zygoteId, organism.immunityId)
                     val children = collectVisibleChildren(organism.zygoteId, excludeIds)
-                        .sortedByDescending { it.sortTime }
+                        .sortedWith(unifiedSidebarItemComparator)
                     val memberUis = allSessions.filter { membership[it.session.id] == organismId &&
                         it.session.id !in excludeIds && !it.session.archived }
                     val status = aggregateCodingStatus(
@@ -226,7 +249,13 @@ internal fun rememberUnifiedItems(
                     UnifiedSidebarItem(
                         id = sessionUi.session.id,
                         displayName = sessionUi.session.sidebarTitle(),
-                        sortTime = recencyTracker.observe(sessionUi.session.id, status, sessionUi.session.createdAt),
+                        sortTime = recencyTracker.observe(
+                            sessionUi.session.id,
+                            status,
+                            sessionUi.session.createdAt,
+                            sessionUi.session.lastStatus,
+                            sessionUi.session.statusChangedAt,
+                        ),
                         isCoding = true,
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
                         projectId = sessionUi.session.projectId,
@@ -240,7 +269,13 @@ internal fun rememberUnifiedItems(
                     UnifiedSidebarItem(
                         id = sessionUi.session.id,
                         displayName = sessionUi.session.sidebarTitle(),
-                        sortTime = recencyTracker.observe(sessionUi.session.id, sessionUi.status, sessionUi.session.createdAt),
+                        sortTime = recencyTracker.observe(
+                            sessionUi.session.id,
+                            sessionUi.status,
+                            sessionUi.session.createdAt,
+                            sessionUi.session.lastStatus,
+                            sessionUi.session.statusChangedAt,
+                        ),
                         isCoding = true,
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
                         projectId = sessionUi.session.projectId,
@@ -251,7 +286,7 @@ internal fun rememberUnifiedItems(
             }
     }
     return remember(chatItems, codingItems) {
-        (chatItems + codingItems).sortedByDescending { it.sortTime }
+        (chatItems + codingItems).sortedWith(unifiedSidebarItemComparator)
     }
 }
 
@@ -288,7 +323,7 @@ internal fun UnifiedSidebar(
         ) {
             projectOrder.forEach { projectId ->
                 val project = coding.projects.firstOrNull { it.id == projectId } ?: return@forEach
-                val sessions = codingByProject[projectId].orEmpty().sortedByDescending { it.sortTime }
+                val sessions = codingByProject[projectId].orEmpty().sortedWith(unifiedSidebarItemComparator)
                 val collapsed = projectId in collapsedProjects
                 item(key = "project:$projectId") {
                     ProjectSectionHeader(
