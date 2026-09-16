@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -345,9 +346,10 @@ internal fun UnifiedSidebar(
     modifier: Modifier = Modifier,
     recencyTracker: SessionRecencyTracker,
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
-    var searchExpanded by rememberSaveable { mutableStateOf(false) }
-    var archivesOnly by rememberSaveable { mutableStateOf(false) }
+    // These values are persisted across app upgrades. Separate keyed groups keep
+    // newly added controls from consuming the old positional collapse-map slots.
+    var query by key("sidebar-query") { rememberSaveable { mutableStateOf("") } }
+    var archivesOnly by key("sidebar-archives") { rememberSaveable { mutableStateOf(false) } }
     val browsing = archivesOnly || query.isNotBlank()
     val searchCoding = remember(coding.sessions) { coding.sessions.map { it.session to it.messages } }
     val results by produceState<List<SessionSearchResult>?>(null, query, archivesOnly, chatSessions, searchCoding, coding.projects) {
@@ -359,9 +361,16 @@ internal fun UnifiedSidebar(
     }
     val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding, recencyTracker)
     val groups = remember(items) { groupUnifiedSidebarItems(items) }
-    var collapsedGroups by rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
-    var collapsedOrganisms by rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
+    var collapsedGroups by key("sidebar-collapsed-groups") {
+        rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
+    }
+    var collapsedOrganisms by key("sidebar-collapsed-organisms") {
+        rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
+    }
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
+    var searchExpanded by key("sidebar-search-expanded") {
+        rememberSaveable { mutableStateOf(query.isNotBlank()) }
+    }
 
     Column(modifier.fillMaxHeight()) {
         SessionBrowserControls(query, { query = it }, searchExpanded, {
