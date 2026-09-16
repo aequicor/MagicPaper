@@ -449,58 +449,10 @@
     "kind": "surface"
   },
   {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "ProjectSectionHeader",
-    "annotationLine": 424,
-    "targets": [
-      "PaperNavigation",
-      "PaperTreeGroupHeader",
-      "PaperTreeRow",
-      "PaperStatus",
-      "PaperMenu"
-    ],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "UnifiedSessionRow",
-    "annotationLine": 494,
-    "targets": [
-      "PaperNavigation",
-      "PaperTreeGroupHeader",
-      "PaperTreeRow",
-      "PaperStatus",
-      "PaperMenu"
-    ],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "UnifiedChildSessionRow",
-    "annotationLine": 586,
-    "targets": [
-      "PaperNavigation",
-      "PaperTreeGroupHeader",
-      "PaperTreeRow",
-      "PaperStatus",
-      "PaperMenu"
-    ],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "ImmunityDiamond",
-    "annotationLine": 692,
-    "targets": [
-      "PaperNavigation",
-      "PaperTreeGroupHeader",
-      "PaperTreeRow",
-      "PaperStatus",
-      "PaperMenu"
-    ],
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSessionFeed.kt",
+    "symbol": "UnifiedSessionFeed",
+    "annotationLine": 33,
+    "targets": ["PaperSessionRow", "PaperStickyTree"],
     "stage": "6",
     "kind": "surface"
   },
@@ -2993,12 +2945,10 @@
     "kind": "surface"
   },
   {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "UnreadDot",
-    "annotationLine": 728,
-    "targets": [
-      "PaperStatus"
-    ],
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSessionFeedPreviews.kt",
+    "symbol": "UnifiedSessionFeedPreview",
+    "annotationLine": 33,
+    "targets": ["PaperSessionRow", "PaperStickyTree", "PaperTheme"],
     "stage": "6",
     "kind": "surface"
   },
@@ -3023,14 +2973,6 @@
     "symbol": "ResearchSourceFootnotes",
     "annotationLine": 282,
     "targets": ["PaperDivider", "PaperText", "PaperLink"],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "content",
-    "annotationLine": 564,
-    "targets": ["PaperNavigation", "PaperTreeRow", "PaperStatus", "PaperMenu"],
     "stage": "6",
     "kind": "surface"
   }

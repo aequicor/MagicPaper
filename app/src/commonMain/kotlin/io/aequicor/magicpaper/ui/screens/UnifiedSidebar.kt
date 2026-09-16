@@ -1,26 +1,11 @@
 package io.aequicor.magicpaper.ui.screens
-import io.aequicor.magicpaper.designsystem.PaperHoverActions
-import io.aequicor.magicpaper.designsystem.PaperRowMenu
 
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -31,30 +16,11 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.designsystem.LocalPaperColors
-import io.aequicor.magicpaper.designsystem.LocalPaperTypography
-import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
-import io.aequicor.magicpaper.designsystem.PaperActivityShape
-import io.aequicor.magicpaper.designsystem.PaperActivityTone
-import io.aequicor.magicpaper.designsystem.activityIndicatorColors
 import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
-import io.aequicor.magicpaper.designsystem.PaperFadingText
-import io.aequicor.magicpaper.designsystem.PaperText
-import io.aequicor.magicpaper.designsystem.PaperTextAction
-import io.aequicor.magicpaper.designsystem.PaperTextRole
-import io.aequicor.magicpaper.designsystem.PaperTooltip
-import io.aequicor.magicpaper.designsystem.PaperTreeGroupHeader
-import io.aequicor.magicpaper.designsystem.paperClickable
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
 import io.aequicor.magicpaper.domain.SessionKind
@@ -62,8 +28,6 @@ import io.aequicor.magicpaper.domain.aggregateCodingStatus
 import io.aequicor.magicpaper.domain.sidebarTitle
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.SidebarActions
-import io.aequicor.magicpaper.designsystem.PaperToolbarButton
-import io.aequicor.magicpaper.designsystem.PaperToolbarIcon
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -166,9 +130,6 @@ internal fun filterUnifiedSidebarItems(
     }
     return items.mapNotNull(::filtered)
 }
-
-internal fun UnifiedSidebarItem.needsStickyHeader(): Boolean =
-    isOrganism || unread || codingStatus == CodingSessionStatus.WORKING || codingStatus == CodingSessionStatus.UNREAD
 
 internal fun groupUnifiedSidebarItems(items: List<UnifiedSidebarItem>): List<UnifiedSidebarGroup> {
     val groups = mutableListOf<UnifiedSidebarGroup>()
@@ -286,14 +247,12 @@ internal fun rememberUnifiedItems(
         // Рекурсивный сбор видимых потомков: архивные скрыты, но их дети показаны.
         fun collectVisibleChildren(parentId: String, excludeIds: Set<String>): List<UnifiedSidebarItem> {
             val result = mutableListOf<UnifiedSidebarItem>()
-            val pending = ArrayDeque<String>()
-            childIdsOf(parentId).filter { it !in excludeIds }.forEach { pending.addLast(it) }
-            while (pending.isNotEmpty()) {
-                val childId = pending.removeLast()
+            for (childId in childIdsOf(parentId).filter { it !in excludeIds }) {
                 val childUi = sessionById[childId] ?: continue
+                val children = collectVisibleChildren(childId, excludeIds + parentId + childId)
                 if (childUi.session.archived || childUi.session.sessionKind == SessionKind.IMMUNITY) {
                     // Архивный родитель скрыт, но его дети показаны.
-                    childIdsOf(childId).filter { it !in excludeIds }.forEach { pending.addLast(it) }
+                    result.addAll(children)
                     continue
                 }
                 val childItem = UnifiedSidebarItem(
@@ -310,26 +269,36 @@ internal fun rememberUnifiedItems(
                     projectId = childUi.session.projectId,
                     codingStatus = childUi.status,
                     unread = childUi.unread,
+                    children = children,
                 )
                 result.add(childItem)
-                // Рекурсивно добавляем потомков этого ребёнка.
-                childIdsOf(childId).filter { it !in excludeIds }.forEach { pending.addLast(it) }
             }
-            return result
+            return result.sortedWith(unifiedSidebarItemComparator)
         }
         // Корневые элементы: зиготы организмов и автономные сессии без родителя.
         val visible = allSessions.filter { !it.session.archived && it.session.sessionKind != SessionKind.IMMUNITY }
+        fun hasVisibleAncestor(id: String): Boolean {
+            fun parentOf(childId: String): String? = if (membership[childId] != null) organismParents[childId]
+                else sessionById[childId]?.session?.parentSessionId
+            val visited = mutableSetOf(id)
+            var parent = parentOf(id)
+            while (parent != null && visited.add(parent)) {
+                val session = sessionById[parent]?.session ?: return false
+                if (!session.archived && session.sessionKind != SessionKind.IMMUNITY) return true
+                parent = parentOf(parent)
+            }
+            return false
+        }
         visible
             .filter { item ->
-                val parent = item.session.parentSessionId
                 val organismId = membership[item.session.id]
                 if (organismId != null) {
                     val organism = coding.organisms[organismId]
                     // Зигота организма — корневой элемент; остальные участники — дети.
                     organism?.zygoteId == item.session.id ||
-                        sessionById[organism?.zygoteId]?.session?.archived == true
+                        (sessionById[organism?.zygoteId]?.session?.archived != false && !hasVisibleAncestor(item.session.id))
                 } else {
-                    parent == null || sessionById[parent]?.session?.archived == true
+                    !hasVisibleAncestor(item.session.id)
                 }
             }
             .map { sessionUi ->
@@ -379,6 +348,7 @@ internal fun rememberUnifiedItems(
                         projectId = sessionUi.session.projectId,
                         codingStatus = sessionUi.status,
                         unread = sessionUi.unread,
+                        children = collectVisibleChildren(sessionUi.session.id, setOf(sessionUi.session.id)),
                     )
                 }
             }
@@ -389,7 +359,6 @@ internal fun rememberUnifiedItems(
 }
 
 /** Единая боковая панель: чаты и кодинг-сессии в одном списке с группировкой по проектам. */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun UnifiedSidebar(
     vm: SidebarActions,
@@ -458,130 +427,26 @@ internal fun UnifiedSidebar(
                 onRestore = { vm.restoreSession(it.id, it.isCoding) },
                 modifier = Modifier.weight(1f), loading = results == null)
         }
-        if (!browsing) LazyColumn(
-            state = rememberLazyListState(),
+        if (!browsing) UnifiedSessionFeed(
+            groups = groups,
+            selectedId = selectedId,
+            viewingCoding = viewingCoding,
+            collapsedGroups = collapsedGroups.keys,
+            expanded = { item -> if (item.isOrganism) collapsedOrganisms[item.id] != false else collapsedSessions[item.id] != false },
+            onToggleGroup = { group ->
+                collapsedGroups = if (group.key in collapsedGroups) collapsedGroups - group.key
+                else collapsedGroups + (group.key to true)
+            },
+            onToggleSession = { item ->
+                if (item.isOrganism) collapsedOrganisms = collapsedOrganisms + (item.id to !(collapsedOrganisms[item.id] != false))
+                else collapsedSessions[item.id] = !(collapsedSessions[item.id] != false)
+            },
+            onSelect = vm::selectUnifiedSession,
+            onArchive = { item -> if (item.isCoding) vm.archiveCodingSession(item.id) else vm.archiveChatSession(item.id) },
+            onDelete = { item -> if (item.isCoding) vm.deleteCodingSession(item.id) else vm.deleteSession(item.id) },
+            onAddSession = vm::requestCodingSessionInProject,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-        ) {
-            groups.forEach { group ->
-                val collapsed = group.key in collapsedGroups
-                if (group.showsProjectHeader) {
-                    stickyHeader(key = "header:${group.key}") {
-                        Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) {
-                            ProjectSectionHeader(
-                                name = group.projectName.orEmpty(),
-                                collapsed = collapsed,
-                                onToggle = {
-                                    collapsedGroups = if (collapsed) collapsedGroups - group.key
-                                    else collapsedGroups + (group.key to true)
-                                },
-                                onAddSession = { group.projectId?.let(vm::requestCodingSessionInProject) },
-                            )
-                        }
-                    }
-                }
-                if (!collapsed || !group.showsProjectHeader) {
-                    group.items.forEach { item ->
-                        val selected = item.id == selectedId && viewingCoding == item.isCoding
-                        if (!item.isCoding) {
-                            item(key = "h:${item.id}") {
-                                UnifiedSessionRow(
-                                    item = item,
-                                    selected = selected,
-                                    onClick = { vm.selectUnifiedSession(item.id, false) },
-                                    onDelete = { vm.deleteSession(item.id) },
-                                    onArchive = { vm.archiveChatSession(item.id) },
-                                )
-                            }
-                        } else if (item.isOrganism) {
-                            val organismExpanded = collapsedOrganisms[item.id] != false
-                            stickyHeader(key = "organism:${item.id}") {
-                                Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) {
-                                var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
-                                PaperTreeGroupHeader(
-                                    title = item.displayName,
-                                    subtitle = item.sidebarSubtitle(showProject = !group.showsProjectHeader),
-                                    expanded = organismExpanded,
-                                    onToggle = { collapsedOrganisms = collapsedOrganisms + (item.id to !organismExpanded) },
-                                    modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
-                                    active = selected,
-                                    leading = {
-                                        if (item.codingStatus != null) {
-                                            ActivityDot(item.codingStatus, size = 8)
-                                        }
-                                    },
-                                    onClick = { vm.selectUnifiedSession(item.id, true) },
-                                    childCount = item.children.size,
-                                    hoverActions = { isHovered ->
-                                        PaperHoverActions(visible = isHovered || menuOpen) {
-                                            PaperTooltip("В архив") {
-                                                PaperToolbarButton(
-                                                    icon = PaperToolbarIcon.Archive,
-                                                    label = "Архивировать задачу",
-                                                    size = 24.dp,
-                                                    onClick = { vm.archiveCodingSession(item.id) },
-                                                )
-                                            }
-                                            Spacer(Modifier.width(4.dp))
-                                            PaperRowMenu(
-                                                open = menuOpen,
-                                                onOpenChange = { menuOpen = it },
-                                                entries = listOf("Удалить задачу" to { vm.deleteCodingSession(item.id) }),
-                                            )
-                                        }
-                                    },
-                                    keepActionsVisible = menuOpen,
-                                    trailing = item.immunity?.let { immunity ->
-                                        {
-                                            ImmunityDiamondButton(
-                                                status = immunity.status,
-                                                selected = immunity.selected,
-                                                onClick = { vm.selectUnifiedSession(immunity.sessionId, true) },
-                                            )
-                                        }
-                                    },
-                                )
-                                }
-                            }
-                            if (organismExpanded) {
-                                item.children.forEach { child ->
-                                    val childSelected = child.id == selectedId && viewingCoding
-                                    val childExpanded = collapsedSessions[child.id] != false
-                                    item(key = "session:${child.id}") {
-                                        UnifiedChildSessionRow(
-                                            item = child,
-                                            selected = childSelected,
-                                            expanded = childExpanded,
-                                            onToggle = { collapsedSessions[child.id] = !childExpanded },
-                                            onClick = { vm.selectUnifiedSession(child.id, true) },
-                                            onDelete = { vm.deleteCodingSession(child.id) },
-                                            onArchive = { vm.archiveCodingSession(child.id) },
-                                            depth = 1,
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            val content: @Composable () -> Unit = {
-                                UnifiedSessionRow(
-                                    item = item,
-                                    selected = selected,
-                                    showProjectSubtitle = !group.showsProjectHeader,
-                                    onClick = { vm.selectUnifiedSession(item.id, true) },
-                                    onDelete = { vm.deleteCodingSession(item.id) },
-                                    onArchive = { vm.archiveCodingSession(item.id) },
-                                    onImmunityClick = { item.immunity?.let { vm.selectUnifiedSession(it.sessionId, true) } },
-                                )
-                            }
-                            if (item.needsStickyHeader()) {
-                                stickyHeader(key = "c:${item.id}") {
-                                    Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) { content() }
-                                }
-                            } else item(key = "c:${item.id}") { content() }
-                        }
-                    }
-                }
-            }
-        }
+        )
         PaperDivider()
         Column(Modifier.padding(8.dp)) {
             PaperButton(
@@ -599,308 +464,4 @@ internal fun UnifiedSidebar(
             )
         }
     }
-}
-
-@Composable
-private fun ProjectSectionHeader(
-    name: String,
-    collapsed: Boolean,
-    onToggle: () -> Unit,
-    onAddSession: () -> Unit,
-) {
-    val hoverInteraction = remember { MutableInteractionSource() }
-    val hovered by hoverInteraction.collectIsHoveredAsState()
-    var menuOpen by rememberSaveable(name) { mutableStateOf(false) }
-    val showActions = hovered || menuOpen
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .hoverable(hoverInteraction)
-            .paperClickable(onClick = onToggle)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PaperText(
-            if (collapsed) "▸" else "▾",
-            style = LocalPaperTypography.current.label,
-            color = LocalPaperColors.current.secondaryText,
-        )
-        Spacer(Modifier.width(6.dp))
-        PaperText(
-            name,
-            style = LocalPaperTypography.current.label,
-            color = LocalPaperColors.current.secondaryText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        PaperHoverActions(visible = showActions) {
-            PaperTooltip("Новая сессия") {
-                PaperTextAction(
-                    onClick = onAddSession,
-                    modifier = Modifier.semantics { contentDescription = "Новая сессия" },
-                ) {
-                    PaperText("+", style = LocalPaperTypography.current.label)
-                }
-            }
-            Spacer(Modifier.width(4.dp))
-            PaperRowMenu(
-                open = menuOpen,
-                onOpenChange = { menuOpen = it },
-                entries = listOf("Удалить проект" to {}),
-            )
-        }
-    }
-}
-
-@Composable
-private fun UnifiedSessionRow(
-    item: UnifiedSidebarItem,
-    selected: Boolean,
-    showProjectSubtitle: Boolean = false,
-    onClick: () -> Unit,
-    onDelete: () -> Unit,
-    onArchive: (() -> Unit)?,
-    onImmunityClick: (() -> Unit)? = null,
-) {
-    val hoverInteraction = remember { MutableInteractionSource() }
-    val hovered by hoverInteraction.collectIsHoveredAsState()
-    var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
-    val showActions = hovered || menuOpen
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (selected) LocalPaperColors.current.selected.copy(alpha = 0.55f)
-                else Color.Transparent
-            )
-            .hoverable(hoverInteraction)
-            .paperClickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (item.isCoding && item.codingStatus != null) {
-            ActivityDot(item.codingStatus, size = 8)
-            Spacer(Modifier.width(8.dp))
-        } else if (!item.isCoding) {
-            PaperText(
-                "✦",
-                role = PaperTextRole.LABEL,
-                color = LocalPaperColors.current.activityIndicatorColors(PaperActivityTone.READY).second,
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            // Длинное название затухает по краю и прокручивается при наведении.
-            PaperFadingText(
-                item.displayName,
-                style = LocalPaperTypography.current.body,
-                color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.text,
-                marqueeOnHover = true,
-            )
-            item.sidebarSubtitle(showProjectSubtitle)
-                ?.let { subtitle ->
-                    PaperFadingText(
-                        subtitle,
-                        style = LocalPaperTypography.current.chrome,
-                        color = LocalPaperColors.current.secondaryText,
-                        marqueeOnHover = true,
-                    )
-                }
-        }
-        // Ромбик иммунитета на строке зиготы.
-        val immunity = item.immunity
-        if (immunity != null && onImmunityClick != null) {
-            Spacer(Modifier.width(4.dp))
-            ImmunityDiamond(
-                status = immunity.status,
-                selected = immunity.selected,
-                onClick = onImmunityClick,
-            )
-        }
-        if (item.unread) {
-            Spacer(Modifier.width(6.dp))
-            UnreadDot()
-        }
-        PaperHoverActions(visible = showActions) {
-            if (onArchive != null) {
-                PaperTooltip("В архив") {
-                    PaperToolbarButton(
-                        icon = PaperToolbarIcon.Archive,
-                        label = "Архивировать сессию",
-                        size = 24.dp,
-                        onClick = onArchive,
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
-            }
-            val entries = buildList<Pair<String, () -> Unit>> {
-                add((if (item.isCoding) "Удалить сессию" else "Удалить чат") to onDelete)
-            }
-            PaperRowMenu(
-                open = menuOpen,
-                onOpenChange = { menuOpen = it },
-                entries = entries,
-            )
-        }
-    }
-}
-
-/** Строка дочерней сессии организма с отступом и поддержкой раскрытия вложенных потомков. */
-@Composable
-private fun UnifiedChildSessionRow(
-    item: UnifiedSidebarItem,
-    selected: Boolean,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    onClick: () -> Unit,
-    onDelete: () -> Unit,
-    onArchive: () -> Unit,
-    depth: Int,
-) {
-    val hoverInteraction = remember { MutableInteractionSource() }
-    val hovered by hoverInteraction.collectIsHoveredAsState()
-    var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
-    val showActions = hovered || menuOpen
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 20.dp + 12.dp * (depth - 1).coerceAtLeast(0), end = 8.dp, top = 2.dp, bottom = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (selected) LocalPaperColors.current.selected.copy(alpha = 0.55f)
-                else Color.Transparent
-            )
-            .hoverable(hoverInteraction)
-            .paperClickable(
-                onClickLabel = if (selected && item.children.isNotEmpty()) {
-                    if (expanded) "Свернуть этапы" else "Раскрыть этапы"
-                } else null,
-            ) {
-                if (selected && item.children.isNotEmpty()) onToggle() else onClick()
-            }
-            .padding(horizontal = 6.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (item.codingStatus != null) {
-            ActivityDot(item.codingStatus, size = 8)
-            Spacer(Modifier.width(7.dp))
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            PaperFadingText(
-                item.displayName,
-                style = LocalPaperTypography.current.chrome,
-                color = LocalPaperColors.current.text,
-                marqueeOnHover = true,
-            )
-            item.codingStatus?.sidebarSubtitle
-                ?.let { subtitle ->
-                    PaperFadingText(
-                        subtitle,
-                        style = LocalPaperTypography.current.chrome,
-                        color = LocalPaperColors.current.secondaryText,
-                        marqueeOnHover = true,
-                    )
-                }
-        }
-        if (item.unread) {
-            Spacer(Modifier.width(6.dp))
-            UnreadDot()
-        }
-        PaperHoverActions(visible = showActions) {
-            if (item.children.isNotEmpty()) {
-                Box(
-                    Modifier.size(24.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .semantics { contentDescription = if (expanded) "Свернуть этапы" else "Раскрыть этапы" }
-                        .paperClickable(onClick = onToggle),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    PaperText(if (expanded) "▾" else "▸", color = LocalPaperColors.current.action)
-                }
-            }
-            PaperTooltip("В архив") {
-                PaperToolbarButton(
-                    icon = PaperToolbarIcon.Archive,
-                    label = "Архивировать сессию",
-                    size = 24.dp,
-                    onClick = onArchive,
-                )
-            }
-            PaperRowMenu(
-                open = menuOpen,
-                onOpenChange = { menuOpen = it },
-                entries = listOf("Удалить сессию" to onDelete),
-            )
-        }
-    }
-    // Вложенные потомки (дочерние сессии дочерней сессии).
-    if (expanded && item.children.isNotEmpty()) {
-        item.children.forEach { grandChild ->
-            val gcExpanded = remember(item.id, grandChild.id) { mutableStateOf(false) }
-            UnifiedChildSessionRow(
-                item = grandChild,
-                selected = false,
-                expanded = gcExpanded.value,
-                onToggle = { gcExpanded.value = !gcExpanded.value },
-                onClick = {},
-                onDelete = {},
-                onArchive = {},
-                depth = depth + 1,
-            )
-        }
-    }
-}
-
-/** Ромбик иммунитета на строке зиготы (аналог ImmunityDiamondButton из CodingScreen). */
-@Composable
-private fun ImmunityDiamond(
-    status: CodingSessionStatus,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val size = if (selected) 12.dp else 10.dp
-    Box(
-        modifier = Modifier
-            .size(size)
-            .paperClickable(
-                onClick = onClick,
-                onClickLabel = "Открыть чат иммунитета",
-            )
-            .semantics { contentDescription = "Иммунитет: ${status.label}" },
-        contentAlignment = Alignment.Center,
-    ) {
-        PaperActivityIndicator(
-            tone = when (status) {
-                CodingSessionStatus.IDLE -> PaperActivityTone.READY
-                CodingSessionStatus.UNREAD -> PaperActivityTone.UNREAD
-                CodingSessionStatus.NEEDS_TESTING -> PaperActivityTone.NEEDS_TESTING
-                CodingSessionStatus.WORKING -> PaperActivityTone.WORKING
-                CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING,
-                CodingSessionStatus.CONFIRMATION -> PaperActivityTone.ATTENTION
-                CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED -> PaperActivityTone.QUEUED
-            },
-            label = status.label,
-            running = status == CodingSessionStatus.WORKING,
-            size = size,
-            shape = PaperActivityShape.DIAMOND,
-        )
-    }
-}
-
-/** Маленькая точка-индикатор непрочитанного сообщения. */
-@Composable
-private fun UnreadDot() {
-    Box(
-        modifier = Modifier
-            .size(6.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .background(LocalPaperColors.current.action)
-            .semantics { contentDescription = "Непрочитанное сообщение" },
-    )
 }
