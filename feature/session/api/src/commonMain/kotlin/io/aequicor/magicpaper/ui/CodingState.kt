@@ -232,6 +232,9 @@ data class CodingState(
     val notice: String? = null,
 ) {
     val availableLlmProfiles: List<LlmProfile> get() = llmProfiles.filter {
-        it.provider != ProviderType.OPENAI_SUBSCRIPTION || subscriptionAvailable
+        it.enabled && (it.provider != ProviderType.OPENAI_SUBSCRIPTION || subscriptionAvailable)
+    }
+    val modelPickerProfiles: List<LlmProfile> get() = llmProfiles.map {
+        if (it.provider == ProviderType.OPENAI_SUBSCRIPTION && !subscriptionAvailable) it.copy(enabled = false) else it
     }
 }

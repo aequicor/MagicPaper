@@ -8,6 +8,22 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ModelSettingsServiceTest {
+    @Test fun disablingProviderPersistsAndExcludesItFromExecutionButKeepsItInPicker() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val fixture = ModelSettingsFixture()
+            val vm = fixture.prepareSettings()
+
+            vm.setLlmProfileEnabled("openai", false)
+            advanceUntilIdle()
+
+            assertFalse(fixture.profiles.load().first { it.id == "openai" }.enabled)
+            assertFalse(vm.state.value.availableLlmProfiles.any { it.id == "openai" })
+            assertFalse(vm.state.value.modelPickerProfiles.first { it.id == "openai" }.enabled)
+            assertEquals("anthropic", ProfileResolver.resolve(null as ChatSession?, vm.state.value.settings, vm.state.value.llmProfiles)?.id)
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun selectedChatEngineIsRememberedForNewSessions() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {

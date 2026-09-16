@@ -79,7 +79,9 @@ fun ModelsSettings(vm: DefaultSettingsComponent, state: SettingsState) {
                 .filter { it.isNotBlank() }.distinct()
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).paperClickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically) {
-                PaperText("${if (expanded) "▾" else "▸"} ${p.name} · ${all.size}", Modifier.weight(1f).padding(vertical = 12.dp), style = paperTextStyle(PaperTextRole.BODY))
+                PaperText("${if (expanded) "▾" else "▸"} ${p.name} · ${all.size}", Modifier.weight(1f).padding(vertical = 12.dp), style = paperTextStyle(PaperTextRole.BODY),
+                    color = if (p.enabled) LocalPaperColors.current.text else LocalPaperColors.current.secondaryText)
+                PaperSwitch(p.enabled, { vm.setLlmProfileEnabled(p.id, it) }, if (p.enabled) "Включён" else "Отключён")
                 PaperAction(onClick = { vm.editLlmProfile(p.id) }) { PaperText("Настроить", style = paperTextStyle(PaperTextRole.LABEL)) }
             }
             if (expanded) {
@@ -96,7 +98,7 @@ fun ModelsSettings(vm: DefaultSettingsComponent, state: SettingsState) {
             }
         } }
     }
-    if (pickingDefault) FavoriteModelPicker(state.availableLlmProfiles.map { p -> p.copy(favoriteModels = (p.favoriteModels + p.modelCatalog.map { it.id } + p.sourceModelId(p.modelId)).filter { it.isNotBlank() }.distinct()) },
+    if (pickingDefault) FavoriteModelPicker(state.modelPickerProfiles.map { p -> p.copy(favoriteModels = (p.favoriteModels + p.modelCatalog.map { it.id } + p.sourceModelId(p.modelId)).filter { it.isNotBlank() }.distinct()) },
         default, vm::setDefaultModel, { pickingDefault = false }, "Модель по умолчанию")
     variantEditor?.let { (id, model) -> state.llmProfiles.firstOrNull { it.id == id }?.let { p ->
         VariantEditor(vm, p, model, { vm.saveVariantDraft(it, model) { variantEditor = null } }, { variantEditor = null })

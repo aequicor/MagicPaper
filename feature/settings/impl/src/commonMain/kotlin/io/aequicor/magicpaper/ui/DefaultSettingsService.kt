@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -63,6 +65,7 @@ class DefaultSettingsService(
     private val draftRepository: io.aequicor.magicpaper.data.storage.DraftRepository = io.aequicor.magicpaper.data.storage.InMemoryDraftRepository(),
 ) : SettingsService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val profileAvailabilityMutex = Mutex()
     val drafts = SettingsDrafts(draftRepository, scope, json)
     private val _state = MutableStateFlow(SettingsState())
     override val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -72,7 +75,8 @@ class DefaultSettingsService(
         drafts.allowProfiles(profiles.map { it.id })
         profiles.forEach { profileRepo.save(it) }
         if (settings.defaultModel == null) {
-            val main = profiles.firstOrNull { it.id == settings.activeLlmProfileId && it.configured } ?: profiles.firstOrNull { it.configured }
+            val main = profiles.firstOrNull { it.id == settings.activeLlmProfileId && it.enabled && it.configured }
+                ?: profiles.firstOrNull { it.enabled && it.configured }
             if (main != null) {
                 settings = settings.copy(defaultModel = ModelSelection(main.id, main.modelId, main.effortSelectionFor()))
                 settingsRepo.save(settings)
@@ -245,6 +249,27 @@ class DefaultSettingsService(
         val updated = _state.value.settings.copy(defaultModel = selection, activeLlmProfileId = selection.profileId)
         _state.update { it.copy(settings = updated) }
         scope.launch { settingsRepo.save(updated) }
+    }
+
+    override fun setLlmProfileEnabled(id: String, enabled: Boolean) {
+        val profile = _state.value.llmProfiles.firstOrNull { it.id == id } ?: return
+        if (profile.enabled == enabled) return
+        val updated = profile.copy(enabled = enabled)
+        _state.update { state -> state.copy(llmProfiles = state.llmProfiles.map { if (it.id == id) updated else it }) }
+        scope.launch {
+            profileAvailabilityMutex.withLock {
+                try {
+                    profileRepo.save(updated)
+                    onDataChanged()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    _state.update { state -> state.copy(llmProfiles = state.llmProfiles.map {
+                        if (it.id == id && it.enabled == updated.enabled) profile else it
+                    }) }
+                    persistenceFailed("set_profile_enabled", failure, "Не удалось изменить доступность поставщика. Повторите действие.")
+                }
+            }
+        }
     }
 
     override fun updateModelLibrary(profile: LlmProfile) {

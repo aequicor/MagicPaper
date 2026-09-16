@@ -18,7 +18,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
     )
     suspend fun refine(plan: Plan, message: String, planner: LlmProfile?, profiles: List<LlmProfile>, dossiers: List<ModelDossier>, searchContext: String = "", onActivity: (CodingStep) -> Unit = {}): Plan {
         require(planner?.configured == true) { "Подключите модель для автоматического планирования. Дерево можно редактировать вручную." }
-        val roster = profiles.filter { it.connectionConfigured && it.supportsCoding }
+        val roster = profiles.filter { it.operational && it.supportsCoding }
         val messages = mutableListOf(
             LlmMessage(LlmChatRole.SYSTEM, """
                 Ты рабочая сессия, составляющая дерево решений проекта. Методика задана зафиксированными правилами запуска.

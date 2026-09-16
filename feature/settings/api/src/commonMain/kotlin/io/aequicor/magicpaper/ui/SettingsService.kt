@@ -13,6 +13,7 @@ interface SettingsService {
     fun saveSettings(settings: AppSettings)
     fun saveLlmProfile(profile: LlmProfile)
     fun deleteLlmProfile(id: String)
+    fun setLlmProfileEnabled(id: String, enabled: Boolean)
     fun setDefaultModel(selection: ModelSelection)
     fun updateModelLibrary(profile: LlmProfile)
     fun refreshModelCatalog(id: String)

@@ -7,6 +7,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.ui.ModelSettingsFixture
+import io.aequicor.magicpaper.ui.components.renderFavoriteModelPicker
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -23,6 +24,25 @@ class ModelsSettingsRenderTest {
             val vm = ModelSettingsFixture().prepareSettingsComponent()
             val state = vm.state.value
             val output = File("build/reports/models").apply { mkdirs() }
+            val disabledState = state.copy(llmProfiles = state.llmProfiles.mapIndexed { index, profile ->
+                if (index == 0) profile.copy(enabled = false) else profile
+            })
+            ImageComposeScene(1000, 800, density = Density(1f)) {
+                MagicPaperTheme { Surface { ModelsSettings(vm, disabledState) } }
+            }.use { scene ->
+                repeat(4) { scene.render(it * 16_000_000L).close() }
+                scene.render(80_000_000L).use {
+                    File(output, "models-disabled-provider.png").writeBytes(it.encodeToData()!!.use { data -> data.bytes })
+                }
+            }
+            ImageComposeScene(600, 700, density = Density(1f)) {
+                MagicPaperTheme { Surface { renderFavoriteModelPicker(disabledState.modelPickerProfiles, null, {}, {}) } }
+            }.use { scene ->
+                repeat(4) { scene.render(it * 16_000_000L).close() }
+                scene.render(80_000_000L).use {
+                    File(output, "model-picker-disabled-provider.png").writeBytes(it.encodeToData()!!.use { data -> data.bytes })
+                }
+            }
             for ((width, height, density) in listOf(Triple(1000, 800, 1f), Triple(390, 844, 1f), Triple(1800, 1400, 2f))) {
                 ImageComposeScene(width, height, density = Density(density)) {
                     MagicPaperTheme { Surface { ModelsSettings(vm, state) } }

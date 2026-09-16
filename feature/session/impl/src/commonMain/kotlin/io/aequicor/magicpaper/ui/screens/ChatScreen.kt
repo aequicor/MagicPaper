@@ -91,7 +91,7 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
                         onResume = vm::resume,
                         onClarify = vm::clarify,
                         session = state.current,
-                        profiles = state.availableLlmProfiles,
+                        profiles = state.modelPickerProfiles,
                         activeProfileId = state.settings.activeLlmProfileId,
                         onSend = { text, attachments -> vm.send(text, attachments) },
                         onOpenSwitcher = { vm.toggleModelSwitcher(true) },

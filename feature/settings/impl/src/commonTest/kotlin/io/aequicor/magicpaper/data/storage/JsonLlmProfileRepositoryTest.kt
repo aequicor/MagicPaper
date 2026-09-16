@@ -131,10 +131,12 @@ class JsonLlmProfileRepositoryTest {
             modelId = "anthropic/claude-sonnet-4",
             effort = EffortSelection.of(ReasoningEffort.HIGH),
             favoriteModels = listOf("anthropic/claude-sonnet-4", "openai/gpt-5"),
+            enabled = false,
         )
         repository.save(profile)
         val loaded = repository.load().single()
         assertEquals(EffortSelection.of(ReasoningEffort.HIGH), loaded.effort)
         assertEquals(profile.favoriteModels, loaded.favoriteModels)
+        assertEquals(false, loaded.enabled)
     }
 }

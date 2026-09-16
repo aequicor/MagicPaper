@@ -25,15 +25,15 @@ fun renderFavoriteModelPicker(
                 if (choices.isEmpty()) PaperText("Добавьте избранные модели в настройках.")
                 choices.forEach { (p, key) ->
                     val selected = selection?.profileId == p.id && selection.modelId == key
-                    PaperAction(onClick = { onSelect(if (selected) selection!! else ModelSelection(p.id, key)) }, modifier = Modifier.fillMaxWidth()) {
+                    PaperAction(onClick = { onSelect(selection.takeIf { selected } ?: ModelSelection(p.id, key)) }, enabled = p.enabled, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.weight(1f)) {
-                            PaperText("${if (selected) "● " else ""}${p.modelName(key)}")
-                            PaperText(p.name + if (p.variants.any { it.id == key }) " · свои параметры" else "", role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
+                            PaperText("${if (selected) "● " else ""}${p.modelName(key)}", color = if (p.enabled) LocalPaperColors.current.text else LocalPaperColors.current.secondaryText)
+                            PaperText(p.name + if (!p.enabled) " · поставщик отключён" else if (p.variants.any { it.id == key }) " · свои параметры" else "", role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
                         }
                     }
                 }
                 val profile = profiles.firstOrNull { it.id == selection?.profileId }
-                if (profile != null && selection != null) {
+                if (profile?.enabled == true && selection != null) {
                     PaperDivider()
                     EffortControl(ModelDefaults.capability(profile, selection.modelId), selection.effort,
                         { onSelect(selection.copy(effort = it)) })

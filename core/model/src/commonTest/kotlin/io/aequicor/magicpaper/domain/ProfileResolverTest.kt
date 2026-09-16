@@ -49,6 +49,16 @@ class ProfileResolverTest {
     }
 
     @Test
+    fun disabledProfileIsUnavailableAndFallsBackWithoutLosingConfiguration() {
+        val disabled = configured.copy(enabled = false)
+        val settings = AppSettings(activeLlmProfileId = disabled.id, defaultModel = ModelSelection(disabled.id, disabled.modelId))
+
+        assertEquals("b", ProfileResolver.resolve(null as ChatSession?, settings, listOf(disabled, other))?.id)
+        assertNull(ProfileResolver.selection(ModelSelection(disabled.id, disabled.modelId), listOf(disabled, other)))
+        assertEquals("m", disabled.modelId)
+    }
+
+    @Test
     fun profileIdOverrideWinsOverGlobal() {
         // Порядок для кодинг-сессии тот же, что для свитка: переопределение важнее глобального.
         val settings = AppSettings(activeLlmProfileId = "a")

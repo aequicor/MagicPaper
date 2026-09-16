@@ -110,6 +110,8 @@ data class LlmProfile(
     val modelCatalog: List<ProviderModel> = emptyList(),
     val variants: List<ModelVariant> = emptyList(),
     val modelLibraryVersion: Int = 0,
+    /** Временно исключает поставщика из выполнения, не удаляя подключение и избранное. */
+    val enabled: Boolean = true,
     @kotlinx.serialization.Transient val invocationKey: String? = null,
 ) {
     val configured: Boolean

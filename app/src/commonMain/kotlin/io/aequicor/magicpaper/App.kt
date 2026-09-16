@@ -130,7 +130,7 @@ private fun AppShellContent(
                     "chat-model" -> {
                         val resolved = ProfileResolver.resolve(chats.current, chats.settings, chats.availableLlmProfiles)
                         val selection = chats.current?.modelSelection ?: resolved?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) }
-                        FavoriteModelPicker(chats.availableLlmProfiles, selection,
+                        FavoriteModelPicker(chats.modelPickerProfiles, selection,
                             { chat.selectChatModel(it); root.dismissDialog() }, root::dismissDialog, "Модель чата", footer = {
                                 PaperAction({ root.dismissDialog(); root.navigate(AppRoute.Settings(SettingsSection.MODELS)) }) { PaperText("Настроить модели") }
                             })

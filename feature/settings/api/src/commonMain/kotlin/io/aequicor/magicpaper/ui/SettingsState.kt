@@ -27,7 +27,10 @@ data class SettingsState(
     val notice: String? = null,
 ) {
     val availableLlmProfiles: List<LlmProfile> get() = llmProfiles.filter {
-        it.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscription.available
+        it.enabled && (it.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscription.available)
+    }
+    val modelPickerProfiles: List<LlmProfile> get() = llmProfiles.map {
+        if (it.provider == ProviderType.OPENAI_SUBSCRIPTION && !openAiSubscription.available) it.copy(enabled = false) else it
     }
 }
 /** Состояние desktop-входа через ChatGPT; available=false на Android/Web. */

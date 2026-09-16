@@ -221,4 +221,15 @@ class DecisionPlannerTest {
         assertTrue(result.milestones.all { it.assignment?.modelId == "gpt-5.4" })
     }
 
+    @Test fun plannerCannotAssignADisabledProvider() = runTest {
+        val disabled = profile.copy(id = "disabled", enabled = false, favoriteModels = listOf("gpt-5.4"), modelLibraryVersion = 1)
+        val available = profile.copy(id = "available", modelId = "fallback", favoriteModels = listOf("fallback"), modelLibraryVersion = 1)
+        val proposal = plan().let { current -> current.copy(milestones = current.milestones.map { stage -> stage.copy(
+            assignment = StageAssignment(disabled.id, "gpt-5.4", EffortSelection.Default)) }) }
+
+        val result = textPlanComposer(Gateway(response(proposal))).refine(plan(), "Choose models", available, listOf(disabled, available), emptyList())
+
+        assertTrue(result.milestones.all { it.assignment?.profileId == available.id && it.assignment?.modelId == "fallback" })
+    }
+
 }

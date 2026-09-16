@@ -419,14 +419,14 @@ class CodingPlanningPlugin(
                 Box {
                     PaperAction(onClick = { menu = true }) { PaperText("Выбрать модель", role = PaperTextRole.LABEL) }
                     PaperMenuHost(menu, { menu = false }) { profiles.filter { it.connectionConfigured && it.supportsCoding }.forEach { p -> p.displayModels.forEach { model ->
-                        PaperMenuAction(label = "${p.name} · ${p.modelName(model)}", onClick = {
+                        PaperMenuAction(label = "${p.name} · ${p.modelName(model)}${if (p.enabled) "" else " · отключён"}", enabled = p.enabled, onClick = {
                             val effective = EffortSelection.ofOrNull(ModelDefaults.capability(p.copy(modelId = model)).resolveEffort(p.effortSelectionFor(model)).level)
                             updateStage { it.copy(agentProfileId = p.id, agentModelId = model, assignment = StageAssignment(p.id, model, effective, effective, manual = true, displayName = p.modelName(model))) }; menu = false
                         })
                     } } }
                 }
                 val profile = profiles.firstOrNull { it.id == assignment?.profileId }
-                if (profile != null && assignment != null) {
+                if (profile?.enabled == true && assignment != null) {
                     val capability = ModelDefaults.capability(profile.copy(modelId = assignment.modelId))
                     EffortControl(capability, assignment.effort, { effort -> updateStage { it.copy(assignment = assignment.copy(effort = effort, effectiveEffort = EffortSelection.ofOrNull(capability.resolveEffort(effort).level), manual = true)) } })
                 }

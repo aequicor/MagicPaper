@@ -13,15 +13,15 @@ object ProfileResolver {
      * Ненастроенные профили пропускаются; если ни одного нет — null.
      */
     fun resolve(profileId: String?, settings: AppSettings, profiles: List<LlmProfile>): LlmProfile? {
-        if (profileId == null && settings.defaultModel != null) return selection(settings.defaultModel, profiles)
+        if (profileId == null) settings.defaultModel?.let { selection(it, profiles) }?.let { return it }
         val wanted = profileId ?: settings.activeLlmProfileId
-        val profile = profiles.firstOrNull { it.id == wanted && it.configured }
-            ?: profiles.firstOrNull { it.configured } ?: return null
+        val profile = profiles.firstOrNull { it.id == wanted && it.enabled && it.configured }
+            ?: profiles.firstOrNull { it.enabled && it.configured } ?: return null
         return profile.forModel()
     }
 
     fun selection(choice: ModelSelection, profiles: List<LlmProfile>): LlmProfile? =
-        profiles.firstOrNull { it.id == choice.profileId && it.connectionConfigured }
+        profiles.firstOrNull { it.id == choice.profileId && it.operational }
             ?.takeIf { choice.modelId in it.displayModels || choice.modelId == it.modelId || it.modelCatalog.any { model -> model.id == choice.modelId } }
             ?.forModel(choice.modelId, choice.effort)
 
@@ -31,7 +31,7 @@ object ProfileResolver {
     }
 
     fun favoriteDefault(settings: AppSettings, profiles: List<LlmProfile>, coding: Boolean = false): ModelSelection? {
-        val eligible = profiles.filter { it.connectionConfigured && (!coding || it.supportsCoding) }
+        val eligible = profiles.filter { it.operational && (!coding || it.supportsCoding) }
         val main = resolve(null as String?, settings, eligible)
         if (main != null && eligible.any { it.id == main.id && main.selectionKey in it.displayModels })
             return ModelSelection(main.id, main.selectionKey, main.effortSelectionFor())
@@ -54,14 +54,14 @@ object ProfileResolver {
                 ?.let { if (assignment.options != null) it.copy(advanced = assignment.options) else it }
         }
         if (stage != null && stage.agentProfileId.isNotBlank()) {
-            val profile = profiles.firstOrNull { it.id == stage.agentProfileId && it.connectionConfigured }
+            val profile = profiles.firstOrNull { it.id == stage.agentProfileId && it.operational }
                 ?.takeIf { it.supportsCoding } ?: return null
             val model = stage.agentModelId.ifBlank { profile.codingModel }
             return selection(ModelSelection(profile.id, model, profile.effortSelectionFor(model)), profiles)
         }
         val choice = session.modelSelection ?: project?.modelSelection
         if (choice != null) return selection(choice, profiles)?.takeIf { it.supportsCoding }
-        val profile = profiles.firstOrNull { it.id == session.llmProfileId && it.connectionConfigured }
+        val profile = profiles.firstOrNull { it.id == session.llmProfileId && it.operational }
         return (profile?.forCoding() ?: resolve(null as String?, settings, profiles))?.takeIf { it.supportsCoding }
     }
 
