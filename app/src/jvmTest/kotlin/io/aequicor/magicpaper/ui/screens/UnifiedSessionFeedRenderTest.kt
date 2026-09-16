@@ -5,6 +5,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.Density
@@ -125,6 +128,34 @@ class UnifiedSessionFeedRenderTest {
                 assertTrue(disclosure.boundsInRoot.right <= width)
                 scene.save("preview-$width-${(scale * 100).toInt()}")
             }
+        }
+    }
+
+    @Test fun wheelOverPinnedRowsContinuesScrollingAndHoverRevealsActions() {
+        val state = LazyListState(firstVisibleItemIndex = 8)
+        ImageComposeScene(320, 420) {
+            PaperTheme {
+                UnifiedSessionFeed(sidebarPreviewGroups(), "child-5", true, emptySet(), { true }, {}, {},
+                    { _, _ -> }, {}, {}, {}, state = state)
+            }
+        }.use { scene ->
+            scene.settle()
+            val before = state.firstVisibleItemIndex
+            val pinned = scene.text("Список сессий и навигация")
+            scene.sendPointerEvent(PointerEventType.Exit, Offset(-1f, -1f), type = PointerType.Mouse)
+            scene.settle()
+            scene.sendPointerEvent(PointerEventType.Move, pinned.boundsInRoot.center, type = PointerType.Mouse)
+            scene.settle()
+            assertTrue(scene.nodes().any {
+                it.boundsInRoot.width > 0 &&
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Действия") == true
+            })
+            repeat(8) {
+                scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
+                    type = PointerType.Mouse)
+                scene.settle()
+            }
+            assertTrue(state.firstVisibleItemIndex > before, "Wheel events over pinned rows must reach the lazy list")
         }
     }
 

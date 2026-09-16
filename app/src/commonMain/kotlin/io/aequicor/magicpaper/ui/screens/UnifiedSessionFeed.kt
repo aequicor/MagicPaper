@@ -77,6 +77,7 @@ internal fun UnifiedSessionFeed(
                 expanded = expanded(item).takeIf { item.children.isNotEmpty() },
                 onToggle = { retainPosition(); onToggleSession(item) },
                 onClick = { onSelect(item.id, item.isCoding) },
+                keepActionsVisible = menuKey == key,
                 indicator = {
                     if (item.isCoding) ActivityDot(item.codingStatus ?: io.aequicor.magicpaper.domain.CodingSessionStatus.IDLE, size = 10)
                     else PaperText("✦", role = PaperTextRole.CHROME)

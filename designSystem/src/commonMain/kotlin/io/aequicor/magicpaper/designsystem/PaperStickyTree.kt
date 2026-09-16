@@ -94,7 +94,7 @@ public fun PaperStickyTree(
             ?: state.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.offset ?: 0
         state.requestScrollToItem(index, -offset.coerceAtLeast(0))
     }
-    Box(modifier.background(LocalPaperColors.current.surface).clipToBounds().scrollable(state, Orientation.Vertical)) {
+    Box(modifier.clipToBounds()) {
         LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
             items(entries, key = { it.key }, contentType = { it.header }) { entry ->
                 val pinned = pins.any { it.key == entry.key }
@@ -109,6 +109,7 @@ public fun PaperStickyTree(
             key(pin.key) {
                 Box(Modifier.fillMaxWidth().offset { IntOffset(0, pin.offset) }
                     .background(LocalPaperColors.current.surface)
+                    .scrollable(state, Orientation.Vertical, reverseDirection = true)
                     .onSizeChanged { heights[pin.key] = it.height }
                 ) { row(pin.key) { retainPosition(pin.key) } }
             }

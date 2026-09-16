@@ -1,14 +1,19 @@
 package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /** Shared navigation row. Selection opens a session; disclosure never selects it.
@@ -25,18 +30,23 @@ public fun PaperSessionRow(
     subtitle: String? = null,
     expanded: Boolean? = null,
     onToggle: () -> Unit = {},
+    keepActionsVisible: Boolean = false,
     indicator: @Composable () -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val colors = LocalPaperColors.current
     val spacing = LocalPaperSpacing.current
     val shape = RoundedCornerShape(6.dp)
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    val focused by hoverInteraction.collectIsFocusedAsState()
     Row(
         modifier.fillMaxWidth()
             .padding(start = spacing.xs + spacing.sm * depth.coerceIn(0, 3), end = spacing.xs)
             .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
             .clip(shape)
-            .background(if (selected) colors.selected else colors.surface)
+            .background(if (selected) colors.selected else Color.Transparent)
+            .hoverable(hoverInteraction)
             .padding(horizontal = spacing.xs, vertical = spacing.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -44,7 +54,7 @@ public fun PaperSessionRow(
         // the selectable button would let its preview key handler select instead.
         Row(
             Modifier.weight(1f).heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
-                .paperClickable(role = Role.Button, onClick = onClick)
+                .paperClickable(role = Role.Button, interactionSource = hoverInteraction, onClick = onClick)
                 .onPreviewKeyEvent { event ->
                     if (expanded != null && (event.key == Key.DirectionLeft || event.key == Key.DirectionRight)) {
                         if (event.type == KeyEventType.KeyDown && expanded != (event.key == Key.DirectionRight)) onToggle()
@@ -71,6 +81,6 @@ public fun PaperSessionRow(
             label = if (expanded) "Свернуть: $title" else "Раскрыть: $title",
             onClick = onToggle,
         ) { PaperText(if (expanded) "▾" else "▸", role = PaperTextRole.CHROME) }
-        actions()
+        PaperHoverActions(visible = hovered || focused || keepActionsVisible) { actions() }
     }
 }
