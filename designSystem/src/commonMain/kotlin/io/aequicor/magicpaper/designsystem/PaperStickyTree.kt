@@ -32,12 +32,17 @@ internal fun paperTreePins(
 ): List<PaperTreePin> {
     val first = visible.firstOrNull { it.index in entries.indices } ?: return emptyList()
     val firstEntry = entries[first.index]
-    val candidates = (firstEntry.ancestors + listOfNotNull(firstEntry.key.takeIf { firstEntry.header }))
-        .take(3).toMutableList()
+    val activePeerHeader = if (firstEntry.header) firstEntry.key else entries
+        .subList(0, first.index)
+        .asReversed()
+        .firstOrNull { firstEntry.ancestors.isNotEmpty() && it.header && it.ancestors == firstEntry.ancestors }
+        ?.key
+    val candidates = (firstEntry.ancestors + listOfNotNull(activePeerHeader))
+        .takeLast(4).toMutableList()
     // Include a descendant header as it reaches the bottom of the pinned stack.
     for (row in visible) {
         val entry = entries.getOrNull(row.index) ?: continue
-        if (entry.header && candidates.size < 3 && entry.ancestors == candidates &&
+        if (entry.header && candidates.size < 4 && entry.ancestors == candidates &&
             row.offset <= candidates.sumOf { heights[it] ?: 0 }
         ) candidates += entry.key
     }
@@ -65,9 +70,9 @@ internal fun paperTreePins(
     }
 }
 
-/** Three-level sticky context over a lazy tree, with variable-height headers.
+/** Four-level sticky context over a lazy tree, with variable-height headers.
  * Foundation's single stickyHeader cannot keep ancestors pinned concurrently.
- * Only visible rows and up to three headers are composed. Pinned rows replace
+ * Only visible rows and up to four headers are composed. Pinned rows replace
  * their original with a size placeholder. Callbacks and state belong to callers.
  * The row's second argument retains its current position before a disclosure
  * changes the visible entries, including when the row is currently pinned.

@@ -38,13 +38,31 @@ class PaperStickyTreeTest {
         assertTrue(paperTreePins(entries, listOf(PaperTreeVisibleEntry(0, 0), PaperTreeVisibleEntry(1, 30)), heights).isEmpty())
     }
 
+    @Test fun previousPeerHeaderRemainsPinnedAfterItsNaturalRowLeavesTheViewport() {
+        val peers = listOf(
+            PaperStickyTreeEntry("project", header = true),
+            PaperStickyTreeEntry("selected", listOf("project"), header = true),
+            PaperStickyTreeEntry("ordinary-1", listOf("project")),
+            PaperStickyTreeEntry("ordinary-2", listOf("project")),
+        )
+
+        assertEquals(
+            listOf(PaperTreePin("project", 0), PaperTreePin("selected", 30)),
+            paperTreePins(
+                peers,
+                listOf(PaperTreeVisibleEntry(3, -8)),
+                mapOf("project" to 30, "selected" to 40),
+            ),
+        )
+    }
+
     @Test fun restoredScrollCanMeasureAncestorsNotPreviouslyVisible() {
         assertEquals(listOf("project", "task", "parent"),
             paperTreePins(entries, listOf(PaperTreeVisibleEntry(3, -10)), emptyMap()).map { it.key })
     }
 
-    @Test fun deeperTreesNeverPinMoreThanThreeHeaders() {
+    @Test fun deeperTreesNeverPinMoreThanFourHeaders() {
         val deep = entries + PaperStickyTreeEntry("deep", listOf("project", "task", "parent", "child"), true)
-        assertEquals(3, paperTreePins(deep, listOf(PaperTreeVisibleEntry(7, -1)), heights).size)
+        assertEquals(4, paperTreePins(deep, listOf(PaperTreeVisibleEntry(7, -1)), heights).size)
     }
 }

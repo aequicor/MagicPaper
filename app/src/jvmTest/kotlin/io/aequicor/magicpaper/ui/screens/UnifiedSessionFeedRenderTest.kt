@@ -142,7 +142,7 @@ class UnifiedSessionFeedRenderTest {
         }.use { scene ->
             scene.settle()
             val before = state.firstVisibleItemIndex
-            val pinned = scene.text("Список сессий и навигация")
+            val pinned = scene.text("Этап 6: проверка интерфейса")
             scene.sendPointerEvent(PointerEventType.Exit, Offset(-1f, -1f), type = PointerType.Mouse)
             scene.settle()
             scene.sendPointerEvent(PointerEventType.Move, pinned.boundsInRoot.center, type = PointerType.Mouse)
@@ -166,8 +166,25 @@ class UnifiedSessionFeedRenderTest {
             },
                 "Moving from the row onto its action must keep hover actions visible")
             assertTrue(archive.config[SemanticsActions.OnClick].action!!.invoke())
-            assertEquals("parent", archived)
-            repeat(8) {
+            assertEquals("child-5", archived)
+            repeat(4) {
+                scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
+                    type = PointerType.Mouse)
+                scene.settle()
+            }
+            val pinnedTop = scene.text("Этап 6: проверка интерфейса").boundsInRoot.top
+            repeat(1) {
+                scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
+                    type = PointerType.Mouse)
+                scene.settle()
+            }
+            assertEquals(
+                pinnedTop,
+                scene.text("Этап 6: проверка интерфейса").boundsInRoot.top,
+                absoluteTolerance = 0.5f,
+                message = "A sticky session must retain its top position while the list scrolls",
+            )
+            repeat(3) {
                 scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
                     type = PointerType.Mouse)
                 scene.settle()
