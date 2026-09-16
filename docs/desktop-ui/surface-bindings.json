@@ -3011,18 +3011,10 @@
     "kind": "surface"
   },
   {
-    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
-    "symbol": "content",
-    "annotationLine": 1218,
-    "targets": ["PaperMessageActions", "PaperMarkdown", "PaperText"],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
-    "symbol": "cardContent",
-    "annotationLine": 1260,
-    "targets": ["PaperMessageActions", "PaperMarkdown", "PaperDivider"],
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt",
+    "symbol": "ForkSessionAction",
+    "annotationLine": 81,
+    "targets": ["PaperButton", "PaperText"],
     "stage": "6",
     "kind": "surface"
   }

@@ -159,6 +159,7 @@ import io.aequicor.magicpaper.domain.CodingMessage
 import io.aequicor.magicpaper.domain.fullCopyText
 import io.aequicor.magicpaper.domain.MessageOrigin
 import io.aequicor.magicpaper.ui.components.MessageHistoryActions
+import io.aequicor.magicpaper.ui.components.ForkSessionAction
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSession
@@ -1050,6 +1051,7 @@ internal fun CodingChat(
                 item(key = "project-header", contentType = "header") {
                     PaperWorkspaceHeading(session.session.sidebarTitle(),
                         "${project.name}  /  ${session.session.interactionMode.title}")
+                    onForkSession?.let { action -> ForkSessionAction(true) { action(null) } }
                 }
                 items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
                     val item = fragment.item
@@ -1067,12 +1069,12 @@ internal fun CodingChat(
                             scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
                             expandedMessages = expandedMessages - item.key
                         }, actions = if (isDraft || message.systemContext || message.systemNotice) null else {
-                            { record, content ->
+                            { record ->
                                 MessageHistoryActions(record.id, record.text, { record.fullCopyText() }, session.canChangeHistory,
                                     onEdit = onEditMessage?.takeIf { !session.session.archived && record.role == CodingRole.USER && record.origin == MessageOrigin.USER }
                                         ?.let { action -> { text -> action(record.id, text) } },
                                     onDelete = onDeleteMessage?.let { action -> { action(record.id) } },
-                                    onFork = onForkSession?.let { action -> { action(record.id) } }, content = content)
+                                    onFork = onForkSession?.let { action -> { action(record.id) } })
                             }
                         })
                 }
@@ -1210,72 +1212,64 @@ private fun SavedCodingHistoryItem(
     fragment: CodingMessageFragment = CodingMessageFragment(item),
     onExpand: () -> Unit = {},
     onCollapse: () -> Unit = {},
-    actions: (@Composable (CodingMessage, @Composable () -> Unit) -> Unit)? = null,
+    actions: (@Composable (CodingMessage) -> Unit)? = null,
 ) {
     val row = item.row
     val message = row.message
     PaperChatScrollItem(scroll, fragment.key) {
-        val content: @Composable () -> Unit = {
-            CompositionLocalProvider(LocalPaperMessageExpansion provides if (fragment.parts == null) PaperMessageExpansion(item.expandableText(), onExpand) else null) {
-                CodingMessageBubble(message, step = item.step, first = item.first && fragment.first,
-                    last = item.last && fragment.last && !continued, live = live,
-                    body = fragment.parts?.let { parts -> {
-                        val step = item.step
-                        if (step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) {
-                            ToolStepContent(step!!.title, "", step.running, step.ok, live,
-                                step.kind == CodingStepKind.EXEC, expanded = true, onToggle = onCollapse,
-                                showHeader = fragment.first, toolPhase = step.toolPhase, body = {
-                                    parts.Content(fragment.index,
-                                        style = LocalPaperTypography.current.body.copy(fontFamily = PaperFonts.code),
-                                        color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
-                                    if (fragment.last) CodingResultImages(message, step)
-                                })
-                        } else parts.Content(fragment.index,
-                            style = when (step?.kind) {
-                                CodingStepKind.INFO -> LocalPaperTypography.current.body
-                                CodingStepKind.ERROR -> LocalPaperTypography.current.body
-                                else -> LocalPaperTypography.current.body
-                            },
-                            color = when {
-                                step?.kind == CodingStepKind.ERROR || message.failed -> LocalPaperColors.current.error
-                                step?.kind == CodingStepKind.INFO -> LocalPaperColors.current.secondaryText
-                                else -> LocalPaperColors.current.text
+        CompositionLocalProvider(LocalPaperMessageExpansion provides if (fragment.parts == null) PaperMessageExpansion(item.expandableText(), onExpand) else null) {
+            CodingMessageBubble(message, step = item.step, first = item.first && fragment.first,
+                last = item.last && fragment.last && !continued, live = live,
+                body = fragment.parts?.let { parts -> {
+                    val step = item.step
+                    if (step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) {
+                        ToolStepContent(step!!.title, "", step.running, step.ok, live,
+                            step.kind == CodingStepKind.EXEC, expanded = true, onToggle = onCollapse,
+                            showHeader = fragment.first, toolPhase = step.toolPhase, body = {
+                                parts.Content(fragment.index,
+                                    style = LocalPaperTypography.current.body.copy(fontFamily = PaperFonts.code),
+                                    color = if (step.ok) LocalPaperColors.current.secondaryText else LocalPaperColors.current.error)
+                                if (fragment.last) CodingResultImages(message, step)
                             })
-                        if (fragment.last) {
-                            if (message.role == CodingRole.USER) CodingInputImages(message)
-                            PaperCollapseMessage(onCollapse)
-                        }
-                    } },
-                    forceWidth = fragment.parts != null,
-                    showFooter = item.last && fragment.last,
-                    pinNumber = pinNumber, onShowPins = onShowPins,
-                    header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
-                    status?.invoke()
-                    if (planningService != null && message.planning != null) {
+                    } else parts.Content(fragment.index,
+                        style = when (step?.kind) {
+                            CodingStepKind.INFO -> LocalPaperTypography.current.body
+                            CodingStepKind.ERROR -> LocalPaperTypography.current.body
+                            else -> LocalPaperTypography.current.body
+                        },
+                        color = when {
+                            step?.kind == CodingStepKind.ERROR || message.failed -> LocalPaperColors.current.error
+                            step?.kind == CodingStepKind.INFO -> LocalPaperColors.current.secondaryText
+                            else -> LocalPaperColors.current.text
+                        })
+                    if (fragment.last) {
+                        if (message.role == CodingRole.USER) CodingInputImages(message)
+                        PaperCollapseMessage(onCollapse)
+                    }
+                } },
+                forceWidth = fragment.parts != null,
+                showFooter = item.last && fragment.last,
+                pinNumber = pinNumber, onShowPins = onShowPins,
+                header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
+                status?.invoke()
+                if (planningService != null && message.planning != null) {
+                    Spacer(Modifier.height(6.dp))
+                    PlanningChatMessage(message, session, messages, planningService, onOpenSession)
+                }
+                row.planCard?.let { card ->
+                    Spacer(Modifier.height(12.dp))
+                    PaperDivider(color = LocalPaperColors.current.border)
+                    Spacer(Modifier.height(12.dp))
+                    PaperChatMarkdown(card.text)
+                    if (planningService != null) {
                         Spacer(Modifier.height(6.dp))
-                        PlanningChatMessage(message, session, messages, planningService, onOpenSession)
+                        PlanningChatMessage(card, session, messages, planningService, onOpenSession)
                     }
-                    OrchestrationMessageInputStatus(message, session.id, planningService)
-                    if (message.pendingDelivery) PaperText("Ожидает передачи после текущего хода", style = LocalPaperTypography.current.label)
+                    actions?.invoke(card)
                 }
-            }
-        }
-        Column {
-            if (actions != null) actions(message, content) else content()
-            // A plan card has its own persisted identity and its own menu, outside the message's hit area.
-            if (item.last && fragment.last) row.planCard?.let { card ->
-                val cardContent: @Composable () -> Unit = {
-                    Column(Modifier.fillMaxWidth().paperConversationMessage(user = false, first = true, last = true)) {
-                        PaperDivider(color = LocalPaperColors.current.border)
-                        Spacer(Modifier.height(12.dp))
-                        PaperChatMarkdown(card.text)
-                        if (planningService != null) {
-                            Spacer(Modifier.height(6.dp))
-                            PlanningChatMessage(card, session, messages, planningService, onOpenSession)
-                        }
-                    }
-                }
-                if (actions != null) actions(card, cardContent) else cardContent()
+                OrchestrationMessageInputStatus(message, session.id, planningService)
+                if (message.pendingDelivery) PaperText("Ожидает передачи после текущего хода", style = LocalPaperTypography.current.label)
+                actions?.invoke(message)
             }
         }
     }

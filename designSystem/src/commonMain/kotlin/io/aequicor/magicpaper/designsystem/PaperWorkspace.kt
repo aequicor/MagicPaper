@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,11 +53,11 @@ public fun Modifier.paperConversationMessage(user: Boolean, first: Boolean, last
         topStart = if (first) 12.dp else 0.dp, topEnd = if (first) 12.dp else 0.dp,
         bottomStart = if (last) 12.dp else 0.dp, bottomEnd = if (last) 12.dp else 0.dp,
     )
-    return this.clip(shape)
-        .background(if (user) LocalPaperColors.current.userMessageSurface else Color.Transparent)
+    return this.shadow(if (first && last) 2.dp else 0.dp, shape).clip(shape)
+        .background(if (user) LocalPaperColors.current.userMessageSurface else LocalPaperColors.current.agentMessageSurface)
         .padding(horizontal = 12.dp, vertical = 0.dp)
-        .padding(top = if (first) 12.dp else 0.dp,
-            bottom = if (last) 12.dp else 0.dp)
+        .padding(top = if (first) (if (user) 8.dp else 4.dp) else 0.dp,
+            bottom = if (last) (if (user) 8.dp else 4.dp) else 0.dp)
 }
 
 /** Quiet disclosure surface. Status and output belong to the calling feature. */

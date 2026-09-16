@@ -50,7 +50,7 @@ class MessageHistoryActionsRenderTest {
         } finally { Dispatchers.resetMain() }
     }
 
-    @Test fun codingContextMenuForksTheSelectedMessageAndHasNoSessionForkButton() = runTest {
+    @Test fun codingKeepsCopyToolbarAndSessionForkButton() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {
             val forked = mutableListOf<String?>()
@@ -81,8 +81,53 @@ class MessageHistoryActionsRenderTest {
                     n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true
                 }
                 render()
-                assertTrue(nodes().none { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Форк сессии" } == true })
+                text("Форк сессии").config[SemanticsActions.OnClick].action!!.invoke()
+                render()
+                assertEquals(3, nodes().count { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Копировать целиком" } == true })
+                for (index in messages.indices) {
+                    val opener = nodes().filter { n ->
+                        n.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Действия с сообщением") == true
+                    }[index]
+                    opener.config[SemanticsActions.OnClick].action!!.invoke(); render()
+                    text("Форк до этого сообщения").config[SemanticsActions.OnClick].action!!.invoke()
+                    render()
+                }
+                assertEquals(listOf(null, "request", "card", "answer"), forked)
+                scene.render(++frame * 32_000_000L).use { image ->
+                    val directory = File("build/reports/message-history").apply { mkdirs() }
+                    image.encodeToData()!!.use { File(directory, "coding-430.png").writeBytes(it.bytes) }
+                }
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun chatContextMenuForksSelectedMessageWithoutCopyToolbar() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val forked = mutableListOf<String?>()
+            val messages = listOf(
+                ChatMessage("request", ChatRole.USER, "Составь план проверки", 1),
+                ChatMessage("answer", ChatRole.AGENT, "Проверим сообщения и меню.", 2),
+            )
+            ImageComposeScene(430, 700, coroutineContext = Dispatchers.Unconfined) {
+                PaperTheme {
+                    CompositionLocalProvider(LocalChatPresentation provides DefaultChatPresentation) {
+                        io.aequicor.magicpaper.ui.screens.MessagesList(
+                            ChatSession("s", "Чат", 0, 0, messages), false, Modifier.fillMaxSize(),
+                            onFork = { forked += it; Result.success("fork") })
+                    }
+                }
+            }.use { scene ->
+                var frame = 0L
+                fun render() { repeat(12) { scene.render(++frame * 32_000_000L).close(); runCurrent() } }
+                fun walk(n: SemanticsNode): List<SemanticsNode> = listOf(n) + n.children.flatMap(::walk)
+                fun nodes() = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }
+                fun text(label: String) = nodes().first { n ->
+                    n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true
+                }
+                render()
                 for (message in messages) {
+                    assertTrue(nodes().none { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Копировать целиком" } == true })
                     val point = text(message.text).boundsInRoot.center
                     scene.sendPointerEvent(PointerEventType.Press, point, type = PointerType.Mouse,
                         buttons = PointerButtons(isSecondaryPressed = true), button = PointerButton.Secondary)
@@ -92,11 +137,7 @@ class MessageHistoryActionsRenderTest {
                     text("Форк до этого сообщения").config[SemanticsActions.OnClick].action!!.invoke()
                     render()
                 }
-                assertEquals(listOf<String?>("request", "answer", "card"), forked)
-                scene.render(++frame * 32_000_000L).use { image ->
-                    val directory = File("build/reports/message-history").apply { mkdirs() }
-                    image.encodeToData()!!.use { File(directory, "coding-430.png").writeBytes(it.bytes) }
-                }
+                assertEquals(listOf<String?>("request", "answer"), forked)
             }
         } finally { Dispatchers.resetMain() }
     }
@@ -120,7 +161,8 @@ class MessageHistoryActionsRenderTest {
                                 PaperText("Сообщение пользователя")
                                 MessageHistoryActions("message", "Исходный запрос", { complete }, true,
                                     onEdit = { edited = it; Result.success(Unit) },
-                                    onDelete = { deleted = true; Result.success(Unit) }, onFork = { Result.success("fork") })
+                                    onDelete = { deleted = true; Result.success(Unit) }, onFork = { Result.success("fork") },
+                                    content = { PaperText("Исходный запрос") })
                             }
                         }
                     }
@@ -167,7 +209,7 @@ class MessageHistoryActionsRenderTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         try {
             ImageComposeScene(430, 500, coroutineContext = Dispatchers.Unconfined) {
-                PaperTheme { PaperMessageActions({}, onFork = {}, onDelete = {}, historyEnabled = false) }
+                PaperTheme { PaperMessageActions({}, onFork = {}, onDelete = {}, historyEnabled = false) { PaperText("Ответ") } }
             }.use { scene ->
                 fun walk(n: SemanticsNode): List<SemanticsNode> = listOf(n) + n.children.flatMap(::walk)
                 fun nodes() = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }

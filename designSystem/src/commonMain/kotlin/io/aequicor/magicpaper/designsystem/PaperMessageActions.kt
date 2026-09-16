@@ -13,7 +13,7 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 
-/** A stable trailing action lane; secondary click never intercepts text selection's primary drag. */
+/** Without content, retain the coding toolbar. Chat content opts into the contextual action lane. */
 @Composable
 public fun PaperMessageActions(
     onCopy: () -> Unit,
@@ -22,9 +22,29 @@ public fun PaperMessageActions(
     onDelete: (() -> Unit)? = null,
     historyEnabled: Boolean = true,
     forkEnabled: Boolean = true,
-    content: @Composable () -> Unit = {},
+    compact: Boolean = false,
+    showCopy: Boolean = true,
+    content: (@Composable () -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
+    if (content == null) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (showCopy) PaperButton(if (compact) "Копировать" else "Копировать целиком", onCopy,
+                modifier = Modifier.weight(1f, fill = false),
+                kind = if (compact) PaperButtonKind.QUIET else PaperButtonKind.SECONDARY)
+            if (onEdit != null || onFork != null || onDelete != null) Box {
+                PaperIconButton(label = "Действия с сообщением", onClick = { open = true }) {
+                    PaperText("⋯", role = PaperTextRole.LABEL)
+                }
+                PaperMenu(open, { open = false }, buildList {
+                    onEdit?.let { add(PaperMenuItem("Редактировать", historyEnabled, onClick = it)) }
+                    onFork?.let { add(PaperMenuItem("Форк до этого сообщения", forkEnabled, onClick = it)) }
+                    onDelete?.let { add(PaperMenuItem("Удалить из истории и контекста", historyEnabled, destructive = true, onClick = it)) }
+                })
+            }
+        }
+        return
+    }
     var focused by remember { mutableStateOf(false) }
     val platform = LocalPaperPlatformPolicy.current.platform
     var touch by remember { mutableStateOf(platform == PaperPlatform.ANDROID) }
