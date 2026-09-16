@@ -37,16 +37,17 @@ public fun PaperSessionRow(
     val colors = LocalPaperColors.current
     val spacing = LocalPaperSpacing.current
     val shape = RoundedCornerShape(6.dp)
-    val hoverInteraction = remember { MutableInteractionSource() }
-    val hovered by hoverInteraction.collectIsHoveredAsState()
-    val focused by hoverInteraction.collectIsFocusedAsState()
+    val rowInteraction = remember { MutableInteractionSource() }
+    val contentInteraction = remember { MutableInteractionSource() }
+    val hovered by rowInteraction.collectIsHoveredAsState()
+    val focused by contentInteraction.collectIsFocusedAsState()
     Row(
         modifier.fillMaxWidth()
             .padding(start = spacing.xs + spacing.sm * depth.coerceIn(0, 3), end = spacing.xs)
             .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
             .clip(shape)
             .background(if (selected) colors.selected else Color.Transparent)
-            .hoverable(hoverInteraction)
+            .hoverable(rowInteraction)
             .padding(horizontal = spacing.xs, vertical = spacing.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -54,7 +55,7 @@ public fun PaperSessionRow(
         // the selectable button would let its preview key handler select instead.
         Row(
             Modifier.weight(1f).heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
-                .paperClickable(role = Role.Button, interactionSource = hoverInteraction, onClick = onClick)
+                .paperClickable(role = Role.Button, interactionSource = contentInteraction, onClick = onClick)
                 .onPreviewKeyEvent { event ->
                     if (expanded != null && (event.key == Key.DirectionLeft || event.key == Key.DirectionRight)) {
                         if (event.type == KeyEventType.KeyDown && expanded != (event.key == Key.DirectionRight)) onToggle()

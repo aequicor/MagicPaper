@@ -133,10 +133,11 @@ class UnifiedSessionFeedRenderTest {
 
     @Test fun wheelOverPinnedRowsContinuesScrollingAndHoverRevealsActions() {
         val state = LazyListState(firstVisibleItemIndex = 8)
+        var archived: String? = null
         ImageComposeScene(320, 420) {
             PaperTheme {
                 UnifiedSessionFeed(sidebarPreviewGroups(), "child-5", true, emptySet(), { true }, {}, {},
-                    { _, _ -> }, {}, {}, {}, state = state)
+                    { _, _ -> }, { archived = it.id }, {}, {}, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -150,6 +151,22 @@ class UnifiedSessionFeedRenderTest {
                 it.boundsInRoot.width > 0 &&
                     it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Действия") == true
             })
+            val archive = scene.nodes().filter {
+                it.boundsInRoot.width > 0 &&
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Архивировать сессию") == true
+            }.minBy { node ->
+                val distance = node.boundsInRoot.center.y - pinned.boundsInRoot.center.y
+                distance * distance
+            }
+            scene.sendPointerEvent(PointerEventType.Move, archive.boundsInRoot.center, type = PointerType.Mouse)
+            scene.settle()
+            assertTrue(scene.nodes().any {
+                it.boundsInRoot.width > 0 &&
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Архивировать сессию") == true
+            },
+                "Moving from the row onto its action must keep hover actions visible")
+            assertTrue(archive.config[SemanticsActions.OnClick].action!!.invoke())
+            assertEquals("parent", archived)
             repeat(8) {
                 scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
                     type = PointerType.Mouse)

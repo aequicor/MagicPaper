@@ -183,4 +183,17 @@ class UnifiedSidebarStatusTest {
         val collapsedProject = sidebarFeedRows(groups, setOf(groups.first().key)) { true }
         assertEquals(listOf("chat", "older"), collapsedProject.mapNotNull { it.session?.id })
     }
+
+    @Test
+    fun selectedWorkingWaitingAndUnreadSessionsAreSticky() {
+        fun session(id: String, status: CodingSessionStatus = CodingSessionStatus.IDLE, unread: Boolean = false) =
+            UnifiedSidebarItem(id, id, 1, true, codingStatus = status, unread = unread)
+
+        assertTrue(session("selected").isStickySession("selected", true))
+        assertTrue(session("working", CodingSessionStatus.WORKING).isStickySession(null, true))
+        assertTrue(session("waiting", CodingSessionStatus.WAITING).isStickySession(null, true))
+        assertTrue(session("confirmation", CodingSessionStatus.CONFIRMATION).isStickySession(null, true))
+        assertTrue(session("unread", unread = true).isStickySession(null, true))
+        assertTrue(!session("idle").isStickySession(null, true))
+    }
 }
