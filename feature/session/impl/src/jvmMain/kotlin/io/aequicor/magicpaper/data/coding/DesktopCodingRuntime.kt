@@ -8,6 +8,18 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.util.concurrent.ConcurrentHashMap
 
+internal fun ChatSession.asResearchCodingSession(projectId: String) = CodingSession(
+    id = id,
+    projectId = projectId,
+    name = title,
+    createdAt = createdAt,
+    piSessionId = nativeSessionId,
+    engine = checkNotNull(engine),
+    modelSelection = modelSelection,
+    researchMode = true,
+    acquireComputerAccess = false,
+)
+
 /** The persisted session engine is the only routing input. Providers supply model access. */
 class DesktopCodingRuntime(
     private val pi: PiCodingRuntime,
@@ -106,9 +118,7 @@ class DesktopCodingRuntime(
         val directory = chatDirectory(session.id)
         withContext(Dispatchers.IO) { check(directory.isDirectory || directory.mkdirs()) { "Не удалось создать рабочую папку чата" } }
         val project = CodingProject("chat-${session.id}", session.title, directory.absolutePath, session.createdAt)
-        val coding = CodingSession(session.id, project.id, session.title, session.createdAt,
-            piSessionId = session.nativeSessionId, engine = checkNotNull(session.engine), modelSelection = session.modelSelection,
-            acquireComputerAccess = session.acquireComputerAccess)
+        val coding = session.asResearchCodingSession(project.id)
         val history = if (session.nativeSessionId.isBlank()) session.messages.dropLast(1).map {
             CodingMessage(it.id, if (it.role == ChatRole.USER) CodingRole.USER else CodingRole.AGENT, it.text, createdAt = it.createdAt)
         } else emptyList()

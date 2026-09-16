@@ -444,20 +444,6 @@
   },
   {
     "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
-    "symbol": "ChatSectionHeader",
-    "annotationLine": 478,
-    "targets": [
-      "PaperNavigation",
-      "PaperTreeGroupHeader",
-      "PaperTreeRow",
-      "PaperStatus",
-      "PaperMenu"
-    ],
-    "stage": "6",
-    "kind": "surface"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
     "symbol": "UnifiedSessionRow",
     "annotationLine": 494,
     "targets": [

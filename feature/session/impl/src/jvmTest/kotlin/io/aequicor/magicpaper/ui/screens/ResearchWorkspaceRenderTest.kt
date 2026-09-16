@@ -111,7 +111,7 @@ class ResearchWorkspaceRenderTest {
                     .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("не ссылка"))
             }
             render()
-            onUi { scene.action("Добавить ссылку").config[SemanticsActions.OnClick].action!!.invoke() }
+            onUi { scene.action("Добавить").config[SemanticsActions.OnClick].action!!.invoke() }
             render()
             onUi { assertTrue(scene.text("Введите ссылку на сайт: https://…").boundsInRoot.height > 0) }
             scene.capture("source-validation", ++frame * 32_000_000L)

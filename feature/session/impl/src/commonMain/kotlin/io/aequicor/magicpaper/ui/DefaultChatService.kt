@@ -54,6 +54,7 @@ class DefaultChatService(
     private val draftBlobs: io.aequicor.magicpaper.data.storage.DraftBlobStore = io.aequicor.magicpaper.data.storage.InMemoryDraftBlobStore(),
     private val layoutAgent: LayoutChatAgent? = null,
     private val layoutProject: (String?) -> CodingProject? = { null },
+    private val researchSearch: SearchEngine? = null,
     private val archiveClock: () -> Long = Id::now,
     private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
 ) : ChatService {
@@ -596,6 +597,7 @@ class DefaultChatService(
                 val answer = if (layoutRequest != null && layoutAgent != null) {
                     layoutAgent.answer(layoutRequest.project, session.id, userMessage.id, trimmed, historyBefore, requestProfile, visible)
                 } else {
+                    if (resumed == null) discoverResearchSources(session.researchChatId, trimmed, settings, operationFields)
                     val shared = checkNotNull(chats.session(session.researchChatId)).resources
                     val researchAttachments = (visible + shared.mapNotNull { it.attachment }).distinctBy { it.id }
                     val recorder = CodingRunRecorder()
@@ -646,6 +648,26 @@ class DefaultChatService(
         }
         chatJobs.update { it + (session.id to job) }
         job.start()
+    }
+
+    private suspend fun discoverResearchSources(chatId: String, query: String, settings: AppSettings,
+        fields: Map<String, String>) {
+        val search = researchSearch ?: return
+        try {
+            val result = withTimeout(15_000) { search.searchWithDiagnostics(query, settings, limit = 5) }
+            if (result.hits.isNotEmpty()) rememberSources(chatId, result.hits)
+            if (result.hits.isEmpty() && result.issues.isNotEmpty()) {
+                AppLog.info("chat", "research.search.unavailable", fields + mapOf("issueCount" to result.issues.size.toString()))
+                _state.update { it.copy(notice = "Поиск недоступен. Ответ будет подготовлен без новых источников.") }
+            }
+        } catch (_: TimeoutCancellationException) {
+            AppLog.info("chat", "research.search.timeout", fields)
+            _state.update { it.copy(notice = "Поиск не ответил. Исследование продолжится по доступным источникам.") }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("chat", "research.search.failed", failure, fields)
+            _state.update { it.copy(notice = "Поиск не ответил. Исследование продолжится по доступным источникам.") }
+        }
     }
 
     // ---- Настройки ---------------------------------------------------------

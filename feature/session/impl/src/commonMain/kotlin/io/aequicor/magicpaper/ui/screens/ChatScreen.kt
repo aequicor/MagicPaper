@@ -163,7 +163,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
                     .paperChatTopShadow(scrolled, topOffset = topInset),
-                contentPadding = PaddingValues(start = 8.dp, top = laneTop + 12.dp, end = 8.dp, bottom = transcriptBottomPadding),
+                contentPadding = PaddingValues(start = 8.dp, top = laneTop + 4.dp, end = 8.dp, bottom = transcriptBottomPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
                 if (onFork != null) item(key = "fork-session") {
@@ -197,7 +197,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
             .padding(end = 8.dp, bottom = controlsBottomPadding))
         Column(Modifier.align(paperResearchComposerAlignment(messages.isEmpty() && !busy))
-            .widthIn(max = 860.dp).fillMaxWidth()
+            .widthIn(max = 800.dp).fillMaxWidth()
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
             if (messages.isEmpty() && !busy) PaperContentEntrance(animate = true) { EmptyHint() }
             footer()
@@ -236,20 +236,20 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
     actions: @Composable () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 8.dp else 0.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 4.dp else 0.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
         MessagePinColumn(
             number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
             modifier = Modifier
-                .widthIn(max = 820.dp)
+                .widthIn(max = 800.dp)
                 .fillMaxWidth()
-                .paperResearchMessage(fragment.first, fragment.last),
+                .paperResearchMessage(fragment.first, fragment.last, isUser),
         ) {
             if (fragment.first) {
                 PaperText(if (isUser) "Вопрос" else "Исследование", role = PaperTextRole.CHROME,
                     color = LocalPaperColors.current.secondaryText)
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(6.dp))
             }
             if (fragment.parts != null) {
                 fragment.parts.Content(fragment.index)

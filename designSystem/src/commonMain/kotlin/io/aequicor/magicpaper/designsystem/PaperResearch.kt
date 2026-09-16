@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -23,12 +24,22 @@ public fun PaperResearchReading(content: @Composable () -> Unit) {
     ), content = content)
 }
 
-/** Both authors share the same reading guide; labels and headings establish authorship. */
+/** Both authors share the same reading guide; a compact rounded sheet separates the document from the canvas. */
 @Composable
-public fun Modifier.paperResearchMessage(first: Boolean, last: Boolean): Modifier =
-    background(LocalPaperColors.current.surface)
+public fun Modifier.paperResearchMessage(first: Boolean, last: Boolean, user: Boolean): Modifier {
+    val radius = 12.dp
+    val shape = RoundedCornerShape(
+        topStart = if (first) radius else 0.dp,
+        topEnd = if (first) radius else 0.dp,
+        bottomStart = if (last) radius else 0.dp,
+        bottomEnd = if (last) radius else 0.dp,
+    )
+    return padding(start = 8.dp, top = if (first) 4.dp else 0.dp,
+        end = 8.dp, bottom = if (last) 4.dp else 0.dp)
+        .background(if (user) LocalPaperColors.current.selected else LocalPaperColors.current.surface, shape)
         .padding(horizontal = 16.dp)
-        .padding(top = if (first) 24.dp else 0.dp, bottom = if (last) 24.dp else 0.dp)
+        .padding(top = if (first) 14.dp else 0.dp, bottom = if (last) 14.dp else 0.dp)
+}
 
 /** Keeps the same editor/focus while moving from the welcome page to the response dock.
  * Compose's MotionDurationScale applies to this finite, interruptible transition. */

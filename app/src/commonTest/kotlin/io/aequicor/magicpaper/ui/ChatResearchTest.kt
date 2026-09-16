@@ -28,11 +28,59 @@ class ChatResearchTest {
         override suspend fun deleteChatSession(session: ChatSession) { deleted += session.id }
     }
 
-    private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatRepository = f.chats): DefaultChatService {
+    private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatRepository = f.chats,
+        search: SearchEngine? = null): DefaultChatService {
         f.seed()
         return DefaultChatService(runtime, repository, f.settings, f.profiles, null,
-            workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs)
+            workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs,
+            researchSearch = search)
             .also { it.start(); it.activate("first") }
+    }
+
+    @Test fun searchResultsAreSharedBeforeTheNativeResearchStarts() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val hit = SearchHit("Android Developers", "https://developer.android.com/", "Official documentation")
+        val search = object : SearchEngine {
+            override val provider = SearchProvider.WIKIPEDIA
+            override val displayName = "Fixture"
+            override fun isConfigured(settings: AppSettings) = true
+            override suspend fun search(query: String, settings: AppSettings, limit: Int) = listOf(hit)
+        }
+        val service = service(f, runtime, search = search)
+        try {
+            service.send("android разработка")
+            runCurrent()
+            assertEquals(hit.url, service.state.value.notebook?.resources?.single()?.url)
+            assertEquals(hit.url, runtime.calls.single().session.resources.single().url)
+            runtime.finish("first", "Обзор")
+            advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun searchTimeoutContinuesResearchWithAvailableSources() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val search = object : SearchEngine {
+            override val provider = SearchProvider.WIKIPEDIA
+            override val displayName = "Fixture"
+            override fun isConfigured(settings: AppSettings) = true
+            override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> = awaitCancellation()
+        }
+        val service = service(f, runtime, search = search)
+        try {
+            service.send("Долгий поиск")
+            runCurrent()
+            advanceTimeBy(15_001)
+            runCurrent()
+            assertEquals("Долгий поиск", runtime.calls.single().prompt)
+            assertNotNull(service.state.value.notice)
+            runtime.finish("first", "Ответ без новых источников")
+            advanceUntilIdle()
+            assertFalse(service.state.value.busy)
+        } finally { service.close(); Dispatchers.resetMain() }
     }
 
     @Test fun questionsShareSourcesButKeepDraftsHistoryAndLateRepliesIndependent() = runTest {

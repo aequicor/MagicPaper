@@ -138,6 +138,7 @@ internal fun buildRuntime(
             layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
+            researchSearch = get(),
             layoutProject = { boundId ->
                 val coding = get<CodingService>().state.value.coding
                 if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }

@@ -69,13 +69,13 @@ internal fun ResearchWorkspaceContent(
             PaperButton("Источники (${state.notebook?.resources?.size ?: 0})", { panel = "sources" }, kind = PaperButtonKind.SECONDARY)
         }
         error?.let { PaperText(it, Modifier.padding(12.dp), role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val wide = maxWidth >= 980.dp
             Row(Modifier.fillMaxSize()) {
                 if (wide) {
                     ResearchLibrary(state, null, saving, onSelectQuestion, onAddWebsite, onPickFiles, onRemoveResource,
-                        Modifier.width(280.dp).fillMaxHeight().padding(start = 12.dp, end = 8.dp))
+                        Modifier.width(260.dp).fillMaxHeight().padding(start = 12.dp, end = 8.dp))
                     PaperVerticalDivider(Modifier.fillMaxHeight())
                 }
                 Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -109,7 +109,7 @@ private fun ResearchLibrary(
     var adding by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
-    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
         if (panel != "sources") {
             item(key = "research-questions-heading") {
                 if (panel == null) PaperText("Вопросы", role = PaperTextRole.TITLE, modifier = Modifier.padding(vertical = 8.dp))
@@ -119,22 +119,21 @@ private fun ResearchLibrary(
                 PaperListRow(question.messages.firstOrNull { it.role == ChatRole.USER }?.text ?: "Новый вопрос",
                     selected = state.current?.id == question.id, enabled = !saving,
                     secondary = when {
-                        question.pendingRun?.intent == ExecutionIntent.RUN -> "Исследование выполняется"
-                        question.pendingRun != null -> "Приостановлено"
-                        state.current?.id == question.id -> "Выбран"
-                        else -> "${question.messages.count { it.role == ChatRole.USER }} запросов"
+                        question.pendingRun?.intent == ExecutionIntent.RUN -> "В работе"
+                        question.pendingRun != null -> "Пауза"
+                        state.current?.id == question.id -> "Открыт"
+                        else -> "${question.messages.count { it.role == ChatRole.USER }} вопросов"
                     }, onClick = { onSelectQuestion(question.id) })
             }
         }
         if (panel != "questions") {
             item(key = "research-sources-controls") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (panel == null) PaperText("Источники", role = PaperTextRole.TITLE, modifier = Modifier.padding(top = 16.dp))
-                    PaperText("Общие для всех вопросов", role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText)
-                    PaperField(url, { url = it; error = null }, "Ссылка на сайт", Modifier.fillMaxWidth(),
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (panel == null) PaperText("Источники", role = PaperTextRole.TITLE, modifier = Modifier.padding(top = 10.dp))
+                    PaperField(url, { url = it; error = null }, "Сайт", Modifier.fillMaxWidth(),
                         enabled = !adding, errorMessage = error)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PaperButton(if (adding) "Добавление…" else "Добавить ссылку", {
+                        PaperButton(if (adding) "Добавляю…" else "Добавить", {
                             val captured = url
                             if (researchUrl(captured) == null) error = "Введите ссылку на сайт: https://…"
                             else {
@@ -148,11 +147,10 @@ private fun ResearchLibrary(
                                 }
                             }
                         }, enabled = !adding && !saving && url.isNotBlank())
-                        PaperButton("Добавить файлы", onPickFiles, enabled = !saving, kind = PaperButtonKind.SECONDARY)
+                        PaperButton("Файлы", onPickFiles, enabled = !saving, kind = PaperButtonKind.SECONDARY)
                     }
-                    PaperText("Изменения учитываются в следующих запросах", role = PaperTextRole.CHROME,
+                    if (state.notebook?.resources.isNullOrEmpty()) PaperText("Нет источников", role = PaperTextRole.LABEL,
                         color = LocalPaperColors.current.secondaryText)
-                    if (state.notebook?.resources.isNullOrEmpty()) PaperText("Источников пока нет", role = PaperTextRole.LABEL)
                 }
             }
             items(state.notebook?.resources.orEmpty(), key = { "resource:${it.id}" }) { resource ->
