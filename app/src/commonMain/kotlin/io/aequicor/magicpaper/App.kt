@@ -60,11 +60,22 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
     // Navigation recreates the visit content below. Recency belongs to the app shell,
     // otherwise selecting another session would reset the activity ordering.
     val sidebarRecencyTracker = remember { SessionRecencyTracker(Id::now) }
+    // Shell layout is a window preference, not a visit preference. Keep it above the
+    // per-visit registry so selecting another session cannot reset it.
+    var primarySidebarVisible by rememberSaveable { mutableStateOf(true) }
+    var chatSidebarVisible by rememberSaveable { mutableStateOf(true) }
+    var primarySidebarWidth by rememberSaveable { mutableStateOf(272f) }
+    var chatSidebarWidth by rememberSaveable { mutableStateOf(272f) }
     Box(Modifier.fillMaxSize()) {
         // The animation belongs to the window, not a visit: recreating it resets
         // its clock and shader and makes the entire window flash on navigation.
         PaperBackground(config.settings.paperAnimationEnabled, Modifier.matchParentSize())
-        key(visit.id) { presentation.Content { AppShellContent(runtime, root, sidebarRecencyTracker) } }
+        key(visit.id) { presentation.Content {
+            AppShellContent(runtime, root, sidebarRecencyTracker,
+                primarySidebarVisible, chatSidebarVisible, primarySidebarWidth, chatSidebarWidth,
+                { primarySidebarVisible = it }, { chatSidebarVisible = it },
+                { primarySidebarWidth = it }, { chatSidebarWidth = it })
+        } }
     }
 }
 
@@ -73,6 +84,14 @@ private fun AppShellContent(
     runtime: MagicPaperRuntime,
     root: RootComponent<AppChild>,
     sidebarRecencyTracker: SessionRecencyTracker,
+    primarySidebarVisible: Boolean,
+    chatSidebarVisible: Boolean,
+    primarySidebarWidth: Float,
+    chatSidebarWidth: Float,
+    onPrimarySidebarVisibleChange: (Boolean) -> Unit,
+    onChatSidebarVisibleChange: (Boolean) -> Unit,
+    onPrimarySidebarWidthChange: (Float) -> Unit,
+    onChatSidebarWidthChange: (Float) -> Unit,
 ) {
     val settings = runtime.koin.get<SettingsService>()
     val chat = runtime.koin.get<ChatService>()
@@ -84,8 +103,6 @@ private fun AppShellContent(
     val navigation by root.navigationState.collectAsState()
     val stack by root.stack.subscribeAsState()
     val slot by root.dialogSlot.subscribeAsState()
-    var primarySidebarVisible by rememberSaveable { mutableStateOf(true) }
-    var chatSidebarVisible by rememberSaveable { mutableStateOf(true) }
     val sidebarActions = remember(chat, coding) { SidebarActions(chat, coding) }
     val isCoding = navigation.route is AppRoute.Projects
     val isChat = navigation.route is AppRoute.Chat
@@ -110,6 +127,8 @@ private fun AppShellContent(
                 val edgeToEdge = navigation.route is AppRoute.Chat || navigation.route is AppRoute.Projects
                 Box(Modifier.fillMaxSize().navigationBarsPadding().paperTitleBarFrost(topInset)) {
                     PaperResizablePanels(sidebarVisible = sidebarVisible,
+                        preferredWidth = if (isChat) chatSidebarWidth else primarySidebarWidth,
+                        onPreferredWidthChange = if (isChat) onChatSidebarWidthChange else onPrimarySidebarWidthChange,
                         sidebar = { modifier ->
                             UnifiedSidebar(sidebarActions, chats.notebooks, projects.coding,
                                 if (isCoding) selectedId else chats.sessions.firstOrNull { it.id == selectedId }?.researchChatId ?: selectedId, isCoding,
@@ -134,8 +153,8 @@ private fun AppShellContent(
                         if (chats.busy) "Исследование…" else "Сохранено"
                     } else null,
                     onToggleSidebar = {
-                        if (isChat) chatSidebarVisible = !chatSidebarVisible
-                        else primarySidebarVisible = !primarySidebarVisible
+                        if (isChat) onChatSidebarVisibleChange(!chatSidebarVisible)
+                        else onPrimarySidebarVisibleChange(!primarySidebarVisible)
                     },
                 )
             }

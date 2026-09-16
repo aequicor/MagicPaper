@@ -15,15 +15,18 @@ import androidx.compose.ui.unit.dp
 fun PaperResizablePanels(
     modifier: Modifier = Modifier,
     sidebarVisible: Boolean = true,
+    preferredWidth: Float? = null,
+    onPreferredWidthChange: (Float) -> Unit = {},
     sidebar: @Composable (Modifier) -> Unit,
     content: @Composable () -> Unit,
 ) {
-    var preferredWidth by rememberSaveable { mutableStateOf(272f) }
+    var localPreferredWidth by rememberSaveable { mutableStateOf(272f) }
+    val requestedWidth = preferredWidth ?: localPreferredWidth
     val density = LocalDensity.current
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val maximum = (maxWidth.value - 328f).coerceIn(160f, 600f)
         val minimum = minOf(200f, maximum)
-        val panelWidth = preferredWidth.coerceIn(minimum, maximum)
+        val panelWidth = requestedWidth.coerceIn(minimum, maximum)
         // The strip is the drag target, the line is its trailing edge and the pill is the grip.
         val stripWidth = 8.dp
         val lineThickness = 1.dp
@@ -43,7 +46,9 @@ fun PaperResizablePanels(
                 Modifier.align(Alignment.TopStart).offset(x = panelWidth.dp).width(stripWidth).fillMaxHeight()
                     .semantics { contentDescription = "Изменить ширину списка сессий" }
                     .draggable(rememberDraggableState { delta ->
-                        preferredWidth = (preferredWidth.coerceIn(minimum, maximum) + with(density) { delta.toDp().value }).coerceIn(minimum, maximum)
+                        val changed = (requestedWidth.coerceIn(minimum, maximum) + with(density) { delta.toDp().value }).coerceIn(minimum, maximum)
+                        if (preferredWidth == null) localPreferredWidth = changed
+                        onPreferredWidthChange(changed)
                     }, Orientation.Horizontal),
             ) {
                 // The line is the transcript edge where messages begin to fade, so it stays on the

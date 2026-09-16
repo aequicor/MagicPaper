@@ -34,8 +34,18 @@ internal fun ResearchWorkspace(vm: DefaultChatComponent, state: ChatState, conte
         if (vm.state.value.notebook == null) vm.newSession()
         return checkNotNull(vm.state.value.notebook).id
     }
+    val notebookId = state.notebook?.id
+    val presentation = vm.workspacePresentation.state(notebookId)
     ResearchWorkspaceContent(
         state = state,
+        questionsExpanded = presentation.questionsExpanded,
+        sourcesExpanded = presentation.sourcesExpanded,
+        onQuestionsExpandedChange = { value ->
+            vm.workspacePresentation.update(notebookId) { it.copy(questionsExpanded = value) }
+        },
+        onSourcesExpandedChange = { value ->
+            vm.workspacePresentation.update(notebookId) { it.copy(sourcesExpanded = value) }
+        },
         saving = saving,
         error = error,
         onNewQuestion = { if (state.notebook == null) vm.newSession() else edit { vm.newQuestion() } },
@@ -56,6 +66,10 @@ internal fun ResearchWorkspace(vm: DefaultChatComponent, state: ChatState, conte
 @Composable
 internal fun ResearchWorkspaceContent(
     state: ChatState,
+    questionsExpanded: Boolean = true,
+    sourcesExpanded: Boolean = true,
+    onQuestionsExpandedChange: (Boolean) -> Unit = {},
+    onSourcesExpandedChange: (Boolean) -> Unit = {},
     saving: Boolean = false,
     error: String? = null,
     onNewQuestion: () -> Unit = {},
@@ -67,8 +81,6 @@ internal fun ResearchWorkspaceContent(
     content: @Composable () -> Unit,
 ) {
     var modalPanel by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
-    var questionsExpanded by remember(state.notebook?.id) { mutableStateOf(true) }
-    var sourcesExpanded by remember(state.notebook?.id) { mutableStateOf(true) }
     var sourceLinkEditorVisible by remember(state.notebook?.id) { mutableStateOf(false) }
     val inset = LocalWindowToolbarHeight.current ?: 56.dp
 
@@ -86,7 +98,7 @@ internal fun ResearchWorkspaceContent(
                             saving = saving,
                             onNewQuestion = onNewQuestion,
                             onSelectQuestion = onSelectQuestion,
-                            onCollapse = { questionsExpanded = false },
+                            onCollapse = { onQuestionsExpandedChange(false) },
                         )
                     }
                 } else {
@@ -95,7 +107,7 @@ internal fun ResearchWorkspaceContent(
                         count = state.questions.size,
                         expandLabel = "Развернуть вопросы",
                         expandGlyph = "›",
-                        onExpand = { questionsExpanded = true },
+                        onExpand = { onQuestionsExpandedChange(true) },
                         modifier = Modifier.width(56.dp).fillMaxHeight(),
                     ) {
                         PaperResearchRailAction(
@@ -114,8 +126,8 @@ internal fun ResearchWorkspaceContent(
                     saving = saving,
                     wide = threeColumns,
                     onNewQuestion = onNewQuestion,
-                    onShowQuestions = { if (threeColumns) questionsExpanded = true else modalPanel = QUESTIONS_PANEL },
-                    onShowSources = { if (threeColumns) sourcesExpanded = true else modalPanel = SOURCES_PANEL },
+                    onShowQuestions = { if (threeColumns) onQuestionsExpandedChange(true) else modalPanel = QUESTIONS_PANEL },
+                    onShowSources = { if (threeColumns) onSourcesExpandedChange(true) else modalPanel = SOURCES_PANEL },
                     onForkQuestion = onForkQuestion,
                 )
                 PaperDivider()
@@ -144,7 +156,7 @@ internal fun ResearchWorkspaceContent(
                             onAddWebsite = onAddWebsite,
                             onPickFiles = onPickFiles,
                             onRemoveResource = onRemoveResource,
-                            onCollapse = { sourcesExpanded = false },
+                            onCollapse = { onSourcesExpandedChange(false) },
                         )
                     }
                 } else {
@@ -153,7 +165,7 @@ internal fun ResearchWorkspaceContent(
                         count = state.notebook?.resources?.size ?: 0,
                         expandLabel = "Развернуть источники",
                         expandGlyph = "‹",
-                        onExpand = { sourcesExpanded = true },
+                        onExpand = { onSourcesExpandedChange(true) },
                         modifier = Modifier.width(56.dp).fillMaxHeight(),
                     ) {
                         PaperResearchRailAction(
@@ -161,7 +173,7 @@ internal fun ResearchWorkspaceContent(
                             glyph = "URL",
                             onClick = {
                                 sourceLinkEditorVisible = true
-                                sourcesExpanded = true
+                                onSourcesExpandedChange(true)
                             },
                             enabled = !saving,
                         )

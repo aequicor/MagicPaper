@@ -104,6 +104,12 @@ class AppShellRenderTest {
                 assertEquals(13.sp, titleLayouts.single().layoutInput.style.fontSize)
                 assertEquals(FontFamily.SansSerif, titleLayouts.single().layoutInput.style.fontFamily)
                 assertTrue(scene.hasText("✦ Новый чат"), "The global session list is visible when a chat opens")
+                scene.action("Показать или скрыть боковую панель").config[SemanticsActions.OnClick].action!!.invoke()
+                draw()
+                assertFalse(scene.hasText("✦ Новый чат"))
+                root.navigate(AppRoute.Docs()); root.awaitIdle(); draw()
+                root.navigate(AppRoute.Chat()); root.awaitIdle(); draw()
+                assertFalse(scene.hasText("✦ Новый чат"), "Chat shell configuration survives switching visits")
                 scene.render(frame * 16_000_000L).use { image ->
                     File(directory, "chat-sidebar-visible.png").writeBytes(image.encodeToData()!!.use { it.bytes })
                 }
