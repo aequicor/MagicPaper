@@ -134,9 +134,14 @@ class UnifiedSessionFeedRenderTest {
     @Test fun wheelOverPinnedRowsContinuesScrollingAndHoverRevealsActions() {
         val state = LazyListState(firstVisibleItemIndex = 8)
         var archived: String? = null
+        fun markUnread(item: UnifiedSidebarItem): UnifiedSidebarItem = item.copy(
+            unread = item.id == "child-5",
+            children = item.children.map(::markUnread),
+        )
+        val groups = sidebarPreviewGroups().map { group -> group.copy(items = group.items.map(::markUnread)) }
         ImageComposeScene(320, 420) {
             PaperTheme {
-                UnifiedSessionFeed(sidebarPreviewGroups(), "child-5", true, emptySet(), { true }, {}, {},
+                UnifiedSessionFeed(groups, "child-5", true, emptySet(), { true }, {}, {},
                     { _, _ -> }, { archived = it.id }, {}, {}, state = state)
             }
         }.use { scene ->
@@ -165,6 +170,11 @@ class UnifiedSessionFeedRenderTest {
                     it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Архивировать сессию") == true
             },
                 "Moving from the row onto its action must keep hover actions visible")
+            assertTrue(scene.nodes().none {
+                it.boundsInRoot.width > 0 &&
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Непрочитанное сообщение") == true
+            }, "A coding session must not duplicate its status indicator in hover actions")
+            scene.save("hover-actions")
             assertTrue(archive.config[SemanticsActions.OnClick].action!!.invoke())
             assertEquals("child-5", archived)
             repeat(4) {

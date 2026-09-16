@@ -46,7 +46,7 @@ public fun PaperSessionRow(
             .padding(start = spacing.xs + spacing.sm * depth.coerceIn(0, 3), end = spacing.xs)
             .heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
             .clip(shape)
-            .background(if (selected) colors.selected else Color.Transparent)
+            .background(if (selected) colors.selected else if (hovered) colors.hover else Color.Transparent)
             .hoverable(rowInteraction)
             .padding(horizontal = spacing.xs, vertical = spacing.xxs),
         verticalAlignment = Alignment.CenterVertically,
@@ -55,7 +55,12 @@ public fun PaperSessionRow(
         // the selectable button would let its preview key handler select instead.
         Row(
             Modifier.weight(1f).heightIn(min = LocalPaperPlatformPolicy.current.density.rowHeight)
-                .paperClickable(role = Role.Button, interactionSource = contentInteraction, onClick = onClick)
+                .paperClickable(
+                    role = Role.Button,
+                    interactionSource = contentInteraction,
+                    showHoverFeedback = false,
+                    onClick = onClick,
+                )
                 .onPreviewKeyEvent { event ->
                     if (expanded != null && (event.key == Key.DirectionLeft || event.key == Key.DirectionRight)) {
                         if (event.type == KeyEventType.KeyDown && expanded != (event.key == Key.DirectionRight)) onToggle()

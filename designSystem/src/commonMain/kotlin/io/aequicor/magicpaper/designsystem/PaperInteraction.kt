@@ -31,11 +31,12 @@ public fun Modifier.paperClickable(
     interactionSource: MutableInteractionSource? = null,
     shape: Shape = RoundedCornerShape(6.dp),
     state: PaperControlState = PaperControlState.NORMAL,
+    showHoverFeedback: Boolean = true,
     onClick: () -> Unit,
 ): Modifier = composed {
     val source = interactionSource ?: remember { MutableInteractionSource() }
     val active = enabled && state != PaperControlState.DISABLED && state != PaperControlState.BUSY
-    paperFeedback(source, shape, active, state)
+    paperFeedback(source, shape, active, state, showHover = showHoverFeedback)
         .onPreviewKeyEvent { event ->
             // Consume both halves of Enter so Foundation cannot activate it twice.
             if (active && event.key == Key.Enter) {
@@ -54,6 +55,7 @@ internal fun Modifier.paperFeedback(
     state: PaperControlState = PaperControlState.NORMAL,
     showFocus: Boolean = true,
     showPress: Boolean = true,
+    showHover: Boolean = true,
 ): Modifier = composed {
     val hovered by source.collectIsHoveredAsState()
     val pressed by source.collectIsPressedAsState()
@@ -75,7 +77,7 @@ internal fun Modifier.paperFeedback(
         val outline = shape.createOutline(size, layoutDirection, this)
         if (enabled) {
             if (showPress && (pressed || state == PaperControlState.PRESSED)) drawOutline(outline, colors.pressed)
-            else if (hovered || state == PaperControlState.HOVER) drawOutline(outline, colors.hover)
+            else if (showHover && (hovered || state == PaperControlState.HOVER)) drawOutline(outline, colors.hover)
             if (focused && showFocus && !pointerFocus || state == PaperControlState.FOCUSED) {
                 // A light separator keeps the focus ring visible on a dark primary button.
                 drawOutline(outline, colors.surface, style = Stroke(8.dp.toPx()))

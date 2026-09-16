@@ -100,7 +100,9 @@ internal fun UnifiedSessionFeed(
                     else PaperText("✦", role = PaperTextRole.CHROME)
                 },
                 actions = {
-                    if (item.unread) PaperActivityIndicator(PaperActivityTone.UNREAD, "Непрочитанное сообщение")
+                    if (item.unread && !item.isCoding) {
+                        PaperActivityIndicator(PaperActivityTone.UNREAD, "Непрочитанное сообщение")
+                    }
                     item.immunity?.let { immunity ->
                         ImmunityDiamondButton(immunity.status, immunity.selected, onClick = { onSelect(immunity.sessionId, true) })
                     }
