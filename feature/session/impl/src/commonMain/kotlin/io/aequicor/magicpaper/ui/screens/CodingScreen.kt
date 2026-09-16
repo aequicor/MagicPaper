@@ -6,13 +6,11 @@ import io.aequicor.magicpaper.designsystem.PaperWorkspaceHeading
 import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
 import io.aequicor.magicpaper.designsystem.PaperPromptField
 import io.aequicor.magicpaper.designsystem.PaperWorkSurface
-import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.PaperTreeGroupHeader
 import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.domain.tools.ToolPhase
 
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.SideEffect
 import io.aequicor.magicpaper.ui.components.PaperInlineMessageParts
 import io.aequicor.magicpaper.ui.components.PaperMessageExpansion
 import io.aequicor.magicpaper.ui.components.LocalPaperMessageExpansion
@@ -986,10 +984,6 @@ internal fun CodingChat(
             if (fragment.item.first && fragment.index == 0) put(fragment.item.row.message.id, index + 1)
         } }
     }
-    // Only arrivals during this open session animate; lazy reuse and saved history do not.
-    val seenTimelineKeys = remember(session.session.id) { timeline.map { it.key }.toMutableSet() }
-    val arrivingKeys = remember(timeline, seenTimelineKeys) { timeline.map { it.key }.filterNot { it in seenTimelineKeys }.toSet() }
-    SideEffect { seenTimelineKeys.addAll(arrivingKeys) }
     var thinkingExpanded by rememberSaveable(session.session.id, busy) { mutableStateOf(false) }
     val hasDraft = draftHistory.isNotEmpty()
     val statusMessageId = rows.lastOrNull()?.let { it.planCard ?: it.message }?.takeIf { it.role == CodingRole.AGENT && !hasDraft }?.id
@@ -1041,18 +1035,15 @@ internal fun CodingChat(
                     val isDraft = message.id == draftRow?.message?.id
                     val rowStatus = status.takeIf { busy && statusMessageId != null &&
                         (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
-                    PaperContentEntrance(animate = fragment.parts == null && isDraft && draft.active &&
-                        item.key in arrivingKeys && item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) {
-                        SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
-                            pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
-                            live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
-                            continued = isDraft && busy, fragment = fragment,
-                            onExpand = { expandedMessages = expandedMessages + item.key },
-                            onCollapse = {
-                                scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
-                                expandedMessages = expandedMessages - item.key
-                            })
-                    }
+                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
+                        pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
+                        live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
+                        continued = isDraft && busy, fragment = fragment,
+                        onExpand = { expandedMessages = expandedMessages + item.key },
+                        onCollapse = {
+                            scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
+                            expandedMessages = expandedMessages - item.key
+                        })
                 }
                 if (completedResponseId != null) {
                     item(key = "session-result:$completedResponseId", contentType = "result") {
