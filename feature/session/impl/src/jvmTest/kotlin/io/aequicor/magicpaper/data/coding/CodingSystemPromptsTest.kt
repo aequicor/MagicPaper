@@ -24,6 +24,9 @@ class CodingSystemPromptsTest {
             assertTrue("task.handoff" in prompt)
             assertTrue("outcome=RESULT" in prompt)
             assertTrue("отдельное\nподтверждение пользователя" in prompt)
+            assertTrue("не повторяй BLOCKED по той же причине" in prompt)
+            assertTrue("пустым checks" in prompt)
+            assertTrue("упавшую автоматическую проверку" in prompt)
             assertTrue(task.path in prompt && task.targetBranch in prompt)
             val next = session.copy(taskWorktree = task.copy(taskId = "next", targetBranch = "feature/next"),
                 pendingRun = session.pendingRun!!.copy(runId = "next"))
