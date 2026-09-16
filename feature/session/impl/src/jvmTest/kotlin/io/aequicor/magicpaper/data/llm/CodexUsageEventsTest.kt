@@ -39,6 +39,7 @@ class CodexUsageEventsTest {
             assertEquals(2L, search.filterIsInstance<CodingEvent.SearchObserved>().single().requests)
             val page = receive("item/completed", """{"item":{"type":"webSearch","id":"page","action":{"type":"openPage","url":"https://example.com"}}}""")
             assertTrue(page.filterIsInstance<CodingEvent.SearchObserved>().single().content)
+            assertEquals("https://example.com/", page.filterIsInstance<CodingEvent.ToolFinished>().single().sources.single().url)
             val webRecorder = CodingRunRecorder()
             receive("item/started", """{"item":{"type":"webSearch","id":"open","action":null}}""").forEach(webRecorder::apply)
             assertEquals("⚒ Веб-операция", webRecorder.timeline().single().title)

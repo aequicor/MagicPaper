@@ -142,7 +142,7 @@ public fun PaperListRow(
     ) {
         Column(Modifier.weight(1f)) {
             PaperText(label, role = PaperTextRole.BODY)
-            secondary?.let { PaperText(it, role = PaperTextRole.LABEL, color = colors.secondaryText) }
+            secondary?.let { PaperText(it, role = PaperTextRole.LABEL, color = if (selected) colors.text else colors.secondaryText) }
         }
         trailing?.invoke(this)
     }

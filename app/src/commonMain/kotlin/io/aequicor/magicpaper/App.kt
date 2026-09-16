@@ -108,7 +108,8 @@ private fun AppShellContent(
                 Box(Modifier.fillMaxSize().navigationBarsPadding().paperTitleBarFrost(topInset)) {
                     PaperResizablePanels(sidebarVisible = sidebarVisible,
                         sidebar = { modifier ->
-                            UnifiedSidebar(sidebarActions, chats.sessions, projects.coding, selectedId, isCoding,
+                            UnifiedSidebar(sidebarActions, chats.notebooks, projects.coding,
+                                if (isCoding) selectedId else chats.sessions.firstOrNull { it.id == selectedId }?.researchChatId ?: selectedId, isCoding,
                                 modifier.padding(top = topInset), sidebarRecencyTracker)
                         }) {
                         Box(Modifier.fillMaxSize().then(if (edgeToEdge) Modifier else Modifier.padding(top = topInset))) {
@@ -120,7 +121,8 @@ private fun AppShellContent(
                         root.dismissNavigationError(); settings.dismissNotice(); chat.dismissNotice(); coding.dismissNotice()
                     }
                 }
-                TopBar(root, usage, selectedId, isCoding, onToggleSidebar = { sidebarVisible = !sidebarVisible })
+                TopBar(root, usage, if (navigation.route is AppRoute.Chat) chats.current?.id else selectedId,
+                    isCoding, onToggleSidebar = { sidebarVisible = !sidebarVisible })
             }
             CompositionLocalProvider(LocalPaperDialogLifecycle provides null) {
             slot.child?.configuration?.let { dialog ->

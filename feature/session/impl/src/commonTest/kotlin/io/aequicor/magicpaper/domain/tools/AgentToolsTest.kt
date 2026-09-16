@@ -143,6 +143,16 @@ class AgentToolsTest {
         assertEquals("Page unavailable", step.result)
     }
 
+    @Test fun nativeSourceReferencesSurviveToolNormalization() = runTest {
+        val tools = session { _, _, _ -> JsonNull }
+        val sources = listOf(SearchHit("Opened page", "https://example.org/report"))
+        val events = flow {
+            emit(CodingEvent.ToolStarted("web_search", "", "page"))
+            emit(CodingEvent.ToolFinished("web_search", false, "page", sources = sources))
+        }.withTools(tools).toList()
+        assertEquals(sources, events.filterIsInstance<CodingEvent.ToolFinished>().single().sources)
+    }
+
     @Test fun parallelCallsAndRepeatedEventsKeepOneCardPerRequestAndCall() = runTest {
         val tools = session { _, _, _ -> JsonPrimitive("queued") }
         val recorder = CodingRunRecorder()

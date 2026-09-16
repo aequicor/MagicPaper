@@ -21,11 +21,12 @@ import kotlin.coroutines.CoroutineContext
     val toolId: String, val category: ToolCategory, val phase: ToolPhase,
     val summary: String, val result: String = "",
     val title: String? = null,
+    val sources: List<SearchHit> = emptyList(),
 ) {
     fun codingEvent(): CodingEvent = when (phase) {
         ToolPhase.STARTED -> CodingEvent.ToolStarted(toolId, summary, callId, category == ToolCategory.EXEC, category = category, title = title)
         ToolPhase.PROGRESS, ToolPhase.WAITING -> CodingEvent.ToolProgress(toolId, callId, result, phase)
-        else -> CodingEvent.ToolFinished(toolId, phase != ToolPhase.SUCCEEDED, callId, result, phase, title = title)
+        else -> CodingEvent.ToolFinished(toolId, phase != ToolPhase.SUCCEEDED, callId, result, phase, title = title, sources = sources)
     }
 }
 
@@ -43,7 +44,9 @@ class ToolEventHub(private val knownSecrets: () -> Set<String> = { emptySet() })
     suspend fun publish(event: ToolEvent) {
         val secrets = knownSecrets()
         val safe = event.copy(summary = PlanningDiagnostics.redact(event.summary, secrets), result = PlanningDiagnostics.redact(event.result, secrets),
-            title = event.title?.let { PlanningDiagnostics.redact(it, secrets) })
+            title = event.title?.let { PlanningDiagnostics.redact(it, secrets) },
+            sources = event.sources.map { source -> source.copy(title = PlanningDiagnostics.redact(source.title, secrets),
+                url = PlanningDiagnostics.redact(source.url, secrets), snippet = PlanningDiagnostics.redact(source.snippet, secrets)) })
         observers.value.forEach { observer ->
             try { observer(safe) } catch (error: Exception) {
                 currentCoroutineContext().ensureActive()
@@ -389,7 +392,8 @@ private fun ToolSession.nativeEvent(event: CodingEvent): ToolEvent? {
         is CodingEvent.ToolFinished -> event.title
         else -> null
     }
-    return ToolEvent(context.projectId, context.ownerSessionId, context.requestId, identity, id, category, phase, summary, result, title)
+    return ToolEvent(context.projectId, context.ownerSessionId, context.requestId, identity, id, category, phase, summary, result, title,
+        sources = (event as? CodingEvent.ToolFinished)?.sources.orEmpty())
 }
 
 /** Validate the JSON subset used by the catalog before invoking any receiver. */

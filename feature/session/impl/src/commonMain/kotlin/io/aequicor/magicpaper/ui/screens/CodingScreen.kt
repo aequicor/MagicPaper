@@ -1710,6 +1710,7 @@ internal fun CodingComposer(
     controls: (@Composable () -> Unit)? = null,
     planning: Boolean = false,
     research: Boolean = false,
+    promptPlaceholder: String = if (research) "Вопрос о проекте…" else "Что нужно сделать?",
     onPlanning: (() -> Unit)? = null,
     onInteractionMode: ((CodingInteractionMode) -> Unit)? = null,
     modeSwitchEnabled: Boolean = true,
@@ -1794,7 +1795,7 @@ internal fun CodingComposer(
                             }
                         },
                     maxLines = 6,
-                    placeholder = if (research) "Вопрос о проекте…" else "Что нужно сделать?",
+                    placeholder = promptPlaceholder,
                 )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box {

@@ -41,7 +41,7 @@ class ChatLongMessageRenderTest {
         return result!!.getOrThrow()
     }
 
-    @Test fun hugeMessagesExpandIntoTheChatListAndCollapseWithoutADialog() {
+    @Test fun hugeResearchAnswersAreFullyAvailableInTheLazyListWithoutADialog() {
         val source = "## Проверка длинного ответа\n\n" + "**Текст сообщения** со [ссылкой](https://example.com). ".repeat(12000) + "\n\nКонец полного сообщения"
         val list = LazyListState()
         val session = ChatSession("long", "long", 0, 0, listOf(ChatMessage("message", ChatRole.AGENT, source, 0)))
@@ -56,24 +56,12 @@ class ChatLongMessageRenderTest {
                 while (!onUi(condition) && System.nanoTime() < deadline) render()
                 assertTrue(onUi(condition), description)
             }
-            fun click(label: String) {
-                awaitRender("Visible action: $label") { label in scene.texts() }
-                onUi {
-                    val button = scene.nodes().single { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true }
-                    scene.sendPointerEvent(PointerEventType.Press, button.boundsInRoot.center)
-                    scene.sendPointerEvent(PointerEventType.Release, button.boundsInRoot.center)
-                }
-            }
-            render()
-            assertEquals(1, list.layoutInfo.totalItemsCount)
-            assertTrue(list.layoutInfo.visibleItemsInfo.single().size <= 400)
-            assertTrue(onUi { scene.texts().sumOf { it.length } } < 8000)
-            onUi { scene.snapshot("preview") }
-            click("Читать далее")
             render()
             awaitRender("Parsed fragments must belong to the outer chat list") { list.layoutInfo.totalItemsCount > 300 }
-            assertEquals(0, list.firstVisibleItemIndex, "Expansion must preserve the beginning instead of following the tail")
+            onUi { list.requestScrollToItem(0) }
+            render()
             assertEquals(1, scene.semanticsOwners.size, "No modal window")
+            assertFalse(onUi { "Читать далее" in scene.texts() }, "Reading does not require expanding messages")
             assertTrue(onUi { scene.texts().sumOf { it.length } } < 16000, "Only visible text is composed")
             onUi { scene.snapshot("inline-expanded") }
             repeat(4) {
@@ -84,10 +72,7 @@ class ChatLongMessageRenderTest {
             onUi { list.requestScrollToItem(list.layoutInfo.totalItemsCount - 1) }
             render()
             assertTrue(onUi { scene.texts().any { "Конец полного сообщения" in it } })
-            click("Свернуть")
-            render()
-            assertEquals(1, list.layoutInfo.totalItemsCount)
-            assertTrue(onUi { "Читать далее" in scene.texts() })
+            assertTrue(list.layoutInfo.totalItemsCount > 300, "The full document stays available after scrolling")
         } finally { onUi { scene.close() } }
     }
 

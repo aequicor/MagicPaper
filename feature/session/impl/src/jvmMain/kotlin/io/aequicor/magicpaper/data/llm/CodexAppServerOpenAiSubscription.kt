@@ -1057,7 +1057,10 @@ class CodexAppServerOpenAiSubscription(
                     emit(CodingEvent.ToolFinished("web_search", failed, id,
                         resultPreview = if (failed) error?.takeIf { it.isNotBlank() } ?: "Не удалось выполнить веб-операцию."
                             else "Операция завершена. Результат не передан в историю.",
-                        title = codexWebTitle(item)))
+                        title = codexWebTitle(item),
+                        sources = if (failed) emptyList() else listOfNotNull(
+                            (item["action"] as? JsonObject)?.takeIf { it.string("type") == "openPage" }
+                                ?.string("url")?.let(::researchUrl)?.let { SearchHit(it, it) })))
                     val action = item["action"] as? JsonObject
                     val content = action?.string("type") == "openPage"
                     if (!failed && action?.string("type") in listOf("search", "openPage")) emit(CodingEvent.SearchObserved(id,

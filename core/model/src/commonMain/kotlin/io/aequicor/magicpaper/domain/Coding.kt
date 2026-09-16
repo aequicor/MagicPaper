@@ -594,6 +594,8 @@ sealed interface CodingEvent {
         val title: String? = null,
         /** Structured adapter blocks only; never reconstructed from resultPreview. */
         val images: List<CodingImageArtifact> = emptyList(),
+        /** References actually reported by a search/browsing adapter. */
+        val sources: List<SearchHit> = emptyList(),
     ) : CodingEvent
 
     /**

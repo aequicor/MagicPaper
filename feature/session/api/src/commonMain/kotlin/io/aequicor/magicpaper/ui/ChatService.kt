@@ -13,6 +13,11 @@ interface ChatService {
     fun dismissNotice()
     fun newSession()
     fun selectSession(id: String)
+    suspend fun newQuestion(): Result<Unit>
+    suspend fun selectQuestion(id: String): Result<Unit>
+    suspend fun addWebsite(chatId: String, url: String): Result<Unit>
+    suspend fun addResources(chatId: String, attachments: List<Attachment>): Result<Unit>
+    suspend fun removeResource(chatId: String, resourceId: String): Result<Unit>
     fun deleteSession(id: String)
     fun archiveSession(id: String)
     fun restoreSession(id: String)

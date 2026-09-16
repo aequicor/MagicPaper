@@ -20,6 +20,41 @@
     "targets": ["PaperTheme", "PaperField", "PaperListRow", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
   },
   {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchWorkspace", "annotationLine": 15,
+    "targets": ["PaperPanel", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchWorkspaceContent", "annotationLine": 44,
+    "targets": ["PaperPanel", "PaperButton", "PaperDialog"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchLibrary", "annotationLine": 99,
+    "targets": ["PaperListRow", "PaperField", "PaperButton", "PaperPanel"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",
+    "symbol": "ResearchWorkspacePreview", "annotationLine": 41,
+    "targets": ["PaperTheme", "PaperReader", "PaperPanel"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",
+    "symbol": "ResearchEmptyPreview", "annotationLine": 64,
+    "targets": ["PaperTheme", "PaperWorkspaceComposer", "PaperContentEntrance"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",
+    "symbol": "ResearchBusyPreview", "annotationLine": 68,
+    "targets": ["PaperTheme", "PaperActivityIndicator"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",
+    "symbol": "ResearchErrorPreview", "annotationLine": 72,
+    "targets": ["PaperTheme", "PaperNotice"], "stage": "6", "kind": "surface"
+  },
+  {
     "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ComputerSettings.kt",
     "symbol": "ComputerSettings", "annotationLine": 13,
     "targets": ["PaperButton", "PaperText", "PaperPanel", "PaperChoice", "PaperFileTransfer"], "stage": "5", "kind": "surface"

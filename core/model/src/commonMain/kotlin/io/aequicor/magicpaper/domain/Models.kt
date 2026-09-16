@@ -48,6 +48,13 @@ data class ChatSession(
     val nativeSessionId: String = "",
     val pendingRun: CodingRunCheckpoint? = null,
     val queuedPrompts: List<CodingRunCheckpoint> = emptyList(),
+    /** Questions retain their existing execution/draft identities; the root owns shared resources. */
+    val researchParentId: String? = null,
+    val selectedQuestionId: String? = null,
+    val resources: List<ResearchResource> = emptyList(),
+    /** Explicit removals must survive late search results and reopening history. */
+    val excludedResourceUrls: Set<String> = emptySet(),
+    val researchResourcesInitialized: Boolean = false,
     /** Invocation-only authority; persisted history and restored queues never grant desktop access. */
     @kotlinx.serialization.Transient val acquireComputerAccess: Boolean = false,
     val archived: Boolean = false,

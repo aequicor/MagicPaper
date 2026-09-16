@@ -10,9 +10,12 @@ class GatewaySessionRuntime(
     private val packageRuntime: SkillInstructionRuntime? = null,
     private val layoutEditor: LayoutEditor = UnavailableLayoutEditor,
     private val settings: suspend () -> AppSettings = { AppSettings() },
+    private val readResearchPage: (suspend (String) -> String)? = null,
 ) : CodingRuntime by io.aequicor.magicpaper.data.coding.NoopCodingRuntime {
     override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = kotlinx.coroutines.flow.flow {
-        val result = answer(session.messages.dropLast(1), prompt, settings(), profile, attachments)
+        val result = answer(session.messages.dropLast(1), prompt, settings(), profile, attachments,
+            researchResources = session.resources,
+            onSearchResults = { emit(CodingEvent.ToolFinished("web.search", false, sources = it)) })
         emit(CodingEvent.FinalText(result.text, sources = result.sources, attachments = result.attachments))
         emit(CodingEvent.Finished)
     }
@@ -27,36 +30,64 @@ class GatewaySessionRuntime(
         attachments: List<Attachment> = emptyList(),
         operationalProfile: LlmProfile? = profile,
         layoutRequest: LayoutChatRequest? = null,
+        researchResources: List<ResearchResource>? = null,
+        onSearchResults: suspend (List<SearchHit>) -> Unit = {},
     ): SessionAnswer {
         val trimmed = userText.trim()
+        val sourceProblems = mutableListOf<String>()
+        val researchContext = researchResources?.let { resources ->
+            buildString {
+                appendLine(researchPrompt("", resources))
+                for (resource in resources.filter { it.url.isNotEmpty() }) {
+                    if (readResearchPage == null) {
+                        sourceProblems += "Не удалось прочитать источник «${resource.title}»: чтение сайтов недоступно в этом подключении."
+                        appendLine("Содержимое ${resource.url} недоступно: чтение сайтов не поддерживается этим подключением.")
+                    } else {
+                        try { appendLine("Источник ${resource.url}:\n${readResearchPage.invoke(resource.url)}") }
+                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            io.aequicor.magicpaper.logging.AppLog.error("chat", "source.read.failed", failure, mapOf("resourceId" to resource.id))
+                            appendLine("Источник ${resource.url} не удалось прочитать. Сообщи об этом в ответе.")
+                            sourceProblems += "Не удалось прочитать источник «${resource.title}». Можно повторить запрос или убрать источник."
+                        }
+                    }
+                }
+                if (attachments.any { it.kind == AttachmentKind.FILE }) {
+                    sourceProblems += "Это подключение читает текстовые файлы и изображения. Для остальных файлов выберите движок на компьютере или загрузите текстовую версию."
+                    appendLine(sourceProblems.last())
+                }
+            }
+        }
         layoutRequest?.let { request ->
             return LayoutChatAgent(gateway, layoutEditor).answer(request.project, request.conversationId, request.requestId,
                 trimmed, history, profile, attachments)
         }
-        packageRuntime?.answer(trimmed, history, profile, attachments)?.let { return SessionAnswer(it) }
+        if (researchResources.isNullOrEmpty()) packageRuntime?.answer(trimmed, history, profile, attachments)?.let { return SessionAnswer(it) }
         // Самонастройка: подбираем навыки под запрос до маршрутизации —
         // они усиливают любую ветку (доки, поиск, свободный диалог).
         val skills = skillSelector.select(trimmed, skillLibrary.relevantFor(trimmed))
 
-        if (looksLikeAppQuestion(trimmed)) {
+        if (looksLikeAppQuestion(trimmed) && (researchResources.isNullOrEmpty() || trimmed.contains("magicpaper", ignoreCase = true))) {
             val matches = docs.search(trimmed)
             if (matches.isNotEmpty()) {
                 val context = matches.joinToString("\n\n") { "${it.article.title}\n${it.article.body}" }
                 return tryModel(
                     profile = operationalProfile,
                     system = SYSTEM_PROMPT,
-                    context = "Документация приложения:\n$context",
+                    context = listOfNotNull(researchContext, "Документация приложения:\n$context").joinToString("\n\n"),
                     skills = skills,
                     history = history,
                     userText = trimmed,
                     sources = emptyList(),
                     attachments = attachments,
+                    sourceProblems = sourceProblems,
                 )
             }
         }
 
         if (looksLikeSearchRequest(trimmed)) {
             val hits = searchEngine.search(trimmed, settings, limit = 5)
+            onSearchResults(hits)
             if (hits.isNotEmpty()) {
                 val context = hits.joinToString("\n\n") { hit ->
                     "[${hit.provider}] ${hit.title}\n${hit.snippet}\n${hit.url}"
@@ -64,12 +95,13 @@ class GatewaySessionRuntime(
                 return tryModel(
                     profile = profile,
                     system = SYSTEM_PROMPT,
-                    context = "Результаты поиска:\n$context",
+                    context = listOfNotNull(researchContext, "Результаты поиска:\n$context").joinToString("\n\n"),
                     skills = skills,
                     history = history,
                     userText = trimmed,
                     sources = hits,
                     attachments = attachments,
+                    sourceProblems = sourceProblems,
                 )
             }
         }
@@ -77,12 +109,13 @@ class GatewaySessionRuntime(
         return tryModel(
             profile = profile,
             system = SYSTEM_PROMPT,
-            context = null,
+            context = researchContext,
             skills = skills,
             history = history,
             userText = trimmed,
             sources = emptyList(),
             attachments = attachments,
+            sourceProblems = sourceProblems,
         )
     }
 
@@ -95,6 +128,7 @@ class GatewaySessionRuntime(
         userText: String,
         sources: List<SearchHit>,
         attachments: List<Attachment>,
+        sourceProblems: List<String> = emptyList(),
     ): SessionAnswer {
         if (profile == null || !profile.configured) {
             return SessionAnswer(NOT_CONFIGURED_TEXT, sources)
@@ -118,7 +152,9 @@ class GatewaySessionRuntime(
             }
             add(LlmMessage(LlmChatRole.USER, userText, attachments))
         }
-        return SessionAnswer(gateway.complete(profile, messages), sources)
+        val answer = gateway.complete(profile, messages)
+        return SessionAnswer(answer + if (sourceProblems.isEmpty()) "" else
+            "\n\n### Недоступные источники\n\n" + sourceProblems.joinToString("\n\n"), sources)
     }
 
     private fun looksLikeAppQuestion(text: String): Boolean =

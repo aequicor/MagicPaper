@@ -91,7 +91,17 @@ class DefaultChatService(
         observePins()
         val settings = settingsRepo.load()
         val profiles = profileRepo.load()
-        val sessions = chats.sessions().map { session ->
+        val stored = chats.sessions()
+        val sessions = stored.map { original ->
+            val session = if (original.researchParentId != null || original.researchResourcesInitialized) original else {
+                val history = stored.filter { it.researchChatId == original.id }.flatMap { it.messages }
+                val files = history.flatMap { it.attachments }.map { ResearchResource(it.id, it.name, attachment = it) }
+                val sites = history.flatMap { it.sources }.mapNotNull { hit -> researchUrl(hit.url)?.let {
+                    if (it in original.excludedResourceUrls) null else ResearchResource(Id.new(), hit.title, it, discovered = true, snippet = hit.snippet)
+                } }
+                original.copy(resources = (original.resources + files + sites).distinctBy { it.url.ifEmpty { it.id } },
+                    researchResourcesInitialized = true).also { chats.save(it) }
+            }
             if (session.modelSelection != null) session else {
                 val profile = ProfileResolver.resolve(session, settings, profiles)
                 session.copy(modelSelection = profile?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) })
@@ -136,7 +146,16 @@ class DefaultChatService(
                 else "Не удалось изменить архив чата. Повторите попытку.") }
         }
     }
-    override fun activate(id: String?) { visible.value = true; _state.update { it.copy(current = it.sessions.firstOrNull { session -> session.id == id }, busy = id in chatJobs.value) } }
+    private var selectionGeneration = 0L
+    override fun activate(id: String?) {
+        selectionGeneration++
+        visible.value = true
+        _state.update { state ->
+            val root = state.sessions.firstOrNull { it.id == id }
+            val selected = state.sessions.firstOrNull { it.id == root?.selectedQuestionId && it.researchChatId == root.id } ?: root
+            state.copy(current = selected, busy = selected?.id in chatJobs.value)
+        }
+    }
     private val visible = MutableStateFlow(false)
     private var pinObserver: Job? = null
     override fun setVisible(visible: Boolean) { this.visible.value = visible }
@@ -172,14 +191,16 @@ class DefaultChatService(
     override fun dismissNotice() { _state.update { it.copy(notice = null) } }
     private val pendingCreations = mutableMapOf<String, CompletableDeferred<Unit>>()
     override fun newSession() {
+        selectionGeneration++
         val now = Id.now()
         val session = ChatSession(
             id = Id.new(),
-            title = "Новый свиток",
+            title = "Новое исследование",
             createdAt = now,
             updatedAt = now,
             engine = _state.value.settings.defaultCodingEngine,
             modelSelection = ProfileResolver.favoriteDefault(_state.value.settings, _state.value.availableLlmProfiles),
+            researchResourcesInitialized = true,
         )
         _state.update {
                 it.copy(
@@ -200,41 +221,151 @@ class DefaultChatService(
     }
 
     override fun selectSession(id: String) {
-        scope.launch {
-            val session = chats.session(id) ?: return@launch
-            _state.update { it.copy(current = session, busy = id in chatJobs.value) }; onOpenSession(id)
+        activate(id)
+        onOpenSession(id)
+    }
+
+    /** Durable edits belong to the application service, even when their screen disappears. */
+    private val researchEdits = Mutex()
+    private suspend fun researchChange(operation: String, block: suspend () -> Unit): Result<Unit> = scope.async {
+        val fields = mapOf("operationId" to Id.new(), "sessionId" to state.value.notebook?.id.orEmpty())
+        try {
+            researchEdits.withLock { block() }
+            AppLog.info("chat", "research.$operation.completed", fields)
+            Result.success(Unit)
+        }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            AppLog.error("chat", "research.$operation.failed", error, fields)
+            val message = "Не удалось сохранить изменение. Повторите попытку."
+            _state.update { it.copy(notice = message) }
+            Result.failure(IllegalStateException(message))
+        }
+    }.await()
+
+    override suspend fun newQuestion(): Result<Unit> {
+        val root = state.value.notebook ?: return Result.failure(IllegalStateException("Сначала создайте чат."))
+        val generation = ++selectionGeneration
+        val model = state.value.current?.modelSelection ?: root.modelSelection
+        return researchChange("question.create") {
+            check(root.id !in deletingSessions)
+            pendingCreations[root.id]?.await()
+            val now = Id.now()
+            val question = ChatSession(Id.new(), "Новый вопрос", now, now,
+                researchParentId = root.id, engine = root.engine, modelSelection = model,
+                llmProfileId = root.llmProfileId)
+            chats.save(question)
+            _state.update { it.copy(sessions = it.sessions + question) }
+            updateChat(root.id) { it.copy(selectedQuestionId = question.id) }
+            if (selectionGeneration == generation) _state.update { it.copy(current = question, busy = false) }
+            AppLog.info("chat", "question.created", mapOf("sessionId" to root.id, "questionId" to question.id))
+        }
+    }
+
+    override suspend fun selectQuestion(id: String): Result<Unit> {
+        val root = state.value.notebook ?: return Result.failure(IllegalStateException("Чат не найден."))
+        val generation = ++selectionGeneration
+        return researchChange("question.select") {
+            require(state.value.sessions.any { it.id == id && it.researchChatId == root.id })
+            check(root.id !in deletingSessions && id !in deletingSessions)
+            pendingCreations[root.id]?.await()
+            updateChat(root.id) { it.copy(selectedQuestionId = id) }
+            if (selectionGeneration == generation) _state.update { latest ->
+                latest.copy(current = latest.sessions.first { it.id == id }, busy = id in chatJobs.value)
+            }
+        }
+    }
+
+    override suspend fun addWebsite(chatId: String, url: String): Result<Unit> {
+        val normalized = researchUrl(url) ?: return Result.failure(IllegalArgumentException("Введите ссылку на сайт: https://…"))
+        return researchChange("source.add") {
+            check(chatId !in deletingSessions)
+            pendingCreations[chatId]?.await()
+            updateChat(chatId) { root ->
+                require(root.researchParentId == null)
+                root.copy(resources = if (root.resources.any { it.url == normalized }) root.resources else
+                    root.resources + ResearchResource(Id.new(), normalized, normalized),
+                    excludedResourceUrls = root.excludedResourceUrls - normalized)
+            }
+        }
+    }
+
+    override suspend fun addResources(chatId: String, attachments: List<Attachment>): Result<Unit> = researchChange("files.add") {
+        check(chatId !in deletingSessions)
+        pendingCreations[chatId]?.await()
+        shareFiles(chatId, attachments)
+    }
+
+    private suspend fun shareFiles(chatId: String, attachments: List<Attachment>) {
+        updateChat(chatId) { root ->
+            require(root.researchParentId == null)
+            root.copy(resources = (root.resources + attachments.map {
+                ResearchResource(it.id, it.name, attachment = it)
+            }).distinctBy { it.id })
+        }
+    }
+
+    override suspend fun removeResource(chatId: String, resourceId: String): Result<Unit> = researchChange("source.remove") {
+        check(chatId !in deletingSessions)
+        updateChat(chatId) { root ->
+            require(root.researchParentId == null)
+            val removed = root.resources.firstOrNull { it.id == resourceId }
+            root.copy(resources = root.resources.filterNot { it.id == resourceId },
+                excludedResourceUrls = root.excludedResourceUrls + listOfNotNull(removed?.url?.takeIf { it.isNotEmpty() }))
+        }
+    }
+
+    private suspend fun rememberSources(chatId: String, sources: List<SearchHit>) {
+        if (sources.isEmpty() || chatId in deletingSessions) return
+        updateChat(chatId) { root ->
+            val additions = sources.mapNotNull { hit -> researchUrl(hit.url)?.let { url ->
+                if (url in root.excludedResourceUrls) null else ResearchResource(Id.new(), hit.title.ifBlank { url }, url,
+                    discovered = true, snippet = hit.snippet)
+            } }
+            root.copy(resources = (root.resources + additions).distinctBy { if (it.url.isNotEmpty()) it.url else it.id })
         }
     }
 
     override fun deleteSession(id: String) {
-        if (id in changingHistory) return
+        val initialIds = state.value.sessions.filter { it.researchParentId == id }.map { it.id } + id
+        if (initialIds.any { it in changingHistory || it in deletingSessions }) return
         AppLog.info("chat", "session.delete", mapOf("sessionId" to id))
-        if (!deletingSessions.add(id)) return
+        deletingSessions.addAll(initialIds)
         scope.launch {
             try {
-            chatJobs.value[id]?.cancelAndJoin()
-            pendingCreations[id]?.await()
-            queuedComputerRequests.update { requests -> requests.filterValues { it != id } }
-            chats.session(id)?.let { runtime.deleteChatSession(it) }
-            sessionLocks.update { if (id in it) it else it + (id to Mutex()) }
-            sessionLocks.value.getValue(id).withLock {
-                chats.delete(id)
-                deletedDraftSessionIds += id
-            }
-            requestPins?.remove(PinConversation(id))
-            composerSessions.remove("chat:$id")?.revoke()
-            try { draftRepository.remove("chat:$id") }
-            catch (error: CancellationException) { throw error }
-            catch (error: Exception) { AppLog.error("chat", "draft.remove.failed", error, mapOf("sessionId" to id)); _state.update { it.copy(notice = "Чат удалён. Не удалось удалить черновик.") } }
-            val rest = chats.sessions()
-            _state.update {
-                it.copy(
-                    sessions = rest,
-                    current = if (it.current?.id == id) rest.firstOrNull() else it.current,
-                )
-            }
-            } finally { deletingSessions.remove(id) }
+                researchEdits.withLock {
+                    // A question whose creation was already accepted must join the deletion, too.
+                    val ids = state.value.sessions.filter { it.researchParentId == id }.map { it.id } + id
+                    deletingSessions.addAll(ids)
+                    try { ids.forEach { deleteStoredQuestion(it, ids) } }
+                    finally { deletingSessions.removeAll(ids.toSet()) }
+                }
+            } finally { deletingSessions.removeAll(initialIds.toSet()) }
         }
+    }
+
+    private suspend fun deleteStoredQuestion(id: String, deletingIds: List<String>) {
+        chatJobs.value[id]?.cancelAndJoin()
+        pendingCreations[id]?.await()
+        queuedComputerRequests.update { requests -> requests.filterValues { it != id } }
+        chats.session(id)?.let { runtime.deleteChatSession(it) }
+        sessionLocks.update { if (id in it) it else it + (id to Mutex()) }
+        sessionLocks.value.getValue(id).withLock {
+            chats.delete(id)
+            deletedDraftSessionIds += id
+        }
+        requestPins?.remove(PinConversation(id))
+        composerSessions.remove("chat:$id")?.revoke()
+        try { draftRepository.remove("chat:$id") }
+        catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            AppLog.error("chat", "draft.remove.failed", error, mapOf("sessionId" to id))
+            _state.update { it.copy(notice = "Чат удалён. Не удалось удалить черновик.") }
+        }
+        val rest = chats.sessions()
+        _state.update { state -> state.copy(sessions = rest,
+            current = if (state.current?.id == id) rest.firstOrNull { it.researchParentId == null && it.id !in deletingIds } else state.current,
+            busy = if (state.current?.id == id) false else state.busy) }
     }
 
     // Per-session jobs for regular chat (not coding sessions, which use codingJobs)
@@ -304,7 +435,9 @@ class DefaultChatService(
         val fork = source.copy(id = Id.new(), title = "${source.title} — форк", createdAt = now, updatedAt = now,
             messages = source.messages.through(throughMessageId) { it.id }.map { it.copy(id = Id.new()) },
             nativeSessionId = "", pendingRun = null, queuedPrompts = emptyList(), acquireComputerAccess = false,
-            archived = false, archiveRestoredAt = null)
+            archived = false, archiveRestoredAt = null,
+            researchParentId = null, selectedQuestionId = null,
+            resources = chats.session(source.researchChatId)?.resources.orEmpty())
         chats.save(fork)
         _state.update { it.copy(sessions = listOf(fork) + it.sessions) }
         onOpenSession(fork.id)
@@ -316,13 +449,14 @@ class DefaultChatService(
         if (session?.id in changingHistory) return
         if (session != null && (session.id in chatJobs.value || session.pendingRun != null)) {
             val visible = attachments.chatVisible()
-            if ((text.isBlank() && visible.isEmpty()) || session.id in deletingSessions) return
+            if ((text.isBlank() && visible.isEmpty()) || session.id in deletingSessions || session.researchChatId in deletingSessions) return
             val draft = composerDraft(session.id)
             val version = draft.state.value.version
             val request = CodingRunCheckpoint(Id.new(), text.trim(), visible, responseId = Id.new())
             scope.launch {
                 pendingCreations[session.id]?.await()
                 updateChat(session.id) { it.copy(queuedPrompts = it.queuedPrompts + request) }
+                if (visible.isNotEmpty()) shareFiles(session.researchChatId, visible)
                 queuedComputerRequests.update { it + (request.messageId to session.id) }
                 draft.clearIfUnchanged(version)
                 startNextChat(session.id)
@@ -403,7 +537,7 @@ class DefaultChatService(
             _state.value.current ?: return
         }
         // Allow parallel chat sessions - each session has its own job
-        if (session.id in chatJobs.value || session.id in deletingSessions || session.id in changingHistory) return
+        if (session.id in chatJobs.value || session.id in deletingSessions || session.researchChatId in deletingSessions || session.id in changingHistory) return
 
         val request = resumed ?: CodingRunCheckpoint(Id.new(), trimmed, visible, responseId = Id.new())
         val userMessage = ChatMessage(
@@ -446,6 +580,10 @@ class DefaultChatService(
                     title = updated.title, updatedAt = updated.updatedAt, pendingRun = request, archived = false,
                     queuedPrompts = latest.queuedPrompts.filterNot { it.messageId == request.messageId },
                     messages = if (latest.messages.any { it.id == userMessage.id }) latest.messages else latest.messages + userMessage) }
+                if (resumed == null && visible.isNotEmpty()) {
+                    shareFiles(session.researchChatId, visible)
+                }
+                if (session.researchParentId != null) updateChat(session.researchChatId) { it.copy(updatedAt = updated.updatedAt) }
                 queuedComputerRequests.update { it - request.messageId }
                 if (resumed != null) runtime.reconcile(session.id)
                 // The accepted message is durable; a newer draft typed during send remains intact.
@@ -458,6 +596,8 @@ class DefaultChatService(
                 val answer = if (layoutRequest != null && layoutAgent != null) {
                     layoutAgent.answer(layoutRequest.project, session.id, userMessage.id, trimmed, historyBefore, requestProfile, visible)
                 } else {
+                    val shared = checkNotNull(chats.session(session.researchChatId)).resources
+                    val researchAttachments = (visible + shared.mapNotNull { it.attachment }).distinctBy { it.id }
                     val recorder = CodingRunRecorder()
                     var finished = false
                     var sources = emptyList<SearchHit>()
@@ -465,12 +605,17 @@ class DefaultChatService(
                     val recovering = resumed != null && session.pendingRun?.messageId == resumed.messageId
                     val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                         "результаты команд и состояние файлов; не повторяй завершённые действия.\n\n" + trimmed else trimmed
-                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess), prompt, requestProfile, visible).collect { event ->
+                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess, resources = shared), prompt, requestProfile, researchAttachments).collect { event ->
                         if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                             updateChat(session.id) { it.copy(nativeSessionId = event.sessionId) }
                         }
                         recorder.apply(event)
-                        if (event is CodingEvent.FinalText) { sources = event.sources; outputAttachments = event.attachments }
+                        val found = event.researchSources()
+                        if (found.isNotEmpty()) {
+                            sources = (sources + found).distinctBy { it.url }
+                            rememberSources(session.researchChatId, found)
+                        }
+                        if (event is CodingEvent.FinalText) { outputAttachments = event.attachments }
                         if (event is CodingEvent.Finished) finished = true
                     }
                     val response = recorder.message(Id.new(), Id.now())

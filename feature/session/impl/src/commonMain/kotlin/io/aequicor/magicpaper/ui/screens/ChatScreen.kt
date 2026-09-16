@@ -1,11 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
-import androidx.compose.runtime.CompositionLocalProvider
 import io.aequicor.magicpaper.ui.components.PaperInlineMessageParts
-import io.aequicor.magicpaper.ui.components.PaperMessageExpansion
-import io.aequicor.magicpaper.ui.components.LocalPaperMessageExpansion
 import io.aequicor.magicpaper.ui.components.rememberPaperInlineMessageParts
-import io.aequicor.magicpaper.ui.components.PaperPreserveInlineExpansion
-import io.aequicor.magicpaper.ui.components.PaperCollapseMessage
 
 
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +28,6 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,8 +45,6 @@ import io.aequicor.magicpaper.domain.PinConversation
 import io.aequicor.magicpaper.domain.RequestPinGroup
 import io.aequicor.magicpaper.ui.DefaultChatComponent
 import io.aequicor.magicpaper.ui.ChatState
-import io.aequicor.magicpaper.ui.components.PaperChatMarkdown
-import io.aequicor.magicpaper.ui.components.PaperChatPlainText
 import io.aequicor.magicpaper.ui.components.MessageAttachments
 import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.paperStickToBottom
@@ -66,44 +58,51 @@ import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
 import io.aequicor.magicpaper.designsystem.PaperActivityTone
-import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.fullCopyText
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.ui.components.MessageHistoryActions
 import io.aequicor.magicpaper.ui.components.ForkSessionAction
+import io.aequicor.magicpaper.designsystem.PaperResearchReading
+import io.aequicor.magicpaper.designsystem.paperResearchMessage
+import io.aequicor.magicpaper.designsystem.PaperContentEntrance
+import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
 
-/** Экран чата: лента сообщений и поле заклинаний. */
+/** Research workspace with shared sources and independently resumable questions. */
 @Composable
 fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
     val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
-    MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
-        onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
-        onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
-        onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
-        pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty(), footer = {
-            Composer(
-                draftSession = vm.composerDraft,
-                enabled = true,
-                busy = state.busy,
-                paused = state.current?.pendingRun != null && !state.busy,
-                onPause = vm::pause,
-                onResume = vm::resume,
-                onClarify = vm::clarify,
-                session = state.current,
-                profiles = state.availableLlmProfiles,
-                activeProfileId = state.settings.activeLlmProfileId,
-                onSend = { text, attachments -> vm.send(text, attachments) },
-                onOpenSwitcher = { vm.toggleModelSwitcher(true) },
-                defaultEngine = state.settings.defaultCodingEngine,
-                onEngineChange = vm::selectChatEngine,
-                onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
-                onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
-            )
-    })
+    ResearchWorkspace(vm, state) {
+        PaperResearchReading {
+            MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+                onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
+                onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
+                onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
+                pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty(), footer = {
+                    Composer(
+                        draftSession = vm.composerDraft,
+                        enabled = true,
+                        busy = state.busy,
+                        paused = state.current?.pendingRun != null && !state.busy,
+                        onPause = vm::pause,
+                        onResume = vm::resume,
+                        onClarify = vm::clarify,
+                        session = state.current,
+                        profiles = state.availableLlmProfiles,
+                        activeProfileId = state.settings.activeLlmProfileId,
+                        onSend = { text, attachments -> vm.send(text, attachments) },
+                        onOpenSwitcher = { vm.toggleModelSwitcher(true) },
+                        defaultEngine = state.settings.defaultCodingEngine,
+                        onEngineChange = vm::selectChatEngine,
+                        onPickAttachments = { already, onPicked -> vm.pickAttachments(already, onPicked) },
+                        onPasteAttachments = { already, onPicked -> vm.pasteAttachments(already, onPicked) },
+                    )
+                })
+        }
+    }
 }
 
 @Composable
@@ -130,17 +129,18 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     val topInset = LocalWindowToolbarHeight.current ?: 56.dp
     val laneTop = topInset + PaperTitleBarLaneGap
     val scrolled by remember(listState) { derivedStateOf { listState.canScrollBackward } }
-    var expandedMessages by rememberSaveable(session?.id) { mutableStateOf(emptyList<String>()) }
-    val expandedParts = buildMap<String, PaperInlineMessageParts> {
-        messages.filter { it.id in expandedMessages }.forEach { message ->
+    // Research is read as a full document. Parsing stays off the UI thread and the outer
+    // lazy list composes only visible fragments, including for book-length answers.
+    val messageParts = buildMap<String, PaperInlineMessageParts> {
+        messages.forEach { message ->
             androidx.compose.runtime.key(message.id) {
                 rememberPaperInlineMessageParts(message.text, message.role != ChatRole.USER)?.let { put(message.id, it) }
             }
         }
     }
-    val fragments = remember(messages, expandedParts) {
+    val fragments = remember(messages, messageParts) {
         messages.flatMap { message ->
-            val parts = expandedParts[message.id]
+            val parts = messageParts[message.id]
             if (parts == null || parts.size == 0) listOf(ChatMessageFragment(message))
             else (0 until parts.size).map { ChatMessageFragment(message, parts, it) }
         }
@@ -150,7 +150,6 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             if (fragment.index == 0) fragment.message.id to (index + if (onFork != null) 1 else 0) else null
         }.toMap()
     }
-    PaperPreserveInlineExpansion(expandedParts, scroll)
     val pinNumbers = remember(pins, indices) { requestPinNumbers(pins, indices.keys) }
     var browserMessageId by remember(scroll) { mutableStateOf<String?>(null) }
     val density = LocalDensity.current
@@ -159,9 +158,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     val transcriptBottomPadding = maxOf(bottomContentPadding, footerHeight + 4.dp)
     val controlsBottomPadding = maxOf(floatingControlsBottomPadding, footerHeight - 8.dp)
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
-        if (messages.isEmpty() && !busy) {
-            Box(Modifier.fillMaxSize().padding(top = laneTop, bottom = maxOf(footerHeight, bottomContentPadding))) { EmptyHint() }
-        } else {
+        if (messages.isNotEmpty() || busy) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
@@ -175,27 +172,21 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
                     val message = fragment.message
                     PaperChatScrollItem(scroll, fragment.key) {
-                        CompositionLocalProvider(LocalPaperMessageExpansion provides PaperMessageExpansion(message.text,
-                            { expandedMessages = expandedMessages + message.id })) {
-                            MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
-                                fragment = fragment, onCollapse = {
-                                    listState.requestScrollToItem(indices.getValue(message.id))
-                                    expandedMessages = expandedMessages - message.id
-                                }, actions = {
-                                    MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
-                                        onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
-                                        onDelete = onDelete?.let { action -> { action(message.id) } },
-                                        onFork = onFork?.let { action -> { action(message.id) } })
-                                })
-                        }
+                        MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
+                            fragment = fragment, actions = {
+                                MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
+                                    onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
+                                    onDelete = onDelete?.let { action -> { action(message.id) } },
+                                    onFork = onFork?.let { action -> { action(message.id) } })
+                            })
                     }
                 }
                 if (busy) item(key = ChatWorkingItem.STATUS, contentType = "status") {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PaperActivityIndicator(PaperActivityTone.WORKING, "Чары плетутся", running = true)
-                        PaperText("Чары плетутся…", role = PaperTextRole.CHROME,
+                        PaperActivityIndicator(PaperActivityTone.WORKING, "Исследую вопрос", running = true)
+                        PaperText("Исследую вопрос…", role = PaperTextRole.CHROME,
                             color = LocalPaperColors.current.secondaryText)
                     }
                 }
@@ -205,8 +196,10 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             browserMessageId = browserMessageId, onCloseBrowser = { browserMessageId = null })
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
             .padding(end = 8.dp, bottom = controlsBottomPadding))
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+        Column(Modifier.align(paperResearchComposerAlignment(messages.isEmpty() && !busy))
+            .widthIn(max = 860.dp).fillMaxWidth()
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
+            if (messages.isEmpty() && !busy) PaperContentEntrance(animate = true) { EmptyHint() }
             footer()
         }
     }
@@ -215,17 +208,17 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
 @Composable
 private fun EmptyHint() {
     Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        PaperText("✦", role = PaperTextRole.HEADLINE, color = LocalPaperColors.current.action)
-        Spacer(Modifier.height(8.dp))
         PaperText(
-            "Свиток пуст. Задайте вопрос — и бумага ответит.",
-            role = PaperTextRole.BODY,
-            color = LocalPaperColors.current.secondaryText,
+            "Что будем исследовать?",
+            role = PaperTextRole.HEADLINE,
         )
+        Spacer(Modifier.height(8.dp))
+        PaperText("Задайте вопрос и добавьте источники", role = PaperTextRole.CHROME,
+            color = LocalPaperColors.current.secondaryText)
     }
 }
 
@@ -239,33 +232,28 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
 
 @Composable
 private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
-    fragment: ChatMessageFragment = ChatMessageFragment(message), onCollapse: () -> Unit = {},
+    fragment: ChatMessageFragment = ChatMessageFragment(message),
     actions: @Composable () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 8.dp else 0.dp),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.Center,
     ) {
         MessagePinColumn(
             number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
             modifier = Modifier
                 .widthIn(max = 820.dp)
-                .then(if (fragment.parts != null) Modifier.fillMaxWidth() else Modifier)
-                .paperConversationMessage(isUser, fragment.first, fragment.last),
+                .fillMaxWidth()
+                .paperResearchMessage(fragment.first, fragment.last),
         ) {
+            if (fragment.first) {
+                PaperText(if (isUser) "Вопрос" else "Исследование", role = PaperTextRole.CHROME,
+                    color = LocalPaperColors.current.secondaryText)
+                Spacer(Modifier.height(12.dp))
+            }
             if (fragment.parts != null) {
                 fragment.parts.Content(fragment.index)
-                if (fragment.last) PaperCollapseMessage(onCollapse)
-            } else if (isUser) {
-                // Пользователь пишет обычный текст — без разметки.
-                PaperChatPlainText(message.text)
-                // Прикреплённые файлы: миниатюры изображений, файлы чипами.
-
-            } else {
-                // Ответ агента рендерим как markdown: заголовки, списки,
-                // блоки кода с подсветкой синтаксиса и кнопкой копирования.
-                PaperChatMarkdown(message.text)
-            }
+            } else if (message.text.isNotEmpty()) PaperText("Подготавливаю сообщение…", role = PaperTextRole.LABEL)
             if (isUser && fragment.last) MessageAttachments(message.attachments)
             if (fragment.last && message.sources.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
@@ -336,6 +324,7 @@ internal fun Composer(
     draft.error.value?.let { PaperText("Не удалось сохранить черновик", color = LocalPaperColors.current.error) }
     CodingComposer(
         state = draft, enabled = enabled, busy = busy,
+        promptPlaceholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
         controls = { ModelChip(session, profiles, activeProfileId, onOpenSwitcher) },
         onSend = { text, attachments -> accepted(onSend, text, attachments) },
         onResume = if (paused) { text, attachments -> accepted(onResume, text, attachments) } else null,

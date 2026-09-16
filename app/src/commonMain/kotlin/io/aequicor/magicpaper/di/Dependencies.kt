@@ -100,7 +100,8 @@ internal fun buildRuntime(
         }
         single { val settings = get<SettingsRepository>()
             GatewaySessionRuntime(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(),
-                layoutEditor = layoutEditor, settings = { settings.load() }) }
+                layoutEditor = layoutEditor, settings = { settings.load() },
+                readResearchPage = io.aequicor.magicpaper.data.ResearchPageReader(get())::read) }
         single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
         single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
             planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get(), taskWorkspace = taskWorkspace).also { graph ->

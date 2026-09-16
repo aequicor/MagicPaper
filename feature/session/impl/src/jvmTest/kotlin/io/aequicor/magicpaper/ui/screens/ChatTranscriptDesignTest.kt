@@ -73,11 +73,12 @@ class ChatTranscriptDesignTest {
                         assertTrue(action.boundsInRoot.bottom <= case.height, "$label below viewport: ${case.name}")
                     }
                     if (case.name == "empty") {
-                        assertTrue(scene.text("Свиток пуст. Задайте вопрос — и бумага ответит.").boundsInRoot.bottom < input.boundsInRoot.top)
+                        assertTrue(scene.text("Что будем исследовать?").boundsInRoot.bottom < input.boundsInRoot.top)
+                        assertTrue(input.boundsInRoot.center.y < case.height * .75f, "New question input belongs near the center")
                     } else {
                         val transcript = scene.nodes().first { it.config.contains(SemanticsProperties.VerticalScrollAxisRange) }
                         assertTrue(transcript.boundsInRoot.bottom > input.boundsInRoot.bottom, "Messages scroll behind composer")
-                        val last = scene.text(if (case.name == "busy") "Чары плетутся…" else "Сначала разберём задачи на понедельник.")
+                        val last = scene.text(if (case.name == "busy") "Исследую вопрос…" else "Сначала разберём задачи на понедельник.")
                         assertTrue(last.boundsInRoot.bottom <= input.boundsInRoot.top - 12, "Last content is covered by composer: ${case.name}")
                     }
                 }
