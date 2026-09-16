@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -368,6 +369,7 @@ internal fun UnifiedSidebar(
     viewingCoding: Boolean,
     modifier: Modifier = Modifier,
     recencyTracker: SessionRecencyTracker,
+    listState: LazyListState,
 ) {
     // These values are persisted across app upgrades. Separate keyed groups keep
     // newly added controls from consuming the old positional collapse-map slots.
@@ -446,6 +448,7 @@ internal fun UnifiedSidebar(
             onDelete = { item -> if (item.isCoding) vm.deleteCodingSession(item.id) else vm.deleteSession(item.id) },
             onAddSession = vm::requestCodingSessionInProject,
             modifier = Modifier.weight(1f).fillMaxWidth(),
+            state = listState,
         )
         PaperDivider()
         Column(Modifier.padding(8.dp)) {

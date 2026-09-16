@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.semantics.*
@@ -98,7 +99,10 @@ class SidebarRestorationTest {
     private fun scene(owner: VisitPresentationState, actions: SidebarActions, recency: SessionRecencyTracker) =
         ImageComposeScene(320, 720) {
             PaperTheme {
-                owner.Content { UnifiedSidebar(actions, emptyList(), CodingUi(), null, false, recencyTracker = recency) }
+                owner.Content {
+                    UnifiedSidebar(actions, emptyList(), CodingUi(), null, false,
+                        recencyTracker = recency, listState = LazyListState())
+                }
             }
         }
     private fun ImageComposeScene.draw() = repeat(6) { render(it * 16_000_000L).close() }

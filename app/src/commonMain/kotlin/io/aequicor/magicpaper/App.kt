@@ -2,6 +2,8 @@ package io.aequicor.magicpaper
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -66,6 +68,10 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
     var chatSidebarVisible by rememberSaveable { mutableStateOf(true) }
     var primarySidebarWidth by rememberSaveable { mutableStateOf(272f) }
     var chatSidebarWidth by rememberSaveable { mutableStateOf(272f) }
+    // Selection replaces the visit composition. The global lists belong to the
+    // window so a new selected session must not recreate either scroll position.
+    val primarySidebarListState = rememberLazyListState()
+    val chatSidebarListState = rememberLazyListState()
     Box(Modifier.fillMaxSize()) {
         // The animation belongs to the window, not a visit: recreating it resets
         // its clock and shader and makes the entire window flash on navigation.
@@ -73,6 +79,7 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
         key(visit.id) { presentation.Content {
             AppShellContent(runtime, root, sidebarRecencyTracker,
                 primarySidebarVisible, chatSidebarVisible, primarySidebarWidth, chatSidebarWidth,
+                primarySidebarListState, chatSidebarListState,
                 { primarySidebarVisible = it }, { chatSidebarVisible = it },
                 { primarySidebarWidth = it }, { chatSidebarWidth = it })
         } }
@@ -88,6 +95,8 @@ private fun AppShellContent(
     chatSidebarVisible: Boolean,
     primarySidebarWidth: Float,
     chatSidebarWidth: Float,
+    primarySidebarListState: LazyListState,
+    chatSidebarListState: LazyListState,
     onPrimarySidebarVisibleChange: (Boolean) -> Unit,
     onChatSidebarVisibleChange: (Boolean) -> Unit,
     onPrimarySidebarWidthChange: (Float) -> Unit,
@@ -132,7 +141,8 @@ private fun AppShellContent(
                         sidebar = { modifier ->
                             UnifiedSidebar(sidebarActions, chats.notebooks, projects.coding,
                                 if (isCoding) selectedId else chats.sessions.firstOrNull { it.id == selectedId }?.researchChatId ?: selectedId, isCoding,
-                                modifier.padding(top = topInset), sidebarRecencyTracker)
+                                modifier.padding(top = topInset), sidebarRecencyTracker,
+                                if (isChat) chatSidebarListState else primarySidebarListState)
                         }) {
                         Box(Modifier.fillMaxSize().then(if (edgeToEdge) Modifier else Modifier.padding(top = topInset))) {
                             key(stack.active.configuration.id) { stack.active.instance.Content() }

@@ -15,6 +15,30 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class UnifiedSessionFeedRenderTest {
+    @Test fun hoistedScrollSurvivesSelectedSessionCompositionReplacement() {
+        val state = LazyListState(firstVisibleItemIndex = 8)
+        val selected = mutableStateOf("child-5")
+        ImageComposeScene(320, 520) {
+            PaperTheme {
+                key(selected.value) {
+                    UnifiedSessionFeed(sidebarPreviewGroups(), selected.value, true, emptySet(), { true }, {}, {},
+                        { id, _ -> selected.value = id }, {}, {}, {}, state = state)
+                }
+            }
+        }.use { scene ->
+            scene.settle()
+            val before = state.firstVisibleItemIndex
+            assertTrue(before > 0)
+            scene.nodes().single { node ->
+                node.config.getOrNull(SemanticsActions.OnClick) != null &&
+                    node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Список сессий и навигация" } == true }
+            }.config[SemanticsActions.OnClick].action!!.invoke()
+            scene.settle()
+            assertEquals("parent", selected.value)
+            assertEquals(before, state.firstVisibleItemIndex)
+        }
+    }
+
     @Test fun sessionProjectionKeepsParentsAndPromotesChildrenOfArchivedNodes() {
         fun session(id: String, parent: String? = null, archived: Boolean = false) =
             io.aequicor.magicpaper.ui.CodingSessionUi(io.aequicor.magicpaper.domain.CodingSession(
