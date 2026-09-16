@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
+import io.aequicor.magicpaper.ui.components.LocalPaperChatScrolling
 
 /** Without content, retain the coding toolbar. Chat content opts into the contextual action lane. */
 @Composable
@@ -42,6 +43,14 @@ public fun PaperMessageActions(
                     onDelete?.let { add(PaperMenuItem("Удалить из истории и контекста", historyEnabled, destructive = true, onClick = it)) }
                 })
             }
+        }
+        return
+    }
+    val scrolling = LocalPaperChatScrolling.current
+    LaunchedEffect(scrolling) { if (scrolling) open = false }
+    if (scrolling) {
+        Column(Modifier.fillMaxWidth().padding(end = LocalPaperPlatformPolicy.current.density.controlHeight + 4.dp)) {
+            content()
         }
         return
     }

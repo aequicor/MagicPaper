@@ -61,7 +61,7 @@ public interface PaperMarkdownSlice : ASTNode {
 
 @Composable
 public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNode>, modifier: Modifier = Modifier,
-    compact: Boolean = false, listState: LazyListState? = null) {
+    compact: Boolean = false, listState: LazyListState? = null, selectable: Boolean = true) {
     val bodyStyle = if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body
     val components = remember {
         markdownComponents(
@@ -135,7 +135,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
             },
         )
     }
-    SelectionContainer {
+    val body: @Composable () -> Unit = {
         Markdown(
             state = document.state,
             modifier = modifier.fillMaxWidth(),
@@ -172,6 +172,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
             },
         )
     }
+    if (selectable) SelectionContainer { body() } else body()
 }
 
 @Composable

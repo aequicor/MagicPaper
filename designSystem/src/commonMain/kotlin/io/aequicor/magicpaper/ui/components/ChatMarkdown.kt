@@ -26,8 +26,8 @@ fun PaperChatMarkdown(text: String, modifier: Modifier = Modifier, compact: Bool
 
 @Composable
 internal fun MarkdownDocumentBody(document: ChatMarkdownDocument, nodes: List<ASTNode>, modifier: Modifier = Modifier,
-    compact: Boolean = false, lazy: Boolean = false, followEnd: Boolean = false) {
+    compact: Boolean = false, lazy: Boolean = false, followEnd: Boolean = false, selectable: Boolean = true) {
     val list = if (lazy) rememberLazyListState(initialFirstVisibleItemIndex = if (followEnd) Int.MAX_VALUE else 0) else null
     if (followEnd && list != null) paperStickToBottom(list)
-    PaperMarkdownBody(document.document, nodes, modifier, compact, list)
+    PaperMarkdownBody(document.document, nodes, modifier, compact, list, selectable)
 }

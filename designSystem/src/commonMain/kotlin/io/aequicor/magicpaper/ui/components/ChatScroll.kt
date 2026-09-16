@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,7 +35,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -51,6 +55,8 @@ class PaperChatScrollState(private val listState: LazyListState) {
     var requestPinsBounds by mutableStateOf<Rect?>(null)
 
     var navigating by mutableStateOf(false)
+        private set
+    internal var userScrolling by mutableStateOf(false)
         private set
     private var navigationId = 0
     private var disclosureItemKey: Any? = null
@@ -80,6 +86,10 @@ class PaperChatScrollState(private val listState: LazyListState) {
         interruptNavigation()
         // A real upward gesture also wins when new rows arrive in the same frame.
         if (deltaY > 0f) disclosureRevision++
+    }
+
+    internal fun updateUserScrolling(scrolling: Boolean) {
+        userScrolling = scrolling
     }
 
     suspend fun navigateToMessage(key: () -> Any, index: () -> Int?, topInset: () -> Int) {
@@ -160,15 +170,35 @@ class PaperChatScrollState(private val listState: LazyListState) {
 
 /** Wheel/drag input immediately hands control back to the reader during a pin jump. */
 fun Modifier.paperChatScrollInput(scroll: PaperChatScrollState): Modifier = composed {
-    nestedScroll(remember(scroll) {
+    val scope = rememberCoroutineScope()
+    val settle = remember(scroll) { ChatScrollSettle() }
+    DisposableEffect(scroll) {
+        onDispose {
+            settle.job?.cancel()
+            scroll.updateUserScrolling(false)
+        }
+    }
+    nestedScroll(remember(scroll, scope) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && available != Offset.Zero) scroll.onUserScroll(available.y)
+                if (source == NestedScrollSource.UserInput && available != Offset.Zero) {
+                    scroll.onUserScroll(available.y)
+                    scroll.updateUserScrolling(true)
+                    settle.job?.cancel()
+                    settle.job = scope.launch {
+                        delay(USER_SCROLL_SETTLE_MILLIS)
+                        scroll.updateUserScrolling(false)
+                    }
+                }
                 return Offset.Zero
             }
         }
     })
 }
+
+private class ChatScrollSettle { var job: Job? = null }
+
+internal val LocalPaperChatScrolling = staticCompositionLocalOf { false }
 
 private val LocalChatDisclosure = staticCompositionLocalOf<(LayoutCoordinates?) -> Unit> { {} }
 
@@ -186,7 +216,10 @@ fun PaperChatScrollItem(scroll: PaperChatScrollState, key: Any, content: @Compos
         coordinates.value = it
         scroll.onLayoutCompleted?.invoke()
     }) {
-        CompositionLocalProvider(LocalChatDisclosure provides preserve) { content() }
+        CompositionLocalProvider(
+            LocalChatDisclosure provides preserve,
+            LocalPaperChatScrolling provides scroll.userScrolling,
+        ) { content() }
     }
 }
 
@@ -354,3 +387,4 @@ private data class ListSnapshot(
 
 /** Потолок докруток за один проход: больше нужно лишь ленте из тысяч шагов. */
 private const val MAX_PIN_PASSES = 8
+private const val USER_SCROLL_SETTLE_MILLIS = 120L

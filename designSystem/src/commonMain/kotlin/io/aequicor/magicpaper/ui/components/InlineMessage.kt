@@ -26,9 +26,14 @@ class PaperInlineMessageParts internal constructor(
     @Composable
     fun Content(index: Int, style: TextStyle = LocalPaperTypography.current.body,
         color: Color = LocalPaperColors.current.text) {
-        if (document != null) MarkdownDocumentBody(document, listOf(document.blocks[index]))
-        else androidx.compose.foundation.text.selection.SelectionContainer {
+        val scrolling = LocalPaperChatScrolling.current
+        if (document != null) MarkdownDocumentBody(document, listOf(document.blocks[index]), selectable = !scrolling)
+        else if (scrolling) {
             PaperText(source.substring(ranges[index]), style = style, color = color)
+        } else {
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                PaperText(source.substring(ranges[index]), style = style, color = color)
+            }
         }
     }
 }
