@@ -181,7 +181,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                             })
                     }
                 }
-                if (busy) item(key = ChatWorkingItem.STATUS, contentType = "status") {
+                if (busy) item(key = CHAT_WORKING_STATUS_KEY, contentType = "status") {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -222,7 +222,7 @@ private fun EmptyHint() {
     }
 }
 
-private enum class ChatWorkingItem { STATUS }
+private const val CHAT_WORKING_STATUS_KEY = "chat-working-status"
 
 private data class ChatMessageFragment(val message: ChatMessage, val parts: PaperInlineMessageParts? = null, val index: Int = 0) {
     val key: String get() = if (index == 0) message.id else "${message.id}:text:$index"

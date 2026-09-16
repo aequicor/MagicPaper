@@ -1,6 +1,9 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
+import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.geometry.Offset
@@ -85,6 +88,27 @@ class ChatTranscriptDesignTest {
                 scene.capture(case.name, 800_000_000L)
             } finally { onUi { scene.close() } }
         }
+    }
+
+    @Test fun busyTranscriptUsesOnlyPlatformSaveableLazyListKeys() {
+        fun platformSaveable(value: Any?): Boolean = when (value) {
+            null, is String, is Boolean, is Number, is Char -> true
+            is MutableState<*> -> platformSaveable(value.value)
+            is List<*> -> value.all(::platformSaveable)
+            is Array<*> -> value.all(::platformSaveable)
+            is Map<*, *> -> value.all { (key, item) -> platformSaveable(key) && platformSaveable(item) }
+            else -> false
+        }
+        val registry = SaveableStateRegistry(restoredValues = null, canBeSaved = ::platformSaveable)
+        val scene = onUi { ImageComposeScene(390, 700) {
+            CompositionLocalProvider(LocalSaveableStateRegistry provides registry) {
+                BusyChatTranscriptPreview()
+            }
+        } }
+        try {
+            repeat(3) { onUi { scene.render(it * 32_000_000L).close() } }
+            onUi { registry.performSave() }
+        } finally { onUi { scene.close() } }
     }
 
     @Test fun growingComposerKeepsTailReadableAndScrollButtonAboveInput() {
