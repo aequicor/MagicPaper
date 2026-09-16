@@ -78,7 +78,7 @@ class DesktopCodingRuntime(
             appendLine("Инструменты и доступ: ${when {
                 session.researchMode -> "чтение проекта и Git; запись в исходники запрещена; проверки только через research_check в песочнице ОС; повышение прав и управление компьютером отключены"
                 session.planningMode -> "режим чтения проекта"
-                else -> "политика выбранного движка; доступ к компьютеру выдаётся отдельно для сессии"
+                else -> "политика выбранного движка; доступ к компьютеру и приложениям задаётся в настройках, действует только на явно запущенный запрос"
             }}.")
         }
         sessionContextReport(effective, environment,
@@ -107,7 +107,8 @@ class DesktopCodingRuntime(
         withContext(Dispatchers.IO) { check(directory.isDirectory || directory.mkdirs()) { "Не удалось создать рабочую папку чата" } }
         val project = CodingProject("chat-${session.id}", session.title, directory.absolutePath, session.createdAt)
         val coding = CodingSession(session.id, project.id, session.title, session.createdAt,
-            piSessionId = session.nativeSessionId, engine = checkNotNull(session.engine), modelSelection = session.modelSelection)
+            piSessionId = session.nativeSessionId, engine = checkNotNull(session.engine), modelSelection = session.modelSelection,
+            acquireComputerAccess = session.acquireComputerAccess)
         val history = if (session.nativeSessionId.isBlank()) session.messages.dropLast(1).map {
             CodingMessage(it.id, if (it.role == ChatRole.USER) CodingRole.USER else CodingRole.AGENT, it.text, createdAt = it.createdAt)
         } else emptyList()
@@ -291,11 +292,16 @@ class DesktopCodingRuntime(
         val lease = try { ownership.begin(session.id, session.runtimeGeneration, currentCoroutineContext().job) }
         catch (e: Exception) { active.remove(session.id); throw e }
         runIds[session.id] = runId
-        val grant = if (session.researchMode) null else computerUse?.grant(session.id)
+        var grant: Long? = if (session.researchMode) null else computerUse?.grant(session.id)
         try {
             val fields = mapOf("operationId" to runId, "sessionId" to session.id, "projectId" to project.id, "engine" to engine.name)
             val input = prepareSkillInput(runId, project, session, prompt) { emit(it) } ?: return@flow
             preflight(engine, profile)
+            ownership.checkCurrent(lease)
+            if (session.acquireComputerAccess && !session.researchMode && !session.planningMode &&
+                session.stageId == null && session.role != CodingSessionRole.WORKER) {
+                grant = computerUse?.begin(session.id)
+            }
             ownership.checkCurrent(lease)
             when (engine) {
                 CodingEngine.PI -> coroutineScope {
@@ -356,7 +362,7 @@ class DesktopCodingRuntime(
         finally {
             ownership.finish(lease)
             active.remove(session.id)
-            if (grant != null) computerUse?.release(session.id, grant)
+            grant?.let { computerUse?.release(session.id, it) }
         }
     }
     override fun abort(sessionId: String) { ownership.cancel(sessionId); ResearchCheckRunner.shared.abort(sessionId); runIds[sessionId]?.let { cancelledRuns.add(it) }; computerUse?.disable(sessionId); clients[sessionId]?.abortCoding(sessionId); pi.abort(sessionId) }

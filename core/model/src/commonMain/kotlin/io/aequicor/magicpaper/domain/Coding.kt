@@ -76,6 +76,8 @@ data class CodingSession(
     /** Execution authority is separate from legacy presentation roles and native thread IDs. */
     val organismId: String? = null,
     val runtimeGeneration: Long = 0,
+    /** Set only on the invocation copy for explicit input; restoration and child workers get false. */
+    @kotlinx.serialization.Transient val acquireComputerAccess: Boolean = false,
     val planningRulesSnapshot: PlanningRulesSnapshot? = null,
     val sessionKind: SessionKind? = null,
     val observedState: SessionObservedState? = null,

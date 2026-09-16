@@ -134,9 +134,12 @@ class DefaultSettingsService(
     override fun restartOnboarding() = _state.update { it.copy(showWelcome = true) }
 
     override fun saveSettings(settings: AppSettings) {
+        if (_state.value.settingsSaving) return
+        _state.update { it.copy(settingsSaving = true) }
         AppLog.info("SettingsService", "save_settings_requested")
         val draftPoint = drafts.capture(SettingsDrafts.SETTINGS)
         scope.launch {
+            try {
             val applied = try {
                 applyRuntimeSettings(settings)
             } catch (cancelled: CancellationException) {
@@ -153,6 +156,7 @@ class DefaultSettingsService(
                 ?: "Настройки сохранены."
             val cleared = clearSavedDraft(draftPoint)
             _state.update { it.copy(settings = settings, notice = if (cleared) notice else it.notice) }
+            } finally { _state.update { it.copy(settingsSaving = false) } }
         }
     }
 
@@ -535,7 +539,8 @@ class DefaultSettingsService(
             val s = _state.value
             val bundle = ProfileBundle(
                 exportedAt = Id.now(),
-                settings = s.settings,
+                settings = s.settings.copy(computerAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF,
+                    applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF),
                 plugins = settingsRepo.pluginStates(),
                 sessions = chats.sessions(),
                 skills = skills?.all().orEmpty(),
@@ -552,18 +557,26 @@ class DefaultSettingsService(
     }
 
     override fun importProfile() {
+        if (_state.value.settingsSaving) return
+        _state.update { it.copy(settingsSaving = true) }
         scope.launch {
+            try {
             val raw = bridge.import()
             if (raw == null) {
                 _state.update { it.copy(notice = "Импорт отменён или недоступен на этой платформе.") }
                 return@launch
             }
             val bundle = runCatching { json.decodeFromString(ProfileBundle.serializer(), raw) }.getOrElse {
-                _state.update { st -> st.copy(notice = "Файл профиля повреждён.") }
+                logPersistenceFailure("SettingsService", "import_decode_failed", it)
+                _state.update { st -> st.copy(notice = "Файл профиля повреждён. Выберите другой файл.") }
                 return@launch
             }
+            // Revoke before importing any other data, including a suspended/failed usage write.
+            // Imported data cannot authorize this machine or retain an active lease.
+            val importedSettings = bundle.settings.copy(computerAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF,
+                applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF)
+            applyRuntimeSettings(importedSettings).getOrThrow()
             usage.replace(bundle.usage)
-            settingsRepo.save(bundle.settings)
             settingsRepo.savePluginStates(bundle.plugins)
             bundle.sessions.forEach { chats.save(it) }
             bundle.skills.forEach { skill -> skills?.save(skill) }
@@ -572,6 +585,11 @@ class DefaultSettingsService(
             start()
             onDataChanged()
             _state.update { it.copy(notice = "Профиль импортирован.") }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                logPersistenceFailure("SettingsService", "import_failed", error)
+                _state.update { it.copy(notice = "Не удалось завершить импорт. Часть данных могла сохраниться. Проверьте настройки и повторите импорт.") }
+            } finally { _state.update { it.copy(settingsSaving = false) } }
         }
     }
 

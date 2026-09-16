@@ -12,6 +12,7 @@ kotlin {
             api(libs.compose.ui)
             api(libs.decompose)
             implementation(libs.compose.foundation)
+            implementation(libs.compose.uiToolingPreview)
             implementation(project(":designSystem"))
             implementation(project(":core:platform"))
             implementation(project(":core:storage:api"))

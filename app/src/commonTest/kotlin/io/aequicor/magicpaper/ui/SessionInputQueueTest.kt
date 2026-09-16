@@ -43,12 +43,73 @@ class SessionInputQueueTest {
             draft.text.value = "New typing"
             backend.permits.send(Unit); runCurrent()
             assertEquals(listOf("First", "Second"), backend.turns.map { it.second })
+            assertTrue(backend.turns.all { it.first.acquireComputerAccess }, "Only current-lifetime user requests carry invocation authority")
             assertEquals("native", backend.turns.last().first.piSessionId)
             assertEquals("New typing", draft.text.value)
             assertTrue(repo.sessions("p").single().queuedPrompts.isEmpty())
             backend.permits.send(Unit); runCurrent()
             assertNull(repo.sessions("p").single().pendingRun)
         } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun restoredQueueCannotAcquireAutomationEvenWhenSettingsPermitIt() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture(); f.seed()
+        f.settings.save(f.settings.load().copy(computerAccess = ComputerAccess.CONTROL, applicationAccess = ComputerAccess.CONTROL))
+        val repo = JsonCodingProjectRepository(f.kv, f.json)
+        repo.save(CodingProject("p", "Project", "/fixture", 1))
+        repo.saveSession(CodingSession("s", "p", "Session", 1, engine = CodingEngine.PI,
+            queuedPrompts = listOf(CodingRunCheckpoint("queued", "Saved before crash"))))
+        val backend = Backend()
+        val service = f.prepareCoding(backend, repo)
+        try {
+            runCurrent()
+            assertEquals("Saved before crash", backend.turns.single().second)
+            assertFalse(backend.turns.single().first.acquireComputerAccess)
+            backend.permits.send(Unit); runCurrent()
+            service.sendCodingPromptTo("s", "Explicit new request"); runCurrent()
+            assertTrue(backend.turns.last().first.acquireComputerAccess)
+            assertFalse(repo.sessions("p").single().acquireComputerAccess)
+            backend.permits.send(Unit); runCurrent()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun deletingSessionTreeOrProjectForgetsQueuedAutomationAuthority() {
+        for (deletion in listOf("session", "sessions", "project")) runTest {
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            val f = ModelSettingsFixture(); f.seed()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            val project = CodingProject("p", "Project", "/fixture", 1)
+            repo.save(project)
+            repo.saveSession(CodingSession("s", "p", "Session", 1, engine = CodingEngine.PI))
+            val backend = Backend()
+            val service = f.prepareCoding(backend, repo)
+            try {
+                service.sendCodingPromptTo("s", "First"); runCurrent()
+                service.sendCodingPromptTo("s", "Later"); runCurrent()
+                val saved = repo.sessions("p").single().copy(pendingRun = null)
+                when (deletion) {
+                    "session" -> service.deleteCodingSession("s")
+                    "sessions" -> service.deleteAllCodingSessions("p")
+                    else -> service.deleteCodingProject("p")
+                }
+                runCurrent()
+                assertEquals(1, backend.turns.size, deletion)
+                assertTrue(repo.sessions("p").isEmpty(), deletion)
+                repo.save(project)
+                repo.saveSession(saved)
+                service.reload()
+                service.selectCodingProject("p"); runCurrent()
+                service.sendCodingPromptTo("s", "Explicit new request"); runCurrent()
+                assertEquals(2, backend.turns.size, deletion)
+                assertEquals("Later", backend.turns.last().second, deletion)
+                assertFalse(backend.turns.last().first.acquireComputerAccess, deletion)
+                backend.permits.send(Unit); runCurrent()
+                assertEquals("Explicit new request", backend.turns.last().second, deletion)
+                assertTrue(backend.turns.last().first.acquireComputerAccess, deletion)
+                backend.permits.send(Unit); runCurrent()
+            } finally { service.close(); Dispatchers.resetMain() }
+        }
     }
 
     @Test fun clarificationWaitsForCleanupAndKeepsQueuedWorkSeparate() = runTest {

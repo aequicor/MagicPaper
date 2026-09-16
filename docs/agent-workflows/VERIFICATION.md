@@ -19,6 +19,7 @@
 | Journal / deep links / dialogs | `./gradlew :app:jvmTest --tests '*RootComponentTest' --tests '*RootDialogLifecycleTest'`; browser bridge и host tests при изменении адаптера |
 | Черновики, миграции, секреты | `./gradlew :core:storage:impl:jvmTest :feature:settings:impl:jvmTest :core:platform:jvmTest`; проверить reopen, ошибку записи, отмену, delete/reset, stale update |
 | Native wire resources | `./gradlew :feature:session:impl:nodeProtocolTest` |
+| Computer/application-use | `:feature:session:impl:jvmTest --tests '*ApplicationUseTest' --tests '*NativeApplicationDesktopTest' --tests '*ComputerUse*Test'`; политики/очереди — `:app:jvmTest --tests '*AutomationPolicyTest' --tests '*SessionInputQueueTest' --tests '*ChatInputQueueTest'`. Реальное окно отдельно: [opt-in macOS-сценарий](../COMPUTER-USE.md#проверка), Windows требует целевой ОС |
 | Desktop host | `./gradlew :desktopApp:compileKotlin :desktopApp:test` |
 | Android host | `./gradlew :androidApp:assembleDebug :app:testAndroidHostTest :androidApp:testDebugUnitTest` |
 | JS / Wasm common API или зависимости | `./gradlew :webApp:compileKotlinJs :webApp:compileKotlinWasmJs :webApp:compileDevelopmentExecutableKotlinJs :webApp:compileDevelopmentExecutableKotlinWasmJs` |

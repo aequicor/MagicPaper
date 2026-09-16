@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.computer
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
 import java.awt.Desktop
 import java.net.URI
 import java.util.UUID
@@ -17,16 +18,44 @@ import kotlinx.serialization.json.*
 
 class DesktopComputerUse internal constructor(
     private val desktop: ComputerDesktop,
+    private val applicationFactory: () -> ApplicationDesktop = { NativeApplicationDesktop() },
     private val clock: () -> Long = System::nanoTime,
 ) : ComputerUse {
     constructor() : this(AwtComputerDesktop())
     private val mutableState = MutableStateFlow(ComputerUseState())
     override val state = mutableState.asStateFlow()
     override val supported get() = desktop.supported
+    override val applicationSupported get() = NativeApplicationDesktop.supported
     private val lock = Any()
     private val operations = Mutex()
     private var generation = 0L
     private var frame: Frame? = null
+    private var application: ApplicationUse? = null
+    private var policy = ComputerAccess.OFF to ComputerAccess.OFF
+
+    override fun configure(computer: ComputerAccess, application: ComputerAccess) = synchronized(lock) {
+        val next = computer to application
+        if (policy != next) {
+            policy = next
+            disable()
+            AppLog.info("computer", "policy.changed", mapOf("computer" to computer.name, "application" to application.name))
+        } else if (computer == ComputerAccess.OFF && application == ComputerAccess.OFF && state.value.sessionId != null) {
+            // Import/loading OFF must also revoke a legacy, manually issued session grant.
+            disable()
+        }
+    }
+
+    /** Called only after runtime ownership/preflight, never during restore or settings loading. */
+    internal fun begin(sessionId: String): Long? = synchronized(lock) {
+        grant(sessionId)?.let { return it }
+        if (state.value.sessionId != null || policy == ComputerAccess.OFF to ComputerAccess.OFF) return null
+        generation++
+        frame = null
+        mutableState.value = ComputerUseState(sessionId, policy.first, applicationAccess = policy.second,
+            detail = "Доступ по настройкам · до завершения запроса или остановки")
+        AppLog.info("computer", "lease.started", mapOf("sessionId" to sessionId, "generation" to generation.toString()))
+        generation
+    }
     private data class Frame(val id: String, val display: ComputerDisplay, val width: Int, val height: Int, val created: Long)
 
     override suspend fun enable(sessionId: String, access: ComputerAccess) {
@@ -35,6 +64,8 @@ class DesktopComputerUse internal constructor(
             if (state.value.sessionId != null && state.value.sessionId != sessionId) return
             generation++
             frame = null
+            application?.close()
+            application = null
             mutableState.value = ComputerUseState(sessionId = sessionId, busy = true)
             generation
         }
@@ -48,7 +79,7 @@ class DesktopComputerUse internal constructor(
             throw error
         } catch (error: Exception) {
             synchronized(lock) {
-                if (generation == epoch) mutableState.value = ComputerUseState(detail = error.message ?: "Нет доступа к экрану")
+                if (generation == epoch) mutableState.value = ComputerUseState(detail = error.message ?: "Нет доступа к экрану", error = true)
             }
         }
     }
@@ -57,24 +88,66 @@ class DesktopComputerUse internal constructor(
         if (sessionId == null || state.value.sessionId == sessionId) {
             generation++
             frame = null
+            application?.close()
+            application = null
             mutableState.value = ComputerUseState()
         }
         Unit
     }
 
     internal fun grant(sessionId: String): Long? = synchronized(lock) {
-        generation.takeIf { state.value.sessionId == sessionId && state.value.access != ComputerAccess.OFF }
+        generation.takeIf { state.value.sessionId == sessionId &&
+            (state.value.access != ComputerAccess.OFF || state.value.applicationAccess != ComputerAccess.OFF) }
     }
 
     internal fun release(sessionId: String, epoch: Long) = synchronized(lock) {
         if (epoch == generation) disable(sessionId)
     }
 
-    private fun checkActive(sessionId: String, epoch: Long, control: Boolean = false) = synchronized(lock) {
-        check(epoch == generation && state.value.sessionId == sessionId && state.value.access != ComputerAccess.OFF) {
-            "Доступ к экрану отключён. Пользователь должен включить его в сессии MagicPaper."
+    private fun checkActive(sessionId: String, epoch: Long, control: Boolean = false, applicationTool: Boolean = false) = synchronized(lock) {
+        val access = if (applicationTool) state.value.applicationAccess else state.value.access
+        check(epoch == generation && state.value.sessionId == sessionId && access != ComputerAccess.OFF) {
+            "Доступ отключён. Проверьте настройки MagicPaper → Движки и отправьте новый запрос."
         }
-        check(!control || state.value.access == ComputerAccess.CONTROL) { "Разрешён только просмотр экрана. Управление выключено." }
+        check(!control || access == ComputerAccess.CONTROL) { "Разрешён только просмотр. Управление выключено." }
+    }
+
+    internal suspend fun executeApplication(sessionId: String, epoch: Long, args: JsonObject): JsonObject = withContext(Dispatchers.IO) {
+        operations.withLock {
+            val context = currentCoroutineContext()
+            val action = (args["action"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            val control = action !in listOf("windows", "inspect", "screenshot")
+            val fields = mapOf("sessionId" to sessionId, "generation" to epoch.toString(),
+                "operationId" to UUID.randomUUID().toString(), "action" to (action?.takeIf { it in ApplicationTool.actions } ?: "invalid"))
+            try {
+                val owner = synchronized(lock) {
+                    checkActive(sessionId, epoch, control, applicationTool = true)
+                    mutableState.value = state.value.copy(busy = true, detail = "Приложение в фоне", error = false)
+                    application ?: ApplicationUse(applicationFactory(), clock).also { application = it }
+                }
+                AppLog.info("computer", "application.started", fields)
+                val result = owner.execute(args, control) { context.ensureActive(); checkActive(sessionId, epoch, control, applicationTool = true) }
+                synchronized(lock) {
+                    checkActive(sessionId, epoch, applicationTool = true)
+                    mutableState.value = state.value.copy(detail = "Приложение · действие завершено", error = false)
+                }
+                AppLog.info("computer", "application.completed", fields)
+                result
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                // Cancelling a native call invalidates its retained references; a later request uses a fresh host.
+                synchronized(lock) { if (generation == epoch) { application?.close(); application = null } }
+                AppLog.info("computer", "application.cancelled", fields)
+                throw error
+            } catch (error: Exception) {
+                val message = if (error is IllegalArgumentException || error is IllegalStateException) error.message.orEmpty()
+                    else "Не удалось выполнить действие. Проверьте окно через inspect перед повтором."
+                AppLog.error("computer", "application.failed", fields + ("causeType" to error.javaClass.simpleName))
+                synchronized(lock) { if (generation == epoch) mutableState.value = state.value.copy(detail = message, error = true) }
+                toolText(message, error = true)
+            } finally {
+                synchronized(lock) { if (generation == epoch) mutableState.value = state.value.copy(busy = false) }
+            }
+        }
     }
 
     override suspend fun preview(sessionId: String) {
@@ -83,8 +156,15 @@ class DesktopComputerUse internal constructor(
     }
 
     override fun openSystemSettings() {
-        if (System.getProperty("os.name").startsWith("Mac")) {
-            runCatching { Desktop.getDesktop().browse(URI("x-apple.systempreferences:com.apple.preference.security")) }
+        val uri = when {
+            System.getProperty("os.name").startsWith("Mac") -> "x-apple.systempreferences:com.apple.preference.security"
+            System.getProperty("os.name").startsWith("Windows") -> "ms-settings:privacy"
+            else -> return
+        }
+        try { Desktop.getDesktop().browse(URI(uri)) }
+        catch (error: Exception) {
+            AppLog.error("computer", "system-settings.failed", fields = mapOf("causeType" to error.javaClass.simpleName))
+            synchronized(lock) { mutableState.value = state.value.copy(detail = "Не удалось открыть системные настройки. Откройте разрешения конфиденциальности вручную.", error = true) }
         }
     }
 
@@ -110,7 +190,7 @@ class DesktopComputerUse internal constructor(
                 } }).toString())
                 synchronized(lock) {
                     checkActive(sessionId, epoch, isControl)
-                    mutableState.value = state.value.copy(busy = true, detail = ComputerTool.label(action))
+                    mutableState.value = state.value.copy(busy = true, detail = ComputerTool.label(action), error = false)
                 }
                 val selected = if (isControl) {
                     val previous = synchronized(lock) { frame } ?: error("Сначала вызовите screenshot и изучите изображение.")
@@ -140,7 +220,7 @@ class DesktopComputerUse internal constructor(
                 synchronized(lock) {
                     checkActive(sessionId, epoch)
                     frame = captured
-                    mutableState.value = state.value.copy(preview = attachment, detail = "${ComputerTool.label(action)} · ${shot.width} × ${shot.height}")
+                    mutableState.value = state.value.copy(preview = attachment, detail = "${ComputerTool.label(action)} · ${shot.width} × ${shot.height}", error = false)
                 }
                 buildJsonObject {
                     put("content", buildJsonArray {
@@ -157,7 +237,7 @@ class DesktopComputerUse internal constructor(
                 throw error
             } catch (error: Exception) {
                 val message = error.message ?: "Не удалось выполнить действие с экраном"
-                synchronized(lock) { if (generation == epoch) mutableState.value = state.value.copy(detail = message) }
+                synchronized(lock) { if (generation == epoch) mutableState.value = state.value.copy(detail = message, error = true) }
                 toolText(message, error = true)
             } finally {
                 synchronized(lock) { if (generation == epoch) mutableState.value = state.value.copy(busy = false) }
@@ -206,7 +286,7 @@ internal fun toolText(text: String, error: Boolean = false) = buildJsonObject {
 internal object ComputerTool {
     val actions = listOf("displays", "screenshot", "click", "double_click", "move", "drag", "scroll", "type", "key", "wait")
     val fields = setOf("action", "screenshot_id", "display_id", "x", "y", "to_x", "to_y", "button", "amount", "text", "keys", "duration_ms")
-    const val instructions = "Use the computer tool for visible desktop tasks only when the user enables access in MagicPaper. " +
+    const val instructions = "Use the computer tool for visible desktop tasks only when the user enables computer access in MagicPaper settings. " +
         "First take a screenshot and inspect it. Input requires the screenshot_id from the most recent image (expires after 30 seconds). " +
         "Coordinates are pixels of that image, not native display pixels. Every input returns a fresh screenshot. " +
         "Use one action at a time; verify its result. Never repeat an input after a timeout: take a screenshot first. " +

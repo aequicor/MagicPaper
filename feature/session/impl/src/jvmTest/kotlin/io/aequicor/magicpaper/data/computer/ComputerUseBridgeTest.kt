@@ -56,7 +56,7 @@ class ComputerUseBridgeTest {
             assertNotNull(init["capabilities"]!!.jsonObject["tools"])
             assertEquals(202, post(bridge, """{"jsonrpc":"2.0","method":"notifications/initialized"}""").statusCode())
             val tools = post(bridge, rpc(2, "tools/list")).result()["tools"]!!.jsonArray
-            assertEquals("computer", tools.single().jsonObject["name"]!!.jsonPrimitive.content)
+            assertEquals(setOf("computer", "application"), tools.map { it.jsonObject.requiredString("name") }.toSet())
             val result = post(bridge, tool(3, request("screenshot")))
             assertEquals(200, result.statusCode())
             assertEquals("no-store", result.headers().firstValue("cache-control").orElse(""))
@@ -101,19 +101,42 @@ class ComputerUseBridgeTest {
         }
     }
 
+    @Test fun applicationCallsUseSameAuthenticatedAntiReplayAndRevocationBoundary() = runBlocking {
+        val native = FakeApplicationDesktop()
+        val computer = DesktopComputerUse(FakeComputerDesktop(), applicationFactory = { native })
+        computer.configure(ComputerAccess.OFF, ComputerAccess.CONTROL)
+        computer.begin("a")
+        fun app(id: Int, args: JsonObject) = rpc(id, "tools/call", buildJsonObject { put("name", "application"); put("arguments", args) })
+        computer.bridge("a")!!.use { bridge ->
+            assertTrue(post(bridge, tool(1, request("screenshot"))).result().failed())
+            val snapshot = post(bridge, app(2, request("inspect") { put("window_id", "w") })).result().snapshotId()
+            val invoke = app(3, request("invoke") { put("window_id", "w"); put("snapshot_id", snapshot); put("element_id", "button") })
+            assertFalse(post(bridge, invoke).result().failed())
+            assertNotNull(Json.parseToJsonElement(post(bridge, invoke).body()).jsonObject["error"])
+            assertEquals(1, native.calls.count { it.requiredString("action") == "invoke" })
+            computer.configure(ComputerAccess.OFF, ComputerAccess.OFF)
+            assertEquals(403, post(bridge, app(4, request("windows"))).statusCode())
+            assertTrue(native.closed)
+        }
+    }
+
     /** Optional local Node smoke test: executes the actual generated extension against the bridge. */
     @Test fun piExtensionReturnsVisionContentAndThrowsForDeniedInput(): Unit = runBlocking {
         val node = System.getenv("MAGICPAPER_COMPUTER_NODE") ?: return@runBlocking
-        val computer = DesktopComputerUse(FakeComputerDesktop())
-        computer.enable("a", ComputerAccess.SCREEN)
+        val native = FakeApplicationDesktop()
+        val computer = DesktopComputerUse(FakeComputerDesktop(), applicationFactory = { native })
+        computer.configure(ComputerAccess.SCREEN, ComputerAccess.CONTROL)
+        computer.begin("a")
         val dir = Files.createTempDirectory("computer-extension-").toFile()
         try {
             dir.resolve("computer.mjs").writeText(PiComputerExtension.source)
             val test = dir.resolve("check.mjs").apply { writeText("""
                 import register from './computer.mjs';
                 import assert from 'node:assert/strict';
-                let tool;
-                register({ registerTool(t) { tool = t; } });
+                const tools = {};
+                register({ registerTool(t) { tools[t.name] = t; } });
+                let tool = tools.computer;
+                assert.deepEqual(Object.keys(tools).sort(), ['application', 'computer']);
                 assert.equal(tool.name, 'computer');
                 assert.equal(tool.parameters.type, 'object');
                 const shot = await tool.execute('one', { action: 'screenshot' });
@@ -122,9 +145,16 @@ class ComputerUseBridgeTest {
                 const id = JSON.parse(shot.content[0].text).screenshot_id;
                 await assert.rejects(() => tool.execute('two', { action: 'click', screenshot_id: id, x: 1, y: 1 }), /только просмотр/);
                 // A continuation loads a new extension, with its own distinct RPC ids.
-                register({ registerTool(t) { tool = t; } });
+                register({ registerTool(t) { tools[t.name] = t; } });
+                tool = tools.computer;
                 assert.equal((await tool.execute('three', { action: 'screenshot' })).content[1].type, 'image');
-                console.log('Pi extension: image delivery, denial, and continuation passed');
+                const inspected = await tools.application.execute('four', { action: 'inspect', window_id: 'w' });
+                const snapshot = JSON.parse(inspected.content[0].text).snapshot_id;
+                await tools.application.execute('five', { action: 'invoke', window_id: 'w', snapshot_id: snapshot, element_id: 'button' });
+                await assert.rejects(() => tools.application.execute('six', { action: 'invoke', window_id: 'w', snapshot_id: snapshot, element_id: 'button' }));
+                const applicationImage = await tools.application.execute('seven', { action: 'screenshot', window_id: 'w' });
+                assert.equal(applicationImage.content[1].type, 'image');
+                console.log('Pi extension: both tools, images, denial, replay, and continuation passed');
             """.trimIndent()) }
             computer.bridge("a")!!.use { bridge ->
                 val output = dir.resolve("output.txt")

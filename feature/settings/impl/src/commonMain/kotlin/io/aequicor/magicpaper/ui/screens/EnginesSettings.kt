@@ -69,6 +69,10 @@ fun EnginesSettings(vm: DefaultSettingsComponent, state: SettingsState) {
         PaperText("Движок новых сессий", role = PaperTextRole.TITLE)
         EngineChoices(state.settings.defaultCodingEngine) { vm.saveSettings(state.settings.copy(defaultCodingEngine = it)) }
         PaperText("Этот вариант предлагается при создании сессии. Движки существующих сессий сохраняются.", role = PaperTextRole.LABEL)
+        AutomationSettings(state.settings, computerEnabled = coding.coding.computerSupported,
+            applicationEnabled = coding.coding.applicationSupported, saving = state.settingsSaving, onChange = vm::saveSettings)
+        PaperButton("Системные разрешения", vm::openComputerSystemSettings, kind = PaperButtonKind.QUIET,
+            enabled = coding.coding.computerSupported || coding.coding.applicationSupported)
         CodingEngine.entries.forEach { engine ->
             EngineStatusCard(engine, coding.coding.engines[engine] ?: RuntimeStatus(if (state.openAiSubscription.available) RuntimePhase.UNKNOWN else RuntimePhase.UNSUPPORTED), engine in coding.coding.preparingEngines,
                 coding.coding.sessions.none { it.running } && coding.coding.preparingEngines.isEmpty(), { vm.prepareCodingRuntime(engine) }, { vm.uninstallCodingRuntime(engine) })

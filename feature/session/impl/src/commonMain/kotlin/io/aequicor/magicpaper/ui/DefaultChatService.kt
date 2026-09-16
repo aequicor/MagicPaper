@@ -170,6 +170,7 @@ class DefaultChatService(
             try {
             chatJobs.value[id]?.cancelAndJoin()
             pendingCreations[id]?.await()
+            queuedComputerRequests.update { requests -> requests.filterValues { it != id } }
             chats.session(id)?.let { runtime.deleteChatSession(it) }
             chats.delete(id)
             requestPins?.remove(PinConversation(id))
@@ -191,6 +192,8 @@ class DefaultChatService(
 
     // Per-session jobs for regular chat (not coding sessions, which use codingJobs)
     private val chatJobs = MutableStateFlow<Map<String, Job>>(emptyMap())
+    // requestId -> sessionId, only for requests accepted in this application lifetime.
+    private val queuedComputerRequests = MutableStateFlow<Map<String, String>>(emptyMap())
 
     private fun removeChatJob(sessionId: String): Job? = chatJobs.getAndUpdate { it - sessionId }[sessionId]
 
@@ -208,6 +211,7 @@ class DefaultChatService(
             scope.launch {
                 pendingCreations[session.id]?.await()
                 updateChat(session.id) { it.copy(queuedPrompts = it.queuedPrompts + request) }
+                queuedComputerRequests.update { it + (request.messageId to session.id) }
                 draft.clearIfUnchanged(version)
                 startNextChat(session.id)
             }
@@ -219,7 +223,10 @@ class DefaultChatService(
         if (sessionId in chatJobs.value || sessionId in deletingSessions || sessionId in controllingSessions) return
         val session = _state.value.sessions.firstOrNull { it.id == sessionId } ?: return
         if (session.pendingRun != null) return
-        session.queuedPrompts.firstOrNull()?.let { startChat(it.prompt, it.attachments, sessionId, it, clearDraft = false) }
+        session.queuedPrompts.firstOrNull()?.let { request ->
+            startChat(request.prompt, request.attachments, sessionId, request, clearDraft = false,
+                acquireComputerAccess = queuedComputerRequests.value[request.messageId] == sessionId)
+        }
     }
 
     override fun pause() {
@@ -269,7 +276,7 @@ class DefaultChatService(
     }
 
     private fun startChat(text: String, attachments: List<Attachment>, targetId: String? = null,
-        resumed: CodingRunCheckpoint? = null, clearDraft: Boolean = true) {
+        resumed: CodingRunCheckpoint? = null, clearDraft: Boolean = true, acquireComputerAccess: Boolean = true) {
 
         val trimmed = text.trim()
         val visible = attachments.chatVisible()
@@ -325,6 +332,7 @@ class DefaultChatService(
                     title = updated.title, updatedAt = updated.updatedAt, pendingRun = request,
                     queuedPrompts = latest.queuedPrompts.filterNot { it.messageId == request.messageId },
                     messages = if (latest.messages.any { it.id == userMessage.id }) latest.messages else latest.messages + userMessage) }
+                queuedComputerRequests.update { it - request.messageId }
                 if (resumed != null) runtime.reconcile(session.id)
                 // The accepted message is durable; a newer draft typed during send remains intact.
                 try { if (clearDraft) withContext(Dispatchers.Main.immediate) { composer.clearIfUnchanged(draftVersion) } }
@@ -343,7 +351,7 @@ class DefaultChatService(
                     val recovering = resumed != null && session.pendingRun?.messageId == resumed.messageId
                     val prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                         "результаты команд и состояние файлов; не повторяй завершённые действия.\n\n" + trimmed else trimmed
-                    runtime.runChat(accepted, prompt, requestProfile, visible).collect { event ->
+                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess), prompt, requestProfile, visible).collect { event ->
                         if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                             updateChat(session.id) { it.copy(nativeSessionId = event.sessionId) }
                         }
@@ -432,6 +440,7 @@ class DefaultChatService(
 
     /** Drain this application's writers while retaining its reusable supervisor. */
     suspend fun prepareForReset() {
+        queuedComputerRequests.value = emptyMap()
         deletingSessions.addAll(_state.value.sessions.map { it.id })
         val caller = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
         val children = scope.coroutineContext[kotlinx.coroutines.Job]?.children?.filter { it != caller }?.toList().orEmpty()

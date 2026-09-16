@@ -13,17 +13,22 @@ import kotlin.test.*
 
 /** Real installed pi, generated extension, and a local fake vision model. */
 class ComputerUsePiIntegrationTest {
-    @Test fun installedPiCarriesScreenshotBackToVisionModel(): Unit = runBlocking {
-        val node = System.getenv("MAGICPAPER_COMPUTER_NODE") ?: return@runBlocking
-        val cli = System.getenv("MAGICPAPER_COMPUTER_PI") ?: return@runBlocking
+    @Test fun installedPiCarriesScreenshotBackToVisionModel() = screenshotRoundTrip("computer")
+    @Test fun installedPiCarriesBackgroundWindowBackToVisionModel() = screenshotRoundTrip("application")
+
+    private fun screenshotRoundTrip(tool: String): Unit = runBlocking {
+        val node = System.getenv("MAGICPAPER_COMPUTER_NODE")
+        val cli = System.getenv("MAGICPAPER_COMPUTER_PI")
+        org.junit.Assume.assumeTrue("Installed engine smoke test is opt-in", node != null && cli != null)
+        val arguments = if (tool == "application") """{\"action\":\"screenshot\",\"window_id\":\"w\"}""" else """{\"action\":\"screenshot\"}"""
         val dir = Files.createTempDirectory("computer-pi-").toFile()
         val requests = CopyOnWriteArrayList<JsonObject>()
         val model = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         model.createContext("/") { exchange ->
             requests += Json.parseToJsonElement(exchange.requestBody.readBytes().decodeToString()).jsonObject
             val chunks = if (requests.size == 1) listOf(
-                """{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"shot","type":"function","function":{"name":"computer","arguments":""}}]}}]}""",
-                """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"action\":\"screenshot\"}"}}]}}]}""",
+                """{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"shot","type":"function","function":{"name":"$tool","arguments":""}}]}}]}""",
+                """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"$arguments"}}]}}]}""",
                 """{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}""",
             ) else listOf(
                 """{"choices":[{"index":0,"delta":{"role":"assistant","content":"SCREEN_RECEIVED"}}]}""",
@@ -35,8 +40,10 @@ class ComputerUsePiIntegrationTest {
             exchange.responseBody.use { it.write(bytes) }
         }
         model.start()
-        val computer = DesktopComputerUse(FakeComputerDesktop())
-        computer.enable("a", ComputerAccess.SCREEN)
+        val desktop = FakeComputerDesktop()
+        val computer = DesktopComputerUse(desktop, applicationFactory = { FakeApplicationDesktop() })
+        if (tool == "computer") computer.enable("a", ComputerAccess.SCREEN)
+        else { computer.configure(ComputerAccess.OFF, ComputerAccess.SCREEN); computer.begin("a") }
         try {
             val home = dir.resolve("home").apply { mkdirs() }
             home.resolve("models.json").writeText(PiModelsConfig.json(LlmProfile("test", "Local test",
@@ -53,6 +60,7 @@ class ComputerUsePiIntegrationTest {
                     environment()["PI_OFFLINE"] = "1"
                     environment()["PI_SKIP_VERSION_CHECK"] = "1"
                     environment()["PI_TELEMETRY"] = "0"
+                    environment()[PiModelsConfig.API_KEY_ENV] = "local-test"
                     environment()["MAGICPAPER_COMPUTER_URL"] = bridge.url
                     environment()["MAGICPAPER_COMPUTER_TOKEN"] = bridge.token
                 }.redirectErrorStream(true).redirectOutput(output).start()
@@ -62,15 +70,16 @@ class ComputerUsePiIntegrationTest {
                     assertEquals(0, process.exitValue(), output.readText().take(4000))
                     assertEquals(2, requests.size, output.readText().take(4000))
                     val definitions = requests.first()["tools"]!!.jsonArray
-                    assertTrue(definitions.any { it.jsonObject["function"]?.jsonObject?.get("name") == JsonPrimitive("computer") })
+                    assertTrue(definitions.any { it.jsonObject["function"]?.jsonObject?.get("name") == JsonPrimitive(tool) })
                     assertContains(requests.last()["messages"].toString(), "data:image/png;base64,")
                     assertContains(output.readText(), "SCREEN_RECEIVED")
-                    assertNotNull(computer.state.value.preview)
+                    if (tool == "computer") assertNotNull(computer.state.value.preview)
+                    else { assertNull(computer.state.value.preview); assertEquals(0, desktop.captures) }
                 } finally {
                     process.destroy()
                     if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
                 }
             }
-        } finally { model.stop(0); dir.deleteRecursively() }
+        } finally { computer.disable(); model.stop(0); dir.deleteRecursively() }
     }
 }

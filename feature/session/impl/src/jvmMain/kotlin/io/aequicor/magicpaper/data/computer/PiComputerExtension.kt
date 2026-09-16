@@ -19,10 +19,11 @@ internal object PiComputerExtension {
             'MCP-Protocol-Version': '2025-06-18',
             'Authorization': 'Bearer ' + token
           };
-          pi.registerTool({
-            name: 'computer', label: 'Экран и управление',
-            description: ${JsonPrimitive(ComputerTool.instructions)},
-            parameters: ${ComputerTool.schema},
+          for (const tool of [
+            { name: 'computer', label: 'Экран и управление', description: ${JsonPrimitive(ComputerTool.instructions)}, parameters: ${ComputerTool.schema} },
+            { name: 'application', label: 'Приложение в фоне', description: ${JsonPrimitive(ApplicationTool.instructions)}, parameters: ${ApplicationTool.schema} }
+          ]) pi.registerTool({
+            ...tool,
             async execute(_callId, args, signal) {
               const id = prefix + '-' + (++nextId);
               const cancel = () => {
@@ -50,7 +51,7 @@ internal object PiComputerExtension {
                 const response = await fetch(url, {
                   method: 'POST', headers,
                   signal: AbortSignal.any([AbortSignal.timeout(30000), ...(signal ? [signal] : [])]),
-                  body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'computer', arguments: args } })
+                  body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: tool.name, arguments: args } })
                 });
                 if (!response.ok) throw new Error('Computer access unavailable (' + response.status + '). Check access in MagicPaper.');
                 const message = await response.json();

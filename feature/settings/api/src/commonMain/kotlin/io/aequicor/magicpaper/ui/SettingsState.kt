@@ -8,6 +8,7 @@ import io.aequicor.magicpaper.domain.ProviderType
 
 data class SettingsState(
     val settings: AppSettings = AppSettings(),
+    val settingsSaving: Boolean = false,
     val storageInfo: String = "",
     val showWelcome: Boolean = false,
     val llmProfiles: List<LlmProfile> = emptyList(),

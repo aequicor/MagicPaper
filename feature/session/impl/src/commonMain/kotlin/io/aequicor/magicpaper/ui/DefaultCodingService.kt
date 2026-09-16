@@ -124,7 +124,7 @@ class DefaultCodingService(
     }
     override fun updateConfiguration(settings: AppSettings, profiles: List<LlmProfile>, subscriptionAvailable: Boolean, subscriptionSignedIn: Boolean) {
         _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn) }
-        // Sync global feature flags to the coding runtime for optimization decisions.
+        // Automation policy is owned by start/applySettings, not asynchronous UI configuration echoes.
         codingRuntime?.globalFeatureFlags = settings.featureFlags
     }
     private val visible = MutableStateFlow(false)
@@ -396,7 +396,7 @@ class DefaultCodingService(
         val projects = codingProjects?.all().orEmpty()
         _state.update { it.copy(settings = settings, llmProfiles = profiles,
             coding = it.coding.copy(projects = projects, sessions = loadCodingSessions(projects), projectStatuses = codingStatusSnapshot(projects))) }
-        // Sync global feature flags to the coding runtime.
+        codingRuntime?.computerUse?.configure(settings.computerAccess, settings.applicationAccess)
         codingRuntime?.globalFeatureFlags = settings.featureFlags
         observeRuntime()
         refreshCodingEngines()
@@ -429,7 +429,7 @@ class DefaultCodingService(
         } }
         codingRuntime?.computerUse?.let { computer -> scope.launch {
             computer.state.collect { value ->
-                _state.update { it.copy(coding = it.coding.copy(computer = value, computerSupported = computer.supported)) }
+                _state.update { it.copy(coding = it.coding.copy(computer = value, computerSupported = computer.supported, applicationSupported = computer.applicationSupported)) }
             }
         } }
         codingRuntime?.let { runtime -> scope.launch {
@@ -850,6 +850,8 @@ class DefaultCodingService(
             try {
                 sessionCreationJobs[id]?.join()
                 val sessions = repo.sessions(id)
+                val sessionIds = sessions.map { it.id }.toSet()
+                queuedComputerRequests.update { requests -> requests.filterValues { it !in sessionIds } }
                 val running = sessions.mapNotNull { removeCodingJob(it.id) }
                 running.forEach { it.cancel() }
                 val failures = sessions.mapNotNull { session -> runCatching { codingRuntime?.abort(session.id) }.exceptionOrNull() }
@@ -1046,6 +1048,8 @@ class DefaultCodingService(
         scope.launch {
             try {
                 val sessions = repo.sessions(projectId)
+                val sessionIds = sessions.map { it.id }.toSet()
+                queuedComputerRequests.update { requests -> requests.filterValues { it !in sessionIds } }
                 val running = sessions.mapNotNull { removeCodingJob(it.id) }
                 running.forEach { it.cancel() }
                 val failures = sessions.mapNotNull { runCatching { codingRuntime?.abort(it.id) }.exceptionOrNull() }
@@ -1097,6 +1101,7 @@ class DefaultCodingService(
             try {
                 val projectId = target.session.projectId
                 val ids = repo.sessions(projectId).sessionTreeIds(id).toMutableSet()
+                queuedComputerRequests.update { requests -> requests.filterValues { it !in ids } }
                 val planIds = planningChat?.store?.plans?.value.orEmpty().filter { it.projectId == projectId && it.parentSessionId in ids }.map { it.id }.toSet()
                 val running = ids.mapNotNull { removeCodingJob(it) }
                 running.forEach { it.cancel() }
@@ -1223,15 +1228,21 @@ class DefaultCodingService(
             }
             if (version != null) clearAcceptedComposer(composer, version)
             AppLog.info("coding", "input.queued", mapOf("sessionId" to sessionId, "requestId" to request.messageId))
+            queuedComputerRequests.update { it + (request.messageId to sessionId) }
             startQueuedPrompt(saved.id)
         }
     }
+
+    // requestId -> sessionId; restored/imported queues never acquire settings-based automation.
+    private val queuedComputerRequests = MutableStateFlow<Map<String, String>>(emptyMap())
 
     private fun startQueuedPrompt(sessionId: String) {
         if (closing || sessionId in codingJobs.value) return
         val session = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session ?: return
         if (session.pendingRun != null || session.archived) return
-        session.queuedPrompts.firstOrNull()?.let { launchCodingRun(session, it, recovering = false) }
+        session.queuedPrompts.firstOrNull()?.let { request ->
+            launchCodingRun(session, request, recovering = false, acquireComputerAccess = queuedComputerRequests.value[request.messageId] == sessionId)
+        }
     }
 
     private val clarifyingSessions = mutableSetOf<String>()
@@ -1392,13 +1403,14 @@ class DefaultCodingService(
         return true
     }
 
-    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null, userInitiated: Boolean = true, clearComposer: Boolean = true) {
+    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null, userInitiated: Boolean = true, clearComposer: Boolean = true, acquireComputerAccess: Boolean = userInitiated) {
         val runtime = codingRuntime ?: return
         val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
         // A cancelled job still owns the session while its runtime and saved output
         // are being cleaned up. Its finally block releases this entry.
         if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value) return
         if (userInitiated && !validateInput(session, checkpoint.attachments, checkpoint.messageId)) return
+        queuedComputerRequests.update { it - checkpoint.messageId }
         var request = checkpoint.copy(
             responseId = checkpoint.responseId.ifBlank { Id.new() },
             responseTimelineId = checkpoint.responseTimelineId.ifBlank { Id.new() },
@@ -1482,7 +1494,7 @@ class DefaultCodingService(
                 else {
                     if (workspaceRecord != null) current = updateStoredCodingSession(current) { it.copy(taskWorktree = it.taskWorktree?.copy(
                         phase = TaskWorktreePhase.RUNNING, handoffGeneration = null, error = null)) }
-                    recorder.recordDrafts(runtime.run(executionProject, current, prompt, codingProfileOf(current), request.attachments), onEvent = { event ->
+                    recorder.recordDrafts(runtime.run(executionProject, current.copy(acquireComputerAccess = acquireComputerAccess), prompt, codingProfileOf(current), request.attachments), onEvent = { event ->
                     if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                         // Save the native conversation before the first command, not at the end of the turn.
                         current = updateStoredCodingSession(session) { it.copy(piSessionId = event.sessionId, needsHistorySeed = false) }
@@ -1700,8 +1712,19 @@ class DefaultCodingService(
             state.coding.sessions.any { it.session.id == id && it.session.projectId == projectId }
         })) }
     }
-    override suspend fun applySettings(settings: AppSettings): Result<Unit> = planningChat?.organisms?.saveSettingsAndApplyLimits(settings)
-        ?: run { settingsRepo.save(settings); Result.success(Unit) }
+    private val settingsApplyLock = Mutex()
+
+    override suspend fun applySettings(settings: AppSettings): Result<Unit> = settingsApplyLock.withLock {
+        val previous = settingsRepo.load()
+        if (previous.computerAccess != settings.computerAccess || previous.applicationAccess != settings.applicationAccess) {
+            // Revoke before waiting for persistence. A failed save must not leave live input running.
+            codingRuntime?.computerUse?.configure(ComputerAccess.OFF, ComputerAccess.OFF)
+        }
+        val result = planningChat?.organisms?.saveSettingsAndApplyLimits(settings)
+            ?: run { settingsRepo.save(settings); Result.success(Unit) }
+        codingRuntime?.computerUse?.configure(settings.computerAccess, settings.applicationAccess)
+        result
+    }
     override suspend fun clearProfileOverrides(id: String) {
         for (item in _state.value.coding.sessions.filter { it.session.llmProfileId == id }) {
             codingProjects?.updateSession(item.session.projectId, item.session.id) { it.copy(llmProfileId = null) }
@@ -1719,6 +1742,7 @@ class DefaultCodingService(
         pinObserver = null
         visible.value = false
         codingJobs.value = emptyMap()
+        queuedComputerRequests.value = emptyMap()
         sessionTitles?.clear()
         interactionDecisions.clear()
         interactionSubmitting.clear()

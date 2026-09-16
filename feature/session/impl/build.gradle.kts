@@ -69,6 +69,8 @@ tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
+    systemProperty("magicpaper.application.native", providers.gradleProperty("magicpaper.application.native").getOrElse("false"))
+    systemProperty("magicpaper.application.testInstallation", layout.buildDirectory.dir("application-use/native-acceptance").get().asFile.absolutePath)
 }
 
 val nodeProtocolTest by tasks.registering(Exec::class) {
@@ -160,11 +162,27 @@ val bundleCodingSearchTools by tasks.registering(BundleCodingSearchToolsTask::cl
     enabled = providers.gradleProperty("magicpaper.codingTools.offline").orNull?.toBooleanStrictOrNull() != true
 }
 
+// Build the ScreenCaptureKit/AX host with the desktop distribution, not on the user's machine.
+// Windows uses the OS-shipped .NET UI Automation host in resources/computer/application-use.ps1.
+val applicationResources = layout.buildDirectory.dir("application-use/resources")
+val applicationBinary = applicationResources.map { it.file("computer/application-use").asFile }
+val bundleApplicationUse by tasks.registering(Exec::class) {
+    enabled = hostOs.contains("mac") || hostOs.contains("darwin")
+    val binary = applicationBinary.get()
+    inputs.file("src/jvmMain/native/application-use.swift")
+    outputs.file(binary)
+    commandLine("xcrun", "swiftc", "-parse-as-library", "-O", "-target",
+        "${if (hostIsArm) "arm64" else "x86_64"}-apple-macosx14.0",
+        "src/jvmMain/native/application-use.swift", "-o", binary.absolutePath)
+    doFirst { binary.parentFile.mkdirs() }
+}
+
 // KMP обрабатывает ресурсы jvm-цели задачей jvmProcessResources: результат идёт в
 // build/processedResources/jvm/main, откуда его читает PiCodingRuntime.
 tasks.named<ProcessResources>("jvmProcessResources") {
     from(codingToolsResources)
-    dependsOn(bundleCodingSearchTools)
+    from(applicationResources)
+    dependsOn(bundleCodingSearchTools, bundleApplicationUse)
 }
 
 abstract class BundleCodingSearchToolsTask : DefaultTask() {

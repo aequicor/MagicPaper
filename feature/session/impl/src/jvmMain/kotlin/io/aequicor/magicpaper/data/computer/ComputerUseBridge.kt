@@ -70,17 +70,21 @@ internal class ComputerUseBridge(
                 put("protocolVersion", params.optionalString("protocolVersion")?.takeIf { it in versions } ?: "2025-06-18")
                 put("capabilities", buildJsonObject { put("tools", buildJsonObject { }) })
                 put("serverInfo", buildJsonObject { put("name", "MagicPaper Computer"); put("version", "1.0.0") })
-                put("instructions", ComputerTool.instructions)
+                put("instructions", ComputerTool.instructions + "\n" + ApplicationTool.instructions)
             }
             "ping" -> buildJsonObject { }
-            "tools/list" -> buildJsonObject { put("tools", buildJsonArray { add(ComputerTool.definition) }) }
+            "tools/list" -> buildJsonObject { put("tools", buildJsonArray { add(ComputerTool.definition); add(ApplicationTool.definition) }) }
             "tools/call" -> {
-                if (params.optionalString("name") != "computer" || params["arguments"] !is JsonObject) {
-                    reply(exchange, 200, rpcError(id, -32602, "Expected computer tool with object arguments")); return
+                val tool = params.optionalString("name")
+                if (tool !in listOf("computer", "application") || params["arguments"] !is JsonObject) {
+                    reply(exchange, 200, rpcError(id, -32602, "Expected computer or application tool with object arguments")); return
                 }
                 runBlocking {
                     jobs[id] = currentCoroutineContext()[Job]!!
-                    try { computer.execute(sessionId, epoch, params["arguments"]!!.jsonObject) }
+                    try {
+                        if (tool == "application") computer.executeApplication(sessionId, epoch, params["arguments"]!!.jsonObject)
+                        else computer.execute(sessionId, epoch, params["arguments"]!!.jsonObject)
+                    }
                     finally { jobs.remove(id) }
                 }
             }
@@ -120,7 +124,7 @@ internal class ComputerUseBridge(
                 put("url", bridge?.url ?: "http://127.0.0.1:1/mcp")
                 put("enabled", bridge != null)
                 put("required", bridge != null)
-                // The user already selected screen/control access in this session's UI.
+                // The explicit request acquired the user's separately configured computer/application policy.
                 put("default_tools_approval_mode", "approve")
                 put("startup_timeout_sec", 10)
                 put("tool_timeout_sec", 30)

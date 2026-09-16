@@ -28,31 +28,34 @@ fun renderComputerUsePanel(
     onPreview: () -> Unit,
     onSettings: () -> Unit,
 ) {
-    var chooser by remember(sessionId) { mutableStateOf(false) }
     var expanded by remember(sessionId) { mutableStateOf(false) }
     val owns = state.sessionId == sessionId
-    val enabled = owns && state.access != ComputerAccess.OFF
+    val enabled = owns && (state.access != ComputerAccess.OFF || state.applicationAccess != ComputerAccess.OFF)
     val other = state.sessionId != null && !owns
     PaperPanel(color = if (enabled) LocalPaperColors.current.successSurface else androidx.compose.ui.graphics.Color.Transparent) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PaperText(if (enabled) {
-                    if (state.access == ComputerAccess.CONTROL) "Экран, мышь и клавиатура включены" else "Просмотр экрана включён"
-                } else if (other) "Экран занят другой сессией" else "Доступ к экрану выключен",
+                    when {
+                        state.access != ComputerAccess.OFF && state.applicationAccess != ComputerAccess.OFF -> "Компьютер и приложение включены"
+                        state.access == ComputerAccess.CONTROL -> "Экран, мышь и клавиатура включены"
+                        state.access == ComputerAccess.SCREEN -> "Просмотр экрана включён"
+                        state.applicationAccess == ComputerAccess.CONTROL -> "Управление приложением в фоне"
+                        else -> "Просмотр приложения включён"
+                    }
+                } else if (other) "Компьютер занят другой сессией" else "Доступ задаётся в настройках → Движки",
                     modifier = Modifier.weight(1f), style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome)
                 if (enabled) {
-                    PaperAction(onPreview, enabled = !state.busy) { PaperText("Снимок", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
+                    if (state.access != ComputerAccess.OFF) PaperAction(onPreview, enabled = !state.busy) { PaperText("Снимок", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
                     PaperAction(onDisable) { PaperText("Отключить", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
                 } else if (owns && state.busy) {
                     PaperAction(onDisable) { PaperText("Отмена", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
-                } else {
-                    PaperAction({ chooser = true }, enabled = !running && !other) { PaperText("Включить…", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
                 }
             }
             if (!other && state.detail.isNotBlank()) {
                 PaperText(state.detail, style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome,
-                    color = if (state.access == ComputerAccess.OFF && !state.busy) LocalPaperColors.current.error else LocalPaperColors.current.secondaryText)
-                if (state.access == ComputerAccess.OFF && !state.busy) PaperAction(onSettings) { PaperText("Системные настройки", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
+                    color = if (state.error) LocalPaperColors.current.error else LocalPaperColors.current.secondaryText)
+                if (state.error && !state.busy) PaperAction(onSettings) { PaperText("Системные настройки", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
             }
             if (owns) state.preview?.let { attachment ->
                 val bitmap = rememberAttachmentBitmap(attachment)
@@ -68,17 +71,4 @@ fun renderComputerUsePanel(
             }
         }
     }
-    if (chooser) PaperModal(
-        onDismissRequest = { chooser = false },
-        title = { PaperText("Доступ к компьютеру", role = PaperTextRole.TITLE) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                PaperText("Агент получит снимки экрана, включая видимые окна других приложений. Снимки передаются выбранной модели. Доступ действует только для этой сессии до завершения запроса или отключения.")
-                PaperText("Выберите модель с поддержкой изображений и инструментов.", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome)
-                PaperAction({ chooser = false; onEnable(ComputerAccess.SCREEN) }) { PaperText("Только просмотр экрана", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
-                PaperAction({ chooser = false; onEnable(ComputerAccess.CONTROL) }) { PaperText("Экран, мышь и клавиатура", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) }
-            }
-        },
-        confirmButton = { PaperAction({ chooser = false }) { PaperText("Отмена", style = io.aequicor.magicpaper.designsystem.LocalPaperTypography.current.chrome) } },
-    )
 }

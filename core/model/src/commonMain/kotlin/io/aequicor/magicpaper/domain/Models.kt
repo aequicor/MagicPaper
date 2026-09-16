@@ -48,6 +48,8 @@ data class ChatSession(
     val nativeSessionId: String = "",
     val pendingRun: CodingRunCheckpoint? = null,
     val queuedPrompts: List<CodingRunCheckpoint> = emptyList(),
+    /** Invocation-only authority; persisted history and restored queues never grant desktop access. */
+    @kotlinx.serialization.Transient val acquireComputerAccess: Boolean = false,
 )
 
 /** Доступные поисковые движки. */
@@ -61,6 +63,9 @@ data class AppSettings(
     val activeLlmProfileId: String = "",
     val defaultModel: ModelSelection? = null,
     val defaultCodingEngine: CodingEngine = CodingEngine.PI,
+    /** Local policy; a fresh explicit request acquires a temporary lease. Never transfer via profiles. */
+    val computerAccess: ComputerAccess = ComputerAccess.OFF,
+    val applicationAccess: ComputerAccess = ComputerAccess.OFF,
     /** Default methodology for new organisms; active runs keep an immutable snapshot. */
     val planningRules: PlanningRulesSettings = PlanningRulesSettings(),
     /** Live resource policy for all agent tasks; no limits until the user sets them. */

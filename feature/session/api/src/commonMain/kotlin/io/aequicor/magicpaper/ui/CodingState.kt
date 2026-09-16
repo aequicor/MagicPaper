@@ -149,6 +149,7 @@ data class QuarantineRecoveryState(
 data class CodingUi(
     val organisms: Map<String, io.aequicor.magicpaper.domain.SessionOrganism> = emptyMap(),
     val computerSupported: Boolean = false,
+    val applicationSupported: Boolean = false,
     val computer: io.aequicor.magicpaper.domain.ComputerUseState = io.aequicor.magicpaper.domain.ComputerUseState(),
     val approvals: List<io.aequicor.magicpaper.domain.CodingApproval> = emptyList(),
     val interactions: List<UserInteractionRequest> = emptyList(),
