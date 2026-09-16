@@ -18,6 +18,43 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class UnifiedSessionFeedRenderTest {
+    @Test fun selectingSessionRetainsViewportWhenStatusReordersItToTop() {
+        fun item(index: Int) = UnifiedSidebarItem(
+            id = "session-$index",
+            displayName = "Session $index",
+            sortTime = (20 - index).toLong(),
+            isCoding = true,
+            projectName = "Project",
+            projectId = "project",
+        )
+        val initialItems = List(20, ::item)
+        val groups = mutableStateOf(groupUnifiedSidebarItems(initialItems))
+        val state = LazyListState(firstVisibleItemIndex = 8)
+        var selected: String? = null
+        ImageComposeScene(320, 240) {
+            PaperTheme {
+                UnifiedSessionFeed(groups.value, selected, true, emptySet(), { true }, {}, {}, { id, _ ->
+                    selected = id
+                    val moved = initialItems.first { it.id == id }.copy(sortTime = 100L)
+                    groups.value = groupUnifiedSidebarItems(listOf(moved) + initialItems.filterNot { it.id == id })
+                }, {}, {}, {}, state = state)
+            }
+        }.use { scene ->
+            scene.settle()
+            val before = state.firstVisibleItemIndex
+            assertTrue(before > 0)
+            val target = sidebarFeedRows(groups.value, emptySet()) { true }[before].session!!
+            val visibleSession = scene.nodes().first { node ->
+                node.config.getOrNull(SemanticsActions.OnClick) != null &&
+                    node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == target.displayName } == true }
+            }
+            assertTrue(visibleSession.config[SemanticsActions.OnClick].action!!.invoke())
+            scene.settle()
+            assertEquals(target.id, selected)
+            assertEquals(before, state.firstVisibleItemIndex)
+        }
+    }
+
     @Test fun hoistedScrollSurvivesSelectedSessionCompositionReplacement() {
         val state = LazyListState(firstVisibleItemIndex = 8)
         val selected = mutableStateOf("child-5")

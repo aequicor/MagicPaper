@@ -71,6 +71,9 @@ internal fun UnifiedSessionFeed(
         expanded = expanded,
     )
     val byKey = rows.associateBy { it.entry.key }
+    fun retainViewport() {
+        state.requestScrollToItem(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset)
+    }
     // Hoist menus above lazy/pinned copies: scrolling cannot reset an open menu.
     var menuKey by rememberSaveable { mutableStateOf<String?>(null) }
     PaperStickyTree(rows.map { it.entry }, modifier, state) { key, retainPosition ->
@@ -96,7 +99,7 @@ internal fun UnifiedSessionFeed(
                 subtitle = item.sidebarSubtitle(showProject = false),
                 expanded = expanded(item).takeIf { item.children.isNotEmpty() },
                 onToggle = { retainPosition(); onToggleSession(item) },
-                onClick = { onSelect(item.id, item.isCoding) },
+                onClick = { retainViewport(); onSelect(item.id, item.isCoding) },
                 keepActionsVisible = menuKey == key,
                 indicator = {
                     if (item.isCoding) ActivityDot(item.codingStatus ?: io.aequicor.magicpaper.domain.CodingSessionStatus.IDLE, size = 10)
@@ -107,7 +110,10 @@ internal fun UnifiedSessionFeed(
                         PaperActivityIndicator(PaperActivityTone.UNREAD, "Непрочитанное сообщение")
                     }
                     item.immunity?.let { immunity ->
-                        ImmunityDiamondButton(immunity.status, immunity.selected, onClick = { onSelect(immunity.sessionId, true) })
+                        ImmunityDiamondButton(immunity.status, immunity.selected, onClick = {
+                            retainViewport()
+                            onSelect(immunity.sessionId, true)
+                        })
                     }
                     PaperTooltip("В архив") {
                         PaperToolbarButton(
