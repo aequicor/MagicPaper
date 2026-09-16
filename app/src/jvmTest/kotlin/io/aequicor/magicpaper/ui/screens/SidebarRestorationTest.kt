@@ -19,12 +19,7 @@ import kotlin.test.*
 class SidebarRestorationTest {
     @Test fun legacyCollapseMapsDoNotBecomeSearchOrArchiveFlags() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
-        val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()),
-            object : ProfileBridge {
-                override val supportsFilePicker = false
-                override suspend fun export(json: String) = false
-                override suspend fun import(): String? = null
-            }, NavigationSessionConfig())
+        val runtime = runtime()
         try {
             var snapshot: String? = null
             val actions = SidebarActions(runtime.koin.get<ChatService>(), runtime.koin.get<CodingService>())
@@ -52,6 +47,53 @@ class SidebarRestorationTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test fun everyStatusFilterSurvivesPresentationRestore() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val runtime = runtime()
+        try {
+            val actions = SidebarActions(runtime.koin.get<ChatService>(), runtime.koin.get<CodingService>())
+            val recency = SessionRecencyTracker { 0L }
+            for (filter in SidebarStatusFilter.entries) {
+                var snapshot: String? = null
+                val errors = mutableListOf<String>()
+                val owner = VisitPresentationState(null, onError = { errors += it }) { snapshot = it }
+                scene(owner, actions, recency).use { scene ->
+                    scene.draw()
+                    scene.click("Фильтры сессий")
+                    scene.draw()
+                    val label = if (filter == SidebarStatusFilter.ALL) "✓ ${filter.label}" else filter.label
+                    val option = scene.semanticsOwners.flatMap { walk(it.rootSemanticsNode) }.first {
+                        it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true &&
+                            it.config.getOrNull(SemanticsActions.OnClick) != null
+                    }
+                    assertTrue(option.config[SemanticsActions.OnClick].action!!.invoke())
+                    scene.draw()
+                    owner.flush()
+                }
+                val restarted = VisitPresentationState(requireNotNull(snapshot), onError = { errors += it }) { snapshot = it }
+                scene(restarted, actions, recency).use { scene ->
+                    scene.draw()
+                    scene.click("Фильтры сессий")
+                    scene.draw()
+                    assertTrue(scene.nodes().any {
+                        it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "✓ ${filter.label}" } == true
+                    }, "Restored filter: $filter")
+                }
+                assertTrue(errors.isEmpty(), errors.joinToString())
+            }
+        } finally {
+            runtime.close(); runtime.awaitClosed()
+            Dispatchers.resetMain()
+        }
+    }
+
+    private fun runtime() = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()),
+        object : ProfileBridge {
+            override val supportsFilePicker = false
+            override suspend fun export(json: String) = false
+            override suspend fun import(): String? = null
+        }, NavigationSessionConfig())
 
     private fun scene(owner: VisitPresentationState, actions: SidebarActions, recency: SessionRecencyTracker) =
         ImageComposeScene(320, 720) {

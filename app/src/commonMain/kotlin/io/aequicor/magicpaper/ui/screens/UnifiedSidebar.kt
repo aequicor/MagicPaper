@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -124,6 +125,12 @@ internal enum class SidebarStatusFilter(val label: String) {
     WAITING("Ждут ответа"), CONFIRMATION("Ждут подтверждения"), BLOCKED("Остановлены"),
     QUEUED("Ждут родителя"), SCHEDULED("Ждут события"), NEEDS_TESTING("Нужна проверка"), READY("Готовы"),
 }
+
+// Presentation snapshots store primitive values, not enum instances or ordinals.
+private val sidebarStatusFilterSaver = Saver<SidebarStatusFilter, String>(
+    save = { it.name },
+    restore = { name -> SidebarStatusFilter.entries.firstOrNull { it.name == name } },
+)
 
 internal sealed interface SidebarSourceFilter {
     data object All : SidebarSourceFilter
@@ -397,7 +404,9 @@ internal fun UnifiedSidebar(
     // newly added controls from consuming the old positional collapse-map slots.
     var query by key("sidebar-query") { rememberSaveable { mutableStateOf("") } }
     var archivesOnly by key("sidebar-archives") { rememberSaveable { mutableStateOf(false) } }
-    var statusFilter by key("sidebar-status-filter") { rememberSaveable { mutableStateOf(SidebarStatusFilter.ALL) } }
+    var statusFilter by key("sidebar-status-filter") {
+        rememberSaveable(stateSaver = sidebarStatusFilterSaver) { mutableStateOf(SidebarStatusFilter.ALL) }
+    }
     var sourceFilterKey by key("sidebar-source-filter") { rememberSaveable { mutableStateOf("all") } }
     val browsing = archivesOnly || query.isNotBlank()
     val searchCoding = remember(coding.sessions) { coding.sessions.map { it.session to it.messages } }
