@@ -6,6 +6,9 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.use
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
@@ -96,6 +99,10 @@ class AppShellRenderTest {
                 assertTrue(scene.hasText("Документация"))
                 root.navigate(AppRoute.Chat()); root.awaitIdle(); draw()
                 assertTrue(scene.hasText("MagicPaper"))
+                val titleLayouts = mutableListOf<TextLayoutResult>()
+                scene.text("MagicPaper").config[SemanticsActions.GetTextLayoutResult].action!!.invoke(titleLayouts)
+                assertEquals(13.sp, titleLayouts.single().layoutInput.style.fontSize)
+                assertEquals(FontFamily.SansSerif, titleLayouts.single().layoutInput.style.fontFamily)
                 assertTrue(scene.hasText("✦ Новый чат"), "The global session list is visible when a chat opens")
                 scene.render(frame * 16_000_000L).use { image ->
                     File(directory, "chat-sidebar-visible.png").writeBytes(image.encodeToData()!!.use { it.bytes })
@@ -114,6 +121,9 @@ class AppShellRenderTest {
 
     private fun ImageComposeScene.nodes() = semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
     private fun ImageComposeScene.hasText(text: String) = nodes().any { node ->
+        node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true
+    }
+    private fun ImageComposeScene.text(text: String) = nodes().first { node ->
         node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true
     }
     private fun ImageComposeScene.action(description: String) = nodes().first { node ->

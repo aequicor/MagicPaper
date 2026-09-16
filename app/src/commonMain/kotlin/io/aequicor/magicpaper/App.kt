@@ -208,7 +208,7 @@ private fun TopBar(
                 Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     PaperBrandMark(Modifier.size(22.dp))
                     Spacer(Modifier.width(8.dp))
-                    PaperText("MagicPaper", role = PaperTextRole.TITLE, maxLines = 1)
+                    PaperText("MagicPaper", role = PaperTextRole.CHROME, maxLines = 1)
                     Spacer(Modifier.width(14.dp))
                     PaperVerticalDivider(Modifier.height(22.dp))
                     Spacer(Modifier.width(14.dp))
