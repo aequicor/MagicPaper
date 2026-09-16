@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.designsystem.PaperTheme
 import java.io.File
+import kotlin.math.abs
 import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -33,7 +34,7 @@ class UnifiedSessionFeedRenderTest {
         var selected: String? = null
         ImageComposeScene(320, 240) {
             PaperTheme {
-                UnifiedSessionFeed(groups.value, selected, true, emptySet(), { true }, {}, {}, { id, _ ->
+                UnifiedSessionFeed(groups.value, selected, true, emptySet(), {}, { id, _ ->
                     selected = id
                     val moved = initialItems.first { it.id == id }.copy(sortTime = 100L)
                     groups.value = groupUnifiedSidebarItems(listOf(moved) + initialItems.filterNot { it.id == id })
@@ -43,7 +44,7 @@ class UnifiedSessionFeedRenderTest {
             scene.settle()
             val before = state.firstVisibleItemIndex
             assertTrue(before > 0)
-            val target = sidebarFeedRows(groups.value, emptySet()) { true }[before].session!!
+            val target = sidebarFeedRows(groups.value, emptySet())[before].session!!
             val visibleSession = scene.nodes().first { node ->
                 node.config.getOrNull(SemanticsActions.OnClick) != null &&
                     node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == target.displayName } == true }
@@ -61,7 +62,7 @@ class UnifiedSessionFeedRenderTest {
         ImageComposeScene(320, 520) {
             PaperTheme {
                 key(selected.value) {
-                    UnifiedSessionFeed(sidebarPreviewGroups(), selected.value, true, emptySet(), { true }, {}, {},
+                    UnifiedSessionFeed(sidebarPreviewGroups(), selected.value, true, emptySet(), {},
                         { id, _ -> selected.value = id }, {}, {}, {}, state = state)
                 }
             }
@@ -69,12 +70,13 @@ class UnifiedSessionFeedRenderTest {
             scene.settle()
             val before = state.firstVisibleItemIndex
             assertTrue(before > 0)
+            val target = sidebarFeedRows(sidebarPreviewGroups(), emptySet())[before].session!!
             scene.nodes().single { node ->
                 node.config.getOrNull(SemanticsActions.OnClick) != null &&
-                    node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Список сессий и навигация" } == true }
+                    node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == target.displayName } == true }
             }.config[SemanticsActions.OnClick].action!!.invoke()
             scene.settle()
-            assertEquals("parent", selected.value)
+            assertEquals(target.id, selected.value)
             assertEquals(before, state.firstVisibleItemIndex)
         }
     }
@@ -94,16 +96,13 @@ class UnifiedSessionFeedRenderTest {
         assertEquals("leaf", items.single().children.single().children.single().id)
     }
 
-    @Test fun restoredScrollPinsThreeHeadersAndTheirControlsStillWork() {
+    @Test fun restoredScrollPinsOneLevelSessionHeaders() {
         val state = LazyListState(firstVisibleItemIndex = 8)
-        val collapsed = mutableStateOf(emptySet<String>())
-        var selected: Pair<String, Boolean>? = null
         ImageComposeScene(320, 520) {
             PaperTheme {
                 UnifiedSessionFeed(sidebarPreviewGroups(), "child-5", true, emptySet(),
-                    expanded = { it.id !in collapsed.value }, onToggleGroup = {},
-                    onToggleSession = { collapsed.value = collapsed.value + it.id },
-                    onSelect = { id, coding -> selected = id to coding }, onArchive = {}, onDelete = {},
+                    onToggleGroup = {},
+                    onSelect = { _, _ -> }, onArchive = {}, onDelete = {},
                     onAddSession = {}, state = state)
             }
         }.use { scene ->
@@ -112,35 +111,28 @@ class UnifiedSessionFeedRenderTest {
                 it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == "MagicPaper"
             }.minBy { it.boundsInRoot.top }
             val task = scene.text("Обновить рабочее пространство")
-            val parent = scene.text("Список сессий и навигация")
+            val selectedSession = scene.text("Этап 6: проверка интерфейса")
             assertTrue(project.boundsInRoot.top >= 0f)
             assertTrue(task.boundsInRoot.top >= project.boundsInRoot.bottom)
-            assertTrue(parent.boundsInRoot.top >= task.boundsInRoot.bottom)
-            scene.save("three-levels")
-            val parentControl = scene.nodes().single { node ->
-                node.config.getOrNull(SemanticsActions.OnClick) != null &&
-                    node.children.any { child -> child.config.getOrNull(SemanticsProperties.Text)?.any { it.text == "Список сессий и навигация" } == true }
-            }
-            assertTrue(parentControl.config[SemanticsActions.OnClick].action!!.invoke())
-            assertEquals("parent" to true, selected)
-            scene.clickDescription("Свернуть: Список сессий и навигация")
-            scene.settle()
-            assertEquals(setOf("parent"), collapsed.value)
-            assertTrue(scene.text("Список сессий и навигация").boundsInRoot.top >= 0f,
-                "Collapsing a pinned branch must retain the clicked parent in view")
-            assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text.startsWith("Этап ") } == true })
-            scene.save("collapsed-parent")
+            assertTrue(selectedSession.boundsInRoot.top >= task.boundsInRoot.bottom)
+            assertTrue(abs(task.boundsInRoot.left - selectedSession.boundsInRoot.left) < 1f,
+                "Sticky session rows must remain on the same visual level")
+            scene.save("one-level-sticky-sessions")
+            assertTrue(scene.nodes().none {
+                it.config.getOrNull(SemanticsProperties.ContentDescription)
+                    ?.contains("Свернуть: Список сессий и навигация") == true
+            })
         }
     }
 
     @Test fun chatReleasesPreviousProjectHeadersAndKeepsSessionGeometry() {
         val groups = sidebarPreviewGroups()
-        val rows = sidebarFeedRows(groups, emptySet()) { true }
+        val rows = sidebarFeedRows(groups, emptySet())
         val index = rows.indexOfFirst { it.session?.id == "chat" }
         val state = LazyListState(firstVisibleItemIndex = index)
         ImageComposeScene(320, 520) {
             PaperTheme {
-                UnifiedSessionFeed(groups, "chat", false, emptySet(), { true }, {}, {}, { _, _ -> }, {}, {}, {}, state = state)
+                UnifiedSessionFeed(groups, "chat", false, emptySet(), {}, { _, _ -> }, {}, {}, {}, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -159,10 +151,12 @@ class UnifiedSessionFeedRenderTest {
             }.use { scene ->
                 scene.settle()
                 val title = scene.text("Список сессий и навигация")
-                val disclosure = scene.description("Свернуть: Список сессий и навигация")
                 assertTrue(title.boundsInRoot.width > 20f)
-                assertTrue(title.boundsInRoot.right <= disclosure.boundsInRoot.left)
-                assertTrue(disclosure.boundsInRoot.right <= width)
+                assertTrue(title.boundsInRoot.right <= width)
+                assertTrue(scene.nodes().none {
+                    it.config.getOrNull(SemanticsProperties.ContentDescription)
+                        ?.contains("Свернуть: Список сессий и навигация") == true
+                })
                 scene.save("preview-$width-${(scale * 100).toInt()}")
             }
         }
@@ -178,7 +172,7 @@ class UnifiedSessionFeedRenderTest {
         val groups = sidebarPreviewGroups().map { group -> group.copy(items = group.items.map(::markUnread)) }
         ImageComposeScene(320, 420) {
             PaperTheme {
-                UnifiedSessionFeed(groups, "child-5", true, emptySet(), { true }, {}, {},
+                UnifiedSessionFeed(groups, "child-5", true, emptySet(), {},
                     { _, _ -> }, { archived = it.id }, {}, {}, state = state)
             }
         }.use { scene ->
@@ -237,7 +231,7 @@ class UnifiedSessionFeedRenderTest {
         val state = LazyListState(firstVisibleItemIndex = 8)
         ImageComposeScene(320, 420) {
             PaperTheme {
-                UnifiedSessionFeed(groups, "selected", true, emptySet(), { true }, {}, {},
+                UnifiedSessionFeed(groups, "selected", true, emptySet(), {},
                     { _, _ -> }, {}, {}, {}, state = state)
             }
         }.use { scene ->
@@ -251,7 +245,9 @@ class UnifiedSessionFeedRenderTest {
             assertTrue(selected.boundsInRoot.top >= project.boundsInRoot.bottom)
             assertTrue(working.boundsInRoot.top >= selected.boundsInRoot.bottom)
             assertTrue(waiting.boundsInRoot.top >= working.boundsInRoot.bottom)
-            scene.save("nested-status-headers")
+            assertTrue(abs(selected.boundsInRoot.left - working.boundsInRoot.left) < 1f)
+            assertTrue(abs(working.boundsInRoot.left - waiting.boundsInRoot.left) < 1f)
+            scene.save("flat-status-headers")
         }
     }
 

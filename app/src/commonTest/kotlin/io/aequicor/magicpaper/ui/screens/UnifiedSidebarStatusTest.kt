@@ -165,22 +165,19 @@ class UnifiedSidebarStatusTest {
     }
 
     @Test
-    fun treeRowsRetainThreeAncestorLevelsAndReleaseThemBeforeAChat() {
+    fun flatRowsKeepStickyContextAndReleaseItBeforeAChat() {
         val leaf = UnifiedSidebarItem("leaf", "Leaf", 4, true)
         val parent = UnifiedSidebarItem("parent", "Parent", 5, true, children = listOf(leaf))
         val task = UnifiedSidebarItem("task", "Task", 6, true, projectId = "p", children = listOf(parent), isOrganism = true)
         val chat = UnifiedSidebarItem("chat", "Chat", 3, false)
         val older = UnifiedSidebarItem("older", "Older", 2, true, projectId = "p")
         val groups = groupUnifiedSidebarItems(listOf(task, chat, older))
-        val rows = sidebarFeedRows(groups, emptySet()) { true }
+        val rows = sidebarFeedRows(groups, emptySet())
         val project = "header:${groups.first().key}"
-        assertEquals(listOf(project, "coding:task", "coding:parent"), rows.single { it.session?.id == "leaf" }.entry.ancestors)
+        assertEquals(listOf(project), rows.single { it.session?.id == "leaf" }.entry.ancestors)
         assertTrue(rows.single { it.session?.id == "chat" }.entry.ancestors.isEmpty())
         assertEquals(2, rows.count { it.session == null })
-        val collapsed = sidebarFeedRows(groups, emptySet()) { it.id != "parent" }
-        assertTrue(collapsed.none { it.session?.id == "leaf" })
-        assertTrue(collapsed.any { it.session?.id == "parent" })
-        val collapsedProject = sidebarFeedRows(groups, setOf(groups.first().key)) { true }
+        val collapsedProject = sidebarFeedRows(groups, setOf(groups.first().key))
         assertEquals(listOf("chat", "older"), collapsedProject.mapNotNull { it.session?.id })
     }
 
@@ -211,7 +208,6 @@ class UnifiedSidebarStatusTest {
             groups,
             emptySet(),
             sticky = { it.isStickySession("selected", true) },
-            expanded = { true },
         )
         val project = "header:${groups.single().key}"
 

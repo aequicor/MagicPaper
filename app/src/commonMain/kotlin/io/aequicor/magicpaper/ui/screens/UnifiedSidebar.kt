@@ -10,7 +10,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
@@ -401,10 +400,6 @@ internal fun UnifiedSidebar(
     var collapsedGroups by key("sidebar-collapsed-groups") {
         rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
     }
-    var collapsedOrganisms by key("sidebar-collapsed-organisms") {
-        rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
-    }
-    val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
     var searchExpanded by key("sidebar-search-expanded") {
         rememberSaveable { mutableStateOf(query.isNotBlank()) }
     }
@@ -434,14 +429,9 @@ internal fun UnifiedSidebar(
             selectedId = selectedId,
             viewingCoding = viewingCoding,
             collapsedGroups = collapsedGroups.keys,
-            expanded = { item -> if (item.isOrganism) collapsedOrganisms[item.id] != false else collapsedSessions[item.id] != false },
             onToggleGroup = { group ->
                 collapsedGroups = if (group.key in collapsedGroups) collapsedGroups - group.key
                 else collapsedGroups + (group.key to true)
-            },
-            onToggleSession = { item ->
-                if (item.isOrganism) collapsedOrganisms = collapsedOrganisms + (item.id to !(collapsedOrganisms[item.id] != false))
-                else collapsedSessions[item.id] = !(collapsedSessions[item.id] != false)
             },
             onSelect = vm::selectUnifiedSession,
             onArchive = { item -> if (item.isCoding) vm.archiveCodingSession(item.id) else vm.archiveChatSession(item.id) },

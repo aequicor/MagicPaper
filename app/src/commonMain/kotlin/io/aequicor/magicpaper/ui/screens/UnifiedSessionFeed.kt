@@ -16,8 +16,7 @@ internal data class SidebarFeedRow(
 )
 
 internal fun UnifiedSidebarItem.isStickySession(selectedId: String?, viewingCoding: Boolean): Boolean =
-    children.isNotEmpty() ||
-        (id == selectedId && isCoding == viewingCoding) ||
+    (id == selectedId && isCoding == viewingCoding) ||
         codingStatus == CodingSessionStatus.WORKING ||
         codingStatus == CodingSessionStatus.WAITING ||
         codingStatus == CodingSessionStatus.CONFIRMATION ||
@@ -26,15 +25,14 @@ internal fun UnifiedSidebarItem.isStickySession(selectedId: String?, viewingCodi
 internal fun sidebarFeedRows(
     groups: List<UnifiedSidebarGroup>,
     collapsedGroups: Set<String>,
-    sticky: (UnifiedSidebarItem) -> Boolean = { it.children.isNotEmpty() },
-    expanded: (UnifiedSidebarItem) -> Boolean,
+    sticky: (UnifiedSidebarItem) -> Boolean = { false },
 ): List<SidebarFeedRow> = buildList {
     fun session(item: UnifiedSidebarItem, group: UnifiedSidebarGroup, stickyAncestors: MutableList<String>) {
         val key = "${if (item.isCoding) "coding" else "chat"}:${item.id}"
         val header = sticky(item)
         add(SidebarFeedRow(PaperStickyTreeEntry(key, stickyAncestors.toList(), header), group, item))
         if (header) stickyAncestors += key
-        if (expanded(item)) item.children.forEach { child ->
+        item.children.forEach { child ->
             session(child, group, stickyAncestors)
         }
     }
@@ -55,9 +53,7 @@ internal fun UnifiedSessionFeed(
     selectedId: String?,
     viewingCoding: Boolean,
     collapsedGroups: Set<String>,
-    expanded: (UnifiedSidebarItem) -> Boolean,
     onToggleGroup: (UnifiedSidebarGroup) -> Unit,
-    onToggleSession: (UnifiedSidebarItem) -> Unit,
     onSelect: (String, Boolean) -> Unit,
     onArchive: (UnifiedSidebarItem) -> Unit,
     onDelete: (UnifiedSidebarItem) -> Unit,
@@ -68,7 +64,6 @@ internal fun UnifiedSessionFeed(
     val rows = sidebarFeedRows(
         groups, collapsedGroups,
         sticky = { it.isStickySession(selectedId, viewingCoding) },
-        expanded = expanded,
     )
     val byKey = rows.associateBy { it.entry.key }
     fun retainViewport() {
@@ -95,10 +90,8 @@ internal fun UnifiedSessionFeed(
             PaperSessionRow(
                 title = item.displayName,
                 selected = item.id == selectedId && item.isCoding == viewingCoding,
-                depth = row.entry.ancestors.size,
+                depth = 0,
                 subtitle = item.sidebarSubtitle(showProject = false),
-                expanded = expanded(item).takeIf { item.children.isNotEmpty() },
-                onToggle = { retainPosition(); onToggleSession(item) },
                 onClick = { retainViewport(); onSelect(item.id, item.isCoding) },
                 keepActionsVisible = menuKey == key,
                 indicator = {

@@ -28,14 +28,12 @@ internal fun sidebarPreviewGroups(): List<UnifiedSidebarGroup> {
 internal fun UnifiedSessionFeedPreview() {
     var selected by remember { mutableStateOf("parent") }
     var coding by remember { mutableStateOf(true) }
-    var collapsed by remember { mutableStateOf(emptySet<String>()) }
     var collapsedGroups by remember { mutableStateOf(emptySet<String>()) }
     PaperTheme {
         UnifiedSessionFeed(
             groups = remember { sidebarPreviewGroups() }, selectedId = selected, viewingCoding = coding,
-            collapsedGroups = collapsedGroups, expanded = { it.id !in collapsed },
+            collapsedGroups = collapsedGroups,
             onToggleGroup = { collapsedGroups = if (it.key in collapsedGroups) collapsedGroups - it.key else collapsedGroups + it.key },
-            onToggleSession = { collapsed = if (it.id in collapsed) collapsed - it.id else collapsed + it.id },
             onSelect = { id, isCoding -> selected = id; coding = isCoding },
             onArchive = {}, onDelete = {}, onAddSession = {}, modifier = Modifier.fillMaxSize(),
         )
