@@ -66,6 +66,7 @@ import io.aequicor.magicpaper.designsystem.PaperResearchReading
 import io.aequicor.magicpaper.designsystem.PaperBrandMark
 import io.aequicor.magicpaper.designsystem.paperResearchMessage
 import io.aequicor.magicpaper.designsystem.PaperContentEntrance
+import io.aequicor.magicpaper.designsystem.PaperResearchReadingMeasure
 import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
 
 /** Research workspace with shared sources and independently resumable questions. */
@@ -164,7 +165,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
                     .paperChatTopShadow(scrolled, topOffset = topInset),
-                contentPadding = PaddingValues(start = 8.dp, top = laneTop + 4.dp, end = 8.dp, bottom = transcriptBottomPadding),
+                contentPadding = PaddingValues(start = 12.dp, top = laneTop + 12.dp, end = 12.dp, bottom = transcriptBottomPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
@@ -195,7 +196,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
         PaperChatScrollToBottomButton(scroll, Modifier.align(Alignment.BottomEnd)
             .padding(end = 8.dp, bottom = controlsBottomPadding))
         Column(Modifier.align(paperResearchComposerAlignment(messages.isEmpty() && !busy))
-            .widthIn(max = 800.dp).fillMaxWidth()
+            .widthIn(max = PaperResearchReadingMeasure).fillMaxWidth()
             .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }) {
             if (messages.isEmpty() && !busy) PaperContentEntrance(animate = true) { EmptyHint() }
             footer()
@@ -238,7 +239,7 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
         modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 4.dp else 0.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
-        Box(Modifier.widthIn(max = 800.dp).fillMaxWidth()) {
+        Box(Modifier.widthIn(max = PaperResearchReadingMeasure).fillMaxWidth()) {
             actions {
                 MessagePinColumn(
                     number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,

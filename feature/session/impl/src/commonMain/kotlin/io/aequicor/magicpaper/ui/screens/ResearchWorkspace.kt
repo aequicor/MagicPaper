@@ -226,8 +226,19 @@ private fun ResearchChatHeader(
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PaperText("ЧАТ", role = PaperTextRole.HEADLINE)
-                Spacer(Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    PaperText(
+                        "ИССЛЕДОВАНИЕ",
+                        role = PaperTextRole.CHROME,
+                        color = LocalPaperColors.current.secondaryText,
+                    )
+                    PaperText(
+                        state.current?.title?.ifBlank { "Новая глава" } ?: "Новая глава",
+                        role = PaperTextRole.HEADLINE,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
                 if (roomy && onForkQuestion != null) {
                     PaperButton(
                         "Создать ветку",

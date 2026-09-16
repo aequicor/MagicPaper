@@ -27,6 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -38,14 +40,30 @@ public fun PaperResearchReading(content: @Composable () -> Unit) {
     val typography = LocalPaperTypography.current
     CompositionLocalProvider(
         LocalPaperTypography provides typography.copy(
-            body = typography.body.copy(fontSize = 18.sp, lineHeight = 30.sp),
-            headline = typography.headline.copy(fontSize = 32.sp, lineHeight = 40.sp),
-            title = typography.title.copy(fontSize = 24.sp, lineHeight = 32.sp),
+            // A book page needs a calm measure and generous leading, not merely
+            // enlarged chat typography. Display faces establish chapter hierarchy;
+            // Literata remains the continuous-reading face.
+            body = typography.body.copy(fontSize = 17.sp, lineHeight = 29.sp),
+            headline = typography.headline.copy(
+                fontFamily = PaperFonts.display,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 34.sp,
+                lineHeight = 40.sp,
+            ),
+            title = typography.title.copy(
+                fontFamily = PaperFonts.display,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 27.sp,
+                lineHeight = 33.sp,
+            ),
         ),
         LocalPaperResearchReading provides true,
         content = content,
     )
 }
+
+/** Comfortable line length for long-form prose; callers may still shrink with the window. */
+public val PaperResearchReadingMeasure: Dp = 720.dp
 
 /** A bordered paper sheet used by the three-column research workspace. */
 @Composable
@@ -169,19 +187,27 @@ public fun PaperBrandMark(modifier: Modifier = Modifier) {
 /** The user gets a compact prompt card; the answer reads directly on the surrounding paper pane. */
 @Composable
 public fun Modifier.paperResearchMessage(first: Boolean, last: Boolean, user: Boolean): Modifier {
-    val radius = 12.dp
+    val radius = 10.dp
     val shape = RoundedCornerShape(
         topStart = if (first) radius else 0.dp,
         topEnd = if (first) radius else 0.dp,
         bottomStart = if (last) radius else 0.dp,
         bottomEnd = if (last) radius else 0.dp,
     )
-    val surface = if (user) LocalPaperColors.current.selected else androidx.compose.ui.graphics.Color.Transparent
-    return padding(start = 12.dp, top = if (first) 6.dp else 0.dp,
-        end = 12.dp, bottom = if (last) 6.dp else 0.dp)
+    // A question is a reader's note; the response is the page itself. Keeping the
+    // answer unboxed makes long text scan like a chapter instead of a message bubble.
+    val surface = if (user) LocalPaperColors.current.selected.copy(alpha = .62f)
+        else androidx.compose.ui.graphics.Color.Transparent
+    return padding(
+        start = if (user) 28.dp else 12.dp,
+        top = if (first) if (user) 10.dp else 18.dp else 0.dp,
+        end = if (user) 28.dp else 12.dp,
+        bottom = if (last) if (user) 10.dp else 18.dp else 0.dp,
+    )
         .background(surface, shape)
-        .padding(horizontal = 16.dp)
-        .padding(top = if (first) 12.dp else 0.dp, bottom = if (last) 12.dp else 0.dp)
+        .padding(horizontal = if (user) 18.dp else 20.dp)
+        .padding(top = if (first) if (user) 12.dp else 4.dp else 0.dp,
+            bottom = if (last) if (user) 12.dp else 8.dp else 0.dp)
 }
 
 /** Keeps the same editor/focus while moving from the welcome page to the response dock.
