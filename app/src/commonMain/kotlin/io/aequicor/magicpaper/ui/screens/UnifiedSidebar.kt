@@ -103,12 +103,41 @@ internal val CodingSessionStatus.sidebarSubtitle: String?
         CodingSessionStatus.IDLE -> null
     }
 
-internal val CodingSessionStatus.pinnedInSidebar: Boolean
-    get() = this == CodingSessionStatus.WORKING || this == CodingSessionStatus.WAITING
-
 internal val unifiedSidebarItemComparator =
-    compareByDescending<UnifiedSidebarItem> { it.codingStatus?.pinnedInSidebar == true }
-        .thenByDescending { it.sortTime }
+    compareByDescending<UnifiedSidebarItem> { it.sortTime }
+
+/** A contiguous part of the activity feed. Chats interrupt project groups. */
+internal data class UnifiedSidebarGroup(
+    val key: String,
+    val projectId: String?,
+    val projectName: String?,
+    val items: List<UnifiedSidebarItem>,
+) {
+    val showsProjectHeader: Boolean get() = projectId != null && items.size > 1
+}
+
+internal fun groupUnifiedSidebarItems(items: List<UnifiedSidebarItem>): List<UnifiedSidebarGroup> {
+    val groups = mutableListOf<UnifiedSidebarGroup>()
+    items.sortedWith(unifiedSidebarItemComparator).forEach { item ->
+        val previous = groups.lastOrNull()
+        if (item.isCoding && item.projectId != null && previous?.projectId == item.projectId) {
+            groups[groups.lastIndex] = previous.copy(items = previous.items + item)
+        } else {
+            groups += UnifiedSidebarGroup(
+                key = "${if (item.isCoding) "project" else "chat"}:${item.id}",
+                projectId = item.projectId.takeIf { item.isCoding },
+                projectName = item.projectName.takeIf { item.isCoding },
+                items = listOf(item),
+            )
+        }
+    }
+    return groups
+}
+
+internal fun UnifiedSidebarItem.sidebarSubtitle(showProject: Boolean): String? = listOfNotNull(
+    codingStatus?.sidebarSubtitle,
+    projectName.takeIf { showProject && !it.isNullOrBlank() },
+).joinToString(" · ").takeIf { it.isNotBlank() }
 
 /** Keeps a runtime recency timestamp: creation first, then every visible status transition. */
 internal class SessionRecencyTracker(private val now: () -> Long) {
@@ -328,10 +357,8 @@ internal fun UnifiedSidebar(
         }
     }
     val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding, recencyTracker)
-    val codingByProject = items.filter { it.isCoding }.groupBy { it.projectId }
-    val projectOrder = coding.projects.map { it.id }
-    val chatItems = items.filter { !it.isCoding }
-    var collapsedProjects by rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
+    val groups = remember(items) { groupUnifiedSidebarItems(items) }
+    var collapsedGroups by rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
     var collapsedOrganisms by rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
     val collapsedSessions = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -356,31 +383,41 @@ internal fun UnifiedSidebar(
             state = rememberLazyListState(),
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
-            projectOrder.forEach { projectId ->
-                val project = coding.projects.firstOrNull { it.id == projectId } ?: return@forEach
-                val sessions = codingByProject[projectId].orEmpty().sortedWith(unifiedSidebarItemComparator)
-                val collapsed = projectId in collapsedProjects
-                item(key = "project:$projectId") {
-                    ProjectSectionHeader(
-                        name = project.name,
-                        collapsed = collapsed,
-                        onToggle = {
-                            collapsedProjects = if (collapsed) collapsedProjects - projectId
-                            else collapsedProjects + (projectId to true)
-                        },
-                        onAddSession = { vm.requestCodingSessionInProject(projectId) },
-                    )
+            groups.forEach { group ->
+                val collapsed = group.key in collapsedGroups
+                if (group.showsProjectHeader) {
+                    item(key = "header:${group.key}") {
+                        ProjectSectionHeader(
+                            name = group.projectName.orEmpty(),
+                            collapsed = collapsed,
+                            onToggle = {
+                                collapsedGroups = if (collapsed) collapsedGroups - group.key
+                                else collapsedGroups + (group.key to true)
+                            },
+                            onAddSession = { group.projectId?.let(vm::requestCodingSessionInProject) },
+                        )
+                    }
                 }
-                if (!collapsed) {
-                    sessions.forEach { item ->
-                        val selected = item.id == selectedId && viewingCoding
-                        if (item.isOrganism) {
+                if (!collapsed || !group.showsProjectHeader) {
+                    group.items.forEach { item ->
+                        val selected = item.id == selectedId && viewingCoding == item.isCoding
+                        if (!item.isCoding) {
+                            item(key = "h:${item.id}") {
+                                UnifiedSessionRow(
+                                    item = item,
+                                    selected = selected,
+                                    onClick = { vm.selectUnifiedSession(item.id, false) },
+                                    onDelete = { vm.deleteSession(item.id) },
+                                    onArchive = { vm.archiveChatSession(item.id) },
+                                )
+                            }
+                        } else if (item.isOrganism) {
                             val organismExpanded = collapsedOrganisms[item.id] != false
                             item(key = "organism:${item.id}") {
                                 var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
                                 PaperTreeGroupHeader(
                                     title = item.displayName,
-                                    subtitle = item.codingStatus?.sidebarSubtitle,
+                                    subtitle = item.sidebarSubtitle(showProject = !group.showsProjectHeader),
                                     expanded = organismExpanded,
                                     onToggle = { collapsedOrganisms = collapsedOrganisms + (item.id to !organismExpanded) },
                                     modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
@@ -445,6 +482,7 @@ internal fun UnifiedSidebar(
                                 UnifiedSessionRow(
                                     item = item,
                                     selected = selected,
+                                    showProjectSubtitle = !group.showsProjectHeader,
                                     onClick = { vm.selectUnifiedSession(item.id, true) },
                                     onDelete = { vm.deleteCodingSession(item.id) },
                                     onArchive = { vm.archiveCodingSession(item.id) },
@@ -453,22 +491,6 @@ internal fun UnifiedSidebar(
                             }
                         }
                     }
-                }
-            }
-            if (chatItems.isNotEmpty()) {
-                item(key = "section:chats") {
-                    ChatSectionHeader()
-                }
-                items(chatItems, key = { "h:${it.id}" }) { item ->
-                    val selected = item.id == selectedId && !viewingCoding
-                    UnifiedSessionRow(
-                        item = item,
-                        selected = selected,
-                        onClick = { vm.selectUnifiedSession(item.id, false) },
-                        onDelete = { vm.deleteSession(item.id) },
-                        onArchive = { vm.archiveChatSession(item.id) },
-                        onImmunityClick = null,
-                    )
                 }
             }
         }
@@ -546,25 +568,10 @@ private fun ProjectSectionHeader(
 }
 
 @Composable
-private fun ChatSectionHeader() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PaperText(
-            "Чаты",
-            style = LocalPaperTypography.current.label,
-            color = LocalPaperColors.current.secondaryText,
-        )
-    }
-}
-
-@Composable
 private fun UnifiedSessionRow(
     item: UnifiedSidebarItem,
     selected: Boolean,
+    showProjectSubtitle: Boolean = false,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onArchive: (() -> Unit)?,
@@ -604,7 +611,7 @@ private fun UnifiedSessionRow(
                 color = if (selected) LocalPaperColors.current.action else LocalPaperColors.current.text,
                 marqueeOnHover = true,
             )
-            item.codingStatus?.sidebarSubtitle
+            item.sidebarSubtitle(showProjectSubtitle)
                 ?.let { subtitle ->
                     PaperFadingText(
                         subtitle,

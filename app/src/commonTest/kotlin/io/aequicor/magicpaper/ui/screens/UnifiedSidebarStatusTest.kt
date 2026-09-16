@@ -4,7 +4,6 @@ import io.aequicor.magicpaper.domain.CodingSessionStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class UnifiedSidebarStatusTest {
@@ -91,15 +90,62 @@ class UnifiedSidebarStatusTest {
     }
 
     @Test
-    fun workingAndWaitingSessionsArePinnedAheadOfNewerInactiveSessions() {
+    fun allItemsAreOrderedByRecentActivityRegardlessOfTypeOrStatus() {
         val idle = UnifiedSidebarItem("idle", "Idle", 100, isCoding = true, codingStatus = CodingSessionStatus.IDLE)
         val working = UnifiedSidebarItem("working", "Working", 10, isCoding = true, codingStatus = CodingSessionStatus.WORKING)
-        val waiting = UnifiedSidebarItem("waiting", "Waiting", 20, isCoding = true, codingStatus = CodingSessionStatus.WAITING)
+        val chat = UnifiedSidebarItem("chat", "Chat", 50, isCoding = false)
 
-        assertEquals(listOf("waiting", "working", "idle"),
-            listOf(idle, working, waiting).sortedWith(unifiedSidebarItemComparator).map { it.id })
-        assertTrue(CodingSessionStatus.WORKING.pinnedInSidebar)
-        assertTrue(CodingSessionStatus.WAITING.pinnedInSidebar)
-        assertFalse(CodingSessionStatus.CONFIRMATION.pinnedInSidebar)
+        assertEquals(listOf("idle", "chat", "working"),
+            listOf(working, idle, chat).sortedWith(unifiedSidebarItemComparator).map { it.id })
+    }
+
+    @Test
+    fun chatInteractionSplitsSessionsFromTheSameProjectIntoSeparateGroups() {
+        fun session(id: String, time: Long, project: String = "p") = UnifiedSidebarItem(
+            id, id, time, isCoding = true, projectName = "Project", projectId = project,
+        )
+        val chat = UnifiedSidebarItem("chat", "Chat", 80, isCoding = false)
+
+        val groups = groupUnifiedSidebarItems(listOf(
+            session("newest", 100),
+            session("newer", 90),
+            chat,
+            session("older", 70),
+        ))
+
+        assertEquals(listOf(listOf("newest", "newer"), listOf("chat"), listOf("older")),
+            groups.map { group -> group.items.map { it.id } })
+        assertTrue(groups.first().showsProjectHeader)
+        assertTrue(!groups[1].showsProjectHeader)
+        assertTrue(!groups.last().showsProjectHeader)
+    }
+
+    @Test
+    fun anotherProjectAlsoStartsANewGroup() {
+        fun session(id: String, time: Long, project: String) = UnifiedSidebarItem(
+            id, id, time, isCoding = true, projectName = project, projectId = project,
+        )
+
+        val groups = groupUnifiedSidebarItems(listOf(
+            session("a1", 40, "a"),
+            session("b1", 30, "b"),
+            session("a2", 20, "a"),
+        ))
+
+        assertEquals(listOf("a", "b", "a"), groups.map { it.projectId })
+        assertTrue(groups.none { it.showsProjectHeader })
+    }
+
+    @Test
+    fun singleProjectSessionIncludesProjectInItsSubtitle() {
+        val idle = UnifiedSidebarItem(
+            "idle", "Idle", 10, isCoding = true, projectName = "MagicPaper",
+            codingStatus = CodingSessionStatus.IDLE,
+        )
+        val working = idle.copy(codingStatus = CodingSessionStatus.WORKING)
+
+        assertEquals("MagicPaper", idle.sidebarSubtitle(showProject = true))
+        assertEquals("Работает · MagicPaper", working.sidebarSubtitle(showProject = true))
+        assertEquals("Работает", working.sidebarSubtitle(showProject = false))
     }
 }
