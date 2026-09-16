@@ -117,7 +117,7 @@ class UnifiedSidebarStatusTest {
             groups.map { group -> group.items.map { it.id } })
         assertTrue(groups.first().showsProjectHeader)
         assertTrue(!groups[1].showsProjectHeader)
-        assertTrue(!groups.last().showsProjectHeader)
+        assertTrue(groups.last().showsProjectHeader)
     }
 
     @Test
@@ -133,7 +133,7 @@ class UnifiedSidebarStatusTest {
         ))
 
         assertEquals(listOf("a", "b", "a"), groups.map { it.projectId })
-        assertTrue(groups.none { it.showsProjectHeader })
+        assertTrue(groups.all { it.showsProjectHeader })
     }
 
     @Test
@@ -147,5 +147,31 @@ class UnifiedSidebarStatusTest {
         assertEquals("MagicPaper", idle.sidebarSubtitle(showProject = true))
         assertEquals("Работает · MagicPaper", working.sidebarSubtitle(showProject = true))
         assertEquals("Работает", working.sidebarSubtitle(showProject = false))
+    }
+
+    @Test
+    fun filtersStatusAndSourceWithoutDroppingMatchingOrganismChildren() {
+        val child = UnifiedSidebarItem("child", "Child", 9, true, projectId = "p",
+            codingStatus = CodingSessionStatus.WORKING)
+        val zygote = UnifiedSidebarItem("zygote", "Task", 10, true, projectId = "p",
+            codingStatus = CodingSessionStatus.IDLE, children = listOf(child), isOrganism = true)
+        val chat = UnifiedSidebarItem("chat", "Chat", 8, false)
+
+        val working = filterUnifiedSidebarItems(listOf(zygote, chat), SidebarStatusFilter.WORKING, SidebarSourceFilter.All)
+        assertEquals(listOf("zygote"), working.map { it.id })
+        assertEquals(listOf("child"), working.single().children.map { it.id })
+        assertEquals(listOf("chat"), filterUnifiedSidebarItems(listOf(zygote, chat), SidebarStatusFilter.ALL,
+            SidebarSourceFilter.Chats).map { it.id })
+    }
+
+    @Test
+    fun projectsAndImportantSessionsAreStickyCandidates() {
+        assertTrue(UnifiedSidebarGroup("p", "p", "Project", listOf(
+            UnifiedSidebarItem("one", "One", 1, true, projectId = "p"),
+        )).showsProjectHeader)
+        assertTrue(UnifiedSidebarItem("z", "Z", 1, true, isOrganism = true).needsStickyHeader())
+        assertTrue(UnifiedSidebarItem("w", "W", 1, true,
+            codingStatus = CodingSessionStatus.WORKING).needsStickyHeader())
+        assertTrue(UnifiedSidebarItem("u", "U", 1, true, unread = true).needsStickyHeader())
     }
 }

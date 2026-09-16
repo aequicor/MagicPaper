@@ -8,7 +8,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
@@ -69,11 +71,50 @@ internal fun SessionBrowserControls(
     archivesOnly: Boolean,
     archiveCount: Int,
     onToggleArchive: () -> Unit,
+    statusFilter: SidebarStatusFilter = SidebarStatusFilter.ALL,
+    onStatusFilter: (SidebarStatusFilter) -> Unit = {},
+    sourceFilterKey: String = "all",
+    onSourceFilter: (String) -> Unit = {},
+    projects: List<Pair<String, String>> = emptyList(),
 ) {
+    var filterOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             PaperText("Сессии", role = PaperTextRole.TITLE, modifier = Modifier.weight(1f))
+            Box {
+                val filtersActive = statusFilter != SidebarStatusFilter.ALL || sourceFilterKey != "all"
+                PaperTooltip("Фильтры сессий") {
+                    PaperToolbarButton(
+                        icon = PaperToolbarIcon.Filter,
+                        label = "Фильтры сессий",
+                        size = 28.dp,
+                        selected = filtersActive,
+                        onClick = { filterOpen = true },
+                    )
+                }
+                PaperMenuHost(filterOpen, { filterOpen = false }, Modifier.widthIn(min = 220.dp)) {
+                    PaperText("Статус", role = PaperTextRole.LABEL,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                    SidebarStatusFilter.entries.forEach { filter ->
+                        PaperRichMenuAction(
+                            text = { PaperText(if (statusFilter == filter) "✓ ${filter.label}" else filter.label) },
+                            onClick = { onStatusFilter(filter); filterOpen = false },
+                        )
+                    }
+                    PaperDivider()
+                    PaperText("Источник", role = PaperTextRole.LABEL,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                    (listOf("all" to "Все сессии", "chats" to "Чаты") +
+                        projects.map { (id, name) -> "project:$id" to name }).forEach { (key, label) ->
+                        PaperRichMenuAction(
+                            text = { PaperText(if (sourceFilterKey == key) "✓ $label" else label) },
+                            onClick = { onSourceFilter(key); filterOpen = false },
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(4.dp))
             PaperTooltip(if (searchExpanded) "Закрыть поиск" else "Поиск сессий") {
                 PaperToolbarButton(
                     icon = PaperToolbarIcon.Search,

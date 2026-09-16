@@ -36,7 +36,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-public enum class PaperToolbarIcon { Sidebar, Settings, Search, Archive, Unarchive, Immunity }
+public enum class PaperToolbarIcon { Sidebar, Settings, Search, Filter, Archive, Unarchive, Immunity }
 
 /** Монохромные значки без зависимости от платформенного emoji-шрифта. */
 @Composable
@@ -85,6 +85,13 @@ public fun PaperToolbarButton(
                     PaperToolbarIcon.Search -> {
                         drawCircle(ink, radius = 4.5f, center = Offset(6.5f, 6.5f), style = stroke)
                         drawLine(ink, Offset(10f, 10f), Offset(14f, 14f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+                    }
+                    PaperToolbarIcon.Filter -> {
+                        val filter = Path().apply {
+                            moveTo(2f, 3f); lineTo(14f, 3f); lineTo(10f, 8f)
+                            lineTo(10f, 13f); lineTo(6f, 15f); lineTo(6f, 8f); close()
+                        }
+                        drawPath(filter, ink, style = stroke)
                     }
                     PaperToolbarIcon.Settings -> {
                         drawPath(gear, ink, style = stroke)

@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.ui.screens
 import io.aequicor.magicpaper.designsystem.PaperHoverActions
 import io.aequicor.magicpaper.designsystem.PaperRowMenu
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -115,8 +116,52 @@ internal data class UnifiedSidebarGroup(
     val projectName: String?,
     val items: List<UnifiedSidebarItem>,
 ) {
-    val showsProjectHeader: Boolean get() = projectId != null && items.size > 1
+    val showsProjectHeader: Boolean get() = projectId != null
 }
+
+internal enum class SidebarStatusFilter(val label: String) {
+    ALL("Все статусы"), WORKING("В работе"), UNREAD("Непрочитанные"),
+    WAITING("Ждут ответа"), CONFIRMATION("Ждут подтверждения"), BLOCKED("Остановлены"),
+    QUEUED("Ждут родителя"), SCHEDULED("Ждут события"), NEEDS_TESTING("Нужна проверка"), READY("Готовы"),
+}
+
+internal sealed interface SidebarSourceFilter {
+    data object All : SidebarSourceFilter
+    data object Chats : SidebarSourceFilter
+    data class Project(val id: String) : SidebarSourceFilter
+}
+
+internal fun filterUnifiedSidebarItems(
+    items: List<UnifiedSidebarItem>, status: SidebarStatusFilter, source: SidebarSourceFilter,
+): List<UnifiedSidebarItem> {
+    fun matchesStatus(item: UnifiedSidebarItem) = when (status) {
+        SidebarStatusFilter.ALL -> true
+        SidebarStatusFilter.WORKING -> item.codingStatus == CodingSessionStatus.WORKING
+        SidebarStatusFilter.UNREAD -> item.unread || item.codingStatus == CodingSessionStatus.UNREAD
+        SidebarStatusFilter.WAITING -> item.codingStatus == CodingSessionStatus.WAITING
+        SidebarStatusFilter.CONFIRMATION -> item.codingStatus == CodingSessionStatus.CONFIRMATION
+        SidebarStatusFilter.BLOCKED -> item.codingStatus == CodingSessionStatus.BLOCKED
+        SidebarStatusFilter.QUEUED -> item.codingStatus == CodingSessionStatus.QUEUED
+        SidebarStatusFilter.SCHEDULED -> item.codingStatus == CodingSessionStatus.SCHEDULED
+        SidebarStatusFilter.NEEDS_TESTING -> item.codingStatus == CodingSessionStatus.NEEDS_TESTING
+        SidebarStatusFilter.READY -> item.codingStatus == CodingSessionStatus.IDLE
+    }
+    fun matchesSource(item: UnifiedSidebarItem) = when (source) {
+        SidebarSourceFilter.All -> true
+        SidebarSourceFilter.Chats -> !item.isCoding
+        is SidebarSourceFilter.Project -> item.projectId == source.id
+    }
+    fun filtered(item: UnifiedSidebarItem): UnifiedSidebarItem? {
+        val children = item.children.mapNotNull(::filtered)
+        return item.copy(children = children).takeIf {
+            matchesSource(item) && (matchesStatus(item) || children.isNotEmpty())
+        }
+    }
+    return items.mapNotNull(::filtered)
+}
+
+internal fun UnifiedSidebarItem.needsStickyHeader(): Boolean =
+    isOrganism || unread || codingStatus == CodingSessionStatus.WORKING || codingStatus == CodingSessionStatus.UNREAD
 
 internal fun groupUnifiedSidebarItems(items: List<UnifiedSidebarItem>): List<UnifiedSidebarGroup> {
     val groups = mutableListOf<UnifiedSidebarGroup>()
@@ -337,6 +382,7 @@ internal fun rememberUnifiedItems(
 }
 
 /** Единая боковая панель: чаты и кодинг-сессии в одном списке с группировкой по проектам. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun UnifiedSidebar(
     vm: SidebarActions,
@@ -351,6 +397,8 @@ internal fun UnifiedSidebar(
     // newly added controls from consuming the old positional collapse-map slots.
     var query by key("sidebar-query") { rememberSaveable { mutableStateOf("") } }
     var archivesOnly by key("sidebar-archives") { rememberSaveable { mutableStateOf(false) } }
+    var statusFilter by key("sidebar-status-filter") { rememberSaveable { mutableStateOf(SidebarStatusFilter.ALL) } }
+    var sourceFilterKey by key("sidebar-source-filter") { rememberSaveable { mutableStateOf("all") } }
     val browsing = archivesOnly || query.isNotBlank()
     val searchCoding = remember(coding.sessions) { coding.sessions.map { it.session to it.messages } }
     val results by produceState<List<SessionSearchResult>?>(null, query, archivesOnly, chatSessions, searchCoding, coding.projects) {
@@ -361,7 +409,15 @@ internal fun UnifiedSidebar(
         }
     }
     val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding, recencyTracker)
-    val groups = remember(items) { groupUnifiedSidebarItems(items) }
+    val sourceFilter = when (sourceFilterKey) {
+        "chats" -> SidebarSourceFilter.Chats
+        "all" -> SidebarSourceFilter.All
+        else -> SidebarSourceFilter.Project(sourceFilterKey.removePrefix("project:"))
+    }
+    val filteredItems = remember(items, statusFilter, sourceFilter) {
+        filterUnifiedSidebarItems(items, statusFilter, sourceFilter)
+    }
+    val groups = remember(filteredItems) { groupUnifiedSidebarItems(filteredItems) }
     var collapsedGroups by key("sidebar-collapsed-groups") {
         rememberSaveable { mutableStateOf(emptyMap<String, Boolean>()) }
     }
@@ -379,7 +435,13 @@ internal fun UnifiedSidebar(
             if (!searchExpanded) query = ""
         }, archivesOnly,
             chatSessions.count { it.archived } + coding.sessions.count { it.session.archived },
-            { archivesOnly = !archivesOnly })
+            { archivesOnly = !archivesOnly },
+            statusFilter = statusFilter,
+            onStatusFilter = { statusFilter = it },
+            sourceFilterKey = sourceFilterKey,
+            onSourceFilter = { sourceFilterKey = it },
+            projects = coding.projects.map { it.id to it.name },
+        )
         PaperDivider()
         if (browsing) {
             SessionBrowserResults(results.orEmpty(), archivesOnly, query.isNotBlank(), selectedId, viewingCoding,
@@ -394,16 +456,18 @@ internal fun UnifiedSidebar(
             groups.forEach { group ->
                 val collapsed = group.key in collapsedGroups
                 if (group.showsProjectHeader) {
-                    item(key = "header:${group.key}") {
-                        ProjectSectionHeader(
-                            name = group.projectName.orEmpty(),
-                            collapsed = collapsed,
-                            onToggle = {
-                                collapsedGroups = if (collapsed) collapsedGroups - group.key
-                                else collapsedGroups + (group.key to true)
-                            },
-                            onAddSession = { group.projectId?.let(vm::requestCodingSessionInProject) },
-                        )
+                    stickyHeader(key = "header:${group.key}") {
+                        Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) {
+                            ProjectSectionHeader(
+                                name = group.projectName.orEmpty(),
+                                collapsed = collapsed,
+                                onToggle = {
+                                    collapsedGroups = if (collapsed) collapsedGroups - group.key
+                                    else collapsedGroups + (group.key to true)
+                                },
+                                onAddSession = { group.projectId?.let(vm::requestCodingSessionInProject) },
+                            )
+                        }
                     }
                 }
                 if (!collapsed || !group.showsProjectHeader) {
@@ -421,7 +485,8 @@ internal fun UnifiedSidebar(
                             }
                         } else if (item.isOrganism) {
                             val organismExpanded = collapsedOrganisms[item.id] != false
-                            item(key = "organism:${item.id}") {
+                            stickyHeader(key = "organism:${item.id}") {
+                                Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) {
                                 var menuOpen by rememberSaveable(item.id) { mutableStateOf(false) }
                                 PaperTreeGroupHeader(
                                     title = item.displayName,
@@ -466,6 +531,7 @@ internal fun UnifiedSidebar(
                                         }
                                     },
                                 )
+                                }
                             }
                             if (organismExpanded) {
                                 item.children.forEach { child ->
@@ -486,7 +552,7 @@ internal fun UnifiedSidebar(
                                 }
                             }
                         } else {
-                            item(key = "c:${item.id}") {
+                            val content: @Composable () -> Unit = {
                                 UnifiedSessionRow(
                                     item = item,
                                     selected = selected,
@@ -497,6 +563,11 @@ internal fun UnifiedSidebar(
                                     onImmunityClick = { item.immunity?.let { vm.selectUnifiedSession(it.sessionId, true) } },
                                 )
                             }
+                            if (item.needsStickyHeader()) {
+                                stickyHeader(key = "c:${item.id}") {
+                                    Column(Modifier.fillMaxWidth().background(LocalPaperColors.current.surface)) { content() }
+                                }
+                            } else item(key = "c:${item.id}") { content() }
                         }
                     }
                 }
