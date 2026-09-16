@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -186,22 +187,31 @@ public val PaperTitleBarLaneGap: Dp = 6.dp
 @Composable
 public fun Modifier.paperChatTopShadow(visible: Boolean, effectHeight: Dp = 32.dp, topOffset: Dp = 0.dp): Modifier {
     val color = LocalPaperColors.current.depthShadow
-    return drawWithContent {
-        drawContent()
-        if (visible) {
-            val start = topOffset.toPx().coerceIn(0f, size.height)
-            val extent = effectHeight.toPx().coerceAtLeast(1f)
-            drawRect(
-                Brush.verticalGradient(
-                    0f to color.copy(alpha = .24f),
-                    .25f to color.copy(alpha = .13f),
-                    .5f to color.copy(alpha = .05f),
-                    .75f to color.copy(alpha = .01f),
-                    1f to Color.Transparent,
-                    startY = start, endY = start + extent),
-                topLeft = Offset(0f, start),
-                size = androidx.compose.ui.geometry.Size(size.width, (size.height - start).coerceAtLeast(0f)),
-            )
+    if (!visible) return this
+    return drawWithCache {
+        val start = topOffset.toPx().coerceIn(0f, size.height)
+        val extent = effectHeight.toPx().coerceAtLeast(1f)
+        val shadowHeight = extent.coerceAtMost((size.height - start).coerceAtLeast(0f))
+        val brush = Brush.verticalGradient(
+            0f to color.copy(alpha = .24f),
+            .25f to color.copy(alpha = .13f),
+            .5f to color.copy(alpha = .05f),
+            .75f to color.copy(alpha = .01f),
+            1f to Color.Transparent,
+            startY = start,
+            endY = start + extent,
+        )
+        onDrawWithContent {
+            drawContent()
+            // The gradient is fully transparent after its extent. Restricting the draw
+            // to that strip avoids blending the whole transcript on every scroll frame.
+            if (shadowHeight > 0f) {
+                drawRect(
+                    brush,
+                    topLeft = Offset(0f, start),
+                    size = androidx.compose.ui.geometry.Size(size.width, shadowHeight),
+                )
+            }
         }
     }
 }
