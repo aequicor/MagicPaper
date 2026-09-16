@@ -21,8 +21,7 @@ internal fun MessageHistoryActions(
     onEdit: (suspend (String) -> Result<Unit>)? = null,
     onDelete: (suspend () -> Result<Unit>)? = null,
     onFork: (suspend () -> Result<String>)? = null,
-    compact: Boolean = false,
-    showCopy: Boolean = true,
+    content: @Composable () -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -30,26 +29,27 @@ internal fun MessageHistoryActions(
     var edited by rememberSaveable(messageId) { mutableStateOf(text) }
     var busy by remember(messageId) { mutableStateOf(false) }
     var error by remember(messageId) { mutableStateOf<String?>(null) }
-    PaperMessageActions(
-        onCopy = {
-            try { clipboard.setText(AnnotatedString(copyText())); error = null }
-            catch (failure: Exception) {
-                AppLog.error("session", "message.copy.failed", failure, mapOf("messageId" to messageId))
-                error = "Не удалось скопировать сообщение. Повторите попытку."
-            }
-        },
-        onEdit = onEdit?.let { { edited = text; error = null; dialog = "edit" } },
-        onDelete = onDelete?.let { { error = null; dialog = "delete" } },
-        onFork = onFork?.let { action -> { scope.launch {
-            busy = true
-            try { error = action().exceptionOrNull()?.message } finally { busy = false }
-        }; Unit } },
-        historyEnabled = enabled && !busy,
-        forkEnabled = !busy,
-        compact = compact,
-        showCopy = showCopy,
-    )
-    if (dialog == null) error?.let { PaperText(it, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL) }
+    Column(Modifier.fillMaxWidth()) {
+        PaperMessageActions(
+            onCopy = {
+                try { clipboard.setText(AnnotatedString(copyText())); error = null }
+                catch (failure: Exception) {
+                    AppLog.error("session", "message.copy.failed", failure, mapOf("messageId" to messageId))
+                    error = "Не удалось скопировать сообщение. Повторите попытку."
+                }
+            },
+            onEdit = onEdit?.let { { edited = text; error = null; dialog = "edit" } },
+            onDelete = onDelete?.let { { error = null; dialog = "delete" } },
+            onFork = onFork?.let { action -> { scope.launch {
+                busy = true
+                try { error = action().exceptionOrNull()?.message } finally { busy = false }
+            }; Unit } },
+            historyEnabled = enabled && !busy,
+            forkEnabled = !busy,
+            content = content,
+        )
+        if (dialog == null) error?.let { PaperText(it, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL) }
+    }
     dialog?.let { mode ->
         val editing = mode == "edit"
         PaperDialog(if (editing) "Редактировать сообщение" else "Удалить сообщение?",
@@ -75,18 +75,4 @@ internal fun MessageHistoryActions(
             }
         }
     }
-}
-
-@Composable
-internal fun ForkSessionAction(enabled: Boolean, onFork: suspend () -> Result<String>) {
-    val scope = rememberCoroutineScope()
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    PaperButton("Форк сессии", enabled = enabled && !busy, kind = PaperButtonKind.QUIET, onClick = {
-        scope.launch {
-            busy = true
-            try { error = onFork().exceptionOrNull()?.message } finally { busy = false }
-        }
-    })
-    error?.let { PaperText(it, role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
 }

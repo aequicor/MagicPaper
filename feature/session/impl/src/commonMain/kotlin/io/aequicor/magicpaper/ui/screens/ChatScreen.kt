@@ -171,12 +171,11 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                     val message = fragment.message
                     PaperChatScrollItem(scroll, fragment.key) {
                         MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
-                            fragment = fragment, researchSourceCount = researchSourceCount, actions = {
+                            fragment = fragment, researchSourceCount = researchSourceCount, actions = { content ->
                                 MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
                                     onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
                                     onDelete = onDelete?.let { action -> { action(message.id) } },
-                                    onFork = onFork?.let { action -> { action(message.id) } }, compact = true,
-                                    showCopy = message.role != ChatRole.USER)
+                                    onFork = onFork?.let { action -> { action(message.id) } }, content = content)
                             })
                     }
                 }
@@ -233,41 +232,42 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
 private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
     fragment: ChatMessageFragment = ChatMessageFragment(message),
     researchSourceCount: Int = 0,
-    actions: @Composable () -> Unit = {}) {
+    actions: @Composable (@Composable () -> Unit) -> Unit = { it() }) {
     val isUser = message.role == ChatRole.USER
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 4.dp else 0.dp),
         horizontalArrangement = Arrangement.Center,
     ) {
-        MessagePinColumn(
-            number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
-            modifier = Modifier
-                .widthIn(max = 800.dp)
-                .fillMaxWidth()
-                .paperResearchMessage(fragment.first, fragment.last, isUser),
-        ) {
-            if (fragment.first) {
-                if (isUser) {
-                    PaperText("Вы", role = PaperTextRole.CHROME)
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PaperBrandMark(Modifier.size(22.dp))
-                        PaperText("MagicPaper", role = PaperTextRole.LABEL)
-                        if (researchSourceCount > 0) PaperText(
-                            "·  По ${researchSourceLabel(researchSourceCount)}",
-                            role = PaperTextRole.CHROME,
-                            color = LocalPaperColors.current.secondaryText,
-                        )
+        Box(Modifier.widthIn(max = 800.dp).fillMaxWidth()) {
+            actions {
+                MessagePinColumn(
+                    number = pinNumber.takeIf { isUser && fragment.last }, onClick = onShowPins,
+                    modifier = Modifier.fillMaxWidth()
+                        .paperResearchMessage(fragment.first, fragment.last, isUser),
+                ) {
+                    if (fragment.first) {
+                        if (isUser) {
+                            PaperText("Вы", role = PaperTextRole.CHROME)
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PaperBrandMark(Modifier.size(22.dp))
+                                PaperText("MagicPaper", role = PaperTextRole.LABEL)
+                                if (researchSourceCount > 0) PaperText(
+                                    "·  По ${researchSourceLabel(researchSourceCount)}",
+                                    role = PaperTextRole.CHROME,
+                                    color = LocalPaperColors.current.secondaryText,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(if (isUser) 4.dp else 10.dp))
                     }
+                    if (fragment.parts != null) {
+                        fragment.parts.Content(fragment.index)
+                    } else if (message.text.isNotEmpty()) PaperText("Подготавливаю сообщение…", role = PaperTextRole.LABEL)
+                    if (isUser && fragment.last) MessageAttachments(message.attachments)
                 }
-                Spacer(Modifier.height(if (isUser) 4.dp else 10.dp))
             }
-            if (fragment.parts != null) {
-                fragment.parts.Content(fragment.index)
-            } else if (message.text.isNotEmpty()) PaperText("Подготавливаю сообщение…", role = PaperTextRole.LABEL)
-            if (isUser && fragment.last) MessageAttachments(message.attachments)
-            if (fragment.last) actions()
         }
     }
 }
