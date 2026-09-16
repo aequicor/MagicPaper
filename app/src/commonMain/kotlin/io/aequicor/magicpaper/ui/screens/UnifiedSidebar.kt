@@ -42,6 +42,7 @@ import io.aequicor.magicpaper.designsystem.LocalPaperTypography
 import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
 import io.aequicor.magicpaper.designsystem.PaperActivityShape
 import io.aequicor.magicpaper.designsystem.PaperActivityTone
+import io.aequicor.magicpaper.designsystem.activityIndicatorColors
 import io.aequicor.magicpaper.designsystem.PaperButton
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
@@ -606,7 +607,11 @@ private fun UnifiedSessionRow(
             ActivityDot(item.codingStatus, size = 8)
             Spacer(Modifier.width(8.dp))
         } else if (!item.isCoding) {
-            PaperText("✦", role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
+            PaperText(
+                "✦",
+                role = PaperTextRole.LABEL,
+                color = LocalPaperColors.current.activityIndicatorColors(PaperActivityTone.READY).second,
+            )
             Spacer(Modifier.width(8.dp))
         }
 
