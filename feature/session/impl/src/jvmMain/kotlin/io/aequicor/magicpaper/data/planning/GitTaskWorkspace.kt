@@ -284,8 +284,13 @@ class GitTaskWorkspace(
         // This ref is created by this workspace immediately before it rewrites the task result.
         // It remains the authoritative proof even when a later destination rewrite means the
         // previous target is intentionally no longer an ancestor of the in-progress rebase HEAD.
-        require(probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 &&
-            ancestor(dir, record.resultCommit, pre), lost)
+        if (probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 &&
+            ancestor(dir, record.resultCommit, pre)) return
+        // Compatibility with a conflict started before pre-integration refs existed: while
+        // rebase is active Git deliberately leaves the task branch at the captured result.
+        val taskBranch = "refs/heads/${record.branch}"
+        require(rebaseInProgress(dir) && probe(dir, "show-ref", "--verify", "--quiet", taskBranch).first == 0 &&
+            ancestor(dir, record.resultCommit, taskBranch), lost)
     }
     private suspend fun preservePreIntegrationRef(dir: File, record: TaskWorktree) {
         val ref = preIntegrationRef(record)

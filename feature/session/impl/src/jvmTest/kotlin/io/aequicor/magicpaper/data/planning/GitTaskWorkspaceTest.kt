@@ -310,6 +310,30 @@ class GitTaskWorkspaceTest {
         assertEquals("user\nagent\n", source.resolve("base.txt").readText())
     } }
 
+    @Test fun legacyConflictWithoutPreIntegrationRefRecoversFromTaskBranch() = runTest { fixture {
+        var task = open()
+        File(task.path).resolve("base.txt").writeText("agent\n")
+        task = task.copy(resultCommit = port.capture(task))
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "user")
+        task = task.copy(targetCommit = port.target(task))
+        assertNull(port.integrate(task))
+
+        val commonPath = git(File(task.path), "rev-parse", "--git-common-dir")
+        val common = File(commonPath).let { if (it.isAbsolute) it else File(task.path, commonPath) }
+        val preRefs = common.resolve("refs/magicpaper").listFiles().orEmpty()
+            .filter { it.name.startsWith("task-pre-integration-") }
+        assertTrue(preRefs.isNotEmpty())
+        preRefs.forEach { it.delete() }
+
+        File(task.path).resolve("base.txt").writeText("user\nagent\n")
+        git(File(task.path), "add", "base.txt")
+        task = task.copy(phase = TaskWorktreePhase.CONFLICT)
+        task = task.copy(mergeCommit = checkNotNull(port.integrate(task)))
+        port.deliver(task)
+        assertEquals("user\nagent\n", source.resolve("base.txt").readText())
+    } }
+
     @Test fun dirtyOrSwitchedDestinationCannotBeOverwritten() = runTest { fixture {
         val task = open()
         File(task.path).resolve("task").writeText("result")
