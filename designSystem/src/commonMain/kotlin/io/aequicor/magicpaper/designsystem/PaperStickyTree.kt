@@ -25,6 +25,9 @@ public data class PaperStickyTreeEntry(
 internal data class PaperTreeVisibleEntry(val index: Int, val offset: Int)
 internal data class PaperTreePin(val key: String, val offset: Int)
 
+private fun List<String>.visiblePinLevels(): List<String> =
+    if (size <= 4) this else listOf(first()) + takeLast(3)
+
 internal fun paperTreePins(
     entries: List<PaperStickyTreeEntry>,
     visible: List<PaperTreeVisibleEntry>,
@@ -38,7 +41,7 @@ internal fun paperTreePins(
         .firstOrNull { firstEntry.ancestors.isNotEmpty() && it.header && it.ancestors == firstEntry.ancestors }
         ?.key
     val candidates = (firstEntry.ancestors + listOfNotNull(activePeerHeader))
-        .takeLast(4).toMutableList()
+        .visiblePinLevels().toMutableList()
     // Include a descendant header as it reaches the bottom of the pinned stack.
     for (row in visible) {
         val entry = entries.getOrNull(row.index) ?: continue

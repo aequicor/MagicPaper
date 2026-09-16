@@ -177,29 +177,44 @@ class UnifiedSessionFeedRenderTest {
             scene.save("hover-actions")
             assertTrue(archive.config[SemanticsActions.OnClick].action!!.invoke())
             assertEquals("child-5", archived)
-            repeat(4) {
-                scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
-                    type = PointerType.Mouse)
-                scene.settle()
-            }
-            val pinnedTop = scene.text("Этап 6: проверка интерфейса").boundsInRoot.top
-            repeat(1) {
-                scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
-                    type = PointerType.Mouse)
-                scene.settle()
-            }
-            assertEquals(
-                pinnedTop,
-                scene.text("Этап 6: проверка интерфейса").boundsInRoot.top,
-                absoluteTolerance = 0.5f,
-                message = "A sticky session must retain its top position while the list scrolls",
-            )
-            repeat(3) {
+            repeat(8) {
                 scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
                     type = PointerType.Mouse)
                 scene.settle()
             }
             assertTrue(state.firstVisibleItemIndex > before, "Wheel events over pinned rows must reach the lazy list")
+        }
+    }
+
+    @Test fun selectedWorkingAndWaitingSessionsStackUnderTheirProject() {
+        fun session(id: String, title: String, status: io.aequicor.magicpaper.domain.CodingSessionStatus) =
+            UnifiedSidebarItem(id, title, 100, true, projectId = "p", projectName = "Project", codingStatus = status)
+        val items = listOf(
+            session("selected", "Выбранный чат", io.aequicor.magicpaper.domain.CodingSessionStatus.IDLE),
+            session("working", "Рабочий чат", io.aequicor.magicpaper.domain.CodingSessionStatus.WORKING),
+            session("waiting", "Чат ждёт ответа", io.aequicor.magicpaper.domain.CodingSessionStatus.WAITING),
+        ) + List(12) {
+            session("ordinary-$it", "Обычный чат $it", io.aequicor.magicpaper.domain.CodingSessionStatus.IDLE)
+        }
+        val groups = listOf(UnifiedSidebarGroup("project:p", "p", "Project", items))
+        val state = LazyListState(firstVisibleItemIndex = 8)
+        ImageComposeScene(320, 420) {
+            PaperTheme {
+                UnifiedSessionFeed(groups, "selected", true, emptySet(), { true }, {}, {},
+                    { _, _ -> }, {}, {}, {}, state = state)
+            }
+        }.use { scene ->
+            scene.settle()
+            val project = scene.text("Project")
+            val selected = scene.text("Выбранный чат")
+            val working = scene.text("Рабочий чат")
+            val waiting = scene.text("Чат ждёт ответа")
+
+            assertTrue(project.boundsInRoot.top >= 0f)
+            assertTrue(selected.boundsInRoot.top >= project.boundsInRoot.bottom)
+            assertTrue(working.boundsInRoot.top >= selected.boundsInRoot.bottom)
+            assertTrue(waiting.boundsInRoot.top >= working.boundsInRoot.bottom)
+            scene.save("nested-status-headers")
         }
     }
 

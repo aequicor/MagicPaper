@@ -196,4 +196,34 @@ class UnifiedSidebarStatusTest {
         assertTrue(session("unread", unread = true).isStickySession(null, true))
         assertTrue(!session("idle").isStickySession(null, true))
     }
+
+    @Test
+    fun stickySessionsAccumulateUnderTheirProject() {
+        fun session(id: String, status: CodingSessionStatus = CodingSessionStatus.IDLE) =
+            UnifiedSidebarItem(id, id, 1, true, projectId = "p", projectName = "Project", codingStatus = status)
+        val groups = groupUnifiedSidebarItems(listOf(
+            session("selected"),
+            session("working", CodingSessionStatus.WORKING),
+            session("waiting", CodingSessionStatus.WAITING),
+            session("ordinary"),
+        ))
+        val rows = sidebarFeedRows(
+            groups,
+            emptySet(),
+            sticky = { it.isStickySession("selected", true) },
+            expanded = { true },
+        )
+        val project = "header:${groups.single().key}"
+
+        assertEquals(listOf(project), rows.single { it.session?.id == "selected" }.entry.ancestors)
+        assertEquals(listOf(project, "coding:selected"), rows.single { it.session?.id == "working" }.entry.ancestors)
+        assertEquals(
+            listOf(project, "coding:selected", "coding:working"),
+            rows.single { it.session?.id == "waiting" }.entry.ancestors,
+        )
+        assertEquals(
+            listOf(project, "coding:selected", "coding:working", "coding:waiting"),
+            rows.single { it.session?.id == "ordinary" }.entry.ancestors,
+        )
+    }
 }

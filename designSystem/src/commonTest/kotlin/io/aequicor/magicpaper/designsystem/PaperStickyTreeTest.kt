@@ -63,6 +63,9 @@ class PaperStickyTreeTest {
 
     @Test fun deeperTreesNeverPinMoreThanFourHeaders() {
         val deep = entries + PaperStickyTreeEntry("deep", listOf("project", "task", "parent", "child"), true)
-        assertEquals(4, paperTreePins(deep, listOf(PaperTreeVisibleEntry(7, -1)), heights).size)
+        assertEquals(
+            listOf("project", "parent", "child", "deep"),
+            paperTreePins(deep, listOf(PaperTreeVisibleEntry(7, -1)), heights).map { it.key },
+        )
     }
 }

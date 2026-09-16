@@ -29,19 +29,22 @@ internal fun sidebarFeedRows(
     sticky: (UnifiedSidebarItem) -> Boolean = { it.children.isNotEmpty() },
     expanded: (UnifiedSidebarItem) -> Boolean,
 ): List<SidebarFeedRow> = buildList {
-    fun session(item: UnifiedSidebarItem, group: UnifiedSidebarGroup, ancestors: List<String>) {
+    fun session(item: UnifiedSidebarItem, group: UnifiedSidebarGroup, stickyAncestors: MutableList<String>) {
         val key = "${if (item.isCoding) "coding" else "chat"}:${item.id}"
         val header = sticky(item)
-        add(SidebarFeedRow(PaperStickyTreeEntry(key, ancestors, header), group, item))
+        add(SidebarFeedRow(PaperStickyTreeEntry(key, stickyAncestors.toList(), header), group, item))
+        if (header) stickyAncestors += key
         if (expanded(item)) item.children.forEach { child ->
-            session(child, group, if (header) ancestors + key else ancestors)
+            session(child, group, stickyAncestors)
         }
     }
     groups.forEach { group ->
         val headerKey = "header:${group.key}"
         if (group.showsProjectHeader) add(SidebarFeedRow(PaperStickyTreeEntry(headerKey, header = true), group))
         if (!group.showsProjectHeader || group.key !in collapsedGroups) {
-            group.items.forEach { session(it, group, if (group.showsProjectHeader) listOf(headerKey) else emptyList()) }
+            val stickyAncestors = mutableListOf<String>()
+            if (group.showsProjectHeader) stickyAncestors += headerKey
+            group.items.forEach { session(it, group, stickyAncestors) }
         }
     }
 }
