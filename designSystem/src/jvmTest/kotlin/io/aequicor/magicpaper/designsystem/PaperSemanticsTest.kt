@@ -93,9 +93,11 @@ class PaperSemanticsTest {
     @Test fun contextIndicatorExposesProgressAndSupportsKeyboard() {
         val focus = FocusRequester()
         val fraction = mutableStateOf<Float?>(.5f)
+        val compacting = mutableStateOf(false)
         var clicks = 0
         ImageComposeScene(320, 120) { PaperTheme {
-            PaperContextIndicator(fraction.value, if (fraction.value == null) "—" else "50%", { clicks++ }, Modifier.focusRequester(focus))
+            PaperContextIndicator(fraction.value, if (fraction.value == null) "—" else "50%", { clicks++ },
+                Modifier.focusRequester(focus), compacting = compacting.value)
         } }.use { scene ->
             scene.render(16_000_000).close()
             fun control() = scene.nodes().first { it.config.getOrNull(SemanticsProperties.StateDescription) != null }
@@ -107,6 +109,12 @@ class PaperSemanticsTest {
             scene.sendKeyEvent(KeyEvent(Key.Spacebar, KeyEventType.KeyDown))
             scene.sendKeyEvent(KeyEvent(Key.Spacebar, KeyEventType.KeyUp))
             assertEquals(2, clicks)
+            compacting.value = true
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            scene.render(40_000_000).close()
+            assertEquals("Сжатие контекста", control().config[SemanticsProperties.StateDescription])
+            assertEquals(null, control().config.getOrNull(SemanticsProperties.ProgressBarRangeInfo))
+            compacting.value = false
             fraction.value = null
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             scene.render(48_000_000).close()

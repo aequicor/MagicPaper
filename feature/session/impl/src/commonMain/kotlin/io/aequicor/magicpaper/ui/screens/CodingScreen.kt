@@ -941,6 +941,9 @@ internal fun CodingChat(
 ) {
     CompositionLocalProvider(LocalOpenQuestionnaire provides onOpenQuestionnaire) {
     val messages = session.messages
+    val contextCompacting = session.draft.steps.any {
+        it.systemEvent?.phase == io.aequicor.magicpaper.domain.CompactionPhase.STARTED
+    }
     val completedResponseId = session.completedResponseId
     val latestOnResultRead by androidx.compose.runtime.rememberUpdatedState(onResultRead)
     LaunchedEffect(session.session.id, completedResponseId, session.unread, windowFocused, listState) {
@@ -1111,6 +1114,7 @@ internal fun CodingChat(
                 CodingComposer(
                     state = composerDraft,
                     contextUsage = contextUsage,
+                    contextCompacting = contextCompacting,
                     enabled = engineReady,
                     busy = busy,
                     controls = modelChip,
@@ -1686,6 +1690,7 @@ internal fun CodingComposer(
     onResume: ((String, List<Attachment>) -> Unit)? = null,
     onClarify: ((String, List<Attachment>) -> Unit)? = null,
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
+    contextCompacting: Boolean = false,
     featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
     onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
     worktreeChecked: Boolean = false,
@@ -1863,7 +1868,7 @@ internal fun CodingComposer(
                     Row(Modifier.widthIn(max = trailingLimit),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
-                        if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
+                        if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage, compacting = contextCompacting)
                         controls?.invoke()
                     }
                 }
@@ -1882,7 +1887,7 @@ internal fun CodingComposer(
             if (narrowContext) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (onInteractionMode != null || planning || research) CodingModeLabel(planning, research)
                 Spacer(Modifier.weight(1f))
-                io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage)
+                io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage, compacting = contextCompacting)
             }
         }
     }

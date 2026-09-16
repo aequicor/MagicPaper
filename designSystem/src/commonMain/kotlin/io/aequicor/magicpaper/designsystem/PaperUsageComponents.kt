@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
@@ -32,20 +33,41 @@ public fun PaperCoinIcon(modifier: Modifier = Modifier) {
     }
 }
 
-/** Known, estimated and unavailable context share the same focusable control. */
+/** Known, estimated, unavailable and actively compacting context share the same focusable control. */
 @Composable
-public fun PaperContextIndicator(fraction: Float?, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+public fun PaperContextIndicator(
+    fraction: Float?,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    compacting: Boolean = false,
+) {
     val colors = LocalPaperColors.current
-    PaperIconButton("Заполненность контекста: $label", onClick, modifier.semantics {
-        stateDescription = label
-        if (fraction != null) progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
+    val rotation = if (compacting) {
+        val animation = rememberInfiniteTransition(label = "Context compaction")
+        val angle by animation.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
+            label = "Context compaction rotation",
+        )
+        angle
+    } else 0f
+    val state = if (compacting) "Сжатие контекста" else label
+    PaperIconButton("Заполненность контекста: $state", onClick, modifier.semantics {
+        stateDescription = state
+        if (!compacting && fraction != null) progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
     }) {
         Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Canvas(Modifier.size(18.dp)) {
                 val stroke = Stroke(2.dp.toPx())
                 drawCircle(colors.border, style = stroke)
-                if (fraction != null) drawArc(if (fraction >= .9f) colors.error else colors.action,
-                    -90f, 360f * fraction.coerceIn(0f, 1f), false, style = stroke)
+                if (compacting) {
+                    drawArc(colors.action, rotation - 90f, 105f, false, style = stroke)
+                } else if (fraction != null) {
+                    drawArc(if (fraction >= .9f) colors.error else colors.action,
+                        -90f, 360f * fraction.coerceIn(0f, 1f), false, style = stroke)
+                }
             }
             PaperText(label, role = PaperTextRole.LABEL)
         }

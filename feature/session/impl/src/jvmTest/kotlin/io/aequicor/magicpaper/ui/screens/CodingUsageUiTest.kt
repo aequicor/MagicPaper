@@ -38,6 +38,7 @@ class CodingUsageUiTest {
     @Test fun contextAndSystemMessagesUseAgentLayoutAndKeepDraftOnResize() {
         for (width in listOf(390, 1000)) {
             val context = mutableStateOf<ContextUsageSnapshot?>(ContextUsageSnapshot("coding:s", "Fixture", 500, 1000, approximate = true))
+            val compacting = mutableStateOf(false)
             val draft = CodingComposerDraft().also { it.text.value = "Сохранённый черновик" }
             ImageComposeScene(width, 800) {
                 MagicPaperTheme { PaperPanel(Modifier.fillMaxSize()) {
@@ -47,6 +48,7 @@ class CodingUsageUiTest {
                             PaperSystemMessage { PaperText("Контекст автоматически сжат") }
                         }
                         CodingComposer(state = draft, enabled = true, busy = false, contextUsage = context.value,
+                            contextCompacting = compacting.value,
                             controls = { PaperText("Fixture") }, onSend = { _, _ -> }, onAbort = {}, onPickAttachments = { _, _ -> })
                     }
                 } }
@@ -68,6 +70,11 @@ class CodingUsageUiTest {
                 context.value = null
                 repeat(5) { scene.render(tick()).close() }
                 assertEquals("—", scene.label("Заполненность контекста").config.getOrNull(SemanticsProperties.StateDescription))
+                context.value = ContextUsageSnapshot("coding:s", "Fixture", 500, 1000, approximate = true)
+                compacting.value = true
+                repeat(5) { scene.render(tick()).close() }
+                assertEquals("Сжатие контекста", scene.label("Заполненность контекста").config.getOrNull(SemanticsProperties.StateDescription))
+                scene.snapshot("chat-compacting-$width")
             }
         }
     }
