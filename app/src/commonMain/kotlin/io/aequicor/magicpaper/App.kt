@@ -84,9 +84,12 @@ private fun AppShellContent(
     val navigation by root.navigationState.collectAsState()
     val stack by root.stack.subscribeAsState()
     val slot by root.dialogSlot.subscribeAsState()
-    var sidebarVisible by rememberSaveable { mutableStateOf(true) }
+    var primarySidebarVisible by rememberSaveable { mutableStateOf(true) }
+    var chatSidebarVisible by rememberSaveable { mutableStateOf(false) }
     val sidebarActions = remember(chat, coding) { SidebarActions(chat, coding) }
     val isCoding = navigation.route is AppRoute.Projects
+    val isChat = navigation.route is AppRoute.Chat
+    val sidebarVisible = if (isChat) chatSidebarVisible else primarySidebarVisible
     val selectedId = when(val route = navigation.route) {
         is AppRoute.Chat -> route.sessionId
         is AppRoute.Projects -> route.sessionId
@@ -121,8 +124,20 @@ private fun AppShellContent(
                         root.dismissNavigationError(); settings.dismissNotice(); chat.dismissNotice(); coding.dismissNotice()
                     }
                 }
-                TopBar(root, usage, if (navigation.route is AppRoute.Chat) chats.current?.id else selectedId,
-                    isCoding, onToggleSidebar = { sidebarVisible = !sidebarVisible })
+                TopBar(
+                    root = root,
+                    usage = usage,
+                    selectedId = if (isChat) chats.current?.id else selectedId,
+                    isCoding = isCoding,
+                    workspaceTitle = if (isChat) chats.notebook?.title ?: chats.current?.title else null,
+                    statusText = if (isChat && chats.current != null) {
+                        if (chats.busy) "Исследование…" else "Сохранено"
+                    } else null,
+                    onToggleSidebar = {
+                        if (isChat) chatSidebarVisible = !chatSidebarVisible
+                        else primarySidebarVisible = !primarySidebarVisible
+                    },
+                )
             }
             CompositionLocalProvider(LocalPaperDialogLifecycle provides null) {
             slot.child?.configuration?.let { dialog ->
@@ -167,7 +182,15 @@ private fun AppShellContent(
 }
 
 @Composable
-private fun TopBar(root: RootComponent<AppChild>, usage: UsageLedger, selectedId: String?, isCoding: Boolean, onToggleSidebar: () -> Unit) {
+private fun TopBar(
+    root: RootComponent<AppChild>,
+    usage: UsageLedger,
+    selectedId: String?,
+    isCoding: Boolean,
+    workspaceTitle: String?,
+    statusText: String?,
+    onToggleSidebar: () -> Unit,
+) {
     val navigation by root.navigationState.collectAsState()
     val modal by root.dialogSlot.subscribeAsState()
     val chrome = LocalWindowChrome.current
@@ -183,10 +206,14 @@ private fun TopBar(root: RootComponent<AppChild>, usage: UsageLedger, selectedId
             PaperIconButton("Вперёд", root::forward, enabled = navigation.canGoForward) { PaperText("›", role = PaperTextRole.CHROME) }
             WindowDragArea(Modifier.weight(1f).height(toolbarHeight)) {
                 Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PaperText("MagicPaper", role = PaperTextRole.CHROME, maxLines = 1)
-                    Spacer(Modifier.width(10.dp))
-                    PaperText(when (navigation.route) {
-                        is AppRoute.Chat -> "Шалость удалась"
+                    PaperBrandMark(Modifier.size(22.dp))
+                    Spacer(Modifier.width(8.dp))
+                    PaperText("MagicPaper", role = PaperTextRole.TITLE, maxLines = 1)
+                    Spacer(Modifier.width(14.dp))
+                    PaperVerticalDivider(Modifier.height(22.dp))
+                    Spacer(Modifier.width(14.dp))
+                    PaperText(workspaceTitle ?: when (navigation.route) {
+                        is AppRoute.Chat -> "Новый чат"
                         is AppRoute.Projects -> "Проекты и код"
                         is AppRoute.Settings -> "Настройки и разделы"
                         is AppRoute.Docs -> "Справочник"
@@ -194,6 +221,13 @@ private fun TopBar(root: RootComponent<AppChild>, usage: UsageLedger, selectedId
                     }, Modifier.weight(1f), role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+            }
+            statusText?.let {
+                PaperText("✓  $it", role = PaperTextRole.CHROME, color = LocalPaperColors.current.action,
+                    maxLines = 1)
+                Spacer(Modifier.width(8.dp))
+                PaperVerticalDivider(Modifier.height(22.dp))
+                Spacer(Modifier.width(4.dp))
             }
             val usageState by usage.state.collectAsState()
             val usageFailure by usage.failure.collectAsState()

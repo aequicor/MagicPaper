@@ -71,7 +71,11 @@ private val LocalComposerInteraction = staticCompositionLocalOf<MutableInteracti
 
 /** A raised writing surface; focus belongs to the whole composer, not an inner rectangle. */
 @Composable
-public fun PaperWorkspaceComposer(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+public fun PaperWorkspaceComposer(
+    modifier: Modifier = Modifier,
+    document: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val colors = LocalPaperColors.current
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
@@ -82,19 +86,24 @@ public fun PaperWorkspaceComposer(modifier: Modifier = Modifier, content: @Compo
     )
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(durationMillis = 180)) }
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(if (document) 10.dp else 16.dp)
+    val frame = if (document) {
+        Modifier.background(colors.surface.copy(alpha = .96f), shape)
+            .border(1.dp, colors.border.copy(alpha = .72f), shape)
+    } else {
+        Modifier.dropShadow(shape) {
+            radius = 5.dp.toPx()
+            spread = 0f
+            color = colors.depthShadow.copy(alpha = .36f)
+            offset = Offset(0f, 1.dp.toPx())
+        }.background(Brush.verticalGradient(listOf(colors.composerHighlight, surface)), shape)
+    }
     CompositionLocalProvider(LocalComposerInteraction provides source) {
         Column(modifier.fillMaxWidth().padding(8.dp)
             // Alpha alone keeps the final geometry from the first layout pass, so the
             // transcript never jumps while the writing surface gently appears.
             .graphicsLayer { alpha = entrance.value }
-            .dropShadow(shape) {
-                radius = 5.dp.toPx()
-                spread = 0f
-                color = colors.depthShadow.copy(alpha = .36f)
-                offset = Offset(0f, 1.dp.toPx())
-            }
-            .background(Brush.verticalGradient(listOf(colors.composerHighlight, surface)), shape)
+            .then(frame)
             .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
     }

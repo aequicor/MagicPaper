@@ -3,7 +3,9 @@ package io.aequicor.magicpaper.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
@@ -32,19 +34,23 @@ internal fun ResearchWorkspace(vm: DefaultChatComponent, state: ChatState, conte
         if (vm.state.value.notebook == null) vm.newSession()
         return checkNotNull(vm.state.value.notebook).id
     }
-    ResearchWorkspaceContent(state, saving, error,
+    ResearchWorkspaceContent(
+        state = state,
+        saving = saving,
+        error = error,
         onNewQuestion = { if (state.notebook == null) vm.newSession() else edit { vm.newQuestion() } },
         onSelectQuestion = { id -> edit { vm.selectQuestion(id) } },
-        onAddWebsite = { url ->
-            val id = rootId()
-            vm.addWebsite(id, url)
+        onForkQuestion = {
+            state.current?.id?.let { sessionId -> edit { vm.forkSession(sessionId).map {} } }
         },
+        onAddWebsite = { url -> vm.addWebsite(rootId(), url) },
         onPickFiles = {
             val id = rootId()
             vm.pickAttachments(0) { files -> edit { vm.addResources(id, files) } }
         },
         onRemoveResource = { id -> state.notebook?.id?.let { chatId -> edit { vm.removeResource(chatId, id) } } },
-        content = content)
+        content = content,
+    )
 }
 
 @Composable
@@ -54,126 +60,402 @@ internal fun ResearchWorkspaceContent(
     error: String? = null,
     onNewQuestion: () -> Unit = {},
     onSelectQuestion: (String) -> Unit = {},
+    onForkQuestion: (() -> Unit)? = null,
     onAddWebsite: suspend (String) -> Result<Unit> = { Result.success(Unit) },
     onPickFiles: () -> Unit = {},
     onRemoveResource: (String) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    var panel by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
+    var modalPanel by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
+    var questionsExpanded by remember(state.notebook?.id) { mutableStateOf(true) }
+    var sourcesExpanded by remember(state.notebook?.id) { mutableStateOf(true) }
     val inset = LocalWindowToolbarHeight.current ?: 56.dp
-    Column(Modifier.fillMaxSize().padding(top = inset + PaperTitleBarLaneGap)) {
-        FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            PaperButton("Новый вопрос", onNewQuestion, enabled = !saving)
-            PaperButton("Вопросы (${state.questions.size})", { panel = "questions" }, kind = PaperButtonKind.SECONDARY)
-            PaperButton("Источники (${state.notebook?.resources?.size ?: 0})", { panel = "sources" }, kind = PaperButtonKind.SECONDARY)
-        }
-        error?.let { PaperText(it, Modifier.padding(12.dp), role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
-        Spacer(Modifier.height(4.dp))
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val wide = maxWidth >= 980.dp
-            Row(Modifier.fillMaxSize()) {
-                if (wide) {
-                    ResearchLibrary(state, null, saving, onSelectQuestion, onAddWebsite, onPickFiles, onRemoveResource,
-                        Modifier.width(260.dp).fillMaxHeight().padding(start = 12.dp, end = 8.dp))
-                    PaperVerticalDivider(Modifier.fillMaxHeight())
+
+    BoxWithConstraints(
+        Modifier.fillMaxSize().padding(top = inset + PaperTitleBarLaneGap)
+            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+    ) {
+        val threeColumns = maxWidth >= 1180.dp
+        val showQuestions = threeColumns && questionsExpanded
+        val showSources = threeColumns && sourcesExpanded
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (showQuestions) {
+                PaperResearchPane(Modifier.width(252.dp).fillMaxHeight()) {
+                    ResearchQuestionsPane(
+                        state = state,
+                        saving = saving,
+                        onNewQuestion = onNewQuestion,
+                        onSelectQuestion = onSelectQuestion,
+                        onCollapse = { questionsExpanded = false },
+                    )
                 }
-                Box(Modifier.weight(1f).fillMaxHeight()) {
+            }
+
+            PaperResearchPane(Modifier.weight(1f).fillMaxHeight()) {
+                ResearchChatHeader(
+                    state = state,
+                    saving = saving,
+                    wide = threeColumns,
+                    questionsVisible = showQuestions,
+                    sourcesVisible = showSources,
+                    onNewQuestion = onNewQuestion,
+                    onShowQuestions = { if (threeColumns) questionsExpanded = true else modalPanel = QUESTIONS_PANEL },
+                    onShowSources = { if (threeColumns) sourcesExpanded = true else modalPanel = SOURCES_PANEL },
+                    onForkQuestion = onForkQuestion,
+                )
+                PaperDivider()
+                error?.let {
+                    PaperText(
+                        it,
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        role = PaperTextRole.LABEL,
+                        color = LocalPaperColors.current.error,
+                    )
+                    PaperDivider()
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
                     CompositionLocalProvider(LocalWindowToolbarHeight provides 0.dp, content = content)
+                }
+            }
+
+            if (showSources) {
+                PaperResearchPane(Modifier.width(304.dp).fillMaxHeight()) {
+                    ResearchSourcesPane(
+                        state = state,
+                        saving = saving,
+                        onAddWebsite = onAddWebsite,
+                        onPickFiles = onPickFiles,
+                        onRemoveResource = onRemoveResource,
+                        onCollapse = { sourcesExpanded = false },
+                    )
                 }
             }
         }
     }
-    panel?.let { selectedPanel ->
-        PaperWideDialog(onDismissRequest = { panel = null }, modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().fillMaxHeight(.85f)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                PaperText(if (selectedPanel == "questions") "Вопросы" else "Источники", role = PaperTextRole.TITLE)
-                PaperButton("Закрыть", { panel = null }, kind = PaperButtonKind.QUIET)
+
+    modalPanel?.let { selectedPanel ->
+        PaperWideDialog(
+            onDismissRequest = { modalPanel = null },
+            modifier = Modifier.widthIn(max = if (selectedPanel == SOURCES_PANEL) 680.dp else 520.dp)
+                .fillMaxWidth().fillMaxHeight(.88f),
+        ) {
+            if (selectedPanel == QUESTIONS_PANEL) {
+                ResearchQuestionsPane(
+                    state = state,
+                    saving = saving,
+                    onNewQuestion = { onNewQuestion(); modalPanel = null },
+                    onSelectQuestion = { onSelectQuestion(it); modalPanel = null },
+                    onCollapse = { modalPanel = null },
+                    closeGlyph = "×",
+                )
+            } else {
+                ResearchSourcesPane(
+                    state = state,
+                    saving = saving,
+                    onAddWebsite = onAddWebsite,
+                    onPickFiles = onPickFiles,
+                    onRemoveResource = onRemoveResource,
+                    onCollapse = { modalPanel = null },
+                    closeGlyph = "×",
+                )
             }
-            ResearchLibrary(state, selectedPanel, saving,
-                onSelectQuestion = { onSelectQuestion(it); panel = null }, onAddWebsite, onPickFiles, onRemoveResource,
-                Modifier.fillMaxSize())
         }
     }
 }
 
 @Composable
-private fun ResearchLibrary(
-    state: ChatState, panel: String?, saving: Boolean,
-    onSelectQuestion: (String) -> Unit,
-    onAddWebsite: suspend (String) -> Result<Unit>,
-    onPickFiles: () -> Unit, onRemoveResource: (String) -> Unit, modifier: Modifier = Modifier,
+private fun ResearchChatHeader(
+    state: ChatState,
+    saving: Boolean,
+    wide: Boolean,
+    questionsVisible: Boolean,
+    sourcesVisible: Boolean,
+    onNewQuestion: () -> Unit,
+    onShowQuestions: () -> Unit,
+    onShowSources: () -> Unit,
+    onForkQuestion: (() -> Unit)?,
 ) {
-    var url by remember(state.notebook?.id) { mutableStateOf("") }
-    var error by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
-    var adding by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
-    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
-        if (panel != "sources") {
-            item(key = "research-questions-heading") {
-                if (panel == null) PaperText("Вопросы", role = PaperTextRole.TITLE, modifier = Modifier.padding(vertical = 8.dp))
-                if (state.questions.isEmpty()) PaperText("Здесь появится история вопросов", role = PaperTextRole.LABEL)
-            }
-            items(state.questions, key = { "question:${it.id}" }) { question ->
-                PaperListRow(question.messages.firstOrNull { it.role == ChatRole.USER }?.text ?: "Новый вопрос",
-                    selected = state.current?.id == question.id, enabled = !saving,
-                    secondary = when {
-                        question.pendingRun?.intent == ExecutionIntent.RUN -> "В работе"
-                        question.pendingRun != null -> "Пауза"
-                        state.current?.id == question.id -> "Открыт"
-                        else -> "${question.messages.count { it.role == ChatRole.USER }} вопросов"
-                    }, onClick = { onSelectQuestion(question.id) })
-            }
-        }
-        if (panel != "questions") {
-            item(key = "research-sources-controls") {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (panel == null) PaperText("Источники", role = PaperTextRole.TITLE, modifier = Modifier.padding(top = 10.dp))
-                    PaperField(url, { url = it; error = null }, "Сайт", Modifier.fillMaxWidth(),
-                        enabled = !adding, errorMessage = error)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PaperButton(if (adding) "Добавляю…" else "Добавить", {
-                            val captured = url
-                            if (researchUrl(captured) == null) error = "Введите ссылку на сайт: https://…"
-                            else {
-                                adding = true
-                                scope.launch {
-                                    try {
-                                        val result = onAddWebsite(captured)
-                                        if (result.isSuccess) { if (url == captured) url = ""; error = null }
-                                        else error = result.exceptionOrNull()?.message
-                                    } finally { adding = false }
-                                }
-                            }
-                        }, enabled = !adding && !saving && url.isNotBlank())
-                        PaperButton("Файлы", onPickFiles, enabled = !saving, kind = PaperButtonKind.SECONDARY)
+    var menuOpen by remember { mutableStateOf(false) }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val roomy = maxWidth >= 620.dp
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PaperText("ЧАТ", role = PaperTextRole.HEADLINE)
+                Spacer(Modifier.weight(1f))
+                if (roomy && onForkQuestion != null) {
+                    PaperButton(
+                        "Создать ветку",
+                        onForkQuestion,
+                        kind = PaperButtonKind.QUIET,
+                        enabled = !saving && state.current != null,
+                    )
+                }
+                Box {
+                    PaperIconButton("Действия чата", { menuOpen = true }) {
+                        PaperText("⋯", role = PaperTextRole.TITLE, color = LocalPaperColors.current.action)
                     }
-                    if (state.notebook?.resources.isNullOrEmpty()) PaperText("Нет источников", role = PaperTextRole.LABEL,
-                        color = LocalPaperColors.current.secondaryText)
+                    PaperMenuHost(menuOpen, { menuOpen = false }) {
+                        if (!roomy && onForkQuestion != null) PaperMenuAction("Создать ветку", {
+                            menuOpen = false
+                            onForkQuestion()
+                        }, enabled = !saving && state.current != null)
+                        PaperMenuAction("Новый вопрос", { menuOpen = false; onNewQuestion() }, enabled = !saving)
+                        PaperMenuAction("Вопросы (${state.questions.size})", { menuOpen = false; onShowQuestions() })
+                        PaperMenuAction("Источники (${state.notebook?.resources?.size ?: 0})", { menuOpen = false; onShowSources() })
+                    }
                 }
             }
-            items(state.notebook?.resources.orEmpty(), key = { "resource:${it.id}" }) { resource ->
-                PaperPanel {
-                    Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        PaperText(resource.title, role = PaperTextRole.LABEL)
-                        PaperText(if (resource.discovered) "Найден при поиске" else if (resource.attachment != null) "Файл" else "Добавлен вами",
-                            role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText)
-                        if (resource.url.isNotEmpty() && resource.title != resource.url)
-                            PaperText(resource.url, role = PaperTextRole.CHROME)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (resource.url.isNotEmpty()) PaperButton("Открыть", {
-                                try { uriHandler.openUri(resource.url) }
-                                catch (failure: Exception) {
-                                    AppLog.error("chat", "source.open.failed", failure, mapOf("resourceId" to resource.id))
-                                    error = "Не удалось открыть сайт. Повторите попытку."
-                                }
-                            }, kind = PaperButtonKind.QUIET)
-                            PaperButton("Убрать", { onRemoveResource(resource.id) }, enabled = !saving, kind = PaperButtonKind.QUIET)
-                        }
-                    }
+            if (!wide || !questionsVisible || !sourcesVisible) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (!wide) PaperButton("+  Новый вопрос", onNewQuestion, enabled = !saving,
+                        accessibilityLabel = "Новый вопрос")
+                    if (!questionsVisible) PaperButton(
+                        "Вопросы (${state.questions.size})",
+                        onShowQuestions,
+                        kind = PaperButtonKind.SECONDARY,
+                    )
+                    if (!sourcesVisible) PaperButton(
+                        "Источники (${state.notebook?.resources?.size ?: 0})",
+                        onShowSources,
+                        kind = PaperButtonKind.SECONDARY,
+                    )
                 }
             }
         }
     }
 }
+
+@Composable
+private fun ResearchQuestionsPane(
+    state: ChatState,
+    saving: Boolean,
+    onNewQuestion: () -> Unit,
+    onSelectQuestion: (String) -> Unit,
+    onCollapse: () -> Unit,
+    closeGlyph: String = "‹",
+) {
+    ResearchPaneHeader("Вопросы", state.questions.size, "Скрыть вопросы", closeGlyph, onCollapse)
+    PaperDivider()
+    LazyColumn(
+        Modifier.fillMaxSize().padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp),
+    ) {
+        item(key = "new-research-question") {
+            PaperButton(
+                "+  Новый вопрос",
+                onNewQuestion,
+                Modifier.fillMaxWidth(),
+                enabled = !saving,
+                accessibilityLabel = "Новый вопрос",
+            )
+        }
+        if (state.questions.isEmpty()) item(key = "empty-research-questions") {
+            PaperText("История пока пуста", role = PaperTextRole.LABEL,
+                color = LocalPaperColors.current.secondaryText, modifier = Modifier.padding(8.dp))
+        }
+        items(state.questions, key = { "question:${it.id}" }) { question ->
+            val title = question.messages.firstOrNull { it.role == ChatRole.USER }?.text
+                ?.trim()?.ifBlank { null } ?: "Новый вопрос"
+            PaperListRow(
+                label = title,
+                selected = state.current?.id == question.id,
+                enabled = !saving,
+                onClick = { onSelectQuestion(question.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ResearchSourcesPane(
+    state: ChatState,
+    saving: Boolean,
+    onAddWebsite: suspend (String) -> Result<Unit>,
+    onPickFiles: () -> Unit,
+    onRemoveResource: (String) -> Unit,
+    onCollapse: () -> Unit,
+    closeGlyph: String = "›",
+) {
+    val resources = state.notebook?.resources.orEmpty()
+    var selectedId by remember(state.notebook?.id) { mutableStateOf<String?>(resources.firstOrNull()?.id) }
+    var showLinkField by remember(state.notebook?.id) { mutableStateOf(false) }
+    var url by remember(state.notebook?.id) { mutableStateOf("") }
+    var error by remember(state.notebook?.id) { mutableStateOf<String?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
+    LaunchedEffect(resources.map { it.id }) {
+        if (selectedId !in resources.map { it.id }) selectedId = resources.firstOrNull()?.id
+    }
+
+    ResearchPaneHeader("Источники", resources.size, "Скрыть источники", closeGlyph, onCollapse)
+    PaperDivider()
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        PaperText("Общие для всех вопросов", role = PaperTextRole.LABEL,
+            color = LocalPaperColors.current.secondaryText)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperButton("Ссылка", { showLinkField = !showLinkField }, Modifier.weight(1f),
+                kind = PaperButtonKind.QUIET, accessibilityLabel = "Добавить ссылку")
+            PaperButton("Файлы", onPickFiles, Modifier.weight(1f), enabled = !saving,
+                kind = PaperButtonKind.QUIET, accessibilityLabel = "Добавить файлы")
+        }
+        if (showLinkField) {
+            PaperField(
+                url,
+                { url = it; error = null },
+                "Ссылка на сайт",
+                Modifier.fillMaxWidth(),
+                enabled = !adding,
+                errorMessage = error,
+            )
+            PaperButton(
+                if (adding) "Добавляю…" else "Добавить",
+                onClick = {
+                    val captured = url
+                    if (researchUrl(captured) == null) error = "Введите ссылку: https://…"
+                    else {
+                        adding = true
+                        scope.launch {
+                            try {
+                                val result = onAddWebsite(captured)
+                                if (result.isSuccess) {
+                                    if (url == captured) url = ""
+                                    error = null
+                                    showLinkField = false
+                                } else error = result.exceptionOrNull()?.message
+                            } finally { adding = false }
+                        }
+                    }
+                },
+                enabled = !adding && !saving && url.isNotBlank(),
+                busy = adding,
+            )
+        }
+        if (!showLinkField) error?.let {
+            PaperText(it, role = PaperTextRole.LABEL, color = LocalPaperColors.current.error)
+        }
+        PaperDivider()
+        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(bottom = 8.dp)) {
+            if (resources.isEmpty()) item(key = "empty-research-sources") {
+                PaperText("Источников пока нет", role = PaperTextRole.LABEL,
+                    color = LocalPaperColors.current.secondaryText, modifier = Modifier.padding(vertical = 8.dp))
+            }
+            itemsIndexed(resources, key = { _, resource -> "resource:${resource.id}" }) { index, resource ->
+                ResearchSourceRow(
+                    index = index + 1,
+                    resource = resource,
+                    selected = selectedId == resource.id,
+                    enabled = !saving,
+                    onSelect = { selectedId = resource.id },
+                    onOpen = resource.url.takeIf { it.isNotEmpty() }?.let { address -> {
+                        try { uriHandler.openUri(address) }
+                        catch (failure: Exception) {
+                            AppLog.error("chat", "source.open.failed", failure, mapOf("resourceId" to resource.id))
+                            error = "Не удалось открыть источник."
+                        }
+                    } },
+                    onRemove = { onRemoveResource(resource.id) },
+                )
+            }
+            val selected = resources.firstOrNull { it.id == selectedId }
+            if (selected != null) item(key = "selected-source:${selected.id}") {
+                val index = resources.indexOf(selected) + 1
+                Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PaperDivider()
+                    Spacer(Modifier.height(2.dp))
+                    PaperText("Цитата $index", role = PaperTextRole.LABEL,
+                        color = LocalPaperColors.current.action)
+                    PaperText(selected.title, role = PaperTextRole.TITLE)
+                    PaperPanel(kind = PaperSurfaceKind.SELECTED) {
+                        PaperText(
+                            selected.snippet.ifBlank {
+                                if (selected.attachment != null) "Файл доступен ИИ во всех вопросах."
+                                else "Источник доступен ИИ во всех следующих запросах."
+                            },
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            role = PaperTextRole.BODY,
+                        )
+                    }
+                    if (selected.url.isNotEmpty()) PaperLink("Открыть источник  →", {
+                        try { uriHandler.openUri(selected.url) }
+                        catch (failure: Exception) {
+                            AppLog.error("chat", "source.open.failed", failure, mapOf("resourceId" to selected.id))
+                            error = "Не удалось открыть источник."
+                        }
+                    })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResearchPaneHeader(
+    title: String,
+    count: Int,
+    collapseLabel: String,
+    collapseGlyph: String,
+    onCollapse: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        PaperText(title, role = PaperTextRole.HEADLINE)
+        PaperResearchCountBadge(count.toString())
+        Spacer(Modifier.weight(1f))
+        PaperIconButton(collapseLabel, onCollapse) {
+            PaperText(collapseGlyph, role = PaperTextRole.TITLE, color = LocalPaperColors.current.action)
+        }
+    }
+}
+
+@Composable
+private fun ResearchSourceRow(
+    index: Int,
+    resource: ResearchResource,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelect: () -> Unit,
+    onOpen: (() -> Unit)?,
+    onRemove: () -> Unit,
+) {
+    var menuOpen by remember(resource.id) { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        PaperResearchCountBadge(index.toString(), selected = selected)
+        PaperListRow(
+            label = resource.title,
+            modifier = Modifier.weight(1f),
+            selected = selected,
+            enabled = enabled,
+            onClick = onSelect,
+            secondary = resourceSubtitle(resource),
+            trailing = {
+                Box {
+                    PaperIconButton("Действия с источником ${resource.title}", { menuOpen = true }) {
+                        PaperText("⋮", role = PaperTextRole.TITLE, color = LocalPaperColors.current.secondaryText)
+                    }
+                    PaperMenuHost(menuOpen, { menuOpen = false }) {
+                        if (onOpen != null) PaperMenuAction("Открыть", { menuOpen = false; onOpen() })
+                        PaperMenuAction("Убрать", { menuOpen = false; onRemove() }, enabled = enabled, destructive = true)
+                    }
+                }
+            },
+        )
+    }
+}
+
+private fun resourceSubtitle(resource: ResearchResource): String = when {
+    resource.attachment != null -> checkNotNull(resource.attachment).name.substringAfterLast('.', "")
+        .ifBlank { "Файл" }.uppercase()
+    resource.url.isNotEmpty() -> resource.url.substringAfter("://").substringBefore('/').removePrefix("www.")
+    resource.discovered -> "Найден при поиске"
+    else -> "Источник"
+}
+
+private const val QUESTIONS_PANEL = "questions"
+private const val SOURCES_PANEL = "sources"

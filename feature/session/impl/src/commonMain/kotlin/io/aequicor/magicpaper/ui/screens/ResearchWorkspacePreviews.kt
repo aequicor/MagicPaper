@@ -12,23 +12,29 @@ import io.aequicor.magicpaper.ui.components.DefaultChatPresentation
 import io.aequicor.magicpaper.ui.components.LocalChatPresentation
 
 internal fun researchPreviewState(empty: Boolean = false, busy: Boolean = false): ChatState {
-    val root = ChatSession("research", "Как устроены городские сады", 1, 1,
+    val root = ChatSession("research", "Android-разработка", 1, 1,
         messages = if (empty) emptyList() else listOf(
-            ChatMessage("question", ChatRole.USER, "Как городские сады влияют на качество жизни?", 1),
-            ChatMessage("answer", ChatRole.AGENT, "## Три направления для исследования\n\n" +
-                "Городской сад — это место для отдыха, совместной работы и наблюдения за природой. " +
-                "Чтобы оценить его влияние, полезно разделить экологические и социальные эффекты.\n\n" +
-                "1. **Микроклимат.** Сравните температуру и доступность тени.\n" +
-                "2. **Общение.** Изучите, кто участвует в уходе за садом.\n" +
-                "3. **Доступность.** Оцените расстояние от домов и удобство дорожек.\n\n" +
-                "### Что проверить дальше\n\nСопоставьте результаты нескольких районов и сезонные различия.", 2)),
+            ChatMessage("question", ChatRole.USER, "С чего начать Android-разработку?", 1),
+            ChatMessage("answer", ChatRole.AGENT, "# Ваш путь в Android-разработку\n\n" +
+                "Начните с Kotlin и Jetpack Compose. Затем переходите к архитектуре, данным и тестированию.\n\n" +
+                "1. **Освойте Kotlin**\n   Разберитесь с типами, null-безопасностью и корутинами.\n\n" +
+                "2. **Создайте первый экран**\n   Соберите небольшой интерфейс в Jetpack Compose и научитесь управлять состоянием.\n\n" +
+                "3. **Соберите небольшое приложение**\n   Добавьте навигацию, локальное хранение и тесты.\n\n" +
+                "> **Первый проект**\n> Список задач: три экрана, хранение данных, навигация.", 2)),
         resources = if (empty) emptyList() else listOf(
-            ResearchResource("source", "Исследование городской среды", "https://example.org/urban-gardens", discovered = true),
-            ResearchResource("notes", "Наблюдения за городскими садами.txt", attachment =
-                Attachment.fromBytes("Наблюдения за городскими садами.txt", "text/plain", "Наблюдения".encodeToByteArray()))))
-    val question = ChatSession("second", "Как сравнить районы?", 3, 3, researchParentId = root.id,
-        messages = listOf(ChatMessage("second-question", ChatRole.USER, "Как сравнить районы?", 3)))
-    return ChatState(sessions = if (empty) listOf(root) else listOf(root, question), current = root, busy = busy)
+            ResearchResource("kotlin", "Kotlin Documentation", "https://kotlinlang.org/docs/home.html", discovered = true,
+                snippet = "Официальное руководство по языку Kotlin и корутинам."),
+            ResearchResource("compose", "Jetpack Compose", "https://developer.android.com/compose", discovered = true,
+                snippet = "Современный набор инструментов для создания интерфейсов Android."),
+            ResearchResource("architecture", "Guide to app architecture", "https://developer.android.com/topic/architecture", discovered = true,
+                snippet = "Рекомендации Android по слоям, состоянию и потоку данных."),
+            ResearchResource("plan", "План обучения.pdf", attachment =
+                Attachment.fromBytes("План обучения.pdf", "application/pdf", "План".encodeToByteArray()))))
+    val architecture = ChatSession("architecture-question", "Архитектура приложения", 3, 3, researchParentId = root.id,
+        messages = listOf(ChatMessage("architecture-prompt", ChatRole.USER, "Архитектура приложения", 3)))
+    val compose = ChatSession("compose-question", "Jetpack Compose", 4, 4, researchParentId = root.id,
+        messages = listOf(ChatMessage("compose-prompt", ChatRole.USER, "Jetpack Compose", 4)))
+    return ChatState(sessions = if (empty) listOf(root) else listOf(root, architecture, compose), current = root, busy = busy)
 }
 
 @Preview(name = "Reading", group = "Research", widthDp = 1280, heightDp = 850)
@@ -40,9 +46,11 @@ internal fun ResearchWorkspacePreview(empty: Boolean = false, busy: Boolean = fa
     PaperTheme {
         PaperSurface(Modifier.fillMaxSize(), kind = PaperSurfaceKind.CANVAS) {
             CompositionLocalProvider(LocalChatPresentation provides DefaultChatPresentation) {
-                ResearchWorkspaceContent(state, error = if (failed) "Не удалось сохранить изменение. Повторите попытку." else null) {
+                ResearchWorkspaceContent(state, error = if (failed) "Не удалось сохранить изменение. Повторите попытку." else null,
+                    onForkQuestion = {}) {
                     PaperResearchReading {
-                        MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(), footer = {
+                        MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+                            researchSourceCount = state.notebook?.resources?.size ?: 0, footer = {
                             Composer(enabled = true, busy = busy, session = state.current,
                                 profiles = emptyList(), activeProfileId = "", onSend = { _, _ -> },
                                 onOpenSwitcher = {}, onPickAttachments = { _, _ -> })

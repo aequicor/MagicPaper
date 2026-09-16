@@ -25,6 +25,7 @@ import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCode
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
 import com.mikepenz.markdown.compose.elements.MarkdownOrderedList
 import com.mikepenz.markdown.compose.elements.MarkdownBulletList
+import com.mikepenz.markdown.compose.elements.MarkdownBlockQuote
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeFence
@@ -72,6 +73,22 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
                 if ((model.node as? PaperMarkdownSlice)?.listContinuation == true)
                     MarkdownListItems(model.content, model.node, model.listDepth, bullet = { _, _, _ -> PaperText(" ") })
                 else MarkdownBulletList(model.content, model.node, model.typography.text, model.listDepth)
+            },
+            blockQuote = { model ->
+                if (LocalPaperResearchReading.current) {
+                    PaperPanel(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = LocalPaperColors.current.successSurface,
+                    ) {
+                        MarkdownBlockQuote(
+                            content = model.content,
+                            node = model.node,
+                            style = model.typography.text,
+                        )
+                    }
+                } else {
+                    MarkdownBlockQuote(model.content, model.node, model.typography.quote)
+                }
             },
             orderedList = { model ->
                 val start = (model.node as? PaperMarkdownSlice)?.listNumber

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import io.aequicor.magicpaper.designsystem.PaperTitleBarLaneGap
 import io.aequicor.magicpaper.designsystem.paperChatTopShadow
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -55,7 +55,6 @@ import io.aequicor.magicpaper.ui.components.MessagePinColumn
 import io.aequicor.magicpaper.ui.components.requestPinNumbers
 import io.aequicor.magicpaper.ui.components.paperChatScrollInput
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
-import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
 import io.aequicor.magicpaper.designsystem.PaperActivityTone
 import io.aequicor.magicpaper.designsystem.PaperText
@@ -63,8 +62,8 @@ import io.aequicor.magicpaper.designsystem.PaperTextRole
 import io.aequicor.magicpaper.domain.fullCopyText
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.ui.components.MessageHistoryActions
-import io.aequicor.magicpaper.ui.components.ForkSessionAction
 import io.aequicor.magicpaper.designsystem.PaperResearchReading
+import io.aequicor.magicpaper.designsystem.PaperBrandMark
 import io.aequicor.magicpaper.designsystem.paperResearchMessage
 import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
@@ -78,6 +77,7 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     ResearchWorkspace(vm, state) {
         PaperResearchReading {
             MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+                researchSourceCount = state.notebook?.resources?.size ?: 0,
                 onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
                 onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
                 onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
@@ -107,6 +107,7 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
 
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
+    researchSourceCount: Int = 0,
     pins: List<RequestPinGroup> = emptyList(),
     onEdit: (suspend (String, String) -> Result<Unit>)? = null,
     onDelete: (suspend (String) -> Result<Unit>)? = null,
@@ -145,9 +146,9 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             else (0 until parts.size).map { ChatMessageFragment(message, parts, it) }
         }
     }
-    val indices = remember(fragments, onFork != null) {
+    val indices = remember(fragments) {
         fragments.mapIndexedNotNull { index, fragment ->
-            if (fragment.index == 0) fragment.message.id to (index + if (onFork != null) 1 else 0) else null
+            if (fragment.index == 0) fragment.message.id to index else null
         }.toMap()
     }
     val pinNumbers = remember(pins, indices) { requestPinNumbers(pins, indices.keys) }
@@ -166,18 +167,16 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 contentPadding = PaddingValues(start = 8.dp, top = laneTop + 4.dp, end = 8.dp, bottom = transcriptBottomPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
-                if (onFork != null) item(key = "fork-session") {
-                    ForkSessionAction(true) { onFork(null) }
-                }
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
                     val message = fragment.message
                     PaperChatScrollItem(scroll, fragment.key) {
                         MessageBubble(message, pinNumbers[message.id], { browserMessageId = message.id },
-                            fragment = fragment, actions = {
+                            fragment = fragment, researchSourceCount = researchSourceCount, actions = {
                                 MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
                                     onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
                                     onDelete = onDelete?.let { action -> { action(message.id) } },
-                                    onFork = onFork?.let { action -> { action(message.id) } })
+                                    onFork = onFork?.let { action -> { action(message.id) } }, compact = true,
+                                    showCopy = message.role != ChatRole.USER)
                             })
                     }
                 }
@@ -233,6 +232,7 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
 @Composable
 private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
     fragment: ChatMessageFragment = ChatMessageFragment(message),
+    researchSourceCount: Int = 0,
     actions: @Composable () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     Row(
@@ -247,39 +247,33 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                 .paperResearchMessage(fragment.first, fragment.last, isUser),
         ) {
             if (fragment.first) {
-                PaperText(if (isUser) "Вопрос" else "Исследование", role = PaperTextRole.CHROME,
-                    color = LocalPaperColors.current.secondaryText)
-                Spacer(Modifier.height(6.dp))
+                if (isUser) {
+                    PaperText("Вы", role = PaperTextRole.CHROME)
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PaperBrandMark(Modifier.size(22.dp))
+                        PaperText("MagicPaper", role = PaperTextRole.LABEL)
+                        if (researchSourceCount > 0) PaperText(
+                            "·  По ${researchSourceLabel(researchSourceCount)}",
+                            role = PaperTextRole.CHROME,
+                            color = LocalPaperColors.current.secondaryText,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(if (isUser) 4.dp else 10.dp))
             }
             if (fragment.parts != null) {
                 fragment.parts.Content(fragment.index)
             } else if (message.text.isNotEmpty()) PaperText("Подготавливаю сообщение…", role = PaperTextRole.LABEL)
             if (isUser && fragment.last) MessageAttachments(message.attachments)
-            if (fragment.last && message.sources.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                PaperDivider()
-                Spacer(Modifier.height(6.dp))
-                SelectionContainer {
-                    Column {
-                        PaperText(
-                            "Источники:",
-                            role = PaperTextRole.LABEL,
-                            color = LocalPaperColors.current.secondaryText,
-                        )
-                        message.sources.forEach { hit ->
-                            PaperText(
-                                text = "• ${hit.title} — ${hit.url}",
-                                role = PaperTextRole.BODY,
-                                color = LocalPaperColors.current.action,
-                            )
-                        }
-                    }
-                }
-            }
             if (fragment.last) actions()
         }
     }
 }
+
+private fun researchSourceLabel(count: Int): String =
+    "$count ${if (count % 100 !in 11..14 && count % 10 == 1) "источнику" else "источникам"}"
 
 /** Чип текущей модели в композиции: тап открывает переключатель источника. */
 @Composable
@@ -324,6 +318,8 @@ internal fun Composer(
     draft.error.value?.let { PaperText("Не удалось сохранить черновик", color = LocalPaperColors.current.error) }
     CodingComposer(
         state = draft, enabled = enabled, busy = busy,
+        documentComposer = true,
+        compactPrimaryAction = true,
         promptPlaceholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
         controls = { ModelChip(session, profiles, activeProfileId, onOpenSwitcher) },
         onSend = { text, attachments -> accepted(onSend, text, attachments) },

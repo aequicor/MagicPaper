@@ -21,18 +21,38 @@
   },
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
-    "symbol": "ResearchWorkspace", "annotationLine": 15,
-    "targets": ["PaperPanel", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
+    "symbol": "ResearchWorkspace", "annotationLine": 20,
+    "targets": ["PaperResearchPane", "PaperButton", "PaperText"], "stage": "6", "kind": "surface"
   },
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
-    "symbol": "ResearchWorkspaceContent", "annotationLine": 44,
-    "targets": ["PaperPanel", "PaperButton", "PaperDialog"], "stage": "6", "kind": "surface"
+    "symbol": "ResearchWorkspaceContent", "annotationLine": 56,
+    "targets": ["PaperResearchPane", "PaperWideDialog", "PaperDivider"], "stage": "6", "kind": "surface"
   },
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
-    "symbol": "ResearchLibrary", "annotationLine": 99,
-    "targets": ["PaperListRow", "PaperField", "PaperButton", "PaperPanel"], "stage": "6", "kind": "surface"
+    "symbol": "ResearchChatHeader", "annotationLine": 166,
+    "targets": ["PaperButton", "PaperIconButton", "PaperMenuHost", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchQuestionsPane", "annotationLine": 230,
+    "targets": ["PaperButton", "PaperListRow", "PaperDivider"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchSourcesPane", "annotationLine": 272,
+    "targets": ["PaperField", "PaperButton", "PaperPanel", "PaperLink"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchPaneHeader", "annotationLine": 398,
+    "targets": ["PaperResearchCountBadge", "PaperIconButton", "PaperText"], "stage": "6", "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "symbol": "ResearchSourceRow", "annotationLine": 417,
+    "targets": ["PaperResearchCountBadge", "PaperListRow", "PaperMenuHost"], "stage": "6", "kind": "surface"
   },
   {
     "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",

@@ -1733,6 +1733,8 @@ internal fun CodingComposer(
     worktreeInformation: String = "Работа в отдельной Git-копии. После завершения результат автоматически вливается в исходную ветку",
     onWorktreeChange: (() -> Unit)? = null,
     directAttachmentAction: Boolean = false,
+    compactPrimaryAction: Boolean = false,
+    documentComposer: Boolean = research,
 ) {
     var text by state.text
     var editorValue by remember(state) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
@@ -1766,7 +1768,7 @@ internal fun CodingComposer(
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val trailingLimit = maxWidth * 0.40f
         val narrowContext = maxWidth < 600.dp
-        PaperWorkspaceComposer {
+        PaperWorkspaceComposer(document = documentComposer) {
             PendingAttachmentsRow(attachments, { index ->
                 attachments = attachments.filterIndexed { itemIndex, _ -> itemIndex != index }
             })
@@ -1949,12 +1951,18 @@ internal fun CodingComposer(
                     modifier = Modifier.padding(horizontal = 6.dp).height(24.dp),
                     color = LocalPaperColors.current.border,
                 )
+                val iconPrimary = compactPrimaryAction && enabled && primaryAction in listOf(
+                    ComposerPrimaryAction.SEND,
+                    ComposerPrimaryAction.QUEUE,
+                    ComposerPrimaryAction.CLARIFY,
+                )
                 io.aequicor.magicpaper.designsystem.PaperButton(
-                    label = if (!enabled && primaryAction != ComposerPrimaryAction.PAUSE) "Движок не готов" else primaryAction.label,
+                    label = if (iconPrimary) "↑" else if (!enabled && primaryAction != ComposerPrimaryAction.PAUSE) "Движок не готов" else primaryAction.label,
                     onClick = ::activatePrimaryAction,
-                    modifier = Modifier.widthIn(min = 104.dp),
+                    modifier = Modifier.widthIn(min = if (iconPrimary) 48.dp else 104.dp),
                     kind = if (primaryAction == ComposerPrimaryAction.PAUSE) PaperButtonKind.SECONDARY else PaperButtonKind.PRIMARY,
                     enabled = primaryEnabled,
+                    accessibilityLabel = primaryAction.label,
                 )
             }
             if (narrowContext) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

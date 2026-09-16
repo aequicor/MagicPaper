@@ -16,10 +16,14 @@ public fun PaperMessageActions(
     onDelete: (() -> Unit)? = null,
     historyEnabled: Boolean = true,
     forkEnabled: Boolean = true,
+    compact: Boolean = false,
+    showCopy: Boolean = true,
 ) {
     var open by remember { mutableStateOf(false) }
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-        PaperButton("Копировать целиком", onCopy, modifier = Modifier.weight(1f, fill = false), kind = PaperButtonKind.SECONDARY)
+        if (showCopy) PaperButton(if (compact) "Копировать" else "Копировать целиком", onCopy,
+            modifier = Modifier.weight(1f, fill = false),
+            kind = if (compact) PaperButtonKind.QUIET else PaperButtonKind.SECONDARY)
         if (onEdit != null || onFork != null || onDelete != null) Box {
             PaperIconButton(label = "Действия с сообщением", onClick = { open = true }) {
                 PaperText("⋯", role = PaperTextRole.LABEL)

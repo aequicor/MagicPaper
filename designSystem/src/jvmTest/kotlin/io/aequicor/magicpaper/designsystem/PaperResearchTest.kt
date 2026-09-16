@@ -57,6 +57,9 @@ class PaperResearchTest {
                 assertTrue((surface.luminance() + .05f) / (text.luminance() + .05f) >= 4.5f)
             }
         }
+        for (surface in listOf(colors.selected, colors.successSurface)) {
+            assertTrue((surface.luminance() + .05f) / (colors.text.luminance() + .05f) >= 4.5f)
+        }
         val scene = onPaperUi { ImageComposeScene(400, 160) {
             PaperTheme { PaperListRow("Вопрос", secondary = "Выбран", selected = true) }
         } }

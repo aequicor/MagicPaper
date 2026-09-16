@@ -21,6 +21,8 @@ internal fun MessageHistoryActions(
     onEdit: (suspend (String) -> Result<Unit>)? = null,
     onDelete: (suspend () -> Result<Unit>)? = null,
     onFork: (suspend () -> Result<String>)? = null,
+    compact: Boolean = false,
+    showCopy: Boolean = true,
 ) {
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -44,6 +46,8 @@ internal fun MessageHistoryActions(
         }; Unit } },
         historyEnabled = enabled && !busy,
         forkEnabled = !busy,
+        compact = compact,
+        showCopy = showCopy,
     )
     if (dialog == null) error?.let { PaperText(it, color = LocalPaperColors.current.error, role = PaperTextRole.LABEL) }
     dialog?.let { mode ->

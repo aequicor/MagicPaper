@@ -41,6 +41,11 @@ class ChatTranscriptDesignTest {
         it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == label }
     }
 
+    private fun ImageComposeScene.action(label: String) = nodes().first {
+        it.config.contains(SemanticsActions.OnClick) &&
+            it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { value -> value == label }
+    }
+
     private fun ImageComposeScene.capture(name: String, time: Long) = onUi {
         val directory = File("build/reports/chat-transcript").apply { mkdirs() }
         File(directory, "$name.png").writeBytes(render(time).use { image ->
@@ -71,7 +76,7 @@ class ChatTranscriptDesignTest {
                         "Attachment glyph must fit the control at ${case.scale} text scale")
                     val labels = if (case.name == "busy") listOf("Пауза") else listOf("Отправить")
                     for (label in labels) {
-                        val action = scene.text(label)
+                        val action = scene.action(label)
                         assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= case.width, "$label clipped: ${case.name}")
                         assertTrue(action.boundsInRoot.bottom <= case.height, "$label below viewport: ${case.name}")
                     }
