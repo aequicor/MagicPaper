@@ -64,13 +64,11 @@ import io.aequicor.magicpaper.domain.fullCopyText
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.ui.components.MessageHistoryActions
 import io.aequicor.magicpaper.designsystem.PaperResearchReading
-import io.aequicor.magicpaper.designsystem.PaperBrandMark
+import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.designsystem.paperResearchMessage
 import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.PaperResearchReadingMeasure
 import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
-import io.aequicor.magicpaper.designsystem.PaperPanel
-import io.aequicor.magicpaper.designsystem.PaperSurfaceKind
 import io.aequicor.magicpaper.designsystem.PaperLink
 import io.aequicor.magicpaper.logging.AppLog
 
@@ -250,12 +248,13 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                 ) {
                     if (fragment.first) {
                         if (isUser) {
-                            PaperText("Вы", role = PaperTextRole.CHROME)
+                            PaperText("Вопрос", role = PaperTextRole.CHROME,
+                                color = LocalPaperColors.current.secondaryText)
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                PaperBrandMark(Modifier.size(22.dp))
-                                PaperText("MagicPaper", role = PaperTextRole.LABEL)
+                                PaperText("Ответ", role = PaperTextRole.CHROME,
+                                    color = LocalPaperColors.current.secondaryText)
                                 if (message.sources.isNotEmpty()) PaperText(
                                     "·  ${message.sources.size} ${sourceFootnoteLabel(message.sources.size)}",
                                     role = PaperTextRole.CHROME,
@@ -263,7 +262,7 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                                 )
                             }
                         }
-                        Spacer(Modifier.height(if (isUser) 4.dp else 10.dp))
+                        Spacer(Modifier.height(4.dp))
                     }
                     if (fragment.parts != null) {
                         fragment.parts.Content(fragment.index)
@@ -283,9 +282,10 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
 private fun ResearchSourceFootnotes(message: ChatMessage) {
     val uriHandler = LocalUriHandler.current
     val sources = remember(message.sources) { message.sources.distinctBy { it.url } }
-    PaperPanel(kind = PaperSurfaceKind.SUCCESS) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            PaperText("Источники ответа", role = PaperTextRole.LABEL)
+    Column {
+        PaperDivider()
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            PaperText("Источники ответа", role = PaperTextRole.CHROME)
             sources.forEachIndexed { index, source ->
                 PaperLink("[${index + 1}] ${source.title.ifBlank { source.url }}", {
                     try { uriHandler.openUri(source.url) }
@@ -356,7 +356,7 @@ internal fun Composer(
     CodingComposer(
         state = draft, enabled = enabled, busy = busy,
         documentComposer = true,
-        compactPrimaryAction = true,
+        compactPrimaryAction = false,
         promptPlaceholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
         controls = { ModelChip(session, profiles, activeProfileId, onOpenSwitcher) },
         onSend = { text, attachments -> accepted(onSend, text, attachments) },

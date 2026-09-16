@@ -295,6 +295,8 @@
 | [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt) | `UnreadDot:728` | surface | PaperStatus | 6 |
 | [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt) | `MessageHistoryActions:15` | surface | PaperMessageActions, PaperDialog, PaperField | 6 |
 | [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt) | `ForkSessionAction:81` | surface | PaperButton, PaperText | 6 |
+| [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ChatScreen.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ChatScreen.kt) | `ResearchSourceFootnotes:282` | surface | PaperDivider, PaperText, PaperLink | 6 |
+| [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt) | `content:564` | surface | PaperNavigation, PaperTreeRow, PaperStatus, PaperMenu | 6 |
 
 ## Постоянные ID этапов
 

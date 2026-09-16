@@ -51,21 +51,20 @@ public fun PaperResearchReading(content: @Composable () -> Unit) {
     val typography = LocalPaperTypography.current
     CompositionLocalProvider(
         LocalPaperTypography provides typography.copy(
-            // A book page needs a calm measure and generous leading, not merely
-            // enlarged chat typography. Display faces establish chapter hierarchy;
-            // Literata remains the continuous-reading face.
-            body = typography.body.copy(fontSize = 17.sp, lineHeight = 29.sp),
+            // A compact book rhythm keeps prose readable without spreading each
+            // paragraph across the viewport. Use the same sturdy face for headings.
+            body = typography.body.copy(fontSize = 17.sp, lineHeight = 25.sp),
             headline = typography.headline.copy(
-                fontFamily = PaperFonts.display,
+                fontFamily = PaperFonts.text,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 34.sp,
-                lineHeight = 40.sp,
+                fontSize = 26.sp,
+                lineHeight = 32.sp,
             ),
             title = typography.title.copy(
-                fontFamily = PaperFonts.display,
+                fontFamily = PaperFonts.text,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 27.sp,
-                lineHeight = 33.sp,
+                fontSize = 21.sp,
+                lineHeight = 28.sp,
             ),
         ),
         LocalPaperResearchReading provides true,
@@ -228,7 +227,7 @@ public fun PaperBrandMark(modifier: Modifier = Modifier) {
 /** The user gets a compact prompt card; the answer reads directly on the surrounding paper pane. */
 @Composable
 public fun Modifier.paperResearchMessage(first: Boolean, last: Boolean, user: Boolean): Modifier {
-    val radius = 10.dp
+    val radius = 4.dp
     val shape = RoundedCornerShape(
         topStart = if (first) radius else 0.dp,
         topEnd = if (first) radius else 0.dp,
@@ -237,17 +236,17 @@ public fun Modifier.paperResearchMessage(first: Boolean, last: Boolean, user: Bo
     )
     // A question is a reader's note; the response is the page itself. Keeping the
     // answer unboxed makes long text scan like a chapter instead of a message bubble.
-    val surface = if (user) LocalPaperColors.current.selected.copy(alpha = .62f)
+    val surface = if (user) LocalPaperColors.current.selected.copy(alpha = .35f)
         else androidx.compose.ui.graphics.Color.Transparent
     return padding(
-        start = if (user) 28.dp else 12.dp,
-        top = if (first) if (user) 10.dp else 18.dp else 0.dp,
-        end = if (user) 28.dp else 12.dp,
-        bottom = if (last) if (user) 10.dp else 18.dp else 0.dp,
+        start = 12.dp,
+        top = if (first) if (user) 6.dp else 12.dp else 0.dp,
+        end = 12.dp,
+        bottom = if (last) if (user) 6.dp else 8.dp else 0.dp,
     )
         .background(surface, shape)
-        .padding(horizontal = if (user) 18.dp else 20.dp)
-        .padding(top = if (first) if (user) 12.dp else 4.dp else 0.dp,
+        .padding(horizontal = 12.dp)
+        .padding(top = if (first) if (user) 8.dp else 4.dp else 0.dp,
             bottom = if (last) if (user) 12.dp else 8.dp else 0.dp)
 }
 

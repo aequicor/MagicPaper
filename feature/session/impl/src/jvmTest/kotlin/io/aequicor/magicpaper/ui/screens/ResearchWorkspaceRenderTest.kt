@@ -81,6 +81,12 @@ class ResearchWorkspaceRenderTest {
                         assertTrue(bounds.left >= 0 && bounds.right <= case.width, "$label clipped in ${case.name}")
                         assertTrue(bounds.top >= 0 && bounds.bottom <= case.height, "$label outside ${case.name}")
                     }
+                    val sendLabel = scene.text(if (case.name == "working") "Пауза" else "Отправить").boundsInRoot
+                    assertTrue(sendLabel.width > 0 && sendLabel.right <= case.width,
+                        "The primary action needs a visible verb, not only an accessible icon label")
+                    assertFalse(scene.nodes().any {
+                        it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Создать ветку" }
+                    }, "Branch creation belongs in the chat menu, leaving the page clear")
                     if (case.width >= 1180) {
                         assertTrue(scene.text("Вопросы").boundsInRoot.left >= 0)
                         assertTrue(scene.text("Источники").boundsInRoot.right <= case.width)
@@ -201,7 +207,9 @@ class ResearchWorkspaceRenderTest {
             onUi {
                 val input = scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
                 assertEquals("Мой исследовательский вопрос", input.config[SemanticsProperties.EditableText].text)
+                assertFalse(scene.action("Отправить").config.contains(SemanticsProperties.Disabled))
             }
+            scene.capture("ready-to-send", ++frame * 32_000_000L)
         } finally { onUi { scene.close() } }
     }
 }

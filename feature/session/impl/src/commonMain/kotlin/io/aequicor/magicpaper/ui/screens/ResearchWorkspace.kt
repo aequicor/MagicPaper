@@ -260,31 +260,17 @@ private fun ResearchChatHeader(
     onForkQuestion: (() -> Unit)?,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val roomy = maxWidth >= 620.dp
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+    Box(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
                     PaperText(
-                        "ИССЛЕДОВАНИЕ",
-                        role = PaperTextRole.CHROME,
-                        color = LocalPaperColors.current.secondaryText,
-                    )
-                    PaperText(
                         state.current?.title?.ifBlank { "Новая глава" } ?: "Новая глава",
-                        role = PaperTextRole.HEADLINE,
+                        role = PaperTextRole.TITLE,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-                if (roomy && onForkQuestion != null) {
-                    PaperButton(
-                        "Создать ветку",
-                        onForkQuestion,
-                        kind = PaperButtonKind.QUIET,
-                        enabled = !saving && state.current != null,
                     )
                 }
                 Box {
@@ -292,7 +278,7 @@ private fun ResearchChatHeader(
                         PaperText("⋯", role = PaperTextRole.TITLE, color = LocalPaperColors.current.action)
                     }
                     PaperMenuHost(menuOpen, { menuOpen = false }) {
-                        if (!roomy && onForkQuestion != null) PaperMenuAction("Создать ветку", {
+                        if (onForkQuestion != null) PaperMenuAction("Создать ветку", {
                             menuOpen = false
                             onForkQuestion()
                         }, enabled = !saving && state.current != null)
@@ -305,6 +291,7 @@ private fun ResearchChatHeader(
             if (!wide) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     PaperButton("+  Новый вопрос", onNewQuestion, enabled = !saving,
+                        kind = PaperButtonKind.SECONDARY,
                         accessibilityLabel = "Новый вопрос")
                     PaperButton(
                         "Вопросы (${state.questions.size})",
@@ -344,6 +331,7 @@ private fun ResearchQuestionsPane(
                 onNewQuestion,
                 Modifier.fillMaxWidth(),
                 enabled = !saving,
+                kind = PaperButtonKind.SECONDARY,
                 accessibilityLabel = "Новый вопрос",
             )
         }

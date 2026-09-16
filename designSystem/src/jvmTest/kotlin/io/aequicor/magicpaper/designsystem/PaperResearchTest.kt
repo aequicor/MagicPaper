@@ -6,13 +6,60 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class PaperResearchTest {
+    @Test fun bookTypeStaysDenseAndAlignedWithoutChangingOtherScreens() {
+        for (scale in listOf(1f, 2f)) {
+            val scene = onPaperUi { ImageComposeScene(390, 900) {
+                PaperTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, scale)) {
+                        Column {
+                            PaperText("До страницы")
+                            PaperResearchReading {
+                                Column(Modifier.paperResearchMessage(true, true, user = true)) { PaperText("Вопрос") }
+                                Column(Modifier.paperResearchMessage(true, true, user = false)) {
+                                    PaperText("Заголовок", role = PaperTextRole.HEADLINE)
+                                    PaperText("Текст ответа: читаемые строки, компактный интервал, общая направляющая.")
+                                }
+                            }
+                            PaperText("После страницы")
+                        }
+                    }
+                }
+            } }
+            try {
+                repeat(8) { onPaperUi { scene.render(it * 32_000_000L).close() } }
+                onPaperUi {
+                    fun walk(n: SemanticsNode): List<SemanticsNode> = listOf(n) + n.children.flatMap(::walk)
+                    val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    fun node(prefix: String) = nodes.first {
+                        it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text.startsWith(prefix) }
+                    }
+                    fun layout(prefix: String): TextLayoutResult {
+                        val results = mutableListOf<TextLayoutResult>()
+                        node(prefix).config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+                        return results.single()
+                    }
+                    val body = layout("Текст ответа")
+                    val style = body.layoutInput.style
+                    assertTrue(style.lineHeight.value / style.fontSize.value in 1.4f..1.55f)
+                    assertFalse(body.hasVisualOverflow)
+                    assertEquals(node("Вопрос").boundsInRoot.left, node("Текст ответа").boundsInRoot.left)
+                    assertEquals(style.fontFamily, layout("Заголовок").layoutInput.style.fontFamily)
+                    assertEquals(layout("До страницы").layoutInput.style, layout("После страницы").layoutInput.style)
+                    assertTrue(style.fontSize > layout("До страницы").layoutInput.style.fontSize)
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
     @Test fun composerMovesContinuouslyAndKeepsItsEditorIdentity() {
         val centered = mutableStateOf(true)
         val scene = onPaperUi { ImageComposeScene(800, 700) {

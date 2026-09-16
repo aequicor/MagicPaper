@@ -3017,5 +3017,21 @@
     "targets": ["PaperButton", "PaperText"],
     "stage": "6",
     "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ChatScreen.kt",
+    "symbol": "ResearchSourceFootnotes",
+    "annotationLine": 282,
+    "targets": ["PaperDivider", "PaperText", "PaperLink"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt",
+    "symbol": "content",
+    "annotationLine": 564,
+    "targets": ["PaperNavigation", "PaperTreeRow", "PaperStatus", "PaperMenu"],
+    "stage": "6",
+    "kind": "surface"
   }
 ]

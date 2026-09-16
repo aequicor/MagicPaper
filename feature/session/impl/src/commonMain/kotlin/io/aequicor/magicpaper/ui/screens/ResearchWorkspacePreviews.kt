@@ -41,7 +41,7 @@ internal fun researchPreviewState(empty: Boolean = false, busy: Boolean = false)
     return ChatState(sessions = if (empty) listOf(root) else listOf(root, architecture, compose), current = root, busy = busy)
 }
 
-@Preview(name = "Reading", group = "Research", widthDp = 1280, heightDp = 850)
+@Preview(name = "Book page", group = "Research", widthDp = 1280, heightDp = 850)
 @Preview(name = "Narrow", group = "Research", widthDp = 390, heightDp = 780)
 @Preview(name = "Large text", group = "Research", widthDp = 720, heightDp = 1000, fontScale = 2f)
 @Composable

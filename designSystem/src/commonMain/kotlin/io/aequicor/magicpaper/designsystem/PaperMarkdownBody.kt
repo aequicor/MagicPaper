@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -38,6 +39,7 @@ import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.SyntaxThemes
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdownFlow
+import com.mikepenz.markdown.model.markdownPadding
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.lazy.LazyListState
@@ -63,6 +65,7 @@ public interface PaperMarkdownSlice : ASTNode {
 public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNode>, modifier: Modifier = Modifier,
     compact: Boolean = false, listState: LazyListState? = null, selectable: Boolean = true) {
     val bodyStyle = if (compact) LocalPaperTypography.current.label else LocalPaperTypography.current.body
+    val reading = LocalPaperResearchReading.current && !compact
     val components = remember {
         markdownComponents(
             // M3-чекбоксы для task-листов — как в дефолте m3-модуля,
@@ -139,13 +142,16 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
         Markdown(
             state = document.state,
             modifier = modifier.fillMaxWidth(),
+            padding = if (reading) markdownPadding(block = 4.dp, list = 2.dp,
+                listItemTop = 2.dp, listItemBottom = 2.dp) else markdownPadding(),
             // В бабле чата дисплейные заголовки ни к чему — приглушаем до типографики чата.
             // Код — фирменный моно (иначе библиотека пинит системный моноширинный);
             // цитаты — курсив, подтянет literata_italic из стека.
             typography = markdownTypography(
                 h1 = if (compact) bodyStyle else LocalPaperTypography.current.headline,
                 h2 = if (compact) bodyStyle else LocalPaperTypography.current.title,
-                h3 = if (compact) bodyStyle else LocalPaperTypography.current.title,
+                h3 = if (reading) bodyStyle.copy(fontWeight = FontWeight.SemiBold)
+                    else if (compact) bodyStyle else LocalPaperTypography.current.title,
                 h4 = if (compact) bodyStyle else LocalPaperTypography.current.body,
                 h5 = if (compact) bodyStyle else LocalPaperTypography.current.body,
                 h6 = if (compact) bodyStyle else LocalPaperTypography.current.body,
