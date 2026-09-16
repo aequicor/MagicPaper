@@ -29,6 +29,14 @@ data class CodingSessionUi(
     val unread: Boolean = false,
     val worktreeAvailability: WorktreeAvailability = WorktreeAvailability(false, "Проверка Git…"),
 ) {
+    /** Native history may only be replaced after every execution owner has settled. */
+    val canChangeHistory: Boolean get() = !running && !draft.active && interactions.isEmpty() && !awaitingUser &&
+        session.pendingRun?.intent != ExecutionIntent.RUN && session.queuedPrompts.isEmpty() &&
+        session.observedState !in setOf(SessionObservedState.UNKNOWN, SessionObservedState.STOPPING, SessionObservedState.RUNNING) &&
+        session.desiredState != SessionDesiredState.QUARANTINE &&
+        (session.taskWorktree?.phase?.let { it == TaskWorktreePhase.COMPLETE } != false) &&
+        (plan == null || plan.phase == ExecutionPhase.COMPLETE)
+
     val worktreeSelected: Boolean get() {
         if (session.researchMode) return false
         if (session.taskWorktree?.let { it.phase != TaskWorktreePhase.COMPLETE } == true) return true

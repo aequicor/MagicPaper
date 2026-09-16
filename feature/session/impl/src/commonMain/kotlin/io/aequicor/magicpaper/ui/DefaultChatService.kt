@@ -164,6 +164,7 @@ class DefaultChatService(
     }
 
     override fun deleteSession(id: String) {
+        if (id in changingHistory) return
         AppLog.info("chat", "session.delete", mapOf("sessionId" to id))
         if (!deletingSessions.add(id)) return
         scope.launch {
@@ -199,9 +200,73 @@ class DefaultChatService(
 
     private val deletingSessions = mutableSetOf<String>()
     private val controllingSessions = mutableSetOf<String>()
+    private val changingHistory = mutableSetOf<String>()
+
+    private suspend fun <T> changeHistory(sessionId: String, operation: String, block: suspend () -> T): Result<T> = scope.async {
+        if (!changingHistory.add(sessionId)) return@async Result.failure(IllegalStateException("Дождитесь сохранения истории."))
+        try {
+            check(sessionId !in deletingSessions)
+            pendingCreations[sessionId]?.await()
+            val session = chats.session(sessionId) ?: error("Session missing")
+            if (operation != "fork") {
+                check(sessionId !in chatJobs.value && sessionId !in controllingSessions)
+                check(session.queuedPrompts.isEmpty() && session.pendingRun?.intent != ExecutionIntent.RUN)
+                runtime.reconcile(sessionId)
+            }
+            block().let { result ->
+                AppLog.info("chat", "history.$operation", mapOf("sessionId" to sessionId))
+                Result.success(result)
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("chat", "history.$operation.failed", failure, mapOf("sessionId" to sessionId))
+            val message = "Не удалось изменить историю. Завершите текущий запрос и повторите попытку."
+            _state.update { it.copy(notice = message) }
+            Result.failure(IllegalStateException(message))
+        } finally {
+            changingHistory.remove(sessionId)
+            startNextChat(sessionId)
+        }
+    }.await()
+
+    override suspend fun editMessage(sessionId: String, messageId: String, text: String): Result<Unit> = changeHistory(sessionId, "edit") {
+        val saved = updateChat(sessionId) { session ->
+            val message = session.messages.first { it.id == messageId }
+            require(message.role == ChatRole.USER && (text.isNotBlank() || message.attachments.isNotEmpty()))
+            val edited = message.copy(text = text.trim())
+            session.copy(messages = session.messages.through(messageId) { it.id }.dropLast(1) + edited,
+                nativeSessionId = "", pendingRun = null, updatedAt = Id.now())
+        }
+        val message = saved.messages.last()
+        changingHistory.remove(sessionId)
+        startChat(message.text, message.attachments, sessionId,
+            CodingRunCheckpoint(message.id, message.text, message.attachments, responseId = Id.new()), clearDraft = false)
+    }
+
+    override suspend fun deleteMessage(sessionId: String, messageId: String): Result<Unit> = changeHistory(sessionId, "delete") {
+        updateChat(sessionId) { session ->
+            require(session.messages.any { it.id == messageId })
+            session.copy(messages = session.messages.filterNot { it.id == messageId }, nativeSessionId = "",
+                pendingRun = null, updatedAt = Id.now())
+        }
+        Unit
+    }
+
+    override suspend fun forkSession(sessionId: String, throughMessageId: String?): Result<String> = changeHistory(sessionId, "fork") {
+        val source = checkNotNull(chats.session(sessionId))
+        val now = Id.now()
+        val fork = source.copy(id = Id.new(), title = "${source.title} — форк", createdAt = now, updatedAt = now,
+            messages = source.messages.through(throughMessageId) { it.id }.map { it.copy(id = Id.new()) },
+            nativeSessionId = "", pendingRun = null, queuedPrompts = emptyList(), acquireComputerAccess = false)
+        chats.save(fork)
+        _state.update { it.copy(sessions = listOf(fork) + it.sessions) }
+        onOpenSession(fork.id)
+        fork.id
+    }
 
     override fun send(text: String, attachments: List<Attachment>) {
         val session = _state.value.current
+        if (session?.id in changingHistory) return
         if (session != null && (session.id in chatJobs.value || session.pendingRun != null)) {
             val visible = attachments.chatVisible()
             if ((text.isBlank() && visible.isEmpty()) || session.id in deletingSessions) return
@@ -220,7 +285,7 @@ class DefaultChatService(
 
     private fun startNextChat(sessionId: String) {
         if (!scope.isActive) return
-        if (sessionId in chatJobs.value || sessionId in deletingSessions || sessionId in controllingSessions) return
+        if (sessionId in chatJobs.value || sessionId in deletingSessions || sessionId in controllingSessions || sessionId in changingHistory) return
         val session = _state.value.sessions.firstOrNull { it.id == sessionId } ?: return
         if (session.pendingRun != null) return
         session.queuedPrompts.firstOrNull()?.let { request ->
@@ -244,6 +309,7 @@ class DefaultChatService(
 
     override fun resume(text: String, attachments: List<Attachment>) {
         val session = _state.value.current ?: return
+        if (session.id in changingHistory) return
         if (session.id in chatJobs.value || session.id in controllingSessions || session.id in deletingSessions) return
         val request = session.pendingRun ?: return
         val revised = request.copy(prompt = request.prompt + if (text.isBlank()) "" else "\n\nУточнение пользователя: " + text.trim(),
@@ -253,6 +319,7 @@ class DefaultChatService(
 
     override fun clarify(text: String, attachments: List<Attachment>) {
         val session = _state.value.current ?: return
+        if (session.id in changingHistory) return
         if (text.isBlank() && attachments.isEmpty()) return
         if (session.id !in chatJobs.value) { resume(text, attachments); return }
         if (!controllingSessions.add(session.id)) return
@@ -289,7 +356,7 @@ class DefaultChatService(
             _state.value.current ?: return
         }
         // Allow parallel chat sessions - each session has its own job
-        if (session.id in chatJobs.value || session.id in deletingSessions) return
+        if (session.id in chatJobs.value || session.id in deletingSessions || session.id in changingHistory) return
 
         val request = resumed ?: CodingRunCheckpoint(Id.new(), trimmed, visible, responseId = Id.new())
         val userMessage = ChatMessage(
@@ -304,7 +371,7 @@ class DefaultChatService(
         val capturedProject = if (wantsLayout) layoutProject(session.layoutProjectId) else null
         val layoutRequest = if (wantsLayout) LayoutChatRequest(capturedProject, session.id, userMessage.id) else null
         val creation = pendingCreations[session.id]
-        val historyBefore = session.messages
+        val historyBefore = session.messages.filterNot { it.id == request.messageId }
         val updated = session.copy(
             engine = session.engine ?: settings.defaultCodingEngine,
             messages = if (session.messages.any { it.id == userMessage.id }) session.messages else session.messages + userMessage,

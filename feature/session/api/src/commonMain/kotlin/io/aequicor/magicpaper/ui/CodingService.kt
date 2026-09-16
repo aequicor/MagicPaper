@@ -46,6 +46,9 @@ interface CodingService {
     fun deleteAllCodingSessions(projectId: String)
     fun archiveCodingSession(id: String)
     fun deleteCodingSession(id: String)
+    suspend fun editMessage(sessionId: String, messageId: String, text: String): Result<Unit>
+    suspend fun deleteMessage(sessionId: String, messageId: String): Result<Unit>
+    suspend fun forkSession(sessionId: String, throughMessageId: String? = null): Result<String>
     fun changeCodingInteractionMode(sessionId: String, mode: CodingInteractionMode)
     /** Переключить per-session фича-флаг; пустой session override наследует глобальные из настроек. */
     fun toggleSessionFeatureFlag(sessionId: String, flag: FeatureFlag)

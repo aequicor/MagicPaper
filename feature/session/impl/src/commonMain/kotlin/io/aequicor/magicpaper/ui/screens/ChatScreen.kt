@@ -69,6 +69,10 @@ import io.aequicor.magicpaper.designsystem.PaperActivityTone
 import io.aequicor.magicpaper.designsystem.paperConversationMessage
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.designsystem.PaperTextRole
+import io.aequicor.magicpaper.domain.fullCopyText
+import io.aequicor.magicpaper.domain.ExecutionIntent
+import io.aequicor.magicpaper.ui.components.MessageHistoryActions
+import io.aequicor.magicpaper.ui.components.ForkSessionAction
 
 /** Экран чата: лента сообщений и поле заклинаний. */
 @Composable
@@ -77,6 +81,9 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
     val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
     MessagesList(state.current, state.busy, modifier = Modifier.fillMaxSize(),
+        onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
+        onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
+        onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
         pins = state.current?.let { pins[PinConversation(it.id)] }.orEmpty(), footer = {
             Composer(
                 draftSession = vm.composerDraft,
@@ -102,6 +109,9 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
     pins: List<RequestPinGroup> = emptyList(),
+    onEdit: (suspend (String, String) -> Result<Unit>)? = null,
+    onDelete: (suspend (String) -> Result<Unit>)? = null,
+    onFork: (suspend (String?) -> Result<String>)? = null,
     bottomContentPadding: androidx.compose.ui.unit.Dp = 16.dp,
     floatingControlsBottomPadding: androidx.compose.ui.unit.Dp = 12.dp,
     listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.runtime.key(session?.id) {
@@ -110,6 +120,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     footer: @Composable () -> Unit = {},
 ) {
     val messages = session?.messages.orEmpty()
+    val historyEnabled = !busy && session?.pendingRun?.intent != ExecutionIntent.RUN && session?.queuedPrompts.orEmpty().isEmpty()
     // Держим конец ленты (открыли чат — видно последнее сообщение; ответ агента
     // дорастает — видно его конец, а не начало). Вверх открутили — не мешаем.
     val scroll = paperStickToBottom(listState, session?.id)
@@ -134,9 +145,9 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             else (0 until parts.size).map { ChatMessageFragment(message, parts, it) }
         }
     }
-    val indices = remember(fragments) {
+    val indices = remember(fragments, onFork != null) {
         fragments.mapIndexedNotNull { index, fragment ->
-            if (fragment.index == 0) fragment.message.id to index else null
+            if (fragment.index == 0) fragment.message.id to (index + if (onFork != null) 1 else 0) else null
         }.toMap()
     }
     PaperPreserveInlineExpansion(expandedParts, scroll)
@@ -158,6 +169,9 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                 contentPadding = PaddingValues(start = 8.dp, top = laneTop + 12.dp, end = 8.dp, bottom = transcriptBottomPadding),
                 verticalArrangement = Arrangement.Top,
             ) {
+                if (onFork != null) item(key = "fork-session") {
+                    ForkSessionAction(true) { onFork(null) }
+                }
                 items(fragments, key = { it.key }, contentType = { it.message.role }) { fragment ->
                     val message = fragment.message
                     PaperChatScrollItem(scroll, fragment.key) {
@@ -167,6 +181,11 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                                 fragment = fragment, onCollapse = {
                                     listState.requestScrollToItem(indices.getValue(message.id))
                                     expandedMessages = expandedMessages - message.id
+                                }, actions = {
+                                    MessageHistoryActions(message.id, message.text, { message.fullCopyText() }, historyEnabled,
+                                        onEdit = onEdit?.takeIf { message.role == ChatRole.USER }?.let { action -> { text -> action(message.id, text) } },
+                                        onDelete = onDelete?.let { action -> { action(message.id) } },
+                                        onFork = onFork?.let { action -> { action(message.id) } })
                                 })
                         }
                     }
@@ -220,7 +239,8 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
 
 @Composable
 private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPins: () -> Unit = {},
-    fragment: ChatMessageFragment = ChatMessageFragment(message), onCollapse: () -> Unit = {}) {
+    fragment: ChatMessageFragment = ChatMessageFragment(message), onCollapse: () -> Unit = {},
+    actions: @Composable () -> Unit = {}) {
     val isUser = message.role == ChatRole.USER
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = if (fragment.first) 8.dp else 0.dp),
@@ -268,6 +288,7 @@ private fun MessageBubble(message: ChatMessage, pinNumber: Int? = null, onShowPi
                     }
                 }
             }
+            if (fragment.last) actions()
         }
     }
 }

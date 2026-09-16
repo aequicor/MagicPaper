@@ -2908,5 +2908,21 @@
     ],
     "stage": "6",
     "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt",
+    "symbol": "MessageHistoryActions",
+    "annotationLine": 15,
+    "targets": ["PaperMessageActions", "PaperDialog", "PaperField"],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt",
+    "symbol": "ForkSessionAction",
+    "annotationLine": 76,
+    "targets": ["PaperButton", "PaperText"],
+    "stage": "6",
+    "kind": "surface"
   }
 ]

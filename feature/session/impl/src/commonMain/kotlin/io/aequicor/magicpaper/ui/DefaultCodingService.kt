@@ -57,6 +57,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -876,6 +877,7 @@ class DefaultCodingService(
     }
 
     override fun deleteCodingProject(id: String) {
+        if (_state.value.coding.sessions.any { it.session.projectId == id && it.session.id in changingHistory }) return
         val repo = codingProjects ?: return
         while (true) {
             val pending = deletingCodingProjects.value
@@ -1080,6 +1082,7 @@ class DefaultCodingService(
     }
 
     override fun deleteAllCodingSessions(projectId: String) {
+        if (_state.value.coding.sessions.any { it.session.projectId == projectId && it.session.id in changingHistory }) return
         val repo = codingProjects ?: return
         scope.launch {
             try {
@@ -1130,6 +1133,7 @@ class DefaultCodingService(
     }
 
     override fun deleteCodingSession(id: String) {
+        if (id in changingHistory) return
         val repo = codingProjects ?: return
         val coding = _state.value.coding
         val target = coding.sessions.firstOrNull { it.session.id == id } ?: return
@@ -1168,6 +1172,7 @@ class DefaultCodingService(
     }
 
     override fun changeCodingInteractionMode(sessionId: String, mode: CodingInteractionMode) {
+        if (sessionId in changingHistory) return
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         scope.launch {
             try {
@@ -1244,6 +1249,7 @@ class DefaultCodingService(
      * Прогоны разных сессий (в том числе разных проектов) идут параллельно.
      */
     override fun sendCodingPromptTo(sessionId: String, text: String, attachments: List<Attachment>) {
+        if (sessionId in changingHistory) return
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session ?: return
         if (planningChat != null && (selected.planningMode || selected.stageId != null)) {
             val draft = composerDrafts[sessionId]
@@ -1273,7 +1279,7 @@ class DefaultCodingService(
     private val queuedComputerRequests = MutableStateFlow<Map<String, String>>(emptyMap())
 
     private fun startQueuedPrompt(sessionId: String) {
-        if (closing || sessionId in codingJobs.value) return
+        if (closing || sessionId in codingJobs.value || sessionId in changingHistory) return
         val session = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session ?: return
         if (session.pendingRun != null || session.archived) return
         session.queuedPrompts.firstOrNull()?.let { request ->
@@ -1284,6 +1290,7 @@ class DefaultCodingService(
     private val clarifyingSessions = mutableSetOf<String>()
 
     override fun clarifyCodingSession(sessionId: String, text: String, attachments: List<Attachment>) {
+        if (sessionId in changingHistory) return
         if (text.isBlank() && attachments.isEmpty()) return
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         if (!validateInput(ui.session, attachments, sessionId)) return
@@ -1324,6 +1331,7 @@ class DefaultCodingService(
     }
 
     override fun resumeCodingSession(sessionId: String, text: String, attachments: List<Attachment>, fromQuestionnaire: Boolean) {
+        if (sessionId in changingHistory) return
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         if (!(if (fromQuestionnaire) ui.copy(interactions = emptyList()) else ui).canResume) return
         if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
@@ -1400,6 +1408,87 @@ class DefaultCodingService(
         }
     }
 
+    private val changingHistory = mutableSetOf<String>()
+
+    private suspend fun <T> changeHistory(sessionId: String, operation: String,
+        action: suspend (CodingSessionUi, CodingProjectRepository) -> T): Result<T> = scope.async {
+        if (!changingHistory.add(sessionId)) return@async Result.failure(IllegalStateException("Дождитесь сохранения истории."))
+        try {
+            val ui = _state.value.coding.sessions.first { it.session.id == sessionId }
+            check(ui.session.projectId !in deletingCodingProjects.value)
+            if (operation != "fork") {
+                check(ui.canChangeHistory && sessionId !in codingJobs.value)
+                check(planningChat?.drafts?.value?.get(sessionId)?.active != true)
+                codingRuntime?.reconcile(sessionId)
+            }
+            val result = action(ui, checkNotNull(codingProjects))
+            AppLog.info("coding", "history.$operation", mapOf("sessionId" to sessionId))
+            Result.success(result)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("coding", "history.$operation.failed", failure, mapOf("sessionId" to sessionId))
+            val message = (failure as? HistoryActionRejected)?.message
+                ?: "Не удалось изменить историю. Завершите текущую задачу и повторите попытку."
+            _state.update { it.copy(notice = message) }
+            Result.failure(IllegalStateException(message))
+        } finally {
+            changingHistory.remove(sessionId)
+            startQueuedPrompt(sessionId)
+        }
+    }.await()
+
+    private suspend fun replaceHistory(ui: CodingSessionUi, repo: CodingProjectRepository, messages: List<CodingMessage>): CodingSession {
+        // Invalidate native context before changing the log. If either write fails, a future
+        // run still seeds from the authoritative log and cannot resume the discarded context.
+        val saved = updateStoredCodingSession(ui.session) { latest ->
+            check(latest.pendingRun?.intent != ExecutionIntent.RUN && latest.queuedPrompts.isEmpty())
+            latest.copy(piSessionId = "", needsHistorySeed = true, pendingRun = null, manuallyVerifiedResponseId = null)
+        }
+        repo.replaceHistory(saved.projectId, saved.id, ui.messages, messages)
+        updateCodingSession(saved.id) { it.copy(messages = messages, draft = CodingDraft(), failedRequest = false, interruptedRequest = false) }
+        return saved
+    }
+
+    override suspend fun deleteMessage(sessionId: String, messageId: String): Result<Unit> = changeHistory(sessionId, "delete") { ui, repo ->
+        require(ui.messages.any { it.id == messageId })
+        replaceHistory(ui, repo, ui.messages.filterNot { it.id == messageId })
+        Unit
+    }
+
+    override suspend fun editMessage(sessionId: String, messageId: String, text: String): Result<Unit> = changeHistory(sessionId, "edit") { ui, repo ->
+        if (ui.session.archived) throw HistoryActionRejected("Архивную сессию можно продолжить в форке.")
+        val message = ui.messages.first { it.id == messageId }
+        require(message.role == CodingRole.USER && message.origin == MessageOrigin.USER)
+        require(text.isNotBlank() || message.inputAttachments.isNotEmpty())
+        // Old metadata-only logs cannot safely recreate missing attachment bytes.
+        if (message.attachments.size != message.inputAttachments.size)
+            throw HistoryActionRejected("В старом сообщении сохранились только названия файлов. Прикрепите их заново в новом сообщении.")
+        val request = CodingRunCheckpoint(Id.new(), text.trim(), message.inputAttachments,
+            responseId = Id.new(), responseTimelineId = Id.new(),
+            interactionMode = ui.session.interactionMode, worktreeEnabled = ui.session.worktreeEnabled)
+        check(validateInput(ui.session, request.attachments, request.messageId))
+        val invocation = CodingImageInvocation(sessionId, request.runId, request.messageId, request.responseId, request.responseTimelineId)
+        val edited = message.copy(id = request.messageId, text = request.prompt, inputStatus = null,
+            images = request.attachments.mapNotNull { it.asCodingInputImage(invocation) })
+        val saved = replaceHistory(ui, repo, ui.messages.through(messageId) { it.id }.dropLast(1) + edited)
+        changingHistory.remove(sessionId)
+        if (planningChat != null && (saved.planningMode || saved.stageId != null)) {
+            checkNotNull(planningChat.send(saved, request.prompt, inputId = request.messageId)).join()
+        } else launchCodingRun(saved, request, recovering = false, clearComposer = false)
+    }
+
+    override suspend fun forkSession(sessionId: String, throughMessageId: String?): Result<String> = changeHistory(sessionId, "fork") { ui, repo ->
+        val fork = ui.session.fork()
+        val messages = ui.messages.through(throughMessageId) { it.id }
+            .filterNot { it.systemContext || it.systemNotice }.map { it.forFork(fork.id) }
+        // Publish the new session only after its complete independent log exists.
+        repo.saveMessages(fork.projectId, fork.id, messages)
+        repo.saveSession(fork)
+        _state.update { it.copy(coding = it.coding.copy(sessions = listOf(CodingSessionUi(fork, messages)) + it.coding.sessions)) }
+        onOpenSession(fork.projectId, fork.id)
+        fork.id
+    }
+
     private suspend fun appendCodingMessage(session: CodingSession, message: CodingMessage) {
         val repo = codingProjects ?: return
         if (planningChat != null) planningChat.append(session.projectId, session.id, message)
@@ -1444,7 +1533,7 @@ class DefaultCodingService(
         val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
         // A cancelled job still owns the session while its runtime and saved output
         // are being cleaned up. Its finally block releases this entry.
-        if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value) return
+        if (closing || session.projectId in deletingCodingProjects.value || session.id in codingJobs.value || session.id in changingHistory) return
         if (userInitiated && !validateInput(session, checkpoint.attachments, checkpoint.messageId)) return
         queuedComputerRequests.update { it - checkpoint.messageId }
         var request = checkpoint.copy(
@@ -1478,6 +1567,7 @@ class DefaultCodingService(
                 if (codingProjects!!.messages(project.id, session.id).none { it.id == request.messageId }) {
                     appendCodingMessage(session, CodingMessage(request.messageId, CodingRole.USER,
                         request.prompt, createdAt = Id.now(), attachments = request.attachments.map { it.asMeta() },
+                        inputAttachments = request.attachments,
                         images = request.attachments.mapNotNull { it.asCodingInputImage(checkNotNull(recorder.imageInvocation)) }))
                 }
                 additionalMessage?.let { appendCodingMessage(session, it) }

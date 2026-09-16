@@ -55,7 +55,9 @@ internal fun ChatTranscriptPreview(session: ChatSession? = chatTranscriptPreview
     PaperTheme {
         CompositionLocalProvider(LocalChatPresentation provides DefaultChatPresentation) {
             Box(Modifier.fillMaxSize().background(LocalPaperColors.current.canvas)) {
-                MessagesList(session, busy, modifier = Modifier.fillMaxSize(), footer = {
+                MessagesList(session, busy, modifier = Modifier.fillMaxSize(),
+                    onEdit = { _, _ -> Result.success(Unit) }, onDelete = { Result.success(Unit) },
+                    onFork = { Result.success("preview-fork") }, footer = {
                     Composer(enabled = true, busy = busy, session = session,
                         profiles = listOf(LlmProfile("preview", "Модель сессии", baseUrl = "https://example.invalid/v1", modelId = "preview-model")), activeProfileId = "preview",
                         onSend = { _, _ -> }, onOpenSwitcher = {}, onPickAttachments = { _, _ -> })

@@ -35,9 +35,9 @@ class SessionOrganismServiceTest {
         val backing = SessionOrganismTestFixture()
         var failSender = false
         val faultProjects = object : CodingProjectRepository by backing.projects {
-            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) {
+            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>): List<CodingMessage> {
                 if (failSender && sessionId == "root") { failSender = false; error("sender projection failed") }
-                backing.projects.saveMessages(projectId, sessionId, messages)
+                return backing.projects.saveMessages(projectId, sessionId, messages)
             }
         }
         val f = SessionOrganismTestFixture(faultProjects, backing.storage); f.initialize()

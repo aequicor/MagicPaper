@@ -275,6 +275,8 @@
 | [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt) | `SessionResultPendingPreview:26` | surface | PaperTheme, PaperText, PaperCheck | 6 |
 | [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionResultReview.kt) | `SessionResultVerifiedPreview:32` | surface | PaperTheme, PaperText, PaperCheck | 6 |
 | [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSidebar.kt) | `UnreadDot:728` | surface | PaperStatus | 6 |
+| [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt) | `MessageHistoryActions:15` | surface | PaperMessageActions, PaperDialog, PaperField | 6 |
+| [feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt](../../feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/MessageHistoryActions.kt) | `ForkSessionAction:76` | surface | PaperButton, PaperText | 6 |
 
 ## Постоянные ID этапов
 

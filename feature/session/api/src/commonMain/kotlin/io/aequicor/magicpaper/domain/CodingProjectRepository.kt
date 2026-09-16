@@ -24,7 +24,13 @@ interface CodingProjectRepository {
     suspend fun deleteSession(projectId: String, sessionId: String)
 
     suspend fun messages(projectId: String, sessionId: String): List<CodingMessage>
-    suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>)
+    /** Returns the committed list after applying explicit history removals. */
+    suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>): List<CodingMessage>
+    /** Compare the displayed history and persist removal identities against later projections. */
+    suspend fun replaceHistory(projectId: String, sessionId: String, expected: List<CodingMessage>, messages: List<CodingMessage>) {
+        check(messages(projectId, sessionId) == expected) { "История изменилась. Повторите действие." }
+        saveMessages(projectId, sessionId, messages)
+    }
     suspend fun orchestration(sessionId: String): OrchestrationState? = null
     suspend fun saveOrchestration(state: OrchestrationState) { error("Хранилище оркестратора недоступно") }
     suspend fun wipe()

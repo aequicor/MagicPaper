@@ -39,12 +39,12 @@ class OrchestrationInputAcceptanceTest {
                 beforeRead?.invoke()
                 return backing.sessions(projectId)
             }
-            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) {
+            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>): List<CodingMessage> {
                 if (failProjection) {
                     projectionFailures++
                     throw StorageException("injected history projection", StorageException.Kind.WRITE)
                 }
-                backing.saveMessages(projectId, sessionId, messages)
+                return backing.saveMessages(projectId, sessionId, messages)
             }
         }
         val store = PlanningStore(JsonPlanningRepository(kv, json))

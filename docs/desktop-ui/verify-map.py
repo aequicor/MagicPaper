@@ -31,7 +31,7 @@ PaperAttachmentRow PaperAttachmentChip PaperCodeBlock PaperScroll PaperTooltip
 PaperApprovalDock PaperText PaperReader PaperLink PaperQuestionnaire PaperScheduleEditor
 PaperActivityIndicator PaperWorkspaceHeading PaperWorkspaceComposer PaperPromptField PaperWorkSurface
 PaperMenuToggleInfo PaperPage PaperTab PaperTreeRow PaperTreeGroupHeader PaperContentEntrance PaperSettingsSection PaperMenu
-PaperExpandableImage PaperCheck PaperFileTransfer'''.split())
+PaperExpandableImage PaperCheck PaperFileTransfer PaperMessageActions'''.split())
 PATTERN = re.compile(
     r'@(?:androidx\.compose\.runtime\.)?Composable\s+'
     r'(?:@[\w.]+(?:\([^\n]*\))?\s+)*'

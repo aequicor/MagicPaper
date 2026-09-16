@@ -14,6 +14,9 @@ interface ChatService {
     fun newSession()
     fun selectSession(id: String)
     fun deleteSession(id: String)
+    suspend fun editMessage(sessionId: String, messageId: String, text: String): Result<Unit>
+    suspend fun deleteMessage(sessionId: String, messageId: String): Result<Unit>
+    suspend fun forkSession(sessionId: String, throughMessageId: String? = null): Result<String>
     fun send(text: String, attachments: List<Attachment> = emptyList())
     fun pause()
     fun resume(text: String = "", attachments: List<Attachment> = emptyList())

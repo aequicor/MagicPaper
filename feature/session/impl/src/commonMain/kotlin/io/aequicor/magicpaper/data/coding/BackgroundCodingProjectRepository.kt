@@ -50,8 +50,13 @@ class BackgroundCodingProjectRepository(
     override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) = access {
         val key = HistoryKey(projectId, sessionId)
         histories.remove(key) // A failed write can have committed before reporting its error.
-        delegate.saveMessages(projectId, sessionId, messages)
-        rememberHistory(key, messages)
+        delegate.saveMessages(projectId, sessionId, messages).also { rememberHistory(key, it) }
+    }
+    override suspend fun replaceHistory(projectId: String, sessionId: String, expected: List<CodingMessage>, messages: List<CodingMessage>) = access {
+        val key = HistoryKey(projectId, sessionId)
+        histories.remove(key)
+        delegate.replaceHistory(projectId, sessionId, expected, messages)
+        rememberHistory(key, delegate.messages(projectId, sessionId))
     }
     override suspend fun orchestration(sessionId: String) = access { delegate.orchestration(sessionId) }
     override suspend fun saveOrchestration(state: OrchestrationState) = access { delegate.saveOrchestration(state) }

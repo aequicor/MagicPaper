@@ -38,7 +38,8 @@ class CodingImageAttachmentRenderTest {
             // An old AttachmentMeta has no trusted bytes and must stay explicitly unavailable.
             CodingAttachments(listOf(AttachmentMeta("legacy.png", "image/png", 70, AttachmentKind.IMAGE)))
         } } }.use { scene ->
-            fun render() = repeat(20) { scene.render(it * 16_000_000L).close(); Thread.sleep(5) }
+            var frame = 0L
+            fun render() = repeat(20) { scene.render(++frame * 16_000_000L).close(); Thread.sleep(5) }
             fun nodes(): List<SemanticsNode> {
                 fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
                 return scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
@@ -56,9 +57,13 @@ class CodingImageAttachmentRenderTest {
             assertTrue(unavailable.any { it.contains("legacy.png: источник изображения недоступен") })
             assertTrue(unavailable.none { it.contains("result.png") && it.contains("input") })
 
-            clickDescription("Открыть input.png")
+            val compact = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Раскрыть input.png") }.boundsInRoot
+            clickDescription("Раскрыть input.png")
             render()
-            assertTrue(nodes().any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text.contains("input.png · 70 Б") } })
+            val expanded = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Свернуть input.png") }
+            assertTrue(expanded.config.getOrNull(SemanticsProperties.StateDescription) == "Изображение раскрыто")
+            assertTrue(expanded.boundsInRoot.width > compact.width && expanded.boundsInRoot.height > compact.height)
+            assertTrue(descriptions().contains("Раскрыть result.png"), "Expanding input must not expand the tool result")
         }
     }
 
@@ -73,10 +78,13 @@ class CodingImageAttachmentRenderTest {
                 return scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
             }
             repeat(20) { scene.render(it * 16_000_000L).close(); Thread.sleep(5) }
-            val button = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Открыть result.png") }
+            val button = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Раскрыть result.png") }
+            val compact = button.boundsInRoot
             assertTrue(button.config[SemanticsActions.OnClick].action?.invoke() == true)
             repeat(20) { scene.render((it + 20) * 16_000_000L).close(); Thread.sleep(5) }
-            assertTrue(nodes().any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text.contains("result.png · 70 Б") } })
+            val expanded = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Свернуть result.png") }
+            assertTrue(expanded.config.getOrNull(SemanticsProperties.StateDescription) == "Изображение раскрыто")
+            assertTrue(expanded.boundsInRoot.width > compact.width && expanded.boundsInRoot.height > compact.height)
         }
     }
 }

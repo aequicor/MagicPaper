@@ -153,6 +153,10 @@ import io.aequicor.magicpaper.domain.CodingDraft
 import io.aequicor.magicpaper.domain.CodingApproval
 import io.aequicor.magicpaper.domain.CodingApprovalDecision
 import io.aequicor.magicpaper.domain.CodingMessage
+import io.aequicor.magicpaper.domain.fullCopyText
+import io.aequicor.magicpaper.domain.MessageOrigin
+import io.aequicor.magicpaper.ui.components.MessageHistoryActions
+import io.aequicor.magicpaper.ui.components.ForkSessionAction
 import io.aequicor.magicpaper.domain.CodingProject
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSession
@@ -360,6 +364,9 @@ private fun SessionArea(
             CodingChat(
                 project = project,
                 session = effective,
+                onEditMessage = { id, text -> vm.editMessage(sessionInfo.id, id, text) },
+                onDeleteMessage = { id -> vm.deleteMessage(sessionInfo.id, id) },
+                onForkSession = { id -> vm.forkSession(sessionInfo.id, id) },
                 onResultRead = { vm.markSessionRead(sessionInfo.id, it) },
                 onManualVerification = { responseId, checked -> vm.setSessionManuallyVerified(sessionInfo.id, responseId, checked) },
                 contextUsage = vm.usage.state.collectAsState().value.contexts["coding:${sessionInfo.id}"]?.takeIf { it.model == vm.codingProfileOf(sessionInfo, workerPlan)?.modelId }
@@ -914,6 +921,9 @@ internal fun CodingChat(
     onOpenSession: (String) -> Unit = {},
     onResultRead: (String) -> Unit = {},
     onManualVerification: (String, Boolean) -> Unit = { _, _ -> },
+    onEditMessage: (suspend (String, String) -> Result<Unit>)? = null,
+    onDeleteMessage: (suspend (String) -> Result<Unit>)? = null,
+    onForkSession: (suspend (String?) -> Result<String>)? = null,
     onPlanning: (() -> Unit)? = null,
     onInteractionMode: ((CodingInteractionMode) -> Unit)? = null,
     modeSwitchEnabled: Boolean = true,
@@ -1038,6 +1048,7 @@ internal fun CodingChat(
                 item(key = "project-header", contentType = "header") {
                     PaperWorkspaceHeading(session.session.sidebarTitle(),
                         "${project.name}  /  ${session.session.interactionMode.title}")
+                    onForkSession?.let { action -> ForkSessionAction(true) { action(null) } }
                 }
                 items(fragments, key = { it.key }, contentType = { it.item.step?.kind ?: it.item.row.message.role }) { fragment ->
                     val item = fragment.item
@@ -1054,6 +1065,14 @@ internal fun CodingChat(
                         onCollapse = {
                             scroll.preserveCollapsedItem(item.key, fragments.indexOfFirst { it.item.key == item.key } + 1)
                             expandedMessages = expandedMessages - item.key
+                        }, actions = if (isDraft || message.systemContext || message.systemNotice) null else {
+                            { record ->
+                                MessageHistoryActions(record.id, record.text, { record.fullCopyText() }, session.canChangeHistory,
+                                    onEdit = onEditMessage?.takeIf { !session.session.archived && record.role == CodingRole.USER && record.origin == MessageOrigin.USER }
+                                        ?.let { action -> { text -> action(record.id, text) } },
+                                    onDelete = onDeleteMessage?.let { action -> { action(record.id) } },
+                                    onFork = onForkSession?.let { action -> { action(record.id) } })
+                            }
                         })
                 }
                 if (completedResponseId != null) {
@@ -1191,6 +1210,7 @@ private fun SavedCodingHistoryItem(
     fragment: CodingMessageFragment = CodingMessageFragment(item),
     onExpand: () -> Unit = {},
     onCollapse: () -> Unit = {},
+    actions: (@Composable (CodingMessage) -> Unit)? = null,
 ) {
     val row = item.row
     val message = row.message
@@ -1243,9 +1263,11 @@ private fun SavedCodingHistoryItem(
                         Spacer(Modifier.height(6.dp))
                         PlanningChatMessage(card, session, messages, planningService, onOpenSession)
                     }
+                    actions?.invoke(card)
                 }
                 OrchestrationMessageInputStatus(message, session.id, planningService)
                 if (message.pendingDelivery) PaperText("Ожидает передачи после текущего хода", style = LocalPaperTypography.current.label)
+                actions?.invoke(message)
             }
         }
     }

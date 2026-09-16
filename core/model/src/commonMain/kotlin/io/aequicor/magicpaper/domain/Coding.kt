@@ -706,6 +706,8 @@ data class CodingMessage(
     /** Structured images passed to this exact user request. */
     val images: List<CodingImageReference> = emptyList(),
 
+    /** Original input bytes retained for explicit editing and resubmission. */
+    val inputAttachments: List<Attachment> = emptyList(),
 )
 
 /** Хранилище проектов, их сессий и журналов. */

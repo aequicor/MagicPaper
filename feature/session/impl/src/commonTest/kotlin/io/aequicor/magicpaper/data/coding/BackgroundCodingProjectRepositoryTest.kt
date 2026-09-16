@@ -44,9 +44,10 @@ class BackgroundCodingProjectRepositoryTest {
             override suspend fun messages(projectId: String, sessionId: String): List<CodingMessage> {
                 reads++; return durable.messages(projectId, sessionId)
             }
-            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) {
-                durable.saveMessages(projectId, sessionId, messages)
+            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>): List<CodingMessage> {
+                val saved = durable.saveMessages(projectId, sessionId, messages)
                 if (failAfterCommit) error("Write acknowledgement lost")
+                return saved
             }
         }, StandardTestDispatcher(testScheduler), historyCacheSize = 2)
         for (id in listOf("a", "b", "c")) repo.saveMessages("p", id, history(id))

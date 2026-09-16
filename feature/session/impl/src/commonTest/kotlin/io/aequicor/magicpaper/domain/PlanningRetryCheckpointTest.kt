@@ -31,9 +31,10 @@ class PlanningRetryCheckpointTest {
         private val delegate = JsonCodingProjectRepository(kv, json)
         var onMessages: suspend (List<CodingMessage>) -> Unit = {}
         val projects = object : CodingProjectRepository by delegate {
-            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) {
-                delegate.saveMessages(projectId, sessionId, messages)
+            override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>): List<CodingMessage> {
+                val saved = delegate.saveMessages(projectId, sessionId, messages)
                 onMessages(messages)
+                return saved
             }
         }
         private val profiles = JsonLlmProfileRepository(kv, json)

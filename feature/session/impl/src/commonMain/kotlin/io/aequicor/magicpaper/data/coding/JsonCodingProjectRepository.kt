@@ -10,6 +10,7 @@ import io.aequicor.magicpaper.domain.interactionMode
 import io.aequicor.magicpaper.domain.changeInteractionMode
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -166,12 +167,43 @@ class JsonCodingProjectRepository(
     // ---- Журналы сессий -----------------------------------------------------
 
     override suspend fun messages(projectId: String, sessionId: String): List<CodingMessage> {
-        val raw = store.read(logKey(projectId, sessionId)) ?: return emptyList()
-        return json.decodeFromString(messagesSerializer, raw)
+        return history(projectId, sessionId).messages
     }
 
-    override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>) {
-        store.write(logKey(projectId, sessionId), json.encodeToString(messagesSerializer, messages))
+    override suspend fun saveMessages(projectId: String, sessionId: String, messages: List<CodingMessage>): List<CodingMessage> {
+        val previous = history(projectId, sessionId)
+        val retained = if (previous.removedIds.isEmpty()) messages else messages.filterNot { it.id in previous.removedIds }
+        // Projections may have captured their list before the user's rewrite. Once a
+        // log has removals, ordinary saves update/append; only replaceHistory removes.
+        val next = if (previous.removedIds.isEmpty()) retained else {
+            val updates = retained.associateBy { it.id }
+            val existing = previous.messages.map { it.id }.toSet()
+            previous.messages.map { updates[it.id] ?: it } + retained.filterNot { it.id in existing }
+        }
+        writeHistory(projectId, sessionId, previous.copy(messages = next))
+        return next
+    }
+
+    override suspend fun replaceHistory(projectId: String, sessionId: String, expected: List<CodingMessage>, messages: List<CodingMessage>) {
+        val previous = history(projectId, sessionId)
+        check(previous.messages == expected) { "История изменилась. Повторите действие." }
+        val retained = messages.map { it.id }.toSet()
+        writeHistory(projectId, sessionId, History(messages, previous.removedIds + expected.filterNot { it.id in retained }.map { it.id }))
+    }
+
+    @Serializable
+    private data class History(val messages: List<CodingMessage> = emptyList(), val removedIds: Set<String> = emptySet())
+
+    private fun history(projectId: String, sessionId: String): History {
+        val raw = store.read(logKey(projectId, sessionId)) ?: return History()
+        // Existing logs remain readable without changing their storage keys.
+        return if (raw.trimStart().startsWith("[")) History(json.decodeFromString(messagesSerializer, raw))
+        else json.decodeFromString(History.serializer(), raw)
+    }
+
+    private fun writeHistory(projectId: String, sessionId: String, history: History) {
+        store.write(logKey(projectId, sessionId), if (history.removedIds.isEmpty())
+            json.encodeToString(messagesSerializer, history.messages) else json.encodeToString(History.serializer(), history))
     }
 
     override suspend fun wipe() {
