@@ -281,9 +281,11 @@ class GitTaskWorkspace(
         require(record.resultCommit.isNotBlank(), lost)
         if (ancestor(dir, record.resultCommit, "HEAD")) return
         val pre = preIntegrationRef(record)
-        val previousTarget = record.integratedCommit.ifBlank { record.targetCommit }
-        require(probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 && ancestor(dir, record.resultCommit, pre) &&
-            previousTarget.isNotBlank() && ancestor(dir, previousTarget, "HEAD"), lost)
+        // This ref is created by this workspace immediately before it rewrites the task result.
+        // It remains the authoritative proof even when a later destination rewrite means the
+        // previous target is intentionally no longer an ancestor of the in-progress rebase HEAD.
+        require(probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 &&
+            ancestor(dir, record.resultCommit, pre), lost)
     }
     private suspend fun preservePreIntegrationRef(dir: File, record: TaskWorktree) {
         val ref = preIntegrationRef(record)

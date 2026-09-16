@@ -192,6 +192,32 @@ class GitTaskWorkspaceTest {
         assertEquals("second", source.resolve("second.txt").readText())
     } }
 
+    @Test fun rewrittenDestinationAfterIntegrationKeepsCapturedResultReachableDuringConflictRepair() = runTest { fixture {
+        var task = open()
+        File(task.path).resolve("base.txt").writeText("agent\n")
+        task = task.copy(resultCommit = port.capture(task))
+
+        source.resolve("first.txt").writeText("first")
+        git(source, "add", "."); git(source, "commit", "-m", "first destination")
+        val firstTarget = port.target(task)
+        task = task.copy(targetCommit = firstTarget)
+        task = task.copy(mergeCommit = checkNotNull(port.integrate(task)), integratedCommit = firstTarget)
+
+        git(source, "reset", "--hard", task.baseCommit)
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "rewritten destination")
+        task = task.copy(targetCommit = port.target(task))
+        assertNull(port.integrate(task))
+
+        File(task.path).resolve("base.txt").writeText("user\nagent\n")
+        git(File(task.path), "add", "base.txt")
+        task = task.copy(phase = TaskWorktreePhase.CONFLICT)
+        task = task.copy(mergeCommit = checkNotNull(port.integrate(task)))
+        port.deliver(task)
+
+        assertEquals("user\nagent\n", source.resolve("base.txt").readText())
+    } }
+
     @Test fun fixAlreadyPresentUpstreamIsDroppedInsteadOfConflicting() = runTest { fixture {
         val task = open()
         File(task.path).resolve("base.txt").writeText("fixed\n")
