@@ -99,12 +99,14 @@ public fun PaperWorkspaceComposer(
         }.background(Brush.verticalGradient(listOf(colors.composerHighlight, surface)), shape)
     }
     CompositionLocalProvider(LocalComposerInteraction provides source) {
-        Column(modifier.fillMaxWidth().padding(8.dp)
+        val outerPadding = if (document) 4.dp else 8.dp
+        val innerVerticalPadding = if (document) 4.dp else 8.dp
+        Column(modifier.fillMaxWidth().padding(outerPadding)
             // Alpha alone keeps the final geometry from the first layout pass, so the
             // transcript never jumps while the writing surface gently appears.
             .graphicsLayer { alpha = entrance.value }
             .then(frame)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = innerVerticalPadding),
             verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
     }
 }

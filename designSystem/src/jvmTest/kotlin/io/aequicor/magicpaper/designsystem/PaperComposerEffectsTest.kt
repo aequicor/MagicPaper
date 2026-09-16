@@ -9,9 +9,12 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.use
 import java.io.ByteArrayInputStream
@@ -20,6 +23,29 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class PaperComposerEffectsTest {
+    @Test fun documentComposerUsesCompactVerticalInsets() {
+        var regular = Rect.Zero
+        var document = Rect.Zero
+        ImageComposeScene(300, 240) {
+            PaperTheme {
+                Column {
+                    PaperWorkspaceComposer(Modifier.onGloballyPositioned { regular = it.boundsInRoot() }) {
+                        Spacer(Modifier.height(50.dp))
+                    }
+                    PaperWorkspaceComposer(
+                        Modifier.onGloballyPositioned { document = it.boundsInRoot() },
+                        document = true,
+                    ) {
+                        Spacer(Modifier.height(50.dp))
+                    }
+                }
+            }
+        }.use { scene ->
+            repeat(4) { scene.render(it * 16_000_000L).close() }
+            assertEquals(16f, regular.height - document.height, 0.1f)
+        }
+    }
+
     @Test fun composerAppearsWithAStationaryFade() {
         val scene = onPaperUi { ImageComposeScene(300, 100) {
             PaperTheme {
