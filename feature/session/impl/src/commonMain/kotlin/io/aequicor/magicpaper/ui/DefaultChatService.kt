@@ -111,7 +111,25 @@ class DefaultChatService(
         }
         _state.update { it.copy(settings = settings, llmProfiles = profiles, sessions = sessions,
             current = it.current?.let { selected -> sessions.firstOrNull { s -> s.id == selected.id } }) }
+        restoreChatRuns(sessions)
+        sessions.forEach { startNextChat(it.id) }
         observeAutoArchive()
+    }
+
+    private suspend fun restoreChatRuns(sessions: List<ChatSession>) {
+        for (session in sessions) {
+            val request = session.pendingRun ?: continue
+            if (request.intent != ExecutionIntent.RUN || session.archived) continue
+            val response = session.messages.firstOrNull { it.id == request.responseId }
+            if (response != null) {
+                updateChat(session.id) { latest ->
+                    if (latest.pendingRun?.messageId == request.messageId) latest.copy(pendingRun = null) else latest
+                }
+                continue
+            }
+            startChat(request.prompt, request.attachments, session.id, request,
+                clearDraft = false, acquireComputerAccess = false)
+        }
     }
     private var archiveObserver: Job? = null
     private fun observeAutoArchive() {

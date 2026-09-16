@@ -16,6 +16,7 @@ class ChatResearchTest {
         val calls = mutableListOf<Call>()
         val events = mutableMapOf<String, Channel<CodingEvent>>()
         val deleted = mutableListOf<String>()
+        val reconciled = mutableListOf<String>()
         override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             calls += Call(session, prompt, attachments)
             val channel = events.getOrPut(session.id) { Channel(Channel.UNLIMITED) }
@@ -26,6 +27,7 @@ class ChatResearchTest {
             events.getValue(id).send(CodingEvent.Finished)
         }
         override suspend fun deleteChatSession(session: ChatSession) { deleted += session.id }
+        override suspend fun reconcile(sessionId: String) { reconciled += sessionId }
     }
 
     private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatRepository = f.chats,
@@ -81,6 +83,50 @@ class ChatResearchTest {
             advanceUntilIdle()
             assertFalse(service.state.value.busy)
         } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun restartRestoresEveryRunningQuestionWithoutRepeatingStoppedWork() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        f.seed()
+        val root = f.chats.session("first")!!.copy(selectedQuestionId = "second")
+        fun question(id: String, intent: ExecutionIntent) = ChatSession(
+            id = id,
+            title = id,
+            createdAt = 2,
+            updatedAt = 2,
+            messages = listOf(ChatMessage("request-$id", ChatRole.USER, "Question $id", 2)),
+            researchParentId = root.id,
+            modelSelection = root.modelSelection,
+            pendingRun = CodingRunCheckpoint("request-$id", "Question $id", responseId = "response-$id", intent = intent),
+        )
+        f.chats.save(root)
+        f.chats.save(question("second", ExecutionIntent.RUN))
+        f.chats.save(question("third", ExecutionIntent.RUN))
+        f.chats.save(question("stopped", ExecutionIntent.STOP))
+        val runtime = Runtime()
+        val restored = DefaultChatService(runtime, JsonChatRepository(f.kv, f.json), f.settings, f.profiles, null,
+            workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs)
+        try {
+            restored.start()
+            restored.activate(root.id)
+            runCurrent()
+
+            assertEquals(setOf("second", "third"), runtime.calls.map { it.session.id }.toSet())
+            assertEquals(setOf("second", "third"), runtime.reconciled.toSet())
+            assertTrue(runtime.calls.all { it.prompt.startsWith("Продолжи незавершённую работу") })
+            assertEquals("second", restored.state.value.current?.id)
+            assertTrue(restored.state.value.busy)
+            assertEquals(1, f.chats.session("second")!!.messages.count { it.id == "request-second" })
+
+            runtime.finish("second", "Second answer")
+            runtime.finish("third", "Third answer")
+            advanceUntilIdle()
+            assertNull(f.chats.session("second")!!.pendingRun)
+            assertNull(f.chats.session("third")!!.pendingRun)
+            assertEquals(ExecutionIntent.STOP, f.chats.session("stopped")!!.pendingRun?.intent)
+            assertFalse(restored.state.value.busy)
+        } finally { restored.close(); Dispatchers.resetMain() }
     }
 
     @Test fun questionsShareSourcesButKeepDraftsHistoryAndLateRepliesIndependent() = runTest {
