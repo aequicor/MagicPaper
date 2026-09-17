@@ -4,6 +4,7 @@ import java.util.zip.ZipFile
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.jvm.toolchain.JvmVendorSpec
+import java.io.File
 
 plugins {
     alias(libs.plugins.kotlinJvm)
@@ -46,6 +47,12 @@ compose.desktop {
         // Custom title bars are implemented by JetBrains Runtime. Use the same
         // runtime for local launches and the self-contained native distribution.
         javaHome = jbr21.get().metadata.installationPath.asFile.absolutePath
+
+        buildTypes.release.proguard {
+            // Bundled libraries reference optional integrations (JUnit, JMX,
+            // mail/JMS, Ant tasks) that are absent from the runtime classpath.
+            configurationFiles.from(project.file("proguard-rules.pro"))
+        }
 
         nativeDistributions {
             modules("jdk.httpserver")
@@ -119,6 +126,24 @@ val protocolPackageType = when {
     else -> null
 }
 if (protocolPackageType != null) {
+    // Resolve packaging inputs at configuration time; the Exec action must not
+    // touch `project` at execution time (configuration-cache requirement).
+    val protocolWxi = layout.projectDirectory.file("packaging/protocol.wxi")
+    val desktopEntry = layout.projectDirectory.file("packaging/MagicPaper.desktop")
+    val windowsIconPath = project.file("../assets/icon/dist/magicpaper.ico").absolutePath
+    val linuxIconPath = project.file("../assets/icon/dist/magicpaper_512.png").absolutePath
+    // jpackage builds MSI/DEB with the WiX toolset (light.exe, candle.exe) found
+    // on PATH. Compose injects its unpacked WiX into its own jpackage tasks; this
+    // direct invocation needs the same environment. Mirrors wixToolset.kt: honor
+    // WIX_PATH, otherwise use the copy unpacked by the root :unzipWix task.
+    val wixEnvDir = System.getenv("WIX_PATH")
+    val wixToolsPath = if (wixEnvDir != null) File(wixEnvDir).absolutePath
+        else rootProject.layout.buildDirectory.dir("wix311").get().asFile.absolutePath
+    val toolPath = wixToolsPath + File.pathSeparator + (System.getenv("PATH") ?: "")
+    // Capture only serializable values in the Exec action: no script properties,
+    // no outer receivers (configuration-cache requirement).
+    val packageType = protocolPackageType
+    val jbrDirectory = jbr21.get().metadata.installationPath.asFile
     listOf(false, true).forEach { release ->
         val variant = if (release) "main-release" else "main"
         val variantTask = if (release) "Release" else ""
@@ -131,16 +156,42 @@ if (protocolPackageType != null) {
             notCompatibleWithConfigurationCache("Native packaging prepares platform-specific JBR resource templates")
             description = "Packages MagicPaper with the magicpaper:// protocol handler."
             dependsOn("create${variantTask}Distributable")
+            if (protocolPackageType == "msi") {
+                if (wixEnvDir == null) dependsOn(":unzipWix")
+                environment("PATH", toolPath)
+            }
             inputs.dir(image)
             inputs.dir(layout.projectDirectory.dir("packaging"))
             outputs.dir(destination)
             // Package tooling owns temporary paths and is intentionally rerun.
             outputs.upToDateWhen { false }
+
+            // All jpackage arguments are known at configuration time; keep the
+            // execution-time action limited to file preparation with local,
+            // serializable captures only (configuration-cache requirement).
+            val resourceDir = resources.get().asFile
+            val outputDir = destination.get().asFile
+            val executableName = if (packageType == "msi") "jpackage.exe" else "jpackage"
+            val options = mutableListOf(
+                jbrDirectory.resolve("bin/$executableName").absolutePath,
+                "--type", packageType,
+                "--app-image", image.get().asFile.absolutePath,
+                "--dest", outputDir.absolutePath,
+                "--resource-dir", resourceDir.absolutePath,
+                "--name", "MagicPaper", "--app-version", "1.0.0",
+            )
+            if (packageType == "msi") {
+                options += listOf("--win-menu", "--win-menu-group", "MagicPaper",
+                    "--icon", windowsIconPath)
+            } else {
+                options += listOf("--linux-shortcut",
+                    "--icon", linuxIconPath)
+            }
+            commandLine(options)
             doFirst {
-                val resourceDir = resources.get().asFile.apply { mkdirs() }
-                val javaDirectory = jbr21.get().metadata.installationPath.asFile
-                if (protocolPackageType == "msi") {
-                    val template = ZipFile(javaDirectory.resolve("jmods/jdk.jpackage.jmod")).use { archive ->
+                resourceDir.mkdirs()
+                if (packageType == "msi") {
+                    val template = ZipFile(jbrDirectory.resolve("jmods/jdk.jpackage.jmod")).use { archive ->
                         val entry = archive.getEntry("classes/jdk/jpackage/internal/resources/main.wxs")
                             ?: error("JBR jpackage main.wxs template is unavailable")
                         archive.getInputStream(entry).bufferedReader().use { it.readText() }
@@ -151,30 +202,13 @@ if (protocolPackageType != null) {
                     }
                     resourceDir.resolve("main.wxs").writeText(template
                         .replace(featureMarker, "$featureMarker\n      <ComponentRef Id=\"MagicPaperProtocol\"/>")
-                        .replace("</Product>", project.file("packaging/protocol.wxi").readText() + "\n  </Product>"))
+                        .replace("</Product>", protocolWxi.asFile.readText() + "\n  </Product>"))
                 } else {
-                    project.file("packaging/MagicPaper.desktop").copyTo(resourceDir.resolve("MagicPaper.desktop"), overwrite = true)
+                    desktopEntry.asFile.copyTo(resourceDir.resolve("MagicPaper.desktop"), overwrite = true)
                 }
-                val output = destination.get().asFile.apply { mkdirs() }
+                outputDir.mkdirs()
                 // Only remove the previous artifact produced by this package task.
-                output.listFiles()?.filter { it.extension == protocolPackageType }?.forEach { it.delete() }
-                val executableName = if (protocolPackageType == "msi") "jpackage.exe" else "jpackage"
-                val options = mutableListOf(
-                    javaDirectory.resolve("bin/$executableName").absolutePath,
-                    "--type", protocolPackageType,
-                    "--app-image", image.get().asFile.absolutePath,
-                    "--dest", output.absolutePath,
-                    "--resource-dir", resourceDir.absolutePath,
-                    "--name", "MagicPaper", "--app-version", "1.0.0",
-                )
-                if (protocolPackageType == "msi") {
-                    options += listOf("--win-menu", "--win-menu-group", "MagicPaper",
-                        "--icon", project.file("../assets/icon/dist/magicpaper.ico").absolutePath)
-                } else {
-                    options += listOf("--linux-shortcut",
-                        "--icon", project.file("../assets/icon/dist/magicpaper_512.png").absolutePath)
-                }
-                commandLine(options)
+                outputDir.listFiles()?.filter { it.extension == packageType }?.forEach { it.delete() }
             }
         }
         tasks.matching { it.name == "package$variantTask$formatTask" }.configureEach {
