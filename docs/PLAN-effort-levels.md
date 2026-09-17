@@ -378,8 +378,9 @@ platform fs с TTL 24 ч + прогрев в фоне, чтобы первый �
 - `EffortControl` рисует чип «умолч» и только `selectableLevels` модели, при унаследованном
   недоступном уровне показывает, во что он превратится в запросе;
 - мост пи пишет `thinkingLevelMap` по словарю модели (`data/coding/PiModelsConfig.kt`);
-- **обогащение из живого каталога**: `parseDeclaredReasoning` читает OpenRouter-схему
-  (`reasoning.supported_efforts`, `reasoning.mandatory`, `supported_parameters`) трёхзначно —
+- **обогащение из живого каталога**: `declaredOf` (внутри `parseProviderModels`) читает
+  OpenRouter-схему (`reasoning.supported_efforts`, `reasoning.mandatory`,
+  `supported_parameters`) трёхзначно —
   «есть уровни» / «точно нет ручки» / «неизвестно»; объявления хранятся в
   `LlmProfile.modelReasoning` и перевешивают эвристику в UI и в транспортах
   (`DeclaredReasoning.withDeclared`). Каталог доступен и для OPENROUTER-профиля.

@@ -42,18 +42,10 @@ internal suspend fun HttpClient.getText(
     text
 }
 
-/** Разбор массива объектов с полем «id» (формат списков OpenAI и Anthropic). */
-internal fun parseIdList(json: Json, body: String, arrayKey: String): List<String> = runCatching {
-    val root = json.parseToJsonElement(body)
-    val array = (root as? JsonObject)?.get(arrayKey) as? JsonArray ?: root as? JsonArray ?: JsonArray(emptyList())
-    array.mapNotNull { item ->
-        ((item as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull
-    }
-}.getOrElse { error("Не удалось разобрать список моделей: ${it.message}") }
-
 /**
- * Объявления провайдера об управлении мышлением: id модели → факт из его
- * каталога. Читаем схему OpenRouter-подобных каталогов:
+ * Объявления провайдера об управлении мышлением — факт из конкретной записи
+ * каталога, который разбирает [parseProviderModels]. Читаем схему
+ * OpenRouter-подобных каталогов:
  *  - `reasoning.supported_efforts` (также `efforts`/`supportedEfforts`) — словарь уровней;
  *  - `reasoning.mandatory` — мышление нельзя выключить;
  *  - `supported_parameters` — перечень органов модели: есть `reasoning` — ручка есть,
@@ -61,25 +53,8 @@ internal fun parseIdList(json: Json, body: String, arrayKey: String): List<Strin
  *
  * Серверы, которые отдают только `id` (Ollama, LM Studio), объявлений не дают —
  * для них остаётся эвристика [ModelDefaults]; догадываться «нет ручки» по
- * отсутствию поля нельзя.
+ * отсутствию поля нельзя. null — запись ничего не объявила.
  */
-internal fun parseDeclaredReasoning(
-    json: Json,
-    body: String,
-    arrayKey: String = "data",
-): Map<String, DeclaredReasoning> = runCatching {
-    val root = json.parseToJsonElement(body)
-    val array = (root as? JsonObject)?.get(arrayKey) as? JsonArray ?: root as? JsonArray
-        ?: return@runCatching emptyMap()
-    array.mapNotNull { item ->
-        val entry = item as? JsonObject ?: return@mapNotNull null
-        val id = (entry["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: return@mapNotNull null
-        id to (declaredOf(entry) ?: return@mapNotNull null)
-    }.toMap()
-}.getOrDefault(emptyMap())
-
-/** Факт о конкретной записи каталога; null — запись ничего не объявляет. */
 private fun declaredOf(entry: JsonObject): DeclaredReasoning? {
     val capabilities = entry["capabilities"] as? JsonObject
     val effortCapability = capabilities?.get("effort") as? JsonObject
