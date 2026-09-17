@@ -1,6 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
-import java.util.zip.ZipFile
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.jvm.toolchain.JvmVendorSpec
@@ -60,7 +59,7 @@ compose.desktop {
 
         nativeDistributions {
             modules("jdk.httpserver")
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+            targetFormats(TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "MagicPaper"
             packageVersion = appVersion
             // Иконки пакетов генерирует: python3 assets/icon/gen_icons.py
@@ -121,49 +120,28 @@ if (providers.gradleProperty("paperEditor").orNull == "true") {
 }
 
 // Compose recreates its internal jpackage resource directory inside the package
-// action. Build MSI/DEB from the same Compose app image with an explicit resource
+// action. Build the DEB from the same Compose app image with an explicit resource
 // directory so registration is installed, upgraded and removed by the package.
 val packagingHost = System.getProperty("os.name").lowercase()
-val protocolPackageType = when {
-    packagingHost.startsWith("windows") -> "msi"
-    packagingHost.startsWith("linux") -> "deb"
-    else -> null
-}
-if (protocolPackageType != null) {
+if (packagingHost.startsWith("linux")) {
     // Resolve packaging inputs at configuration time; the Exec action must not
     // touch `project` at execution time (configuration-cache requirement).
-    val protocolWxi = layout.projectDirectory.file("packaging/protocol.wxi")
     val desktopEntry = layout.projectDirectory.file("packaging/MagicPaper.desktop")
-    val windowsIconPath = project.file("../assets/icon/dist/magicpaper.ico").absolutePath
     val linuxIconPath = project.file("../assets/icon/dist/magicpaper_512.png").absolutePath
-    // jpackage builds MSI/DEB with the WiX toolset (light.exe, candle.exe) found
-    // on PATH. Compose injects its unpacked WiX into its own jpackage tasks; this
-    // direct invocation needs the same environment. Mirrors wixToolset.kt: honor
-    // WIX_PATH, otherwise use the copy unpacked by the root :unzipWix task.
-    val wixEnvDir = System.getenv("WIX_PATH")
-    val wixToolsPath = if (wixEnvDir != null) File(wixEnvDir).absolutePath
-        else rootProject.layout.buildDirectory.dir("wix311").get().asFile.absolutePath
-    val toolPath = wixToolsPath + File.pathSeparator + (System.getenv("PATH") ?: "")
     // Capture only serializable values in the Exec action: no script properties,
     // no outer receivers (configuration-cache requirement).
-    val packageType = protocolPackageType
     val jbrDirectory = jbr21.get().metadata.installationPath.asFile
     listOf(false, true).forEach { release ->
         val variant = if (release) "main-release" else "main"
         val variantTask = if (release) "Release" else ""
-        val formatTask = protocolPackageType.replaceFirstChar(Char::uppercaseChar)
         val image = layout.buildDirectory.dir("compose/binaries/$variant/app/MagicPaper")
         val resources = layout.buildDirectory.dir("compose/protocol-resources/$variant")
-        val destination = layout.buildDirectory.dir("compose/binaries/$variant/$protocolPackageType")
-        val installer = tasks.register<Exec>("package${variantTask}MagicPaper$formatTask") {
+        val destination = layout.buildDirectory.dir("compose/binaries/$variant/deb")
+        val installer = tasks.register<Exec>("package${variantTask}MagicPaperDeb") {
             group = "compose desktop"
             notCompatibleWithConfigurationCache("Native packaging prepares platform-specific JBR resource templates")
             description = "Packages MagicPaper with the magicpaper:// protocol handler."
             dependsOn("create${variantTask}Distributable")
-            if (protocolPackageType == "msi") {
-                if (wixEnvDir == null) dependsOn(":unzipWix")
-                environment("PATH", toolPath)
-            }
             inputs.dir(image)
             inputs.dir(layout.projectDirectory.dir("packaging"))
             outputs.dir(destination)
@@ -175,59 +153,82 @@ if (protocolPackageType != null) {
             // serializable captures only (configuration-cache requirement).
             val resourceDir = resources.get().asFile
             val outputDir = destination.get().asFile
-            val executableName = if (packageType == "msi") "jpackage.exe" else "jpackage"
-            val options = mutableListOf(
-                jbrDirectory.resolve("bin/$executableName").absolutePath,
-                "--type", packageType,
+            val options = listOf(
+                jbrDirectory.resolve("bin/jpackage").absolutePath,
+                "--type", "deb",
                 "--app-image", image.get().asFile.absolutePath,
                 "--dest", outputDir.absolutePath,
                 "--resource-dir", resourceDir.absolutePath,
                 "--name", "MagicPaper", "--app-version", appVersion,
+                "--linux-shortcut", "--icon", linuxIconPath,
             )
-            if (packageType == "msi") {
-                options += listOf("--win-menu", "--win-menu-group", "MagicPaper",
-                    "--icon", windowsIconPath)
-            } else {
-                options += listOf("--linux-shortcut",
-                    "--icon", linuxIconPath)
-            }
             commandLine(options)
             doFirst {
                 resourceDir.mkdirs()
-                if (packageType == "msi") {
-                    val template = ZipFile(jbrDirectory.resolve("jmods/jdk.jpackage.jmod")).use { archive ->
-                        val entry = archive.getEntry("classes/jdk/jpackage/internal/resources/main.wxs")
-                            ?: error("JBR jpackage main.wxs template is unavailable")
-                        archive.getInputStream(entry).bufferedReader().use { it.readText() }
-                    }
-                    val featureMarker = "<ComponentGroupRef Id=\"FileAssociations\"/>"
-                    check(template.contains(featureMarker) && template.contains("</Product>")) {
-                        "JBR jpackage WiX template changed; review protocol integration before shipping"
-                    }
-                    resourceDir.resolve("main.wxs").writeText(template
-                        .replace(featureMarker, "$featureMarker\n      <ComponentRef Id=\"MagicPaperProtocol\"/>")
-                        .replace("</Product>", protocolWxi.asFile.readText() + "\n  </Product>"))
-                } else {
-                    desktopEntry.asFile.copyTo(resourceDir.resolve("MagicPaper.desktop"), overwrite = true)
-                }
+                desktopEntry.asFile.copyTo(resourceDir.resolve("MagicPaper.desktop"), overwrite = true)
                 outputDir.mkdirs()
                 // Only remove the previous artifact produced by this package task.
-                outputDir.listFiles()?.filter { it.extension == packageType }?.forEach { it.delete() }
+                outputDir.listFiles()?.filter { it.extension == "deb" }?.forEach { it.delete() }
             }
         }
-        tasks.matching { it.name == "package$variantTask$formatTask" }.configureEach {
+        tasks.matching { it.name == "package${variantTask}Deb" }.configureEach {
             enabled = false
             dependsOn(installer)
         }
     }
 }
 
-// Portable Windows distribution: the same release app-image the MSI wraps, archived
-// without an installer. Unpacking it needs no administrator rights and writes nothing
-// to the system: the app keeps its data in the user-owned ~/.MagicPaper directory, so
-// the ZIP is a no-install alternative to the per-machine MSI. Meaningful only on a
-// Windows host — createReleaseDistributable builds the image for the build OS.
+// Windows packaging: the Inno Setup installer plus a no-install portable ZIP, both
+// over the same release app-image. jpackage's MSI is retired: it installed
+// per-machine (elevation required), registered the protocol under HKLM and needed a
+// manually provisioned WiX toolchain. Inno Setup installs per-user without admin
+// rights, registers magicpaper:// under HKCU and offers the launch/desktop-icon
+// choices jpackage cannot express. Meaningful only on a Windows host —
+// createReleaseDistributable builds the image for the build OS.
 if (packagingHost.startsWith("windows")) {
+    val innoScript = layout.projectDirectory.file("packaging/windows/MagicPaper.iss")
+    val innoOutput = layout.buildDirectory.dir("innosetup")
+    val windowsIconPath = project.file("../assets/icon/dist/magicpaper.ico").absolutePath
+    val imageDir = layout.buildDirectory.dir("compose/binaries/main-release/app/MagicPaper").get().asFile.absolutePath
+    // ISCC discovery: explicit override first, then standard install dirs, then PATH.
+    val isccCandidates = buildList {
+        System.getenv("INNO_SETUP_PATH")?.takeIf { it.isNotBlank() }?.let { override ->
+            val overridden = File(override)
+            add(if (overridden.isFile) overridden.absolutePath else File(overridden, "ISCC.exe").absolutePath)
+        }
+        add("C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe")
+        add("C:\\Program Files\\Inno Setup 6\\ISCC.exe")
+        addAll((System.getenv("PATH") ?: "").split(File.pathSeparator)
+            .filter { it.isNotBlank() }.map { File(it, "ISCC.exe").absolutePath })
+    }
+    val packageReleaseInnoSetup by tasks.registering(Exec::class) {
+        group = "compose desktop"
+        description = "Builds the per-user Windows installer (Inno Setup) from the release app-image."
+        dependsOn("createReleaseDistributable")
+        inputs.dir(imageDir)
+        inputs.file(innoScript)
+        outputs.dir(innoOutput)
+        // Installer embedding stamps build time; packaging is intentionally rerun.
+        outputs.upToDateWhen { false }
+        val outDir = innoOutput.get().asFile.absolutePath
+        val scriptPath = innoScript.asFile.absolutePath
+        val iconPath = windowsIconPath
+        val appImageDir = imageDir
+        val version = appVersion
+        val candidates = isccCandidates
+        doFirst {
+            val iscc = candidates.firstOrNull { File(it).isFile }
+                ?: throw GradleException("Inno Setup 6 compiler (ISCC.exe) not found. " +
+                    "Install Inno Setup or set INNO_SETUP_PATH to its directory. Searched: " +
+                    candidates.joinToString(", "))
+            File(outDir).mkdirs()
+            commandLine(iscc, "/DAppVersion=$version", "/DAppDir=$appImageDir", "/DSetupIcon=$iconPath",
+                "/O$outDir", "/FMagicPaper-$version-setup", "/Qp", scriptPath)
+        }
+    }
+
+    // Portable distribution: unpack and run without installing or registering anything;
+    // data stays in the user-owned ~/.MagicPaper directory.
     val packageReleasePortableZip by tasks.registering(Zip::class) {
         group = "compose desktop"
         description = "Packages the release app-image into a portable (no-install, no-admin) Windows ZIP."

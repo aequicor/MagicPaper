@@ -63,6 +63,10 @@
 # library, including platform mappings and NativeMapped implementations.
 -keep class com.sun.jna.** { *; }
 -keep class * implements com.sun.jna.NativeMapped { *; }
+# JNA Structures map native layouts through their declared Java fields; shrinking
+# "unused" public fields corrupts getFieldOrder() and every native call of the
+# structure (oshi battery probe -> the paper animation never enables).
+-keepclassmembers class * extends com.sun.jna.Structure { *; }
 
 # Declarations entered only for the native side must survive shrinking.
 -keepclasseswithmembernames class * {
