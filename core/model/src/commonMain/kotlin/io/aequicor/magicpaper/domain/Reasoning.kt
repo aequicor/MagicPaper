@@ -11,8 +11,6 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
 import kotlin.math.abs
 
 /**
@@ -70,20 +68,6 @@ enum class ReasoningEffort(val wire: String, val label: String, val shortLabel: 
                 else -> null
             }
         }
-
-        /**
-         * Старая шкала 0–100 → уровень. Нужна только чтобы прочитать профили
-         * прежних версий; в новом коде чисел усилия не бывает.
-         */
-        fun fromLegacyScale(value: Int): ReasoningEffort = when (value.coerceIn(0, 100)) {
-            0 -> NONE
-            in 1..10 -> MINIMAL
-            in 11..39 -> LOW
-            in 40..64 -> MEDIUM
-            in 65..84 -> HIGH
-            in 85..94 -> XHIGH
-            else -> MAX
-        }
     }
 }
 
@@ -114,9 +98,10 @@ data class EffortSelection private constructor(val level: ReasoningEffort?) {
     }
 
     /**
-     * Сериализатор с обратной совместимостью: исторически усилие хранили
-     * строкой перечисления ("HIGH"), затем числом 0–100. Читаем всё, пишем
-     * строку уровня либо "default".
+     * Сериализатор: усилие хранится именем уровня (`"high"`) либо `"default"`;
+     * при чтении принимаются также провайдерские алиасы (см. [ReasoningEffort.fromWire]).
+     * Числа прежней шкалы 0–100 больше не читаются — такому значению соответствует
+     * «по умолчанию провайдера», а не выдуманный по числу уровень.
      */
     internal object Serializer : KSerializer<EffortSelection> {
         override val descriptor: SerialDescriptor =
@@ -133,10 +118,7 @@ data class EffortSelection private constructor(val level: ReasoningEffort?) {
 
         override fun deserialize(decoder: Decoder): EffortSelection {
             val content = readContent(decoder) ?: return Default
-            ReasoningEffort.fromWire(content)?.let { return of(it) }
-            content.toIntOrNull()?.let { return of(ReasoningEffort.fromLegacyScale(it)) }
-            content.toDoubleOrNull()?.let { return of(ReasoningEffort.fromLegacyScale(it.toInt())) }
-            return Default
+            return ReasoningEffort.fromWire(content)?.let { of(it) } ?: Default
         }
 
         private fun readContent(decoder: Decoder): String? {
@@ -144,7 +126,6 @@ data class EffortSelection private constructor(val level: ReasoningEffort?) {
                 val primitive = runCatching { decoder.decodeJsonElement() }.getOrNull() as? JsonPrimitive
                     ?: return null
                 if (primitive is JsonNull) return null
-                primitive.intOrNull?.let { return it.toString() }
                 return primitive.content
             }
             return runCatching { decoder.decodeString() }.getOrNull()
