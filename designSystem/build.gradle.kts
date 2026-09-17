@@ -47,6 +47,9 @@ kotlin {
         jvmMain.dependencies {
             compileOnly(libs.jbr.api)
             implementation(libs.oshi.core)
+            // The animation eligibility decision is a significant branch: it must be
+            // reconstructable from diagnostics without a visual inspection.
+            implementation(project(":core:logging"))
         }
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)

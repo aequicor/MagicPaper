@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import io.aequicor.magicpaper.logging.AppLog
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.skiaCanvas
 import io.aequicor.magicpaper.ui.window.LocalWindowScope
@@ -36,7 +37,25 @@ internal actual fun rememberPaperEnvironment(active: Boolean): State<PaperEnviro
                 )
             }.getOrDefault(false)
         }
-        if (!capable || window == null) return@produceState
+        // The eligibility decision selects between two visible behaviours, so every
+        // change of its inputs is recorded once instead of per polling tick.
+        var loggedDecision: String? = null
+        fun decide(environment: PaperEnvironment, backend: String, reason: String) {
+            val decision = "$environment|$backend|$reason"
+            if (decision == loggedDecision) return
+            loggedDecision = decision
+            AppLog.debug("designsystem", "paper_animation_environment", buildMap {
+                put("result", if (environment.allowsAnimation) "allowed" else "denied")
+                put("capability", environment.capable.toString())
+                put("backend", backend)
+                put("reason", reason)
+                environment.batteryPercent?.let { put("batteryPercent", it.toString()) }
+            })
+        }
+        if (!capable || window == null) {
+            decide(PaperEnvironment(), "unknown", "not_capable")
+            return@produceState
+        }
         while (isActive) {
             // A background window keeps the last environment: polling waits, the value survives.
             if (!activeState.value) {
@@ -50,11 +69,12 @@ internal actual fun rememberPaperEnvironment(active: Boolean): State<PaperEnviro
                 else -> false
             }
             if (!gpu) {
+                decide(PaperEnvironment(), "software", "no_gpu")
                 value = PaperEnvironment()
                 delay(5_000)
                 continue
             }
-            value = withContext(Dispatchers.IO) {
+            val environment = withContext(Dispatchers.IO) {
                 runCatching {
                     val batteries = hardware?.powerSources ?: return@runCatching PaperEnvironment()
                     val levels = batteries.map { it.remainingCapacityPercent }
@@ -64,8 +84,21 @@ internal actual fun rememberPaperEnvironment(active: Boolean): State<PaperEnviro
                         // Empty list is a desktop without a battery; monitor all laptop/UPS batteries.
                         batteryPercent = levels.minOrNull()?.let { (it * 100).toInt() },
                     )
-                }.getOrDefault(PaperEnvironment())
+                }.getOrElse { failure ->
+                    AppLog.error("designsystem", "paper_environment_probe_failed", failure,
+                        mapOf("result" to "animation_denied"))
+                    PaperEnvironment()
+                }
             }
+            val reason = when {
+                !environment.powerKnown -> "power_unknown"
+                environment.powerSave -> "power_save"
+                environment.reduceMotion -> "reduce_motion"
+                environment.batteryPercent != null && environment.batteryPercent !in 21..100 -> "battery_low"
+                else -> "eligible"
+            }
+            decide(environment, window.renderApi.name.lowercase(), reason)
+            value = environment
             delay(5_000)
         }
     }
@@ -73,7 +106,13 @@ internal actual fun rememberPaperEnvironment(active: Boolean): State<PaperEnviro
 
 @Composable
 internal actual fun rememberPaperRenderer(): PaperRenderer? {
-    val renderer = remember { runCatching { DesktopPaperRenderer() }.getOrNull() }
+    val renderer = remember {
+        runCatching { DesktopPaperRenderer() }.getOrElse { failure ->
+            AppLog.error("designsystem", "paper_renderer_unavailable", failure,
+                mapOf("result" to "static_background"))
+            null
+        }
+    }
     DisposableEffect(renderer) { onDispose { renderer?.close() } }
     return renderer
 }

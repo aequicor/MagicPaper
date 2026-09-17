@@ -227,6 +227,12 @@ if (packagingHost.startsWith("windows")) {
         }
     }
 
+    // With the jpackage MSI retired, the standard release packaging entry point must
+    // produce the Inno Setup installer on Windows instead of staying empty.
+    tasks.matching { it.name == "packageReleaseDistributionForCurrentOS" }.configureEach {
+        dependsOn(packageReleaseInnoSetup)
+    }
+
     // Portable distribution: unpack and run without installing or registering anything;
     // data stays in the user-owned ~/.MagicPaper directory.
     val packageReleasePortableZip by tasks.registering(Zip::class) {
