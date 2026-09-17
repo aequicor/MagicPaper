@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper
 
 import io.aequicor.magicpaper.logging.AppLog
+import kotlin.coroutines.cancellation.CancellationException
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -237,7 +238,12 @@ private object DesktopForegroundTransfer {
                 .invoke(library, "AllowSetForegroundWindow")
             function.javaClass.getMethod("invokeInt", Array<Any>::class.java)
                 .invoke(function, arrayOf<Any>(pid.toInt()))
-        } catch (failure: Exception) {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            // The foreground hint is a courtesy to the OS shell, never a precondition of
+            // activation: linkage and initializer errors (an unusable native library in a
+            // shrunk or blocked runtime) must not turn forwarding into a startup failure.
             AppLog.error("desktop_activation", "foreground_permission_failed", failure, mapOf("result" to "activation_continues"))
         }
     }

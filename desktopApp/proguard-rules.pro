@@ -54,3 +54,34 @@
 # adapters; ProGuard explicitly reports these classes must be kept.
 -keep class com.microsoft.playwright.options.** { *; }
 -keep class com.microsoft.playwright.impl.LocatorImpl { *; }
+
+# JNA's native dispatch library (jnidispatch) calls private static bridge
+# methods of com.sun.jna.Native (fromNative/toNative) through JNI. Shrinking
+# sees no Java caller and removes them; every later NativeLibrary load then
+# dies with UnsatisfiedLinkError "Can't obtain static method fromNative",
+# which broke activation forwarding in the packaged executable. Keep the whole
+# library, including platform mappings and NativeMapped implementations.
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.NativeMapped { *; }
+
+# Declarations entered only for the native side must survive shrinking.
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# ServiceLoader providers are invisible to shrinking: nothing in Java code names
+# them, only META-INF/services resources do, and ProGuard copies those verbatim.
+# Without these rules the packaged executable dies on startup with
+# ServiceConfigurationError (ktor engine, Decompose main-thread checker, Swing
+# dispatcher) or later while parsing/validation (validator, Jetty encoders).
+# The list mirrors the META-INF/services entries of the bundled classpath.
+-keep class * implements io.ktor.client.HttpClientEngineContainer { *; }
+-keep class * implements kotlinx.coroutines.internal.MainDispatcherFactory { *; }
+-keep class * implements com.arkivanov.decompose.mainthread.MainThreadChecker { *; }
+-keep class * implements org.eclipse.jetty.http.HttpFieldPreEncoder { *; }
+-keep class * implements org.relaxng.datatype.DatatypeLibraryFactory { *; }
+# nu.validator discovers its schema readers, datatype and regex engines through
+# its vendored ServiceLoader interfaces; keep the whole discovery graph.
+-keep class nu.validator.** { *; }
+# JDK SPI implemented by the bundled Saxon; selected via TransformerFactory.
+-keep class net.sf.saxon.TransformerFactoryImpl { *; }

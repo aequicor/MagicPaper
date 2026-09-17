@@ -4,6 +4,13 @@ Build installers on their target operating system with `:desktopApp:packageDmg`,
 `:desktopApp:packageMsi`, or `:desktopApp:packageDeb`. The current-OS aggregate task
 and release variants use the same integration. JBR 21 remains the bundled runtime.
 
+On Windows, `:desktopApp:packageReleasePortableZip` archives the same release
+app-image into `build/portable/MagicPaper-<version>-portable-windows-x64.zip`
+without an installer. Unpacking and running it requires no administrator rights and
+registers nothing: data stays in the user-owned `~/.MagicPaper` directory, and the
+`magicpaper://` handler is only installed by the MSI. The MSI itself remains a
+per-machine package and still requires elevation.
+
 macOS declares `magicpaper` in `CFBundleURLTypes`. MSI packaging adds installer-owned
 registry values to `Software\Classes\magicpaper`; upgrade/removal uses the MSI
 component lifecycle. Linux packaging supplies a desktop entry with `%u` and

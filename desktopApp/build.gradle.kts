@@ -41,6 +41,10 @@ kotlin {
     }
 }
 
+// Single source of the shipped version: nativeDistributions, jpackage arguments and
+// portable archive names must never drift apart.
+val appVersion = "1.0.0"
+
 compose.desktop {
     application {
         mainClass = "io.aequicor.magicpaper.MainKt"
@@ -58,7 +62,7 @@ compose.desktop {
             modules("jdk.httpserver")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "MagicPaper"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion
             // Иконки пакетов генерирует: python3 assets/icon/gen_icons.py
             macOS {
                 bundleID = "io.aequicor.magicpaper"
@@ -178,7 +182,7 @@ if (protocolPackageType != null) {
                 "--app-image", image.get().asFile.absolutePath,
                 "--dest", outputDir.absolutePath,
                 "--resource-dir", resourceDir.absolutePath,
-                "--name", "MagicPaper", "--app-version", "1.0.0",
+                "--name", "MagicPaper", "--app-version", appVersion,
             )
             if (packageType == "msi") {
                 options += listOf("--win-menu", "--win-menu-group", "MagicPaper",
@@ -215,6 +219,22 @@ if (protocolPackageType != null) {
             enabled = false
             dependsOn(installer)
         }
+    }
+}
+
+// Portable Windows distribution: the same release app-image the MSI wraps, archived
+// without an installer. Unpacking it needs no administrator rights and writes nothing
+// to the system: the app keeps its data in the user-owned ~/.MagicPaper directory, so
+// the ZIP is a no-install alternative to the per-machine MSI. Meaningful only on a
+// Windows host — createReleaseDistributable builds the image for the build OS.
+if (packagingHost.startsWith("windows")) {
+    val packageReleasePortableZip by tasks.registering(Zip::class) {
+        group = "compose desktop"
+        description = "Packages the release app-image into a portable (no-install, no-admin) Windows ZIP."
+        dependsOn("createReleaseDistributable")
+        from(layout.buildDirectory.dir("compose/binaries/main-release/app/MagicPaper"))
+        archiveFileName.set("MagicPaper-$appVersion-portable-windows-x64.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("portable"))
     }
 }
 
