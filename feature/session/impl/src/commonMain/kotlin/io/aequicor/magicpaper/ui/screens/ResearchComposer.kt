@@ -52,15 +52,20 @@ internal fun ResearchComposer(state: CodingComposerDraft, enabled: Boolean, busy
     fun picked(files: List<Attachment>) { attachments = (attachments + files).take(MAX_ATTACHMENTS_PER_MESSAGE) }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val compact = maxWidth < 440.dp
+        val separateActions = maxWidth < 600.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
+        val accessoryActions: @Composable () -> Unit = {
+            PaperComposerActions(menu, { onPickAttachments(attachments.size, ::picked) }, { menu = !menu },
+                optionsModifier = Modifier.focusRequester(optionsFocus), attachEnabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE)
+        }
         val expandedHeight = (maxHeight - 96.dp).coerceIn(80.dp, 206.dp)
-        PaperWorkspaceComposer(document = true, options = {
+        PaperWorkspaceComposer(document = true, corner = {
+            PaperComposerExpandButton(expanded) {
+                expanded = !expanded
+                focus.requestFocus()
+            }
+        }, options = {
             PaperComposerOptionsPanel(menu, { menu = false; optionsFocus.requestFocus() },
                 maxHeight = (maxHeight * .4f).coerceIn(80.dp, 240.dp)) {
-                PaperRichMenuAction(text = { PaperText("Прикрепить файлы", role = PaperTextRole.CHROME) },
-                    onClick = { onPickAttachments(attachments.size, ::picked) },
-                    enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
-                    leadingIcon = { PaperNoteAddIcon(tint = LocalPaperColors.current.action) })
-                PaperDivider()
                 PaperText("Движок", Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText)
                 if (onEngineChange != null) {
@@ -87,16 +92,13 @@ internal fun ResearchComposer(state: CodingComposerDraft, enabled: Boolean, busy
                             } else false
                         }, maxLines = if (expanded) 10 else 3, enabled = enabled,
                     style = LocalPaperTypography.current.chrome)
-                // Align the affordance with the frame's corner, outside its inner padding.
-                PaperComposerExpandButton(expanded, Modifier.offset(x = 8.dp, y = (-4).dp)) {
-                    expanded = !expanded
-                    focus.requestFocus()
-                }
+                Spacer(Modifier.width(LocalPaperPlatformPolicy.current.density.controlHeight))
             }
             PendingAttachmentsRow(attachments, { index -> attachments = attachments.filterIndexed { i, _ -> i != index } })
+            if (separateActions) accessoryActions()
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                PaperComposerOptionsToggle(menu, { menu = !menu }, Modifier.focusRequester(optionsFocus))
+                if (!separateActions) accessoryActions()
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     CodingModelChip(profile, false, onOpenSwitcher)
                 }

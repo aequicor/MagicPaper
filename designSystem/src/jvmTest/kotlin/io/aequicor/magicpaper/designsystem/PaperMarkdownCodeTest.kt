@@ -153,6 +153,33 @@ class PaperMarkdownCodeTest {
         }
     }
 
+    @Test fun shortCodeSequenceStaysCompactAndKeepsEveryCopyActionAccessible() {
+        for ((width, scale) in listOf(640 to 1f, 320 to 1f, 480 to 2f)) {
+            val clipboard = MemoryClipboard()
+            val scene = onPaperUi { ImageComposeScene(width, 560) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale), LocalClipboardManager provides clipboard) {
+                    PaperMarkdownCodeSequencePreview()
+                }
+            } }
+            try {
+                settle(scene) { scene.copyButtons().size == 3 && scene.layouts().any { "List выполняет" in it.layoutInput.text.text } }
+                onPaperUi {
+                    val copies = scene.copyButtons().sortedBy { it.boundsInRoot.top }
+                    val code = scene.textNode("./gradlew bootRun")
+                    // Adjacent fences share Markdown's gap, without stacking two card margins.
+                    assertTrue(copies[1].boundsInRoot.top - code.boundsInRoot.bottom <= 16f)
+                    for (copy in copies) {
+                        assertTrue(copy.boundsInRoot.width >= 28f && copy.boundsInRoot.height >= 28f)
+                        assertTrue(copy.boundsInRoot.right <= width && copy.boundsInRoot.bottom < 560f)
+                        copy.config[SemanticsActions.OnClick].action!!.invoke()
+                    }
+                    assertEquals("{\n  \"answer\": \"List выполняет цепочку преобразований…\"\n}", clipboard.copied?.text)
+                    scene.capture("sequence-$width-$scale")
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
     private class MemoryClipboard : ClipboardManager {
         var copied: AnnotatedString? = null
         override fun getText(): AnnotatedString? = copied

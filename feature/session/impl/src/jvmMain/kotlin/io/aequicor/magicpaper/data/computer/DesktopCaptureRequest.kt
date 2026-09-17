@@ -1,6 +1,21 @@
 package io.aequicor.magicpaper.data.computer
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
+
+/** Pixel grid in which the agent measured coordinates, not the screen's logical/HiDPI size. */
+internal data class DesktopImageSize(val width: Int, val height: Int) {
+    companion object {
+        fun parse(value: JsonElement): DesktopImageSize {
+            val args = value as? JsonObject ?: error("image_size: требуется объект width, height")
+            require(args.keys == setOf("width", "height")) { "image_size: требуются width и height" }
+            val width = args.requiredInt("width")
+            val height = args.requiredInt("height")
+            require(width > 0 && height > 0) { "image_size: ширина и высота должны быть положительными" }
+            return DesktopImageSize(width, height)
+        }
+    }
+}
 
 internal enum class ScreenshotResolution(val wireName: String) { OVERVIEW("overview"), NATIVE("native") }
 

@@ -1,15 +1,10 @@
 package io.aequicor.magicpaper.designsystem
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -20,15 +15,7 @@ import io.aequicor.magicpaper.ui.window.*
 
 /** Outline sidebar symbol matching the system window/sidebar convention. */
 @Composable
-public fun PaperSidebarIcon(modifier: Modifier = Modifier) {
-    val color = LocalPaperColors.current.secondaryText
-    Canvas(modifier.size(16.dp)) {
-        val scale = size.minDimension / 16f
-        drawRoundRect(color, Offset(1f * scale, 2f * scale), Size(14f * scale, 12f * scale),
-            CornerRadius(2f * scale), style = Stroke(1.2f * scale))
-        drawLine(color, Offset(5.5f * scale, 2f * scale), Offset(5.5f * scale, 14f * scale), 1.2f * scale)
-    }
-}
+public fun PaperSidebarIcon(modifier: Modifier = Modifier) = PaperPanelIcon(PaperPanelSide.LEFT, modifier)
 
 /** A zero host toolbar height means fullscreen: no controls, drag region or focus targets.
  * The host and content insets share that same value, so hiding chrome leaves no empty lane. */

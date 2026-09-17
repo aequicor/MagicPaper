@@ -93,6 +93,27 @@ class ComputerUseBridgeTest {
         assertFails { post(bridge, rpc(3, "ping")) }
     }
 
+    @Test fun mcpAdvertisesAndMapsCoordinatesMeasuredOnAResizedImage(): Unit = runBlocking {
+        val desktop = FakeComputerDesktop()
+        val computer = DesktopComputerUse(desktop)
+        computer.enable("a", ComputerAccess.CONTROL)
+        computer.bridge("a")!!.use { bridge ->
+            val tools = post(bridge, rpc(1, "tools/list")).result()["tools"]!!.jsonArray
+            val definition = tools.single { it.jsonObject.requiredString("name") == "computer" }.jsonObject
+            val size = definition["inputSchema"]!!.jsonObject["properties"]!!.jsonObject["image_size"]!!.jsonObject
+            assertEquals(setOf("width", "height"), size["required"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet())
+            val shot = post(bridge, tool(2, request("screenshot"))).result()
+            val click = post(bridge, tool(3, request("click") {
+                put("screenshot_id", shot.screenshotId()); put("x", 400); put("y", 225)
+                put("image_size", buildJsonObject { put("width", 800); put("height", 450) })
+            })).result()
+            assertFalse(click.failed())
+            assertEquals(ComputerAction("click", 1280, 720), desktop.performed.single())
+            val metadata = Json.parseToJsonElement(click["content"]!!.jsonArray[0].jsonObject.requiredString("text")).jsonObject
+            assertEquals(JsonPrimitive(1600), metadata["image_size"]!!.jsonObject["width"])
+        }
+    }
+
     @Test fun codexConfigurationPreservesSandboxAndReplacesOldEndpoint(): Unit = runBlocking {
         val computer = DesktopComputerUse(FakeComputerDesktop())
         computer.enable("a", ComputerAccess.SCREEN)
@@ -154,12 +175,14 @@ class ComputerUseBridgeTest {
                 assert.deepEqual(Object.keys(tools).sort(), ['application', 'computer']);
                 assert.equal(tool.name, 'computer');
                 assert.equal(tool.parameters.type, 'object');
+                assert.deepEqual(tool.parameters.properties.image_size.required, ['width', 'height']);
                 const shot = await tool.execute('one', { action: 'screenshot' });
                 assert.equal(shot.content[1].type, 'image');
                 assert.equal(shot.content[1].mimeType, 'image/jpeg');
                 const region = await tool.execute('detail', { action: 'screenshot',
                   screenshot_id: JSON.parse(shot.content[0].text).screenshot_id,
-                  region: { x: 400, y: 200, width: 100, height: 50 } });
+                  image_size: { width: 800, height: 450 },
+                  region: { x: 200, y: 100, width: 50, height: 25 } });
                 assert.equal(region.content[1].mimeType, 'image/png');
                 assert.equal(JSON.parse(region.content[0].text).width, 160);
                 const id = JSON.parse(region.content[0].text).screenshot_id;

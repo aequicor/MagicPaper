@@ -53,9 +53,11 @@ internal fun PaperOutlineIconsPreview() = PaperTheme {
                 PaperToolbarButton(PaperToolbarIcon.Search, "Поиск", 32.dp, onClick = {})
                 PaperToolbarButton(PaperToolbarIcon.Archive, "Архив", 32.dp, onClick = {})
             }
-            PaperText("Новые иконки", role = PaperTextRole.LABEL)
+            PaperText("Иконки действий", role = PaperTextRole.LABEL)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PaperIconButton("Список сессий", {}, Modifier.size(32.dp)) { PaperSidebarIcon() }
+                PaperIconButton("Список вопросов", {}, Modifier.size(32.dp)) { PaperPanelIcon(PaperPanelSide.LEFT) }
+                PaperIconButton("Источники", {}, Modifier.size(32.dp)) { PaperPanelIcon(PaperPanelSide.RIGHT) }
                 PaperIconButton("Добавить ресурс", {}, Modifier.size(32.dp)) { PaperNoteAddIcon() }
                 PaperComposerOptionsToggle(false, {}, Modifier.size(32.dp))
                 PaperComposerOptionsToggle(true, {}, Modifier.size(32.dp))

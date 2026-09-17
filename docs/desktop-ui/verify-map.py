@@ -34,7 +34,7 @@ PaperActivityIndicator PaperWorkspaceHeading PaperWorkspaceComposer PaperPromptF
 PaperMenuToggleInfo PaperPage PaperTab PaperTreeRow PaperTreeGroupHeader PaperContentEntrance PaperSettingsSection PaperMenu
 PaperExpandableImage PaperCheck PaperFileTransfer PaperMessageActions PaperQuestionnaireChoice
 PaperResearchFollowUps PaperResearchSourceGroupHeader PaperResearchActivityPanel PaperResearchActivityStep PaperResearchSourceLink PaperComposerExpandButton PaperAction PaperResearchQuestionRow PaperResearchSourceRow PaperResearchPane PaperResearchCountBadge PaperBrandMark PaperWideDialog PaperDivider PaperMenuHost
-PaperComposerOptionsToggle PaperComposerOptionsPanel PaperSessionRow PaperStickyTree PaperPanelIcon PaperScrollViewport PaperScrollColumn PaperScrollRow PaperLazyColumn PaperScrollArea'''.split())
+PaperComposerActions PaperResearchSourceTabs PaperResearchSourceSelection PaperResearchSourcesEmpty PaperComposerOptionsToggle PaperComposerOptionsPanel PaperSessionRow PaperStickyTree PaperPanelIcon PaperScrollViewport PaperScrollColumn PaperScrollRow PaperLazyColumn PaperScrollArea'''.split())
 PATTERN = re.compile(
     r'@(?:androidx\.compose\.runtime\.)?Composable\s+'
     r'(?:@[\w.]+(?:\([^\n]*\))?\s+)*'

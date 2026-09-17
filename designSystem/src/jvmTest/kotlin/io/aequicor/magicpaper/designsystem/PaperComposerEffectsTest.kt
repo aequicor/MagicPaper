@@ -24,7 +24,7 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class PaperComposerEffectsTest {
-    @Test fun documentComposerUsesCompactVerticalInsets() {
+    @Test fun composersKeepContentInsetsAndOuterBreathingRoom() {
         var regular = Rect.Zero
         var document = Rect.Zero
         ImageComposeScene(300, 240) {
@@ -43,7 +43,8 @@ class PaperComposerEffectsTest {
             }
         }.use { scene ->
             repeat(4) { scene.render(it * 16_000_000L).close() }
-            assertEquals(16f, regular.height - document.height, 0.1f)
+            assertEquals(82f, regular.height, 0.1f) // 50 content + 16 inner + 16 outer.
+            assertEquals(90f, document.height, 0.1f) // Document keeps the requested 12 dp outer gap.
         }
     }
 

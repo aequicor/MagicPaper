@@ -1,20 +1,17 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.domain.*
-import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.ui.ChatState
 import io.aequicor.magicpaper.ui.DefaultChatComponent
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
@@ -42,11 +39,8 @@ internal fun ResearchWorkspace(vm: DefaultChatComponent, state: ChatState, conte
     ResearchWorkspaceContent(
         state = state,
         questionsExpanded = presentation.questionsExpanded, sourcesExpanded = presentation.sourcesExpanded,
-        sharedSourcesExpanded = presentation.sharedSourcesExpanded, questionSourcesExpanded = presentation.questionSourcesExpanded,
-        onSourceGroupExpandedChange = { target, expanded -> vm.workspacePresentation.update(notebookId) {
-            if (target == ResearchResourceScope.SHARED) it.copy(sharedSourcesExpanded = expanded)
-            else it.copy(questionSourcesExpanded = expanded)
-        } },
+        sourceScope = presentation.sourceScope,
+        onSourceScopeChange = { target -> vm.workspacePresentation.update(notebookId) { it.copy(sourceScope = target) } },
         questionsWidth = presentation.questionsWidth, sourcesWidth = presentation.sourcesWidth,
         onQuestionsExpandedChange = { value -> vm.workspacePresentation.update(notebookId) { it.copy(questionsExpanded = value) } },
         onSourcesExpandedChange = { value -> vm.workspacePresentation.update(notebookId) { it.copy(sourcesExpanded = value) } },
@@ -80,9 +74,8 @@ internal fun ResearchWorkspaceContent(
     state: ChatState,
     questionsExpanded: Boolean = true,
     sourcesExpanded: Boolean = true,
-    sharedSourcesExpanded: Boolean = true,
-    questionSourcesExpanded: Boolean = true,
-    onSourceGroupExpandedChange: (ResearchResourceScope, Boolean) -> Unit = { _, _ -> },
+    sourceScope: ResearchResourceScope = ResearchResourceScope.SHARED,
+    onSourceScopeChange: (ResearchResourceScope) -> Unit = {},
     questionsWidth: Float = 216f,
     sourcesWidth: Float = 272f,
     onQuestionsExpandedChange: (Boolean) -> Unit = {},
@@ -112,7 +105,7 @@ internal fun ResearchWorkspaceContent(
         key(state.current?.id) {
             ResearchSourcesPane(state, saving, onAddWebsite, onSearchResources, onAddSearchResult,
                 onPickFiles, onRemoveResource, onResourceEnabled, onShareResource, collapse,
-                sharedSourcesExpanded, questionSourcesExpanded, onSourceGroupExpandedChange, loadSourceIcon, onResourcesEnabled,
+                sourceScope, onSourceScopeChange, loadSourceIcon, onResourcesEnabled,
                 onReadSourceInBrowser)
         }
     }
@@ -198,96 +191,11 @@ private fun ColumnScope.ResearchQuestionsPane(state: ChatState, saving: Boolean,
 }
 
 @Composable
-private fun ColumnScope.ResearchSourcesPane(state: ChatState, saving: Boolean,
-    onAddWebsite: suspend (String, ResearchResourceScope) -> Result<Unit>,
-    onSearchResources: suspend (String) -> Result<List<SearchHit>>,
-    onAddSearchResult: suspend (SearchHit, ResearchResourceScope) -> Result<Unit>,
-    onPickFiles: (ResearchResourceScope) -> Unit,
-    onRemoveResource: (String, ResearchResourceScope) -> Unit,
-    onResourceEnabled: (String, Boolean) -> Unit,
-    onShareResource: (String) -> Unit, onCollapse: () -> Unit,
-    sharedExpanded: Boolean, questionExpanded: Boolean,
-    onGroupExpandedChange: (ResearchResourceScope, Boolean) -> Unit,
-    loadSourceIcon: suspend (String) -> ImageBitmap?,
-    onResourcesEnabled: (Set<String>, Boolean) -> Unit,
-    onReadSourceInBrowser: (String) -> Unit) {
-    var searchOpen by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val uriHandler = LocalUriHandler.current
-    val shared = state.notebook?.resources.orEmpty()
-    val local = state.current?.questionResources.orEmpty().filterNot { resource -> shared.any { it.key == resource.key } ||
-        resource.discovered && resource.url in state.notebook?.excludedResourceUrls.orEmpty() }
-    val disabled = state.current?.disabledResourceKeys.orEmpty()
-    ResearchPaneHeader("Источники", "Скрыть источники", PaperPanelSide.RIGHT, onCollapse)
-    PaperDivider()
-    PaperLazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
-        for ((target, resources) in listOf(ResearchResourceScope.SHARED to shared, ResearchResourceScope.QUESTION to local)) {
-            val expanded = if (target == ResearchResourceScope.SHARED) sharedExpanded else questionExpanded
-            item(key = "group:$target") {
-                PaperResearchSourceGroupHeader(target.label, expanded, { onGroupExpandedChange(target, !expanded) },
-                    Modifier.padding(top = if (target == ResearchResourceScope.QUESTION) 12.dp else 0.dp),
-                    selectedCount = resources.count { it.key !in disabled }, totalCount = resources.size,
-                    onSelectionChange = { onResourcesEnabled(resources.map { it.key }.toSet(), it) },
-                    enabled = !saving && state.current != null) {
-                    PaperIconButton("Добавить файлы: ${target.label}", { onPickFiles(target) }, enabled = !saving) {
-                        PaperNoteAddIcon(tint = LocalPaperColors.current.action)
-                    }
-                }
-            }
-            if (expanded) items(resources, key = { "resource:$target:${it.id}" }) { resource ->
-                var menu by remember(resource.id) { mutableStateOf(false) }
-                val source = remember(resource.title, resource.url, resource.attachment?.name, resource.attachment?.mimeType) { resource.presentation() }
-                val openWebsite: (() -> Unit)? = source.browserUrl?.let { url -> {
-                    try { uriHandler.openUri(url); error = null }
-                    catch (failure: Exception) {
-                        AppLog.error("chat", "source.open.failed", failure, mapOf("resourceId" to resource.id))
-                        error = "Не удалось открыть источник. Повторите попытку."
-                    }
-                } }
-                val icon by produceState<ImageBitmap?>(null, source.iconUrl) {
-                    value = null
-                    source.iconUrl?.let { value = loadSourceIcon(it) }
-                }
-                PaperResearchSourceRow(source.title, resource.key !in disabled, { onResourceEnabled(resource.key, it) },
-                    enabled = !saving, keepActionsVisible = menu,
-                    detail = source.detail, file = source.file, icon = icon,
-                    onOpenWebsite = openWebsite,
-                    onRemove = { onRemoveResource(resource.id, target) },
-                    readProblem = state.sourceReadProblems[state.current?.id]?.get(resource.key),
-                    readProblemLabel = researchSourceProblemLabel(state.sourceReadProblems[state.current?.id]?.get(resource.key)),
-                    onReadProblem = if (state.sourceBrowserSupported && resource.url.isNotEmpty()) ({ onReadSourceInBrowser(resource.key) }) else null) {
-                    Box {
-                        PaperIconButton("Действия с источником ${resource.title}", { menu = true }) { PaperMoreIcon() }
-                        PaperMenuHost(menu, { menu = false }) {
-                            if (resource.url.isNotEmpty() && state.sourceBrowserSupported) PaperMenuAction("Прочитать в браузере", {
-                                menu = false; onReadSourceInBrowser(resource.key)
-                            })
-                            if (openWebsite != null) PaperMenuAction("Открыть", {
-                                menu = false
-                                openWebsite()
-                            })
-                            if (target == ResearchResourceScope.QUESTION) PaperMenuAction("Сделать общим", {
-                                menu = false; onShareResource(resource.id)
-                            }, enabled = !saving)
-                            PaperMenuAction(if (target == ResearchResourceScope.SHARED) "Убрать из общих" else "Убрать из вопроса", {
-                                menu = false; onRemoveResource(resource.id, target)
-                            }, enabled = !saving, destructive = true)
-                        }
-                    }
-                }
-            }
-        }
-    }
-    error?.let { PaperText(it, Modifier.padding(12.dp), role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
-    PaperButton("Найти ещё", { searchOpen = true }, Modifier.fillMaxWidth().padding(12.dp), kind = PaperButtonKind.SECONDARY)
-    if (searchOpen) ResearchSourceSearchDialog(shared, local, onSearchResources, onAddSearchResult, onAddWebsite, { searchOpen = false })
-}
-
-@Composable
-private fun ResearchPaneHeader(title: String, collapseLabel: String, side: PaperPanelSide, onCollapse: () -> Unit) {
+internal fun ResearchPaneHeader(title: String, collapseLabel: String, side: PaperPanelSide, onCollapse: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
     Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         PaperText(title, Modifier.weight(1f), role = PaperTextRole.CHROME)
+        actions()
         ResearchPanelToggle(collapseLabel, side, onCollapse)
     }
 }

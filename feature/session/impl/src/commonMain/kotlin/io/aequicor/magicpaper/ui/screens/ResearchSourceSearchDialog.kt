@@ -15,9 +15,9 @@ import kotlinx.coroutines.launch
 internal fun ResearchSourceSearchDialog(sharedResources: List<ResearchResource>, questionResources: List<ResearchResource>,
     onSearch: suspend (String) -> Result<List<SearchHit>>,
     onAddResult: suspend (SearchHit, ResearchResourceScope) -> Result<Unit>,
-    onAddWebsite: suspend (String, ResearchResourceScope) -> Result<Unit>, onDismiss: () -> Unit) {
+    onAddWebsite: suspend (String, ResearchResourceScope) -> Result<Unit>, onDismiss: () -> Unit, initialScope: ResearchResourceScope = ResearchResourceScope.QUESTION) {
     var query by remember { mutableStateOf("") }
-    var target by remember { mutableStateOf(ResearchResourceScope.QUESTION) }
+    var target by remember { mutableStateOf(initialScope) }
     var results by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }

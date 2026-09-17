@@ -84,8 +84,10 @@ internal fun PaperMarkdownCode(code: String, language: String?, style: TextStyle
     val codeStyle = style.copy(fontFamily = PaperFonts.code, fontSize = 10.sp, lineHeight = 14.sp)
     val longCode = remember(code) { code.length > 16_384 || code.count { it == '\n' } >= 64 }
     val clipboard = LocalClipboardManager.current
+    val spacing = LocalPaperSpacing.current
+    // Markdown already separates blocks, including their intervening EOL nodes.
     MarkdownCodeBackground(LocalPaperColors.current.raisedSurface,
-        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(LocalMarkdownDimens.current.codeBackgroundCornerSize),
         showHeader = false, language = language, code = copyCode) {
         Column(Modifier.fillMaxWidth()) {
@@ -111,7 +113,8 @@ internal fun PaperMarkdownCode(code: String, language: String?, style: TextStyle
             else {
                 val scroll = rememberScrollState()
                 PaperScrollViewport(scroll, horizontal = true) {
-                    MarkdownBasicText(text = highlighted, modifier = Modifier.horizontalScroll(scroll).padding(8.dp), style = codeStyle)
+                    MarkdownBasicText(text = highlighted, modifier = Modifier.horizontalScroll(scroll)
+                        .padding(horizontal = spacing.xs, vertical = spacing.xxs), style = codeStyle)
                 }
             }
         }
@@ -122,6 +125,7 @@ internal fun PaperMarkdownCode(code: String, language: String?, style: TextStyle
  * shared horizontal position and full-code copying survive their disposal during scrolling. */
 @Composable
 private fun PaperLongCode(code: AnnotatedString, style: TextStyle) {
+    val spacing = LocalPaperSpacing.current
     val ranges = remember(code.text) { paperCodeRanges(code.text) }
     val longestLine = remember(code.text, ranges) {
         ranges.asSequence().flatMap { code.text.substring(it).lineSequence() }.maxByOrNull { it.length }.orEmpty()
@@ -137,7 +141,7 @@ private fun PaperLongCode(code: AnnotatedString, style: TextStyle) {
         val width = maxOf(maxWidth, measuredWidth)
         PaperScrollViewport(horizontal, Modifier.fillMaxSize(), horizontal = true) {
             LazyColumn(Modifier.horizontalScroll(horizontal).width(width).fillMaxHeight(), state = vertical,
-                contentPadding = PaddingValues(8.dp)) {
+                contentPadding = PaddingValues(horizontal = spacing.xs, vertical = spacing.xxs)) {
                 items(ranges.size, key = { it }) { index ->
                     val range = ranges[index]
                     // One Text already ends its final line; don't add a second visual blank line.

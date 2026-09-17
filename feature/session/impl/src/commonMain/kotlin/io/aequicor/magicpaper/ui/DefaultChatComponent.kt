@@ -64,8 +64,7 @@ class DefaultChatComponentFactory(private val service: DefaultChatService, priva
 internal data class ChatWorkspacePresentation(
     val questionsExpanded: Boolean = true,
     val sourcesExpanded: Boolean = true,
-    val sharedSourcesExpanded: Boolean = true,
-    val questionSourcesExpanded: Boolean = true,
+    val sourceScope: io.aequicor.magicpaper.domain.ResearchResourceScope = io.aequicor.magicpaper.domain.ResearchResourceScope.SHARED,
     val questionsWidth: Float = 216f,
     val sourcesWidth: Float = 272f,
 )
