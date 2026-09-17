@@ -20,15 +20,30 @@ class ComputerUsePiIntegrationTest {
         val node = System.getenv("MAGICPAPER_COMPUTER_NODE")
         val cli = System.getenv("MAGICPAPER_COMPUTER_PI")
         org.junit.Assume.assumeTrue("Installed engine smoke test is opt-in", node != null && cli != null)
-        val arguments = if (tool == "application") """{\"action\":\"screenshot\",\"window_id\":\"w\"}""" else """{\"action\":\"screenshot\"}"""
+        val arguments = request("screenshot") { if (tool == "application") put("window_id", "w") }
         val dir = Files.createTempDirectory("computer-pi-").toFile()
         val requests = CopyOnWriteArrayList<JsonObject>()
         val model = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         model.createContext("/") { exchange ->
             requests += Json.parseToJsonElement(exchange.requestBody.readBytes().decodeToString()).jsonObject
-            val chunks = if (requests.size <= 2) listOf(
+            fun screenshotId(value: JsonElement): String? = when (value) {
+                is JsonObject -> value.values.mapNotNull(::screenshotId).lastOrNull()
+                is JsonArray -> value.mapNotNull(::screenshotId).lastOrNull()
+                is JsonPrimitive -> if (value.isString) Regex("\"screenshot_id\"\\s*:\\s*\"([^\"]+)\"").find(value.content)?.groupValues?.get(1) else null
+            }
+            val next = if (tool == "computer" && requests.size == 2) request("screenshot") {
+                put("screenshot_id", checkNotNull(screenshotId(requests.last()["messages"]!!)))
+                put("image_size", buildJsonObject { put("width", 800); put("height", 450) })
+                put("region", buildJsonObject { put("x", 200); put("y", 100); put("width", 50); put("height", 25) })
+            } else if (tool == "computer" && requests.size == 3) request("click") {
+                put("screenshot_id", checkNotNull(screenshotId(requests.last()["messages"]!!)))
+                put("image_size", buildJsonObject { put("width", 80); put("height", 40) })
+                put("x", 40); put("y", 20)
+            } else arguments
+            val encodedArguments = JsonPrimitive(next.toString())
+            val chunks = if (requests.size <= if (tool == "computer") 3 else 2) listOf(
                 """{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"shot-${requests.size}","type":"function","function":{"name":"$tool","arguments":""}}]}}]}""",
-                """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"$arguments"}}]}}]}""",
+                """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":$encodedArguments}}]}}]}""",
                 """{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}""",
             ) else listOf(
                 """{"choices":[{"index":0,"delta":{"role":"assistant","content":"SCREEN_RECEIVED"}}]}""",
@@ -40,9 +55,9 @@ class ComputerUsePiIntegrationTest {
             exchange.responseBody.use { it.write(bytes) }
         }
         model.start()
-        val desktop = FakeComputerDesktop()
+        val desktop = FakeComputerDesktop().apply { nativeScale = 2 }
         val computer = DesktopComputerUse(desktop, applicationFactory = { FakeApplicationDesktop() })
-        if (tool == "computer") computer.enable("a", ComputerAccess.SCREEN)
+        if (tool == "computer") computer.enable("a", ComputerAccess.CONTROL)
         else { computer.configure(ComputerAccess.OFF, ComputerAccess.SCREEN); computer.begin("a") }
         try {
             val home = dir.resolve("home").apply { mkdirs() }
@@ -68,14 +83,21 @@ class ComputerUsePiIntegrationTest {
                     process.outputStream.use { it.write("Describe the test screen".toByteArray()) }
                     assertTrue(process.waitFor(25, TimeUnit.SECONDS), "pi did not finish")
                     assertEquals(0, process.exitValue(), output.readText().take(4000))
-                    assertEquals(3, requests.size, output.readText().take(4000))
+                    assertEquals(if (tool == "computer") 4 else 3, requests.size, output.readText().take(4000))
                     val definitions = requests.first()["tools"]!!.jsonArray
                     assertTrue(definitions.any { it.jsonObject["function"]?.jsonObject?.get("name") == JsonPrimitive(tool) })
                     val sent = requests.last()["messages"].toString()
-                    assertEquals(1, Regex("data:image/jpeg;base64,").findAll(sent).count(), "Only the latest screenshot should reach the model")
+                    assertEquals(1, Regex("data:image/(jpeg|png);base64,").findAll(sent).count(), "Only the latest screenshot should reach the model")
+                    assertContains(sent, "data:image/jpeg;base64,")
                     assertContains(sent, "Earlier screenshot image omitted")
                     assertContains(output.readText(), "SCREEN_RECEIVED")
-                    if (tool == "computer") assertNotNull(computer.state.value.preview)
+                    if (tool == "computer") {
+                        assertNotNull(computer.state.value.preview)
+                        assertContains(requests[2]["messages"].toString(), "data:image/png;base64,")
+                        assertEquals(DesktopCaptureRequest(DesktopRegion(640, 320, 160, 80), ScreenshotResolution.NATIVE), desktop.captureRequests[1])
+                        assertEquals(ComputerAction("click", 720, 360), desktop.performed.single())
+                        assertEquals(DesktopRegion.full(desktop.monitors.single()), desktop.captureRequests.last().region)
+                    }
                     else { assertNull(computer.state.value.preview); assertEquals(0, desktop.captures) }
                 } finally {
                     process.destroy()

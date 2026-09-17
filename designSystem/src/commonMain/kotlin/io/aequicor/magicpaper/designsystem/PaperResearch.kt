@@ -163,39 +163,27 @@ public fun PaperResearchSourceRow(title: String, checked: Boolean, onCheckedChan
             }, verticalAlignment = Alignment.Top) {
             PaperCheck(checked, onCheckedChange, Modifier.heightIn(min = controlHeight)
                 .semantics { contentDescription = "Использовать источник: $title" }, enabled)
-            Column(Modifier.weight(1f)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    PaperText(title, Modifier.weight(1f).heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
-                        .paperClickable(enabled = enabled) { onCheckedChange(!checked) }
-                        .padding(horizontal = 2.dp, vertical = 3.dp), role = PaperTextRole.CHROME, maxLines = 2,
-                        overflow = TextOverflow.Ellipsis, color = when {
-                            readProblem != null -> colors.error
-                            checked -> colors.text
-                            else -> colors.secondaryText
-                        })
-                    // Reserve the menu slot, so hover and keyboard focus never reflow the title.
-                    Row(Modifier.heightIn(min = controlHeight).onFocusChanged { actionFocused = it.hasFocus }.graphicsLayer {
-                        alpha = if (showActions) 1f else 0f
-                    }, verticalAlignment = Alignment.CenterVertically, content = trailing)
-                }
-                Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) {
-                        if (detail != null) Row(Modifier.fillMaxWidth().then(
-                            if (file || onOpenWebsite == null) Modifier else Modifier
-                                .heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
-                                .semantics { contentDescription = "Открыть сайт: $detail" }
-                                .paperClickable(enabled = enabled, role = Role.Button, onClick = onOpenWebsite)),
-                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            if (icon != null && !file) PaperImage(icon, null, Modifier.size(14.dp), scale = PaperImageScale.FIT)
-                            else PaperResearchSourceIcon(file)
-                            PaperText(detail, Modifier.weight(1f), style = LocalPaperTypography.current.chrome.copy(
-                                fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
-                                color = LocalPaperColors.current.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+            Box(Modifier.width(26.dp).heightIn(min = controlHeight), contentAlignment = Alignment.Center) {
+                if (icon != null && !file) PaperImage(icon, null, Modifier.size(18.dp), scale = PaperImageScale.FIT)
+                else PaperResearchSourceIcon(file)
+            }
+            Column(Modifier.weight(1f).padding(top = 4.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                PaperText(title, Modifier.fillMaxWidth()
+                    .paperClickable(enabled = enabled) { onCheckedChange(!checked) },
+                    role = PaperTextRole.CHROME, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    color = if (readProblem != null) colors.error else if (checked) colors.text else colors.secondaryText)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (detail != null) Box(Modifier.weight(1f).heightIn(min = 24.dp)
+                        .then(if (file || onOpenWebsite == null) Modifier else Modifier
+                            .semantics { contentDescription = "Открыть сайт: $detail" }
+                            .paperClickable(enabled = enabled, role = Role.Button, onClick = onOpenWebsite)),
+                        contentAlignment = Alignment.CenterStart) {
+                        PaperText(detail, style = LocalPaperTypography.current.chrome.copy(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
+                            color = colors.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (readProblem != null) PaperTooltip(readProblem) {
                         Box(Modifier
-                            .then(if (onReadProblem == null) Modifier else Modifier.heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
+                            .then(if (onReadProblem == null) Modifier else Modifier.heightIn(min = 24.dp)
                                 .paperClickable(enabled = enabled, onClick = onReadProblem))
                             .padding(start = 6.dp).semantics {
                                 contentDescription = if (onReadProblem != null) "Прочитать в браузере: $readProblem" else readProblem
@@ -206,15 +194,16 @@ public fun PaperResearchSourceRow(title: String, checked: Boolean, onCheckedChan
                                 color = colors.error, maxLines = 1)
                         }
                     }
-                    // Unreadable sources can be removed directly, independently of the hover-only menu.
-                    if (readProblem != null && onRemove != null) PaperTooltip("Убрать источник") {
-                        PaperIconButton("Убрать источник: $title", onRemove,
-                            Modifier.padding(start = 4.dp), enabled = enabled) {
-                            PaperDeleteIcon(tint = colors.error)
-                        }
-                    }
                 }
             }
+            // Both the menu and permanent recovery action share the checkbox's top alignment.
+            if (readProblem != null && onRemove != null) PaperTooltip("Убрать источник") {
+                PaperIconButton("Убрать источник: $title", onRemove, Modifier.heightIn(min = controlHeight), enabled = enabled) {
+                    PaperDeleteIcon(tint = colors.error)
+                }
+            } else Row(Modifier.heightIn(min = controlHeight).onFocusChanged { actionFocused = it.hasFocus }.graphicsLayer {
+                alpha = if (showActions) 1f else 0f
+            }, verticalAlignment = Alignment.CenterVertically, content = trailing)
         }
     }
 }

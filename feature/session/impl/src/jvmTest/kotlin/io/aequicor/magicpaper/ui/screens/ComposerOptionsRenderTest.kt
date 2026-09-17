@@ -19,7 +19,7 @@ import kotlin.test.*
 class ComposerOptionsRenderTest {
     @Test fun chatAndSessionOptionsAttachFilesWithoutSendingOrReplacingTheEditor() {
         for (coding in listOf(false, true)) for ((width, scale, enabled) in listOf(
-            Triple(720, 1f, true), Triple(390, 1f, true), Triple(720, 2f, true), Triple(390, 1f, false))) {
+            Triple(720, 1f, true), Triple(390, 1f, true), Triple(720, 2f, true), Triple(390, 2f, true), Triple(390, 1f, false))) {
             val draft = CodingComposerDraft().apply { text.value = "Вопрос с уже введённым текстом" }
             val file = Attachment.fromBytes("Материалы.txt", "text/plain", "Текст для исследования".encodeToByteArray())
             var picks = 0
@@ -54,8 +54,8 @@ class ComposerOptionsRenderTest {
             try {
                 settle()
                 val inputId = onUi { scene.editor().id }
-                click("Показать параметры и ресурсы"); settle()
                 click("Прикрепить файлы"); settle()
+                click("Показать параметры"); settle()
                 onUi {
                     assertEquals(1, picks)
                     assertEquals(listOf(file), draft.attachments.value)
@@ -67,7 +67,7 @@ class ComposerOptionsRenderTest {
                     val input = scene.editor().boundsInRoot
                     val send = scene.action("Отправить").boundsInRoot
                     val attach = scene.action("Прикрепить файлы").boundsInRoot
-                    assertTrue(input.top >= 0 && send.bottom < attach.top, "Options must be below the usable editor and primary action")
+                    assertTrue(input.top >= 0 && attach.top >= input.bottom, "Direct attachment action stays below the usable editor")
                     assertTrue(attach.right <= width && attach.bottom <= 700)
                     assertTrue(scene.semanticsOwners.any { owner ->
                         val ids = descendants(owner.rootSemanticsNode).map { it.id }
@@ -76,9 +76,10 @@ class ComposerOptionsRenderTest {
                     File("build/reports/composer-options/${if (coding) "session" else "chat"}-$width-$scale${if (enabled) "" else "-unavailable"}.png")
                         .apply { parentFile.mkdirs() }.writeBytes(scene.render(time).use { image -> image.encodeToData()!!.use { it.bytes } })
                 }
-                click("Скрыть параметры и ресурсы"); settle()
+                click("Скрыть параметры"); settle()
                 onUi {
-                    assertFalse(scene.nodes().any { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == "Прикрепить файлы" } })
+                    assertTrue(scene.action("Прикрепить файлы").boundsInRoot.height > 0)
+                    assertTrue(scene.action("Отправить").boundsInRoot.bottom <= 692, "Bottom gap remains visible")
                     assertEquals(inputId, scene.editor().id)
                     assertEquals(listOf(file), draft.attachments.value)
                 }

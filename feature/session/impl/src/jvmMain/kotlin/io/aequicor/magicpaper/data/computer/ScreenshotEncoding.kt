@@ -4,6 +4,29 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
+import kotlin.math.roundToInt
+
+/** The source is already the requested region at native pixel density, never an enlarged overview. */
+internal fun encodeDesktopCapture(source: java.awt.Image, resolution: ScreenshotResolution): DesktopCapture {
+    val nativeWidth = source.getWidth(null); val nativeHeight = source.getHeight(null)
+    require(nativeWidth > 0 && nativeHeight > 0 &&
+        (resolution != ScreenshotResolution.NATIVE || nativeWidth.toLong() * nativeHeight <= MAX_NATIVE_SCREENSHOT_PIXELS)) {
+        "Слишком большой снимок. Запросите screenshot с region для нужной области."
+    }
+    val scale = if (resolution == ScreenshotResolution.NATIVE) 1.0 else minOf(1.0, 1600.0 / maxOf(nativeWidth, nativeHeight))
+    val width = (nativeWidth * scale).roundToInt().coerceAtLeast(1)
+    val height = (nativeHeight * scale).roundToInt().coerceAtLeast(1)
+    val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    try {
+        val graphics = image.createGraphics()
+        try {
+            graphics.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            graphics.drawImage(source, 0, 0, width, height, null)
+        } finally { graphics.dispose() }
+        val png = ByteArrayOutputStream().use { output -> check(ImageIO.write(image, "png", output)); output.toByteArray() }
+        return DesktopCapture(png, width, height)
+    } finally { image.flush() }
+}
 
 internal data class EncodedScreenshot(val bytes: ByteArray, val mimeType: String, val extension: String)
 

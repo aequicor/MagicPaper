@@ -25,6 +25,7 @@ public fun PaperComposerExpandButton(expanded: Boolean, modifier: Modifier = Mod
     val label = if (expanded) "Свернуть поле ввода" else "Развернуть поле ввода"
     val colors = LocalPaperColors.current
     val policy = LocalPaperPlatformPolicy.current
+    val cornerRadius = LocalComposerCornerRadius.current
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     val focused by source.collectIsFocusedAsState()
@@ -54,9 +55,12 @@ public fun PaperComposerExpandButton(expanded: Boolean, modifier: Modifier = Mod
                         else { arrow(.58f, .12f, .88f, .12f); arrow(.88f, .12f, .88f, .42f) }
                     }
                 } else {
+                    val outerRadius = cornerRadius.toPx()
+                    val radius = outerRadius - 4.dp.toPx()
+                    // A concentric inset of the actual frame corner, independent of hitbox size.
                     drawArc(colors.secondaryText.copy(alpha = .75f), 270f, 90f, useCenter = false,
-                        topLeft = Offset(size.width - 16.dp.toPx(), 4.dp.toPx()),
-                        size = Size(12.dp.toPx(), 12.dp.toPx()), style = Stroke(1.dp.toPx(), cap = StrokeCap.Round))
+                        topLeft = Offset(size.width - outerRadius - radius, outerRadius - radius),
+                        size = Size(radius * 2, radius * 2), style = Stroke(1.dp.toPx(), cap = StrokeCap.Round))
                 }
             }
         }
@@ -66,16 +70,22 @@ public fun PaperComposerExpandButton(expanded: Boolean, modifier: Modifier = Mod
 @Preview(name = "Composer corner", group = "Research composer", widthDp = 360, heightDp = 140)
 @Preview(name = "Composer corner large text", group = "Research composer", widthDp = 360, heightDp = 200, fontScale = 2f)
 @Composable
-internal fun PaperComposerCornerPreview(buttonModifier: Modifier = Modifier) = PaperTheme {
+internal fun PaperComposerCornerPreview(buttonModifier: Modifier = Modifier,
+    platform: PaperPlatform? = null) = PaperTheme {
     var expanded by remember { mutableStateOf(false) }
-    PaperSurface(Modifier.fillMaxSize()) {
-        Box(Modifier.padding(12.dp)) {
-            PaperWorkspaceComposer(document = true) {
-                Row(Modifier.fillMaxWidth()) {
-                    PaperText("Продолжить исследование…", Modifier.weight(1f).padding(8.dp), role = PaperTextRole.CHROME)
-                    PaperComposerExpandButton(expanded, buttonModifier.offset(x = 8.dp, y = (-4).dp)) { expanded = !expanded }
+    val policy = platform?.let { PaperPlatformPolicy.desktop(it) } ?: LocalPaperPlatformPolicy.current
+    CompositionLocalProvider(LocalPaperPlatformPolicy provides policy) {
+        PaperSurface(Modifier.fillMaxSize()) {
+            Box(Modifier.padding(12.dp)) {
+                PaperWorkspaceComposer(document = true, corner = {
+                    PaperComposerExpandButton(expanded, buttonModifier) { expanded = !expanded }
+                }) {
+                    Row(Modifier.fillMaxWidth()) {
+                        PaperText("Продолжить исследование…", Modifier.weight(1f).padding(8.dp), role = PaperTextRole.CHROME)
+                        Spacer(Modifier.width(policy.density.controlHeight))
+                    }
+                    PaperText(if (expanded) "Развёрнуто" else "Свёрнуто", Modifier.padding(8.dp), role = PaperTextRole.LABEL)
                 }
-                PaperText(if (expanded) "Развёрнуто" else "Свёрнуто", Modifier.padding(8.dp), role = PaperTextRole.LABEL)
             }
         }
     }

@@ -62,8 +62,17 @@ class ComputerUseBridgeTest {
             assertEquals("no-store", result.headers().firstValue("cache-control").orElse(""))
             assertFalse(result.result().failed())
             assertEquals("image", result.result()["content"]!!.jsonArray[1].jsonObject["type"]!!.jsonPrimitive.content)
+            val crop = post(bridge, tool(4, request("screenshot") {
+                put("screenshot_id", result.result().screenshotId())
+                put("region", buildJsonObject { put("x", 400); put("y", 200); put("width", 100); put("height", 50) })
+            })).result()
+            assertFalse(crop.failed())
+            assertEquals("image/png", crop["content"]!!.jsonArray[1].jsonObject.requiredString("mimeType"))
+            val metadata = Json.parseToJsonElement(crop["content"]!!.jsonArray[0].jsonObject.requiredString("text")).jsonObject
+            assertEquals(JsonPrimitive(160), metadata["width"])
+            assertEquals(JsonPrimitive(80), metadata["height"])
             computer.disable("a")
-            assertEquals(403, post(bridge, tool(4, request("screenshot"))).statusCode())
+            assertEquals(403, post(bridge, tool(5, request("screenshot"))).statusCode())
         }
         assertEquals(ComputerAccess.OFF, computer.state.value.access)
     }
@@ -82,6 +91,27 @@ class ComputerUseBridgeTest {
         }
         assertNull(computer.grant("a"))
         assertFails { post(bridge, rpc(3, "ping")) }
+    }
+
+    @Test fun mcpAdvertisesAndMapsCoordinatesMeasuredOnAResizedImage(): Unit = runBlocking {
+        val desktop = FakeComputerDesktop()
+        val computer = DesktopComputerUse(desktop)
+        computer.enable("a", ComputerAccess.CONTROL)
+        computer.bridge("a")!!.use { bridge ->
+            val tools = post(bridge, rpc(1, "tools/list")).result()["tools"]!!.jsonArray
+            val definition = tools.single { it.jsonObject.requiredString("name") == "computer" }.jsonObject
+            val size = definition["inputSchema"]!!.jsonObject["properties"]!!.jsonObject["image_size"]!!.jsonObject
+            assertEquals(setOf("width", "height"), size["required"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet())
+            val shot = post(bridge, tool(2, request("screenshot"))).result()
+            val click = post(bridge, tool(3, request("click") {
+                put("screenshot_id", shot.screenshotId()); put("x", 400); put("y", 225)
+                put("image_size", buildJsonObject { put("width", 800); put("height", 450) })
+            })).result()
+            assertFalse(click.failed())
+            assertEquals(ComputerAction("click", 1280, 720), desktop.performed.single())
+            val metadata = Json.parseToJsonElement(click["content"]!!.jsonArray[0].jsonObject.requiredString("text")).jsonObject
+            assertEquals(JsonPrimitive(1600), metadata["image_size"]!!.jsonObject["width"])
+        }
     }
 
     @Test fun codexConfigurationPreservesSandboxAndReplacesOldEndpoint(): Unit = runBlocking {
@@ -122,7 +152,8 @@ class ComputerUseBridgeTest {
 
     /** Optional local Node smoke test: executes the actual generated extension against the bridge. */
     @Test fun piExtensionReturnsVisionContentAndThrowsForDeniedInput(): Unit = runBlocking {
-        val node = System.getenv("MAGICPAPER_COMPUTER_NODE") ?: return@runBlocking
+        val node = System.getenv("MAGICPAPER_COMPUTER_NODE")
+        org.junit.Assume.assumeTrue("Local Node extension check is opt-in", node != null)
         val native = FakeApplicationDesktop()
         val computer = DesktopComputerUse(FakeComputerDesktop(), applicationFactory = { native })
         computer.configure(ComputerAccess.SCREEN, ComputerAccess.CONTROL)
@@ -134,18 +165,31 @@ class ComputerUseBridgeTest {
                 import register from './computer.mjs';
                 import assert from 'node:assert/strict';
                 const tools = {};
-                register({ registerTool(t) { tools[t.name] = t; } });
+                const contextHooks = [];
+                const api = () => ({
+                  registerTool(t) { tools[t.name] = t; },
+                  on(event, handler) { assert.equal(event, 'context'); contextHooks.push(handler); }
+                });
+                register(api());
                 let tool = tools.computer;
                 assert.deepEqual(Object.keys(tools).sort(), ['application', 'computer']);
                 assert.equal(tool.name, 'computer');
                 assert.equal(tool.parameters.type, 'object');
+                assert.deepEqual(tool.parameters.properties.image_size.required, ['width', 'height']);
                 const shot = await tool.execute('one', { action: 'screenshot' });
                 assert.equal(shot.content[1].type, 'image');
-                assert.equal(shot.content[1].mimeType, 'image/png');
-                const id = JSON.parse(shot.content[0].text).screenshot_id;
+                assert.equal(shot.content[1].mimeType, 'image/jpeg');
+                const region = await tool.execute('detail', { action: 'screenshot',
+                  screenshot_id: JSON.parse(shot.content[0].text).screenshot_id,
+                  image_size: { width: 800, height: 450 },
+                  region: { x: 200, y: 100, width: 50, height: 25 } });
+                assert.equal(region.content[1].mimeType, 'image/png');
+                assert.equal(JSON.parse(region.content[0].text).width, 160);
+                const id = JSON.parse(region.content[0].text).screenshot_id;
                 await assert.rejects(() => tool.execute('two', { action: 'click', screenshot_id: id, x: 1, y: 1 }), /только просмотр/);
                 // A continuation loads a new extension, with its own distinct RPC ids.
-                register({ registerTool(t) { tools[t.name] = t; } });
+                register(api());
+                assert.equal(contextHooks.length, 2);
                 tool = tools.computer;
                 assert.equal((await tool.execute('three', { action: 'screenshot' })).content[1].type, 'image');
                 const inspected = await tools.application.execute('four', { action: 'inspect', window_id: 'w' });

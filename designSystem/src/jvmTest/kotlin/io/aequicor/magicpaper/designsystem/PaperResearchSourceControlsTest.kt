@@ -112,7 +112,9 @@ class PaperResearchSourceControlsTest {
                     assertEquals(3, removeActions.size, "Only unreadable sources have a permanent remove action")
                     val remove = removeActions[1]
                     assertTrue(remove.boundsInRoot.left >= status.right)
-                    assertEquals(status.center.y, remove.boundsInRoot.center.y, 1f)
+                    val checkbox = nodes.first { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                        .contains("Использовать источник: ${remove.config[SemanticsProperties.ContentDescription].single().removePrefix("Убрать источник: ")}") }
+                    assertEquals(checkbox.boundsInRoot.center.y, remove.boundsInRoot.center.y, 1f)
                     assertTrue(remove.boundsInRoot.right <= width)
                     val file = File("build/reports/research-source-controls/compact-errors-$scale.png").apply { parentFile.mkdirs() }
                     scene.render(240_000_000L).use { image -> image.encodeToData()!!.use { file.writeBytes(it.bytes) } }
@@ -197,7 +199,7 @@ class PaperResearchSourceControlsTest {
             onPaperUi { assertEquals(titleBounds, title().boundsInRoot) }
             move(Offset(10f, 205f))
             assertContentEquals(hidden, pixels("pointer-left", menuBounds), "The menu must hide when the pointer leaves")
-            repeat(6) { if (!onPaperUi { menu().config.getOrNull(SemanticsProperties.Focused) == true }) press(Key.Tab) }
+            repeat(7) { if (!onPaperUi { menu().config.getOrNull(SemanticsProperties.Focused) == true }) press(Key.Tab) }
             onPaperUi { assertTrue(menu().config.getOrNull(SemanticsProperties.Focused) == true) }
             assertFalse(hidden.contentEquals(pixels("keyboard-focus", menuBounds)))
             press(Key.Enter)

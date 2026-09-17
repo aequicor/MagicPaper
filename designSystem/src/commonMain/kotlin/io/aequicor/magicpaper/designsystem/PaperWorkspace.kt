@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
@@ -68,13 +69,17 @@ public fun PaperWorkSurface(modifier: Modifier = Modifier, expanded: Boolean = f
 }
 
 private val LocalComposerInteraction = staticCompositionLocalOf<MutableInteractionSource?> { null }
+internal val LocalComposerCornerRadius = staticCompositionLocalOf { 10.dp }
 
-/** A raised writing surface; focus belongs to the whole composer, not an inner rectangle. */
+/** A raised writing surface; focus belongs to the whole composer, not an inner rectangle.
+ * [corner] attaches to the physical top-right frame corner, outside content padding.
+ * Content should reserve enough room for that action beside its editor. */
 @Composable
 public fun PaperWorkspaceComposer(
     modifier: Modifier = Modifier,
     document: Boolean = false,
     options: (@Composable () -> Unit)? = null,
+    corner: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalPaperColors.current
@@ -87,7 +92,8 @@ public fun PaperWorkspaceComposer(
     )
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(durationMillis = 180)) }
-    val shape = RoundedCornerShape(if (document) 10.dp else 16.dp)
+    val cornerRadius = if (document) 10.dp else 16.dp
+    val shape = RoundedCornerShape(cornerRadius)
     val frame = if (document) {
         Modifier.background(colors.surface.copy(alpha = .96f), shape)
             .border(1.dp, colors.border.copy(alpha = .72f), shape)
@@ -99,21 +105,27 @@ public fun PaperWorkspaceComposer(
             offset = Offset(0f, 1.dp.toPx())
         }.background(Brush.verticalGradient(listOf(colors.composerHighlight, surface)), shape)
     }
-    CompositionLocalProvider(LocalComposerInteraction provides source) {
-        val outerPadding = if (document) 4.dp else 8.dp
-        val innerVerticalPadding = if (document) 4.dp else 8.dp
-        Column(modifier.fillMaxWidth().padding(outerPadding)
+    CompositionLocalProvider(LocalComposerInteraction provides source, LocalComposerCornerRadius provides cornerRadius) {
+        val outerPadding = if (document) 12.dp else 8.dp
+        val innerVerticalPadding = 8.dp
+        Box(modifier.fillMaxWidth().padding(outerPadding)
             // Alpha alone keeps the final geometry from the first layout pass, so the
             // transcript never jumps while the writing surface gently appears.
             .graphicsLayer { alpha = entrance.value }
-            .then(frame)
-            .padding(horizontal = 8.dp, vertical = innerVerticalPadding),
-            verticalArrangement = if (options == null) Arrangement.spacedBy(6.dp) else Arrangement.Top) {
-            if (options == null) content()
-            else {
-                // Keep the editor branch stable while the options reveal below it.
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
-                options()
+            .then(frame)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = innerVerticalPadding),
+                verticalArrangement = if (options == null) Arrangement.spacedBy(6.dp) else Arrangement.Top) {
+                if (options == null) content()
+                else {
+                    // Keep the editor branch stable while the options reveal below it.
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
+                    options()
+                }
+            }
+            // The affordance belongs to the surface, not a padded editor row. Its bounds
+            // and the border therefore share an origin at every density and content height.
+            if (corner != null) Box(Modifier.align(AbsoluteAlignment.TopRight)) {
+                corner()
             }
         }
     }

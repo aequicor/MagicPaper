@@ -1772,7 +1772,16 @@ internal fun CodingComposer(
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val trailingLimit = maxWidth * 0.40f
-        val narrowContext = maxWidth < 600.dp
+        val narrowContext = maxWidth < 600.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
+        val accessoryActions: @Composable () -> Unit = {
+            PaperComposerActions(menuOpen, {
+                onPickAttachments(attachments.size) { attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE) }
+            }, {
+                menuOpen = !menuOpen
+                searchMenuOpen = false
+                engineMenuOpen = false
+            }, optionsModifier = Modifier.focusRequester(optionsFocus), attachEnabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE)
+        }
         PaperWorkspaceComposer(document = documentComposer, options = {
             PaperComposerOptionsPanel(menuOpen, ::closeMenu,
                 maxHeight = (maxHeight * .4f).coerceIn(80.dp, 240.dp)) {
@@ -1807,16 +1816,6 @@ internal fun CodingComposer(
                 } else {
                     if (onSkills != null) PaperRichMenuAction(text = { PaperText("Навыки", role = PaperTextRole.CHROME) },
                         onClick = { closeMenu(); onSkills() })
-                    PaperRichMenuAction(
-                        text = { PaperText("Прикрепить файлы", role = PaperTextRole.CHROME) },
-                        enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
-                        leadingIcon = { PaperNoteAddIcon(tint = LocalPaperColors.current.action) },
-                        onClick = {
-                            onPickAttachments(attachments.size) {
-                                attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
-                            }
-                        },
-                    )
                     if (onInteractionMode != null) {
                         val currentMode = if (planning) CodingInteractionMode.PLANNING else if (research) CodingInteractionMode.RESEARCH else CodingInteractionMode.CODE
                         CodingInteractionMode.entries.forEach { mode ->
@@ -1928,12 +1927,9 @@ internal fun CodingComposer(
                     maxLines = 6,
                     placeholder = promptPlaceholder,
                 )
+            if (narrowContext) accessoryActions()
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                PaperComposerOptionsToggle(menuOpen, {
-                    menuOpen = !menuOpen
-                    searchMenuOpen = false
-                    engineMenuOpen = false
-                }, Modifier.focusRequester(optionsFocus))
+                if (!narrowContext) accessoryActions()
                 if (!narrowContext && (onInteractionMode != null || planning || research)) CodingModeLabel(planning, research)
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     Row(Modifier.widthIn(max = trailingLimit),

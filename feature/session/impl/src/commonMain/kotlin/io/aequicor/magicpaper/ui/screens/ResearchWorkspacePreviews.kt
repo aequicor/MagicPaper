@@ -100,7 +100,7 @@ internal fun ResearchWorkspacePreview(
     empty: Boolean = false,
     busy: Boolean = false,
     failed: Boolean = false,
-    sourceGroupsExpanded: Boolean = true,
+    initialSourceScope: ResearchResourceScope = ResearchResourceScope.SHARED,
     unreadableSource: Boolean = false,
     onNewQuestion: () -> Unit = {},
     onPickFiles: (ResearchResourceScope) -> Unit = {},
@@ -111,8 +111,7 @@ internal fun ResearchWorkspacePreview(
     }) }
     var questionsExpanded by remember { mutableStateOf(true) }
     var sourcesExpanded by remember { mutableStateOf(true) }
-    var sharedSourcesExpanded by remember { mutableStateOf(sourceGroupsExpanded) }
-    var questionSourcesExpanded by remember { mutableStateOf(sourceGroupsExpanded) }
+    var sourceScope by remember { mutableStateOf(initialSourceScope) }
     var questionsWidth by remember { mutableStateOf(216f) }
     var sourcesWidth by remember { mutableStateOf(272f) }
     fun selectSources(keys: Set<String>, enabled: Boolean) {
@@ -126,12 +125,8 @@ internal fun ResearchWorkspacePreview(
                 ResearchWorkspaceContent(state,
                     questionsExpanded = questionsExpanded,
                     sourcesExpanded = sourcesExpanded,
-                    sharedSourcesExpanded = sharedSourcesExpanded,
-                    questionSourcesExpanded = questionSourcesExpanded,
-                    onSourceGroupExpandedChange = { target, expanded ->
-                        if (target == ResearchResourceScope.SHARED) sharedSourcesExpanded = expanded
-                        else questionSourcesExpanded = expanded
-                    },
+                    sourceScope = sourceScope,
+                    onSourceScopeChange = { sourceScope = it },
                     questionsWidth = questionsWidth,
                     sourcesWidth = sourcesWidth,
                     onQuestionsExpandedChange = { questionsExpanded = it },
@@ -167,9 +162,9 @@ internal fun ResearchWorkspacePreview(
 @Composable
 internal fun ResearchEmptyPreview() = ResearchWorkspacePreview(empty = true)
 
-@Preview(name = "Collapsed source groups", group = "Research", widthDp = 1280, heightDp = 850)
+@Preview(name = "Question sources", group = "Research", widthDp = 1280, heightDp = 850)
 @Composable
-internal fun ResearchSourcesCollapsedPreview() = ResearchWorkspacePreview(sourceGroupsExpanded = false)
+internal fun ResearchSourcesCollapsedPreview() = ResearchWorkspacePreview(initialSourceScope = ResearchResourceScope.QUESTION)
 
 @Preview(name = "Working", group = "Research", widthDp = 1280, heightDp = 850)
 @Composable

@@ -81,7 +81,7 @@ class CodingComposerRenderTest {
                 fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
                 fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                 render()
-                nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Показать параметры и ресурсы") }
+                nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Показать параметры") }
                     .config[SemanticsActions.OnClick].action!!.invoke()
                 render()
                 val setting = nodes().single { it.config.getOrNull(SemanticsProperties.Role) == Role.Checkbox }

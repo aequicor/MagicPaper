@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.domain.ResearchResourceScope
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
@@ -29,9 +30,10 @@ class ResearchWorkspaceRenderTest {
         val saving = androidx.compose.runtime.mutableStateOf(false)
         val removed = mutableListOf<Pair<String, io.aequicor.magicpaper.domain.ResearchResourceScope>>()
         var selections = 0
+        val tab = androidx.compose.runtime.mutableStateOf(ResearchResourceScope.SHARED)
         val scene = onUi { ImageComposeScene(1280, 850) {
             io.aequicor.magicpaper.designsystem.PaperTheme {
-                ResearchWorkspaceContent(state.value, saving = saving.value,
+                ResearchWorkspaceContent(state.value, saving = saving.value, sourceScope = tab.value, onSourceScopeChange = { tab.value = it },
                     onRemoveResource = { id, target -> removed += id to target },
                     onResourceEnabled = { _, _ -> selections++ }) {}
             }
@@ -50,6 +52,10 @@ class ResearchWorkspaceRenderTest {
             settle()
             onUi {
                 click(scene.action(sharedLabel))
+                tab.value = ResearchResourceScope.QUESTION
+            }
+            settle()
+            onUi {
                 click(scene.action(questionLabel))
                 assertEquals(listOf("architecture" to io.aequicor.magicpaper.domain.ResearchResourceScope.SHARED,
                     "compose" to io.aequicor.magicpaper.domain.ResearchResourceScope.QUESTION), removed)
@@ -57,6 +63,7 @@ class ResearchWorkspaceRenderTest {
                 assertFalse(scene.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
                     .contains("Убрать источник: План обучения.pdf") })
                 saving.value = true
+                tab.value = ResearchResourceScope.SHARED
             }
             settle()
             onUi {
@@ -184,35 +191,35 @@ class ResearchWorkspaceRenderTest {
         }
     }
 
-    @Test fun groupSelectionIsIndependentOfDisclosureAndTheOtherGroup() {
+    @Test fun scopeSelectionAndFilteringKeepTheOtherScopeUnchanged() {
         val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview() } }
         var frame = 0L
-        fun render() { repeat(8) { onUi { scene.render(++frame * 32_000_000L).close() } } }
+        fun render() = repeat(8) { onUi { scene.render(++frame * 32_000_000L).close() } }
         fun click(label: String) { onUi { scene.action(label).config[SemanticsActions.OnClick].action!!.invoke() }; render() }
         fun checked(label: String) = scene.action(label).config[SemanticsProperties.ToggleableState]
         try {
             render()
             onUi { assertEquals(androidx.compose.ui.state.ToggleableState.Indeterminate, checked("Выбрать все: Общие для чата")) }
             click("Выбрать все: Общие для чата")
-            onUi {
-                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: Guide to app architecture"))
-                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Снять выбор со всех: Только этот вопрос"))
-            }
-            click("Свернуть: Общие для чата")
-            click("Снять выбор со всех: Общие для чата")
-            onUi {
-                assertEquals(androidx.compose.ui.state.ToggleableState.Off, checked("Выбрать все: Общие для чата"))
-                assertTrue(scene.action("Развернуть: Общие для чата").boundsInRoot.height > 0)
-                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: Jetpack Compose"))
-            }
+            click("Для вопроса")
+            onUi { assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: Jetpack Compose")) }
             click("Снять выбор со всех: Только этот вопрос")
-            click("Выбрать все: Общие для чата")
-            click("Развернуть: Общие для чата")
+            click("Для чата")
+            onUi { assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: План обучения.pdf")) }
+            click("Поиск по источникам")
+            onUi { scene.nodes().last { it.config.contains(SemanticsActions.SetText) }
+                .config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("План")) }
+            render()
             onUi {
-                assertEquals(androidx.compose.ui.state.ToggleableState.On, checked("Использовать источник: План обучения.pdf"))
-                assertEquals(androidx.compose.ui.state.ToggleableState.Off, checked("Использовать источник: Jetpack Compose"))
+                assertFalse(scene.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().contains("Использовать источник: Guide to app architecture") })
+                assertTrue(scene.text("Выбрано 2 из 2").boundsInRoot.width > 0)
             }
-            scene.capture("source-group-selection", ++frame * 32_000_000L)
+            click("Снять выбор со всех: Общие для чата")
+            click("Скрыть поиск по источникам")
+            onUi { assertEquals(androidx.compose.ui.state.ToggleableState.Off, checked("Использовать источник: Guide to app architecture")) }
+            click("Для вопроса")
+            onUi { assertEquals(androidx.compose.ui.state.ToggleableState.Off, checked("Использовать источник: Jetpack Compose")) }
+            scene.capture("source-tab-selection", ++frame * 32_000_000L)
         } finally { onUi { scene.close() } }
     }
 
@@ -295,39 +302,27 @@ class ResearchWorkspaceRenderTest {
         } finally { onUi { scene.close() } }
     }
 
-    @Test fun sourceGroupsCollapseIndependentlyAndKeepFileActionsAvailable() {
-        val picks = mutableListOf<io.aequicor.magicpaper.domain.ResearchResourceScope>()
+    @Test fun sourceTabsRetainScopeOnReopeningAndAddFilesToTheActiveScope() {
+        val picks = mutableListOf<ResearchResourceScope>()
         val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview(onPickFiles = { picks += it }) } }
         var frame = 0L
-        fun render() { repeat(12) { onUi { scene.render(++frame * 32_000_000L).close() }; Thread.sleep(5) } }
-        fun source(label: String) = scene.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription)
-            .orEmpty().contains("Использовать источник: $label") }
-        fun click(label: String) = onUi { scene.action(label).config[SemanticsActions.OnClick].action!!.invoke() }
+        fun render() = repeat(8) { onUi { scene.render(++frame * 32_000_000L).close() } }
+        fun click(label: String) { onUi { scene.action(label).config[SemanticsActions.OnClick].action!!.invoke() }; render() }
         try {
             render()
-            click("Свернуть: Общие для чата"); render()
-            onUi { assertFalse(source("План обучения.pdf")); assertTrue(source("Jetpack Compose")) }
-            click("Добавить файлы: Общие для чата"); render()
+            click("Добавить источник: Общие для чата")
+            click("Добавить файлы: Общие для чата")
+            click("Для вопроса")
+            click("Добавить источник: Только этот вопрос")
+            click("Добавить файлы: Только этот вопрос")
+            assertEquals(ResearchResourceScope.entries.toList(), picks)
+            click("Скрыть источники")
+            click("Развернуть источники")
             onUi {
-                assertFalse(source("План обучения.pdf"), "Adding a file must not toggle the collapsed group")
-                assertEquals(listOf(io.aequicor.magicpaper.domain.ResearchResourceScope.SHARED), picks)
+                assertTrue(scene.action("Для вопроса").config[SemanticsProperties.Selected])
+                assertTrue(scene.action("Использовать источник: Jetpack Compose").boundsInRoot.height > 0)
             }
-            click("Свернуть: Только этот вопрос"); render()
-            onUi { assertFalse(source("Jetpack Compose")) }
-            scene.capture("collapsed-source-groups", ++frame * 32_000_000L)
-            click("Скрыть источники"); render()
-            click("Развернуть источники"); render()
-            onUi { assertFalse(source("План обучения.pdf")); assertFalse(source("Jetpack Compose")) }
-            click("Развернуть: Общие для чата"); render()
-            onUi { assertTrue(source("План обучения.pdf")); assertFalse(source("Jetpack Compose")) }
-            click("Развернуть: Только этот вопрос"); render()
-            onUi {
-                assertTrue(source("Jetpack Compose"))
-                val check = scene.nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription)
-                    .orEmpty().contains("Использовать источник: Guide to app architecture") }
-                assertEquals(androidx.compose.ui.state.ToggleableState.Off, check.config[SemanticsProperties.ToggleableState],
-                    "Collapsing must preserve source selection")
-            }
+            scene.capture("question-source-tab", ++frame * 32_000_000L)
         } finally { onUi { scene.close() } }
     }
 
@@ -431,7 +426,7 @@ class ResearchWorkspaceRenderTest {
                     if (case.width >= 1000) {
                         assertTrue(scene.text("Вопросы").boundsInRoot.left >= 0)
                         assertTrue(scene.text("Источники").boundsInRoot.right <= case.width)
-                        assertTrue(scene.text("Общие для чата").boundsInRoot.width > 0)
+                        assertTrue(scene.text("Для чата").boundsInRoot.width > 0)
                         if (case.name == "unreadable-source") {
                             val problem = scene.text("CAPTCHA")
                             assertTrue(problem.boundsInRoot.right <= case.width)
@@ -501,11 +496,15 @@ class ResearchWorkspaceRenderTest {
                 scene.action("Развернуть источники").config[SemanticsActions.OnClick].action!!.invoke()
             }
             render()
-            onUi {
-                scene.action("Добавить файлы: Общие для чата").config[SemanticsActions.OnClick].action!!.invoke()
-                scene.action("Добавить файлы: Только этот вопрос").config[SemanticsActions.OnClick].action!!.invoke()
-                assertEquals(io.aequicor.magicpaper.domain.ResearchResourceScope.entries.toList(), filePicks)
+            for (scope in ResearchResourceScope.entries) {
+                onUi { scene.action(if (scope == ResearchResourceScope.SHARED) "Для чата" else "Для вопроса").config[SemanticsActions.OnClick].action!!.invoke() }
+                render()
+                onUi { scene.action("Добавить источник: ${scope.label}").config[SemanticsActions.OnClick].action!!.invoke() }
+                render()
+                onUi { scene.action("Добавить файлы: ${scope.label}").config[SemanticsActions.OnClick].action!!.invoke() }
+                render()
             }
+            assertEquals(ResearchResourceScope.entries.toList(), filePicks)
         } finally { onUi { scene.close() } }
     }
 
@@ -545,7 +544,9 @@ class ResearchWorkspaceRenderTest {
                 scene.action("Развернуть источники").config[SemanticsActions.OnClick].action!!.invoke()
             }
             render()
-            onUi { scene.action("Найти ещё").config[SemanticsActions.OnClick].action!!.invoke() }
+            onUi { scene.action("Добавить источник: Общие для чата").config[SemanticsActions.OnClick].action!!.invoke() }
+            render()
+            onUi { scene.action("Добавить ссылку или найти").config[SemanticsActions.OnClick].action!!.invoke() }
             render()
             onUi {
                 scene.nodes().last { it.config.contains(SemanticsActions.SetText) }

@@ -2093,8 +2093,8 @@
       "PaperPromptField",
       "PaperWorkspaceComposer",
       "PaperMenuToggleInfo",
-      "PaperComposerOptionsToggle",
-      "PaperComposerOptionsPanel"
+      "PaperComposerOptionsPanel",
+      "PaperComposerActions"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3293,14 +3293,16 @@
     "kind": "surface"
   },
   {
-    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspace.kt",
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchSourcesPane.kt",
     "symbol": "ColumnScope.ResearchSourcesPane",
-    "annotationLine": 182,
+    "annotationLine": 15,
     "targets": [
       "PaperResearchSourceRow",
+      "PaperResearchSourceTabs",
+      "PaperResearchSourceSelection",
+      "PaperResearchSourcesEmpty",
       "PaperButton",
       "PaperMenuHost",
-      "PaperResearchSourceGroupHeader",
       "PaperLazyColumn"
     ],
     "stage": "6",
@@ -3351,8 +3353,8 @@
       "PaperComposerExpandButton",
       "PaperIconButton",
       "PaperButton",
-      "PaperComposerOptionsToggle",
-      "PaperComposerOptionsPanel"
+      "PaperComposerOptionsPanel",
+      "PaperComposerActions"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3443,6 +3445,72 @@
       "PaperSessionRow",
       "PaperStickyTree",
       "PaperTheme"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchSourcesPane.kt",
+    "symbol": "AddMenu",
+    "annotationLine": 1,
+    "targets": [
+      "PaperMenuHost"
+    ],
+    "stage": "6",
+    "kind": "local-surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchComposer.kt",
+    "symbol": "accessoryActions",
+    "annotationLine": 1,
+    "targets": [
+      "PaperComposerActions"
+    ],
+    "stage": "6",
+    "kind": "local-surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+    "symbol": "accessoryActions",
+    "annotationLine": 1,
+    "targets": [
+      "PaperComposerActions"
+    ],
+    "stage": "6",
+    "kind": "local-surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchSourcesPanePreviews.kt",
+    "symbol": "ResearchSourcesPanePreview",
+    "annotationLine": 1,
+    "targets": [
+      "PaperTheme",
+      "PaperResearchPane",
+      "PaperResearchSourceTabs"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchSourcesPanePreviews.kt",
+    "symbol": "ResearchQuestionSourcesEmptyPreview",
+    "annotationLine": 1,
+    "targets": [
+      "PaperTheme",
+      "PaperResearchPane",
+      "PaperResearchSourceTabs"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchSourcesPanePreviews.kt",
+    "symbol": "ResearchSourcesSavingPreview",
+    "annotationLine": 1,
+    "targets": [
+      "PaperTheme",
+      "PaperResearchPane",
+      "PaperResearchSourceTabs"
     ],
     "stage": "6",
     "kind": "surface"

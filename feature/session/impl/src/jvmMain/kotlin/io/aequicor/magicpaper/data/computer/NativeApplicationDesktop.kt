@@ -65,7 +65,10 @@ internal class NativeApplicationDesktop(
                 child.outputStream.flush()
                 val out = java.io.ByteArrayOutputStream()
                 val input = child.inputStream.buffered()
-                while (out.size() <= 8 * 1024 * 1024) {
+                // Native desktop PNGs can exceed the ordinary UIA/AX reply budget (bounded at 16 MP).
+                val limit = if (args.optionalString("action") == "desktop_capture" && args.optionalString("resolution") == "native")
+                    96 * 1024 * 1024 else 8 * 1024 * 1024
+                while (out.size() <= limit) {
                     val byte = input.read()
                     check(byte >= 0) { "Application adapter terminated" }
                     if (byte == 10) return@submit out.toString(Charsets.UTF_8)
@@ -113,5 +116,6 @@ internal class ApplicationAdapterException(code: String, cause: Throwable? = nul
     "stale" -> "Окно или элемент изменились. Вызовите windows и inspect заново."
     "unsupported" -> "Программа не поддерживает это фоновое действие. Выберите доступный элемент; управление общей мышью не используется."
     "capture" -> "Не удалось получить снимок выбранного окна. Проверьте, что оно не свёрнуто и разрешена запись экрана, затем повторите screenshot."
+    "capture_too_large" -> "Слишком большой снимок. Запросите screenshot с region для нужной области."
     else -> "Адаптер приложения недоступен или не ответил. Действие могло выполниться: отправьте новый запрос и проверьте окно, не повторяя ввод автоматически."
 }, cause)

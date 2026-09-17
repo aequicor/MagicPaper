@@ -59,9 +59,30 @@ class DesktopCaptureMacIntegrationTest {
                         val y = ((coordinate("y") + coordinate("height") / 2 - display.y).toDouble() * image.height / display.height).toInt()
                         val color = Color(image.getRGB(x, y))
                         assertTrue(color.blue > 180 && color.red < 80, "Expected the blue external fixture beneath the excluded magenta app window; got $color")
+                        val density = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.defaultTransform
+                        val detail = native.request(request("desktop_capture") {
+                            put("x", display.x); put("y", display.y); put("width", display.width); put("height", display.height)
+                            put("resolution", "native")
+                            put("region_x", centerX - display.x - 20); put("region_y", centerY - display.y - 15)
+                            put("region_width", 40); put("region_height", 30)
+                        }) {}
+                        val cropped = ImageIO.read(Base64.getDecoder().decode(detail.requiredString("png")).inputStream())
+                        try {
+                            assertEquals((40 * density.scaleX).toInt(), cropped.width, "Region must retain native display density")
+                            assertEquals((30 * density.scaleY).toInt(), cropped.height)
+                            val pixel = Color(cropped.getRGB(cropped.width / 2, cropped.height / 2))
+                            assertTrue(pixel.blue > 180 && pixel.red < 80, "Native region must reveal the same underlying fixture")
+                        } finally { cropped.flush() }
+                        val nativeFull = native.request(request("desktop_capture") {
+                            put("x", display.x); put("y", display.y); put("width", display.width); put("height", display.height)
+                            put("resolution", "native")
+                        }) {}
+                        assertEquals((display.width * density.scaleX).toInt(), nativeFull["width"]!!.jsonPrimitive.int)
+                        assertEquals((display.height * density.scaleY).toInt(), nativeFull["height"]!!.jsonPrimitive.int)
                         Files.createDirectories(Path.of("build/reports/computer-use"))
                         Files.writeString(Path.of("build/reports/computer-use/native-capture.txt"),
-                            "PASS: ScreenCaptureKit display capture excludes parent JVM windows; underlying blue fixture visible. Image ${image.width}x${image.height}. Desktop image not retained.\n")
+                            "PASS: ScreenCaptureKit excludes parent JVM windows in overview and native region; underlying blue fixture visible. " +
+                                "Overview ${image.width}x${image.height}; native full ${nativeFull["width"]}x${nativeFull["height"]}; region ${detail["width"]}x${detail["height"]}. Desktop images not retained.\n")
                         image.flush()
                     } finally { SwingUtilities.invokeAndWait { own?.dispose() } }
                 }
