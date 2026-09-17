@@ -33,7 +33,8 @@ class ResearchSiteIcons(private val client: HttpClient) {
                 withTimeoutOrNull(3_000) { fetch(url) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                AppLog.error("research.icons", "load.failed", fields = mapOf("causeType" to failure::class.simpleName.orEmpty()))
+                AppLog.error("research.icons", "load.failed", fields = mapOf("failure" to failure::class.simpleName.orEmpty(),
+                    "recovery" to "default_icon"))
                 null
             }
             if (bitmap == null) AppLog.debug("research.icons", "fallback", fields = mapOf("reason" to "icon_unavailable"))

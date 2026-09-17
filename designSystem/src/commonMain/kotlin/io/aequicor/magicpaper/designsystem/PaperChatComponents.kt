@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DropdownMenu
@@ -31,6 +32,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -83,7 +85,15 @@ public fun PaperMarkdown(text: String, modifier: Modifier = Modifier, compact: B
         components = markdownComponents(
             checkbox = { MarkdownCheckBox(it.content, it.node, it.typography.text) },
             table = { PaperMarkdownTable(it) },
+            codeFence = { PaperMarkdownCodeElement(it) },
+            codeBlock = { PaperMarkdownCodeElement(it) },
         ),
+        success = { state, components, contentModifier ->
+            val root = remember(state.node, state.content) { paperCodeTitles(state.node, state.content) }
+            Column(contentModifier) {
+                root.children.forEach { com.mikepenz.markdown.compose.MarkdownElement(it, components, state.content) }
+            }
+        },
         typography = markdownTypography(
             h1 = paperTextStyle(if (compact) body else PaperTextRole.TITLE),
             h2 = paperTextStyle(if (compact) body else PaperTextRole.TITLE),
@@ -168,18 +178,29 @@ public fun PaperTab(label: String, selected: Boolean, onClick: () -> Unit, modif
 
 @Composable
 public fun PaperMenuHost(expanded: Boolean, onDismissRequest: () -> Unit, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val windowHeight = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height
+    // Keep the bounded inner viewport within either side of the native popup anchor.
+    val menuHeight = with(density) { (windowHeight.toDp() / 2 - 64.dp).coerceAtLeast(64.dp) }
     DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest,
         modifier = modifier.onPreviewKeyEvent { event ->
             if (event.key == Key.Escape) {
                 if (event.type == KeyEventType.KeyDown) onDismissRequest()
                 true
             } else false
-        }, content = content)
+        }) {
+        // Popups own their hover surface even when their opener belongs to a composite row.
+        androidx.compose.runtime.CompositionLocalProvider(LocalPaperChildHoverFeedback provides true) {
+            PaperScrollColumn(Modifier.heightIn(max = menuHeight), content = content)
+        }
+    }
 }
 
 @Composable
-public fun PaperMenuAction(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, destructive: Boolean = false) {
-    PaperRichMenuAction(text = { PaperText(label, role = PaperTextRole.BODY, color = if (destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) }, onClick = onClick, enabled = enabled, modifier = modifier)
+public fun PaperMenuAction(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, destructive: Boolean = false,
+    leadingIcon: (@Composable () -> Unit)? = null) {
+    PaperRichMenuAction(text = { PaperText(label, role = PaperTextRole.BODY, color = if (destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) },
+        onClick = onClick, enabled = enabled, modifier = modifier, leadingIcon = leadingIcon)
 }
 
 /** Slot-based menu item for feature menus with icons and multi-line labels. */

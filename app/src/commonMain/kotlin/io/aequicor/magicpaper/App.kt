@@ -8,8 +8,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import io.aequicor.magicpaper.di.*
@@ -27,7 +25,7 @@ import kotlinx.coroutines.delay
 
 /** Host-created runtime and root survive recomposition; this layer only renders Paper. */
 @Composable
-fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
+fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>, compact: Boolean = false) {
     val readiness by runtime.ready.collectAsState()
     PaperTheme {
         CompositionLocalProvider(
@@ -37,7 +35,7 @@ fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
         ) {
             PaperSurface(Modifier.fillMaxSize(), kind = PaperSurfaceKind.CANVAS) {
                 when (val status = readiness) {
-                    RuntimeState.Ready -> AppShell(runtime, root)
+                    RuntimeState.Ready -> AppShell(runtime, root, compact)
                     is RuntimeState.Failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { PaperText(status.message) }
                     RuntimeState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { PaperText("Загрузка…") }
                     RuntimeState.Closed -> Unit
@@ -48,7 +46,7 @@ fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
 }
 
 @Composable
-private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) {
+private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>, compact: Boolean) {
     val settings = runtime.koin.get<SettingsService>()
     val config by settings.state.collectAsState()
     val navigation by root.navigationState.collectAsState()
@@ -66,6 +64,7 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
     // per-visit registry so selecting another session cannot reset it.
     var primarySidebarVisible by rememberSaveable { mutableStateOf(true) }
     var chatSidebarVisible by rememberSaveable { mutableStateOf(true) }
+    var compactSidebarVisible by remember(compact) { mutableStateOf(false) }
     var primarySidebarWidth by rememberSaveable { mutableStateOf(272f) }
     var chatSidebarWidth by rememberSaveable { mutableStateOf(272f) }
     // Selection replaces the visit composition. The global lists belong to the
@@ -78,9 +77,11 @@ private fun AppShell(runtime: MagicPaperRuntime, root: RootComponent<AppChild>) 
         PaperBackground(config.settings.paperAnimationEnabled, Modifier.matchParentSize())
         key(visit.id) { presentation.Content {
             AppShellContent(runtime, root, sidebarRecencyTracker,
-                primarySidebarVisible, chatSidebarVisible, primarySidebarWidth, chatSidebarWidth,
+                if (compact) compactSidebarVisible else primarySidebarVisible,
+                if (compact) compactSidebarVisible else chatSidebarVisible, primarySidebarWidth, chatSidebarWidth,
                 primarySidebarListState, chatSidebarListState,
-                { primarySidebarVisible = it }, { chatSidebarVisible = it },
+                { if (compact) compactSidebarVisible = it else primarySidebarVisible = it },
+                { if (compact) compactSidebarVisible = it else chatSidebarVisible = it },
                 { primarySidebarWidth = it }, { chatSidebarWidth = it })
         } }
     }
@@ -160,7 +161,7 @@ private fun AppShellContent(
                     usage = usage,
                     selectedId = if (isChat) chats.current?.id else selectedId,
                     isCoding = isCoding,
-                    workspaceTitle = if (isChat) chats.notebook?.title ?: chats.current?.title else null,
+                    sidebarVisible = sidebarVisible,
                     onToggleSidebar = {
                         if (isChat) onChatSidebarVisibleChange(!chatSidebarVisible)
                         else onPrimarySidebarVisibleChange(!primarySidebarVisible)
@@ -215,49 +216,22 @@ private fun TopBar(
     usage: UsageLedger,
     selectedId: String?,
     isCoding: Boolean,
-    workspaceTitle: String?,
+    sidebarVisible: Boolean,
     onToggleSidebar: () -> Unit,
 ) {
+    // Keep both the controls and their subscriptions out of the fullscreen composition.
+    if ((LocalWindowToolbarHeight.current ?: 56.dp) <= 0.dp) return
     val navigation by root.navigationState.collectAsState()
-    val modal by root.dialogSlot.subscribeAsState()
     val chrome = LocalWindowChrome.current
-    val toolbarHeight = LocalWindowToolbarHeight.current ?: 56.dp
-    val layoutDirection = LocalLayoutDirection.current
-    val nativeInsets = LocalWindowTitleBarInsets.current
-    WindowTitleBarArea(Modifier.fillMaxWidth().height(toolbarHeight)) {
-        Row(Modifier.statusBarsPadding().fillMaxSize().padding(
-            start = nativeInsets.calculateLeftPadding(layoutDirection).coerceAtLeast(8.dp),
-            end = nativeInsets.calculateRightPadding(layoutDirection).coerceAtLeast(8.dp)), verticalAlignment = Alignment.CenterVertically) {
-            PaperIconButton("Показать или скрыть боковую панель", onToggleSidebar) { PaperText("☰", role = PaperTextRole.CHROME) }
-            PaperIconButton("Назад", root::back, enabled = navigation.canGoBack || modal.child != null) { PaperText("‹", role = PaperTextRole.CHROME) }
-            PaperIconButton("Вперёд", root::forward, enabled = navigation.canGoForward) { PaperText("›", role = PaperTextRole.CHROME) }
-            WindowDragArea(Modifier.weight(1f).height(toolbarHeight)) {
-                Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PaperBrandMark(Modifier.size(22.dp))
-                    Spacer(Modifier.width(8.dp))
-                    PaperText("MagicPaper", role = PaperTextRole.CHROME, maxLines = 1)
-                    Spacer(Modifier.width(14.dp))
-                    PaperVerticalDivider(Modifier.height(22.dp))
-                    Spacer(Modifier.width(14.dp))
-                    PaperText(workspaceTitle ?: when (navigation.route) {
-                        is AppRoute.Chat -> "Новый чат"
-                        is AppRoute.Projects -> "Проекты и код"
-                        is AppRoute.Settings -> "Настройки и разделы"
-                        is AppRoute.Docs -> "Справочник"
-                        is AppRoute.Plugins -> "Плагины и панели"
-                    }, Modifier.weight(1f), role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            val usageState by usage.state.collectAsState()
-            val usageFailure by usage.failure.collectAsState()
-            UsageMenu(usageState, selectedId?.let { if (isCoding) "coding:$it" else "chat:$it" }, usageFailure)
-            PaperIconButton("Настройки", {
-                if (navigation.route is AppRoute.Settings && navigation.canGoBack) root.back()
-                else root.navigate(AppRoute.Settings())
-            }, selected = navigation.route is AppRoute.Settings) { PaperText("⚙", role = PaperTextRole.CHROME) }
-            if (chrome != null) WindowButtons(chrome)
-        }
+    PaperAppTitleBar(sidebarVisible, onToggleSidebar) {
+        val usageState by usage.state.collectAsState()
+        val usageFailure by usage.failure.collectAsState()
+        UsageMenu(usageState, selectedId?.let { if (isCoding) "coding:$it" else "chat:$it" }, usageFailure)
+        PaperIconButton("Настройки", {
+            if (navigation.route is AppRoute.Settings && navigation.canGoBack) root.back()
+            else root.navigate(AppRoute.Settings())
+        }, selected = navigation.route is AppRoute.Settings) { PaperText("⚙", role = PaperTextRole.CHROME) }
+        if (chrome != null) WindowButtons(chrome)
     }
 }
 

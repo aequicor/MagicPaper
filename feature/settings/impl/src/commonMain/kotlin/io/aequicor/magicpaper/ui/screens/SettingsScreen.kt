@@ -17,10 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
@@ -59,11 +56,10 @@ fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
     val draftSession = vm.drafts.settings(settings)
     var draft by draftSession.field({ it.settings ?: settings }, { value, settings -> value.copy(settings = settings) })
     var agentLimits by draftSession.field({ it.agentLimits }, { value, limits -> value.copy(agentLimits = limits) })
-    Column(
+    PaperScrollColumn(
         modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
     ) {
         PaperText("Настройки", style = paperTextStyle(PaperTextRole.TITLE))
         DraftSaveError(draftSession)
@@ -226,12 +222,11 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
         }
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-    Column(
+    PaperScrollColumn(
         modifier = Modifier
             .widthIn(max = 720.dp)
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .fillMaxWidth(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
     ) {
         PaperText(if (profile.configured) "Настройки подключения" else "Подключить модели", style = paperTextStyle(PaperTextRole.TITLE))
         PaperText(
@@ -292,7 +287,7 @@ fun ProfileEditor(vm: DefaultSettingsComponent, profile: LlmProfile, state: Sett
                 singleLine = true, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
             val filtered = draft.modelCatalog.filter { it.id.contains(modelQuery, true) || it.name.contains(modelQuery, true) }
             if (filtered.isEmpty()) PaperText("Модели не найдены", style = paperTextStyle(PaperTextRole.BODY))
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+            PaperLazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
                 items(filtered, key = { it.id }) { model ->
                     val checked = model.id in draft.favoriteModels
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).paperToggleable(value = checked, role = Role.Checkbox,

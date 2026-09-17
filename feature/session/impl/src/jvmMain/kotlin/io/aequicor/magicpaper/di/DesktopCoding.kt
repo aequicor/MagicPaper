@@ -13,7 +13,8 @@ fun createDesktopCodingRuntime(
     recordSkillRun: suspend (CodingSkillRunRecord) -> Unit,
     runObserver: CodingRunObserver,
 ): DesktopCodingRuntime = DesktopCodingRuntime(
-    PiCodingRuntime(computerUse = computer, subscriptionToken = subscription::subscriptionAccessToken),
+    PiCodingRuntime(computerUse = computer, subscriptionToken = subscription::subscriptionAccessToken,
+        browserAvailability = subscription.browserAvailability),
     subscription,
     skillSelection = skillSelection,
     recordSkillRun = recordSkillRun,

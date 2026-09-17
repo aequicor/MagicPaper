@@ -97,7 +97,7 @@ class PaperResearchTest {
                     val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                     val row = nodes.first { it.config.getOrNull(SemanticsProperties.ContentDescription)?.any { label -> label.startsWith("Вопрос 1:") } == true }
                     assertTrue(row.config[SemanticsProperties.Selected])
-                    assertTrue(row.boundsInRoot.height >= 44f)
+                    assertTrue(row.boundsInRoot.height >= 28f, "Compact desktop rows retain the minimum control hit area")
                     val title = nodes.first { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text.startsWith("Как организовать") } == true }
                     val layouts = mutableListOf<TextLayoutResult>()
                     title.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)

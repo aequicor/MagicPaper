@@ -86,6 +86,7 @@ class CodexAppServerOpenAiSubscription(
     private val sharedQuestionnaires: RuntimeQuestionnaires? = null,
     private val secretStore: io.aequicor.magicpaper.data.storage.SecretStore =
         io.aequicor.magicpaper.data.storage.CodexAuthSecretStore(authFile = appHome.resolve("auth.json").toFile()),
+    internal val browserAvailability: io.aequicor.magicpaper.data.browser.BrowserAvailability = io.aequicor.magicpaper.data.browser.BrowserAvailability(),
 ) : OpenAiSubscriptionService {
     private val authSecrets = io.aequicor.magicpaper.data.storage.CodexAuthSecretStore(secretStore, appHome.resolve("auth.json").toFile())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -158,7 +159,7 @@ class CodexAppServerOpenAiSubscription(
     @Volatile private var writer: BufferedWriter? = null
 
     internal fun newCodingClient() = CodexAppServerOpenAiSubscription(json, appHome, commandOverride, computerUse,
-        ownsComputerUse = false, sharedQuestionnaires = questionnaireRegistry, secretStore = secretStore)
+        ownsComputerUse = false, sharedQuestionnaires = questionnaireRegistry, secretStore = secretStore, browserAvailability = browserAvailability)
 
     private val tokenMutex = Mutex()
     /** Refresh ownership remains with app-server; pi receives only the current access token. */
@@ -378,14 +379,15 @@ class CodexAppServerOpenAiSubscription(
             val baseConfig = io.aequicor.magicpaper.data.computer.ComputerUseBridge.codexConfig(
                 if (restricted) JsonObject(providerConfig + CodexPlanningPermissions.threadConfig()) else JsonObject(permissions!!.threadConfig() + providerConfig), computerBridge)
             val agentTools = kotlinx.coroutines.currentCoroutineContext()[ToolSession]
-            agentBridge = agentTools?.let { AgentToolBridge(it) }
+            agentBridge = agentTools?.let { AgentToolBridge(it,
+                browser = io.aequicor.magicpaper.data.browser.BrowserToolSession(availability = browserAvailability)) }
             questionnaireBridge = if (planning || agentTools != null) null else QuestionnaireBridge(questionnaireRegistry, session)
             researchBridge = if (research) ResearchCheckBridge(session, project) else null
             val questionnaireConfig = questionnaireBridge?.codexConfig(baseConfig) ?: baseConfig
             val researchConfig = researchBridge?.codexConfig(questionnaireConfig) ?: questionnaireConfig
             val threadConfig = agentBridge?.codexConfig(researchConfig) ?: researchConfig
             val instructions = io.aequicor.magicpaper.data.coding.codingSystemPrompt(
-                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, session = session)
+                io.aequicor.magicpaper.domain.CodingEngine.CODEX, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, session = session, browserAvailable = browserAvailability.available)
             val resumed = session.piSessionId.takeIf { !planning && it.isNotBlank() }?.let { oldId ->
                 if ((research || computerUse != null) && oldId in codingThreads) {
                     request("thread/unsubscribe", buildJsonObject { put("threadId", oldId) })

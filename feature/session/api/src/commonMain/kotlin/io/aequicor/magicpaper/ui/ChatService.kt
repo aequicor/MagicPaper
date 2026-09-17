@@ -24,6 +24,9 @@ interface ChatService {
     /** Changes the whole selection in one saved edit, for this question only. */
     suspend fun setResourcesEnabled(questionId: String, resourceKeys: Set<String>, enabled: Boolean): Result<Unit>
     suspend fun shareResource(questionId: String, resourceId: String): Result<Unit>
+    fun openSourceBrowser(questionId: String, resourceKey: String)
+    fun readSourceBrowser()
+    fun dismissSourceBrowser()
     fun deleteSession(id: String)
     fun archiveSession(id: String)
     fun restoreSession(id: String)

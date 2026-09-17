@@ -3,8 +3,6 @@ package io.aequicor.magicpaper.plugins.builtin
 import io.aequicor.magicpaper.designsystem.*
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -165,7 +163,7 @@ class LocalSkillsPlugin(private val root: Path, draftRepository: DraftRepository
             }
         }
         LaunchedEffect(Unit) { action { "Хранилище открыто. Импортированные версии остаются в карантине до проверки." } }
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PaperScrollColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PaperText(title, style = LocalPaperTypography.current.headline)
             PaperText("Активные версии подбираются по задаче в чате. Только текстовый API-профиль, до 6 сообщений и 24 000 символов, без вложений. Скрипты и доступ к файлам/сети отключены: изоляция и ограничения ресурсов не подтверждены. В coding пакеты не передаются.")
             PaperText("Пакеты хранятся на этом устройстве. Импорт не запускает скрипты; активация требует отдельной проверки и подтверждения.")
@@ -174,7 +172,7 @@ class LocalSkillsPlugin(private val root: Path, draftRepository: DraftRepository
             for ((state, retry) in listOf(libraryState to { libraryOwner.draft.retry() }, importState to { importOwner.draft.retry() }, textState to { textOwner.draft.retry() }, backupState to { backupOwner.draft.retry() }, activationState to { activationOwner.draft.retry() }, reviewState to { reviewOwner.draft.retry() })) {
                 if (state.error != null) { PaperText("Черновик не сохранён.", color = LocalPaperColors.current.error); PaperAction(onClick = retry) { PaperText("Повторить сохранение") } }
             }
-            if (!listOf(libraryState, importState, textState, backupState, activationState, reviewState).all { it.loaded }) { PaperProgress(Modifier.fillMaxWidth()); return@Column }
+            if (!listOf(libraryState, importState, textState, backupState, activationState, reviewState).all { it.loaded }) { PaperProgress(Modifier.fillMaxWidth()); return@PaperScrollColumn }
             if (busy) PaperProgress(Modifier.fillMaxWidth())
             PaperInput(query, { query = it }, label = { PaperText("Поиск по имени, источнику, лицензии и версии") }, modifier = Modifier.fillMaxWidth())
             entries.filter { entry ->

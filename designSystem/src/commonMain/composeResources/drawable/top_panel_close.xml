@@ -1,0 +1,9 @@
+<!-- Paper outline adaptation of Google Material Symbols top_panel_close (Apache-2.0).
+     16 dp / 1.2 dp, matching toolbar icons. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp" android:height="16dp"
+    android:viewportWidth="16" android:viewportHeight="16">
+    <path android:fillColor="#00000000" android:strokeColor="#000000"
+        android:strokeWidth="1.2" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M2,2H14Q15,2 15,3V13Q15,14 14,14H2Q1,14 1,13V3Q1,2 2,2Z M1,5H15 M5.5,10.5L8,8L10.5,10.5" />
+</vector>

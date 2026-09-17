@@ -1,8 +1,8 @@
 package io.aequicor.magicpaper.ui.components
 
+import io.aequicor.magicpaper.designsystem.PaperScrollColumn
+
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -110,7 +110,7 @@ internal fun OrchestrationStatus(
             if (plan?.proposal != null) PlanningProposalCard(plan, questions.isNotEmpty()) { proposalId ->
                 openQuestionnaire(InteractionKind.CONFIRM_PLAN, plan.id)
             }
-            if (expanded) Column(Modifier.heightIn(max = 270.dp).verticalScroll(rememberScrollState()),
+            if (expanded) PaperScrollColumn(Modifier.heightIn(max = 270.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SessionActions(session.session, service, onOpenSession, allowArchive = false)
                 questions.forEach { q -> PaperText("Ожидается ответ: ${q.scopeLabel}", role = PaperTextRole.LABEL) }

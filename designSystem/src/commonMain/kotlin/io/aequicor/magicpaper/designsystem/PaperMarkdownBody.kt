@@ -2,18 +2,11 @@ package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -21,22 +14,15 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.MarkdownElement
-import com.mikepenz.markdown.compose.components.MarkdownComponentModel
-import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCode
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
 import com.mikepenz.markdown.compose.elements.MarkdownOrderedList
 import com.mikepenz.markdown.compose.elements.MarkdownBulletList
 import com.mikepenz.markdown.compose.elements.MarkdownBlockQuote
 import com.mikepenz.markdown.compose.elements.listDepth
-import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeBlock
-import com.mikepenz.markdown.compose.elements.MarkdownHighlightedCodeFence
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.elements.MarkdownCheckBox
 import com.mikepenz.markdown.m3.markdownTypography
 import org.intellij.markdown.ast.ASTNode
-import org.intellij.markdown.MarkdownTokenTypes
-import dev.snipme.highlights.Highlights
-import dev.snipme.highlights.model.SyntaxThemes
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdownFlow
 import com.mikepenz.markdown.model.markdownPadding
@@ -51,7 +37,9 @@ public class PaperMarkdownDocument internal constructor(internal val state: Stat
 }
 
 public suspend fun parsePaperMarkdown(source: String): PaperMarkdownDocument =
-    PaperMarkdownDocument(parseMarkdownFlow(source).filterIsInstance<State.Success>().first())
+    PaperMarkdownDocument(parseMarkdownFlow(source).filterIsInstance<State.Success>().first().let {
+        it.copy(node = paperCodeTitles(it.node, source))
+    })
 
 /** Bounded document slice with its original syntax and numbering preserved. */
 public interface PaperMarkdownSlice : ASTNode {
@@ -102,40 +90,8 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
                         Modifier.padding(end = 6.dp), style = model.typography.text)
                 })
             },
-            codeFence = {
-                // The renderer mutates this builder on Dispatchers.Default. Each block and
-                // source revision owns both the builder and the async result state, so old
-                // work cannot highlight another block or publish into a newer revision.
-                key(it.content, it.node) {
-                    val highlightsBuilder = remember {
-                        Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
-                    }
-                    if ((it.node as? PaperMarkdownSlice)?.code != null) MarkdownCodePart(it, highlightsBuilder)
-                    else MarkdownHighlightedCodeFence(
-                        content = it.content,
-                        node = it.node,
-                        style = it.typography.code,
-                        highlightsBuilder = highlightsBuilder,
-                        // Шапка блока: имя языка + кнопка «скопировать».
-                        showHeader = true,
-                    )
-                }
-            },
-            codeBlock = {
-                key(it.content, it.node) {
-                    val highlightsBuilder = remember {
-                        Highlights.Builder().theme(SyntaxThemes.default(darkMode = false))
-                    }
-                    if ((it.node as? PaperMarkdownSlice)?.code != null) MarkdownCodePart(it, highlightsBuilder)
-                    else MarkdownHighlightedCodeBlock(
-                        content = it.content,
-                        node = it.node,
-                        style = it.typography.code,
-                        highlightsBuilder = highlightsBuilder,
-                        showHeader = true,
-                    )
-                }
-            },
+            codeFence = { PaperMarkdownCodeElement(it) },
+            codeBlock = { PaperMarkdownCodeElement(it) },
         )
     }
     val body: @Composable () -> Unit = {
@@ -167,7 +123,7 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
             components = components,
             success = { state, markdownComponents, contentModifier ->
                 if (listState != null) {
-                    LazyColumn(state = listState, modifier = contentModifier) {
+                    PaperLazyColumn(state = listState, modifier = contentModifier) {
                         items(nodes.size, key = { it }, contentType = { nodes[it].type }) { index ->
                             MarkdownElement(nodes[index], markdownComponents, state.content)
                         }
@@ -179,24 +135,4 @@ public fun PaperMarkdownBody(document: PaperMarkdownDocument, nodes: List<ASTNod
         )
     }
     if (selectable) SelectionContainer { body() } else body()
-}
-
-@Composable
-@Suppress("DEPRECATION")
-private fun MarkdownCodePart(model: MarkdownComponentModel, highlightsBuilder: Highlights.Builder) {
-    val node = model.node as PaperMarkdownSlice
-    val range = node.code!!
-    val language = node.original.children.firstOrNull { it.type == MarkdownTokenTypes.FENCE_LANG }
-        ?.let { model.content.substring(it.startOffset, it.endOffset).take(80) }
-    val clipboard = LocalClipboardManager.current
-    Column {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            PaperText(language.orEmpty(), Modifier.weight(1f), style = LocalPaperTypography.current.label)
-            PaperAction(onClick = {
-                val lines = node.original.children.filter { it.type == MarkdownTokenTypes.CODE_FENCE_CONTENT || it.type == MarkdownTokenTypes.CODE_LINE }
-                clipboard.setText(AnnotatedString(if (lines.isEmpty()) "" else model.content.substring(lines.first().startOffset, lines.last().endOffset)))
-            }) { PaperText("Копировать код") }
-        }
-        MarkdownHighlightedCode(model.content.substring(range), language, model.typography.code, highlightsBuilder, showHeader = false)
-    }
 }

@@ -2,7 +2,7 @@ package io.aequicor.magicpaper.ui.components
 
 import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import io.aequicor.magicpaper.designsystem.PaperLazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -46,7 +46,7 @@ internal fun RequestPinsDialog(entries: List<RequestPinEntry>, selectedId: Strin
                 PaperDivider(Modifier.padding(vertical = 12.dp))
                 val listState = rememberLazyListState(
                     initialFirstVisibleItemIndex = (entries.indexOfFirst { it.pin.messageId == selectedId } - 1).coerceAtLeast(0))
-                LazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth(), state = listState,
+                PaperLazyColumn(Modifier.weight(1f, fill = false).fillMaxWidth(), state = listState,
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     itemsIndexed(entries, key = { _, entry -> entry.pin.messageId }) { index, entry ->
                         val current = entry.pin.messageId == selectedId

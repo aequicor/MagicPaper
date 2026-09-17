@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.PaperButton
+import io.aequicor.magicpaper.designsystem.PaperNoteAddIcon
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.domain.ChatSession
@@ -443,10 +444,11 @@ internal fun UnifiedSidebar(
         PaperDivider()
         Column(Modifier.padding(8.dp)) {
             PaperButton(
-                "✦ Новый чат",
+                "Новый чат",
                 vm::newSession,
                 Modifier.fillMaxWidth(),
                 kind = PaperButtonKind.QUIET,
+                leadingIcon = { PaperNoteAddIcon() },
             )
             Spacer(Modifier.height(2.dp))
             PaperButton(

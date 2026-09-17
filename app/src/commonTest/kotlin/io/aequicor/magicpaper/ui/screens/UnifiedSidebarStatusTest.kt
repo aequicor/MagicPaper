@@ -190,8 +190,13 @@ class UnifiedSidebarStatusTest {
         assertTrue(session("working", CodingSessionStatus.WORKING).isStickySession(null, true))
         assertTrue(session("waiting", CodingSessionStatus.WAITING).isStickySession(null, true))
         assertTrue(session("confirmation", CodingSessionStatus.CONFIRMATION).isStickySession(null, true))
-        assertTrue(session("unread", unread = true).isStickySession(null, true))
+        assertTrue(session("unread", CodingSessionStatus.UNREAD).isStickySession(null, true))
         assertTrue(!session("idle").isStickySession(null, true))
+        assertTrue(!session("idle", unread = true).isStickySession(null, true),
+            "The current ready status takes precedence over an old unread flag")
+        assertTrue(!session("selected").isStickySession("selected", false),
+            "Chat and coding selection identities must remain separate")
+        assertTrue(UnifiedSidebarItem("chat", "Chat", 1, false, unread = true).isStickySession(null, false))
     }
 
     @Test

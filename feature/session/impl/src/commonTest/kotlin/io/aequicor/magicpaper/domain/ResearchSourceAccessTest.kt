@@ -8,6 +8,24 @@ import kotlinx.serialization.json.Json
 import kotlin.test.*
 
 class ResearchSourceAccessTest {
+    @Test fun readerTimeoutOnlyExcludesItsPageWhileOtherSourcesComplete() = runTest {
+        val resources = listOf("slow", "ok", "blocked").map { ResearchResource(it, it, "https://example.org/$it") }
+        val access = ResearchSourceAccess { url ->
+            when {
+                url.endsWith("slow") -> withTimeout(10) { delay(100); "too late" }
+                url.endsWith("blocked") -> "Verify you are human"
+                else -> "Readable source evidence"
+            }
+        }
+        val result = access.check(resources)
+        assertEquals(listOf("ok"), result.readableSources().map { it.id })
+        assertContains(result.first().problem.orEmpty(), "время ожидания")
+        assertContains(result.last().problem.orEmpty(), "CAPTCHA")
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(1) { access.check(resources) }
+        }
+    }
+
     @Test fun readsAreBoundedAndFailuresAreRetriedOnNextRequest() = runTest {
         var active = 0
         var peak = 0

@@ -59,14 +59,40 @@ class DefaultChatService(
     private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
     val usage: UsageLedger? = null,
     private val sourceAccess: ResearchSourceAccess = ResearchSourceAccess(),
+    sourceBrowser: ResearchPageBrowser? = null,
 ) : ChatService {
-    private val _state = MutableStateFlow(ChatState())
+    private val _state = MutableStateFlow(ChatState(sourceBrowserSupported = sourceBrowser != null))
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
         AppLog.error("chat", "background.failed", error)
         _state.update { it.copy(notice = "Не удалось выполнить действие с чатом. Повторите попытку.") }
     })
     private val composerSessions = mutableMapOf<String, io.aequicor.magicpaper.data.storage.DraftSession<ComposerDraftData>>()
     private val deletedDraftSessionIds = mutableSetOf<String>()
+    private val browserSources = ResearchBrowserSources(Id::now)
+    private val browserRecovery = sourceBrowser?.let { browser -> ResearchBrowserRecovery(browser, scope,
+        onState = { value -> _state.update { it.copy(sourceBrowser = value) } },
+        onRead = { target, content ->
+            val question = _state.value.sessions.firstOrNull { it.id == target.questionId }
+            val notebook = _state.value.sessions.firstOrNull { it.id == target.notebookId }
+            val exists = question != null && notebook != null && question.researchChatId == notebook.id &&
+                (notebook.resources + question.questionResources).any { it.id == target.resource.id && it.key == target.resource.key }
+            if (exists) {
+                browserSources.put(target, content.text)
+                _state.update { state -> state.copy(sourceReadProblems = state.sourceReadProblems.mapValues { (id, problems) ->
+                    if (state.sessions.any { it.id == id && it.researchChatId == target.notebookId }) problems - target.resource.key else problems
+                }, notice = "Страница прочитана. Она будет использована в следующем ответе по выбранным источникам.") }
+            }
+            exists
+        }, onNotice = { notice -> _state.update { it.copy(notice = notice) } }) }
+
+    override fun openSourceBrowser(questionId: String, resourceKey: String) {
+        val question = _state.value.sessions.firstOrNull { it.id == questionId } ?: return
+        val notebook = _state.value.sessions.firstOrNull { it.id == question.researchChatId } ?: return
+        val resource = (notebook.resources + question.questionResources).firstOrNull { it.key == resourceKey && it.url.isNotBlank() } ?: return
+        browserRecovery?.open(ResearchBrowserTarget(notebook.id, questionId, resource))
+    }
+    override fun readSourceBrowser() { browserRecovery?.read() }
+    override fun dismissSourceBrowser() { browserRecovery?.dismiss() }
     fun composerDraft(sessionId: String?): io.aequicor.magicpaper.data.storage.DraftSession<ComposerDraftData> {
         val key = "chat:" + (sessionId ?: "new")
         return composerSessions.getOrPut(key) { composerDraftSession(draftRepository, draftBlobs, key, scope) }
@@ -668,6 +694,7 @@ class DefaultChatService(
         publishDraft()
         AppLog.info("chat", "send.started", operationFields)
         val job = scope.launch(workerDispatcher + io.aequicor.magicpaper.domain.UsageOwner(io.aequicor.magicpaper.domain.UsageScope.chat(session.id)), start = CoroutineStart.LAZY) {
+            var modelReplyFailed = false
             try {
                 creation?.await()
                 val accepted = updateChat(session.id) { latest -> latest.copy(
@@ -728,7 +755,7 @@ class DefaultChatService(
                             title = if (researchRequest.sourceTask) "Читаю указанные источники" else "Проверяю доступность источников"))
                         publishDraft()
                     }
-                    val sourceChecks = sourceAccess.check(candidates).associateBy { it.resource.key }.toMutableMap()
+                    val sourceChecks = sourceAccess.check(browserSources.apply(root.id, candidates)).associateBy { it.resource.key }.toMutableMap()
                     fun publishSourceProblems() {
                         val problems = sourceChecks.values.filter { it.problem != null }.associate { it.resource.key to it.problem!! }
                         _state.update { it.copy(sourceReadProblems = it.sourceReadProblems + (session.id to problems)) }
@@ -736,6 +763,8 @@ class DefaultChatService(
                     publishSourceProblems()
                     val availableResources = sourceChecks.values.toList().readableSources()
                     val unreadableCount = sourceChecks.values.count { it.problem != null }
+                    AppLog.info("chat", "research.sources.checked", operationFields + mapOf(
+                        "readableCount" to availableResources.size.toString(), "unavailableCount" to unreadableCount.toString()))
                     if (checksWebSources) {
                         recorder.apply(CodingEvent.ToolFinished("web.read", false, readId,
                             title = "Прочитано источников: ${availableResources.count { it.url.isNotBlank() }}" +
@@ -758,7 +787,12 @@ class DefaultChatService(
                         if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                             updateChat(session.id) { it.copy(nativeSessionId = event.sessionId) }
                         }
-                        recorder.apply(event)
+                        // A model failure is separate from an unavailable page. Preserve a
+                        // safe, specific cause in the activity instead of a raw provider body.
+                        recorder.apply(if (event is CodingEvent.Failed) {
+                            modelReplyFailed = true
+                            CodingEvent.Failed(RESEARCH_MODEL_FAILURE)
+                        } else event)
                         publishDraft(event !is CodingEvent.TextDelta && event !is CodingEvent.ThinkingDelta && event !is CodingEvent.ToolProgress)
                         if (event is CodingEvent.ToolStarted || event is CodingEvent.ToolFinished) {
                             updateChat(session.id) { it.copy(pendingActivity = previousActivity + recorder.draft(true).steps.researchActivity()) }
@@ -769,7 +803,7 @@ class DefaultChatService(
                         val unchecked = candidatesFound.mapNotNull { hit -> researchUrl(hit.url)?.let { url ->
                             ResearchResource(Id.new(), hit.title, url)
                         } }.filterNot { it.key in sourceChecks }
-                        sourceAccess.check(unchecked).forEach { sourceChecks[it.resource.key] = it }
+                        sourceAccess.check(browserSources.apply(root.id, unchecked)).forEach { sourceChecks[it.resource.key] = it }
                         if (unchecked.isNotEmpty()) publishSourceProblems()
                         val found = candidatesFound.filter { hit ->
                             val checked = researchUrl(hit.url)?.let { sourceChecks["url:$it"] }
@@ -783,7 +817,7 @@ class DefaultChatService(
                         if (event is CodingEvent.Finished) finished = true
                     }
                     val response = recorder.message(Id.new(), Id.now())
-                    check(finished && !response.failed) { "Движок не завершил ответ" }
+                    check(finished && !response.failed) { if (modelReplyFailed) "research_model_reply_failed" else "research_reply_incomplete" }
                     val unavailable = sourceChecks.values.filter { it.problem != null }
                     val citesUnavailable = researchReferences(response.text).any { hit ->
                         val checked = sourceChecks["url:${hit.url}"]
@@ -823,8 +857,11 @@ class DefaultChatService(
                 try { updateChat(session.id) { it.copy(pendingRun = it.pendingRun?.copy(intent = ExecutionIntent.STOP)) } }
                 catch (failure: CancellationException) { throw failure }
                 catch (failure: Exception) { AppLog.error("chat", "checkpoint.failed", failure, operationFields) }
-                recorder.apply(CodingEvent.Failed("Не удалось завершить исследование"))
-                AppLog.error("chat", "send.failed", e, operationFields); _state.update { it.copy(notice = "Не удалось завершить отправку. Проверьте подключение и повторите попытку.") } }
+                if (recorder.draft(false).failedMessage == null) recorder.apply(CodingEvent.Failed("Не удалось завершить исследование"))
+                AppLog.error("chat", "send.failed", e, operationFields + ("phase" to if (modelReplyFailed) "model" else "research"))
+                _state.update { it.copy(notice = if (modelReplyFailed)
+                    "$RESEARCH_MODEL_FAILURE. Проверьте подключение к модели и нажмите «Продолжить»."
+                    else "Не удалось завершить отправку. Проверьте подключение и повторите попытку.") } }
             finally {
                 try {
                     withContext(NonCancellable) {
@@ -925,6 +962,8 @@ class DefaultChatService(
 
     /** Drain this application's writers while retaining its reusable supervisor. */
     suspend fun prepareForReset() {
+        browserRecovery?.close()
+        browserSources.clear()
         queuedComputerRequests.value = emptyMap()
         deletingSessions.addAll(_state.value.sessions.map { it.id })
         val caller = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
@@ -935,7 +974,7 @@ class DefaultChatService(
         archiveObserver = null
         chatJobs.value = emptyMap()
         pendingCreations.clear()
-        _state.value = ChatState()
+        _state.value = ChatState(sourceBrowserSupported = browserRecovery != null)
         deletingSessions.clear()
     }
 
@@ -943,7 +982,7 @@ class DefaultChatService(
     suspend fun resetDrafts() { composerSessions.values.forEach { it.revoke() }; composerSessions.clear(); deletedDraftSessionIds.clear() }
 
     override suspend fun close() {
-        try { composerSessions.values.forEach { it.awaitSaved() } }
+        try { browserRecovery?.close(); browserSources.clear(); composerSessions.values.forEach { it.awaitSaved() } }
         finally {
             val jobs = scope.coroutineContext[Job]?.children?.toList().orEmpty()
             scope.cancel()

@@ -58,7 +58,7 @@ class DesktopComputerUseTest {
         assertFalse(screenshot.failed())
         val image = screenshot["content"]!!.jsonArray[1].jsonObject
         assertEquals("image", image["type"]!!.jsonPrimitive.content)
-        assertEquals("image/png", image["mimeType"]!!.jsonPrimitive.content)
+        assertEquals("image/jpeg", image["mimeType"]!!.jsonPrimitive.content)
         assertEquals(computer.state.value.preview!!.dataBase64, image["data"]!!.jsonPrimitive.content)
         for (action in listOf("click", "double_click", "move", "drag", "scroll", "type", "key")) {
             assertTrue(computer.execute("a", epoch, request(action) { put("screenshot_id", screenshot.screenshotId()) }).failed())

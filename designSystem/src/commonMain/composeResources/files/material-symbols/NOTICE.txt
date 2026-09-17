@@ -1,0 +1,14 @@
+Material Symbols Outlined by Google — Apache License 2.0 (see LICENSE.txt).
+
+dock_to_left, dock_to_right, note_add, delete, top_panel_open and top_panel_close: FILL 0, wght 400, GRAD 0, opsz 24.
+dock_to_left, dock_to_right and delete: original SVG paths converted to VectorDrawable XML without changing geometry.
+note_add, top_panel_open and top_panel_close: adapted by MagicPaper on 2026-09-17 to a 16 dp grid,
+1.2 dp rounded outline, an open page fold and open disclosure chevrons to match Paper toolbar icons.
+
+https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/dock_to_left/default/24px.svg
+https://fonts.gstatic.com/s/i/short-term/release/materialsymbolsoutlined/dock_to_right/default/24px.svg
+https://raw.githubusercontent.com/google/material-design-icons/master/symbols/web/note_add/materialsymbolsoutlined/note_add_24px.svg
+https://github.com/google/material-design-icons
+https://raw.githubusercontent.com/google/material-design-icons/master/symbols/web/top_panel_open/materialsymbolsoutlined/top_panel_open_24px.svg
+https://raw.githubusercontent.com/google/material-design-icons/master/symbols/web/top_panel_close/materialsymbolsoutlined/top_panel_close_24px.svg
+https://raw.githubusercontent.com/google/material-design-icons/master/symbols/web/delete/materialsymbolsoutlined/delete_24px.svg

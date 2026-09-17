@@ -3,7 +3,6 @@ package io.aequicor.magicpaper.designsystem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -75,6 +74,7 @@ private val LocalComposerInteraction = staticCompositionLocalOf<MutableInteracti
 public fun PaperWorkspaceComposer(
     modifier: Modifier = Modifier,
     document: Boolean = false,
+    options: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalPaperColors.current
@@ -108,7 +108,14 @@ public fun PaperWorkspaceComposer(
             .graphicsLayer { alpha = entrance.value }
             .then(frame)
             .padding(horizontal = 8.dp, vertical = innerVerticalPadding),
-            verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
+            verticalArrangement = if (options == null) Arrangement.spacedBy(6.dp) else Arrangement.Top) {
+            if (options == null) content()
+            else {
+                // Keep the editor branch stable while the options reveal below it.
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
+                options()
+            }
+        }
     }
 }
 
@@ -120,18 +127,17 @@ public fun PaperPromptField(value: String, onValueChange: (String) -> Unit, plac
     singleLine: Boolean = false, onSubmit: (() -> Unit)? = null, label: String? = null) {
     val source = LocalComposerInteraction.current ?: remember { MutableInteractionSource() }
     val field: @Composable () -> Unit = {
-        BasicTextField(value, onValueChange, modifier.fillMaxWidth()
+        PaperBasicTextField(value, onValueChange, modifier.fillMaxWidth()
             .onPreviewKeyEvent { event ->
                 if (enabled && onSubmit != null && event.key == Key.Enter) {
                     if (event.type == KeyEventType.KeyDown && value.isNotBlank()) onSubmit()
                     true
                 } else false
             }
-            .semantics { contentDescription = placeholder }
             .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
             .padding(horizontal = 8.dp, vertical = 8.dp),
             textStyle = LocalPaperTypography.current.body.copy(color = LocalPaperColors.current.text), singleLine = singleLine,
-            cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = if (singleLine) 1 else maxLines,
+            contentDescription = placeholder, cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = if (singleLine) 1 else maxLines,
             interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
             decorationBox = { inner -> Box {
                 if (value.isEmpty()) PaperText(placeholder, color = LocalPaperColors.current.secondaryText)
@@ -155,11 +161,11 @@ public fun PaperPromptField(value: TextFieldValue, onValueChange: (TextFieldValu
     visualTransformation: VisualTransformation = VisualTransformation.None,
     style: androidx.compose.ui.text.TextStyle = LocalPaperTypography.current.body) {
     val source = LocalComposerInteraction.current ?: remember { MutableInteractionSource() }
-    BasicTextField(value, onValueChange, modifier.fillMaxWidth().semantics { contentDescription = placeholder }
+    PaperBasicTextField(value, onValueChange, modifier.fillMaxWidth()
         .paperFeedback(source, RoundedCornerShape(6.dp), enabled, PaperControlState.NORMAL, showFocus = LocalComposerInteraction.current == null, showPress = false)
         .padding(horizontal = 8.dp, vertical = 8.dp),
         textStyle = style.copy(color = LocalPaperColors.current.text),
-        cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = maxLines,
+        contentDescription = placeholder, cursorBrush = SolidColor(LocalPaperColors.current.action), maxLines = maxLines,
         interactionSource = source, enabled = enabled, visualTransformation = visualTransformation,
         decorationBox = { inner -> Box {
             if (value.text.isEmpty()) PaperText(placeholder, style = style, color = LocalPaperColors.current.secondaryText)

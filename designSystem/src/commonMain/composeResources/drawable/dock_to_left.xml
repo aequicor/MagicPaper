@@ -1,0 +1,9 @@
+<!-- Google Material Symbols Outlined, FILL 0 / wght 400 / GRAD 0 / opsz 24.
+     Apache-2.0. Converted from SVG to VectorDrawable; geometry unchanged. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="960" android:viewportHeight="960">
+    <group android:translateY="960">
+        <path android:fillColor="#000000" android:pathData="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm440-80h120v-560H640v560Zm-80 0v-560H200v560h360Zm80 0h120-120Z" />
+    </group>
+</vector>

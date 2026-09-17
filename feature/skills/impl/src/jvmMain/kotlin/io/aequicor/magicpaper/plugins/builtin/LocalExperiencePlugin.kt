@@ -3,8 +3,6 @@ package io.aequicor.magicpaper.plugins.builtin
 import io.aequicor.magicpaper.designsystem.*
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -57,7 +55,7 @@ class LocalExperiencePlugin(
         val busy = actionState.busy || actionState.cleanupPending || deletionState.busy
         val deleteConfirm = selectionState.value.deleteConfirmed
         LaunchedEffect(Unit) { forms.start() }
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        PaperScrollColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             PaperText(title, style = LocalPaperTypography.current.title)
             maintenanceFailure?.let {
                 PaperText(it, color = LocalPaperColors.current.error)
@@ -76,7 +74,7 @@ class LocalExperiencePlugin(
             if (actionState.cleanupPending) PaperAction(onClick = forms.actions::retryCleanup) { PaperText("Повторить очистку черновика") }
             if (deletionState.cleanupPending) PaperAction(onClick = forms.deletion::retryCleanup) { PaperText("Повторить очистку черновика") }
             if (!view.loaded || !listOf(resultState, retentionState, selectionState, searchState).all { it.loaded }) {
-                PaperProgress(Modifier.fillMaxWidth()); return@Column
+                PaperProgress(Modifier.fillMaxWidth()); return@PaperScrollColumn
             }
             if (busy) PaperProgress(Modifier.fillMaxWidth())
             PaperText("Строгое обучение: сохраняются только тип задачи, выбранные признаки и отметка успеха. Исходные тексты, файлы и чаты не используются. Веса модели не меняются.")

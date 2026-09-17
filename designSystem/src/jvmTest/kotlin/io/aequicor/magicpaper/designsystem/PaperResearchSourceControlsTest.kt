@@ -16,6 +16,117 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperResearchSourceControlsTest {
+    @Test fun entireSourceAndGroupHoverTogetherWhileDomainClickOnlyOpensTheWebsite() {
+        for (scale in listOf(1f, 2f)) {
+            val width = if (scale == 1f) 300 else 340
+            var opened = 0
+            val scene = onPaperUi { ImageComposeScene(width, 400) {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, scale)) {
+                    PaperResearchSourceControlsPreview { opened++ }
+                }
+            } }
+            var frame = 0L
+            fun settle() = onPaperUi { repeat(8) { scene.render(++frame * 32_000_000L).close() } }
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+            fun action(label: String) = nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().contains(label) }
+            fun bounds(tag: String) = nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == tag }.boundsInRoot
+            fun capture(name: String) = onPaperUi {
+                val bytes = scene.render(++frame * 32_000_000L).use { image -> image.encodeToData()!!.use { it.bytes } }
+                File("build/reports/research-source-controls/$name-$scale.png").apply { parentFile.mkdirs(); writeBytes(bytes) }
+                ImageIO.read(ByteArrayInputStream(bytes))
+            }
+            fun move(point: Offset) { onPaperUi { scene.sendPointerEvent(PointerEventType.Move, point, type = PointerType.Mouse) }; settle() }
+            try {
+                settle()
+                val row = onPaperUi { bounds("source-row") }
+                val group = onPaperUi { bounds("source-group") }
+                val before = capture("full-row-idle")
+                val checkboxLabel = "Использовать источник: system_design_replit.md · GitHub"
+                for ((name, label) in listOf("checkbox" to checkboxLabel, "domain" to "Открыть сайт: github.com", "menu" to "Действия с источником")) {
+                    move(onPaperUi { action(label).boundsInRoot.center })
+                    val hovered = capture("full-row-$name")
+                    for (x in listOf(3, width - 4)) {
+                        assertNotEquals(before.getRGB(x, row.center.y.toInt()), hovered.getRGB(x, row.center.y.toInt()),
+                            "Hover over $name covers both edges, including the checkbox and menu lanes")
+                        assertNotEquals(before.getRGB(x, (row.bottom - 8).toInt()), hovered.getRGB(x, (row.bottom - 8).toInt()),
+                            "The domain row belongs to the same hover surface")
+                    }
+                }
+                move(onPaperUi { action("Открыть сайт: github.com").boundsInRoot.center })
+                onPaperUi {
+                    val point = action("Открыть сайт: github.com").boundsInRoot.center
+                    scene.sendPointerEvent(PointerEventType.Press, point, type = PointerType.Mouse, button = PointerButton.Primary)
+                    scene.sendPointerEvent(PointerEventType.Release, point, type = PointerType.Mouse, button = PointerButton.Primary)
+                }
+                settle()
+                onPaperUi {
+                    assertEquals(1, opened)
+                    assertEquals(androidx.compose.ui.state.ToggleableState.On, action(checkboxLabel).config[SemanticsProperties.ToggleableState])
+                    action("Открыть сайт: github.com").config[SemanticsActions.RequestFocus].action!!.invoke()
+                    scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown))
+                    scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))
+                    assertEquals(2, opened)
+                }
+                for ((name, label) in listOf("selection" to "Снять выбор со всех: Общие для чата", "disclosure" to "Свернуть: Общие для чата", "add" to "Добавить файлы")) {
+                    move(onPaperUi { action(label).boundsInRoot.center })
+                    val hovered = capture("full-group-$name")
+                    // Sample above the checkmark so its opaque border doesn't mask the row background at 2x.
+                    for (x in listOf(4, width - 5)) assertNotEquals(before.getRGB(x, (group.top + 4).toInt()), hovered.getRGB(x, (group.top + 4).toInt()),
+                        "Hover over $name covers the whole group header")
+                    val dividerY = (group.bottom - 1).toInt()
+                    assertEquals(before.getRGB(width / 2, dividerY), hovered.getRGB(width / 2, dividerY), "Divider stays outside hover")
+                    assertNotEquals(before.getRGB(width / 2, dividerY + 1), hovered.getRGB(width / 2, dividerY), "Divider separates header from list")
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
+    @Test fun compactErrorsShareTheDomainRowAndOpenReadingAtBothTextScales() {
+        for (scale in listOf(1f, 2f)) {
+            val width = if (scale == 1f) 300 else 360
+            var reads = 0
+            var removals = 0
+            val scene = onPaperUi { ImageComposeScene(width, 600) {
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, scale)) {
+                    PaperResearchCompactSourcesPreview(onRemove = { removals++ }) { reads++ }
+                }
+            } }
+            try {
+                onPaperUi {
+                    repeat(6) { scene.render((it + 1) * 32_000_000L).close() }
+                    fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+                    val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    fun text(value: String) = nodes.first { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == value } }
+                    val domain = text("perforce.com").boundsInRoot
+                    val status = text("HTTP 403").boundsInRoot
+                    assertTrue(status.left >= domain.right)
+                    assertEquals(domain.center.y, status.center.y, 1f)
+                    assertTrue(status.right <= width)
+                    assertFalse(nodes.any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text.startsWith("Не используется:") } })
+                    nodes.first { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().contains("Прочитать в браузере: Ошибка HTTP 403") }
+                        .config[SemanticsActions.OnClick].action!!.invoke()
+                    assertEquals(1, reads)
+                    val removeActions = nodes.filter { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                        .any { label -> label.startsWith("Убрать источник:") } }
+                    assertEquals(3, removeActions.size, "Only unreadable sources have a permanent remove action")
+                    val remove = removeActions[1]
+                    assertTrue(remove.boundsInRoot.left >= status.right)
+                    assertEquals(status.center.y, remove.boundsInRoot.center.y, 1f)
+                    assertTrue(remove.boundsInRoot.right <= width)
+                    val file = File("build/reports/research-source-controls/compact-errors-$scale.png").apply { parentFile.mkdirs() }
+                    scene.render(240_000_000L).use { image -> image.encodeToData()!!.use { file.writeBytes(it.bytes) } }
+                    val bounds = remove.boundsInRoot
+                    val pixels = ImageIO.read(file).getRGB(bounds.left.toInt(), bounds.top.toInt(),
+                        bounds.width.toInt(), bounds.height.toInt(), null, 0, bounds.width.toInt())
+                    assertTrue(pixels.distinct().size > 1, "Delete icon is painted without pointer hover or keyboard focus")
+                    remove.config[SemanticsActions.OnClick].action!!.invoke()
+                    assertEquals(1, removals)
+                    assertEquals(1, reads, "Removal must not retry reading")
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
     @Test fun groupSelectionShowsNonePartialAllAndEmptyAtBothTextScales() {
         for (scale in listOf(1f, 2f)) {
             val width = if (scale == 1f) 300 else 340
@@ -76,8 +187,10 @@ class PaperResearchSourceControlsTest {
             render()
             val titleBounds = onPaperUi { title().boundsInRoot }
             val menuBounds = onPaperUi { menu().boundsInRoot }
-            assertTrue(titleBounds.right >= menuBounds.right - 3f, "The title uses the width above the action lane")
-            assertTrue(titleBounds.bottom <= menuBounds.top, "The menu is beside metadata, never over the title")
+            val checkbox = onPaperUi { nodes().first { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                .contains("Использовать источник: system_design_replit.md · GitHub") }.boundsInRoot }
+            assertTrue(titleBounds.right <= menuBounds.left, "The title cannot overlap its menu")
+            assertEquals(checkbox.center.y, menuBounds.center.y, 1f, "Menu aligns with the top checkbox: check=$checkbox menu=$menuBounds title=$titleBounds at $scale")
             val hidden = pixels("idle", menuBounds)
             move(titleBounds.center)
             assertFalse(hidden.contentEquals(pixels("hover", menuBounds)), "Hovering the source must reveal its menu")

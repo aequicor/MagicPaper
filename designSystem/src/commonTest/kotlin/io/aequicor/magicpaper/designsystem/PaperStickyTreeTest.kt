@@ -68,4 +68,41 @@ class PaperStickyTreeTest {
             paperTreePins(deep, listOf(PaperTreeVisibleEntry(7, -1)), heights).map { it.key },
         )
     }
+
+    @Test fun selectedChatSurvivesIndependentRowsAndProjectBoundaries() {
+        val rows = listOf(
+            PaperStickyTreeEntry("selected-chat", header = true, retainAfterBranch = true),
+            PaperStickyTreeEntry("other-chat"),
+            PaperStickyTreeEntry("project", header = true),
+            PaperStickyTreeEntry("unread", listOf("project"), header = true),
+            PaperStickyTreeEntry("ready", listOf("project", "unread")),
+        )
+        val sizes = mapOf("selected-chat" to 40, "project" to 30, "unread" to 50)
+        assertEquals(listOf(PaperTreePin("selected-chat", 0)),
+            paperTreePins(rows, listOf(PaperTreeVisibleEntry(1, -10)), sizes))
+        assertEquals(listOf(PaperTreePin("selected-chat", 0), PaperTreePin("project", 40), PaperTreePin("unread", 70)),
+            paperTreePins(rows, listOf(PaperTreeVisibleEntry(4, -10)), sizes))
+        assertTrue(paperTreePins(rows, listOf(PaperTreeVisibleEntry(0, 0)), sizes).isEmpty())
+        assertTrue(paperTreePins(rows.map { it.copy(retainAfterBranch = false) },
+            listOf(PaperTreeVisibleEntry(1, -10)), sizes).isEmpty(), "Changing selection releases the old chat")
+    }
+
+    @Test fun selectedSessionKeepsItsSlotWhenManyUnreadSessionsHavePassed() {
+        val rows = listOf(PaperStickyTreeEntry("project", header = true),
+            PaperStickyTreeEntry("selected", listOf("project"), header = true, retainAfterBranch = true)) +
+            (1..6).map { n -> PaperStickyTreeEntry("unread-$n",
+                listOf("project", "selected") + (1 until n).map { "unread-$it" }, header = true) }
+        val sizes = rows.associate { it.key to 30 }
+        assertEquals(listOf("selected", "project", "unread-5", "unread-6"),
+            paperTreePins(rows, listOf(PaperTreeVisibleEntry(7, -10)), sizes).map { it.key })
+    }
+
+    @Test fun selectedRowPinsBeforeItCanHideUnderItsProjectHeader() {
+        val rows = listOf(PaperStickyTreeEntry("project", header = true),
+            PaperStickyTreeEntry("selected", listOf("project"), header = true, retainAfterBranch = true),
+            PaperStickyTreeEntry("ordinary", listOf("project", "selected")))
+        assertEquals(listOf(PaperTreePin("selected", 0), PaperTreePin("project", 40)),
+            paperTreePins(rows, listOf(PaperTreeVisibleEntry(1, 0), PaperTreeVisibleEntry(2, 40)),
+                mapOf("project" to 30, "selected" to 40)))
+    }
 }

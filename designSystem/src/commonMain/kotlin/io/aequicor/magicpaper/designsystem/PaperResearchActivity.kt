@@ -179,32 +179,6 @@ public fun PaperResearchSourceLink(title: String, onClick: () -> Unit, modifier:
     }
 }
 
-/** Diagonal corner arrows remain legible independent of the platform's symbol font. */
-@Composable
-public fun PaperComposerExpandButton(expanded: Boolean, onClick: () -> Unit) {
-    val label = if (expanded) "Свернуть поле ввода" else "Развернуть поле ввода"
-    val ink = LocalPaperColors.current.secondaryText
-    PaperTooltip(label) {
-        PaperIconButton(label, onClick, Modifier.semantics {
-            stateDescription = if (expanded) "Развёрнуто" else "Свёрнуто"
-        }) {
-            Canvas(Modifier.size(16.dp)) {
-                fun line(x1: Float, y1: Float, x2: Float, y2: Float) = drawLine(ink,
-                    Offset(size.width * x1, size.height * y1), Offset(size.width * x2, size.height * y2),
-                    1.4.dp.toPx(), StrokeCap.Round)
-                for (flip in listOf(false, true)) {
-                    fun arrow(x1: Float, y1: Float, x2: Float, y2: Float) {
-                        if (flip) line(1-x1, 1-y1, 1-x2, 1-y2) else line(x1, y1, x2, y2)
-                    }
-                    arrow(.58f, .42f, .88f, .12f)
-                    if (expanded) { arrow(.58f, .12f, .58f, .42f); arrow(.58f, .42f, .88f, .42f) }
-                    else { arrow(.58f, .12f, .88f, .12f); arrow(.88f, .12f, .88f, .42f) }
-                }
-            }
-        }
-    }
-}
-
 @Preview(name = "Search and reading", group = "Research activity", widthDp = 440, heightDp = 360)
 @Preview(name = "Narrow large text", group = "Research activity", widthDp = 320, heightDp = 900, fontScale = 2f)
 @Composable

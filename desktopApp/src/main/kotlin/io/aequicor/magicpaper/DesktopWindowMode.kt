@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.WindowPlacement
+
 internal enum class DesktopWindowMode {
     /** macOS: прозрачный нативный тайтлбар, системные декорации. */
     MAC_SYSTEM,
@@ -23,3 +27,8 @@ internal fun desktopWindowMode(
         else -> DesktopWindowMode.LINUX_CUSTOM
     }
 }
+
+/** Native fullscreen is distinct from maximizing or resizing to the display bounds. */
+internal fun desktopToolbarHeight(mode: DesktopWindowMode, placement: WindowPlacement, fontScale: Float): Dp =
+    if (placement == WindowPlacement.Fullscreen) 0.dp
+    else maxOf(if (mode == DesktopWindowMode.MAC_SYSTEM) 28.dp else 40.dp, (16f * fontScale + 8f).dp)

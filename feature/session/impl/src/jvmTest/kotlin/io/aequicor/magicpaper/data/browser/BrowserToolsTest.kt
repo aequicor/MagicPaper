@@ -54,7 +54,7 @@ class BrowserToolsTest {
         }
     }
 
-    @Test fun browserStartupFailureIsReportedAndCanBeRetried() = runBlocking {
+    @Test fun browserStartupFailureIsReportedWithoutRepeatedDriverLaunch() = runBlocking {
         val receipts = MemoryToolReceiptStore()
         val session = ToolHost(receipts).session(ToolExecutionContext("p", "s", "s", "r", ToolRole.CHAT, CodingInteractionMode.RESEARCH))
         var attempts = 0
@@ -66,7 +66,7 @@ class BrowserToolsTest {
                 val failure = assertFailsWith<ToolStateRejection> { session.call("attempt-$attempt", "browser.open", args) }
                 assertFalse("Sensitive" in failure.message.orEmpty())
             }
-            assertEquals(2, attempts)
+            assertEquals(1, attempts)
             assertTrue(receipts.forRequest("p/s/r").all { receipt -> receipt.phase == ToolPhase.FAILED })
         }
     }

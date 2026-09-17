@@ -18,7 +18,8 @@
     "targets": [
       "PaperListRow",
       "PaperButton",
-      "PaperText"
+      "PaperText",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -168,7 +169,8 @@
       "PaperText",
       "PaperPanel",
       "PaperChoice",
-      "PaperFileTransfer"
+      "PaperFileTransfer",
+      "PaperScrollColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -688,7 +690,9 @@
     "targets": [
       "PaperWindowHost",
       "PaperTheme",
-      "PaperCommandMenu"
+      "PaperCommandMenu",
+      "PaperComputerControlBar",
+      "PaperComputerFeedback"
     ],
     "stage": "5",
     "kind": "entry"
@@ -1217,7 +1221,8 @@
     "targets": [
       "PaperDialog",
       "PaperListRow",
-      "PaperMarkdown"
+      "PaperMarkdown",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1241,7 +1246,8 @@
     "targets": [
       "PaperChatTranscript",
       "PaperScroll",
-      "PaperActivityIndicator"
+      "PaperActivityIndicator",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1290,7 +1296,8 @@
     "targets": [
       "PaperPanel",
       "PaperListRow",
-      "PaperButton"
+      "PaperButton",
+      "PaperLazyColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -1398,7 +1405,8 @@
       "PaperSplitPane",
       "PaperGraphCanvas",
       "PaperField",
-      "PaperButton"
+      "PaperButton",
+      "PaperScrollColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1410,7 +1418,8 @@
     "targets": [
       "PaperChatTranscript",
       "PaperComposer",
-      "PaperMarkdown"
+      "PaperMarkdown",
+      "PaperScrollColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1471,7 +1480,8 @@
     "targets": [
       "PaperListRow",
       "PaperStatus",
-      "PaperMarkdown"
+      "PaperMarkdown",
+      "PaperScrollColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1495,7 +1505,8 @@
     "targets": [
       "PaperApprovalDock",
       "PaperButton",
-      "PaperText"
+      "PaperText",
+      "PaperScrollArea"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1553,7 +1564,9 @@
     "annotationLine": 78,
     "targets": [
       "PaperGraphCanvas",
-      "PaperGraphNode"
+      "PaperGraphNode",
+      "PaperScrollColumn",
+      "PaperScrollRow"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1600,7 +1613,8 @@
     "annotationLine": 28,
     "targets": [
       "PaperStatus",
-      "PaperPanel"
+      "PaperPanel",
+      "PaperScrollColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1700,7 +1714,8 @@
     "targets": [
       "PaperApprovalDock",
       "PaperStatus",
-      "PaperButton"
+      "PaperButton",
+      "PaperScrollArea"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1723,7 +1738,8 @@
     "targets": [
       "PaperPanel",
       "PaperStatus",
-      "PaperButton"
+      "PaperButton",
+      "PaperScrollColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1774,7 +1790,8 @@
       "PaperQuestionnaire",
       "PaperPromptField",
       "PaperQuestionnaireChoice",
-      "PaperButton"
+      "PaperButton",
+      "PaperScrollColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1845,7 +1862,8 @@
       "PaperTreeRow",
       "PaperScroll",
       "PaperButton",
-      "PaperTreeGroupHeader"
+      "PaperTreeGroupHeader",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -1939,7 +1957,8 @@
       "PaperChatTranscript",
       "PaperComposer",
       "PaperMarkdown",
-      "PaperWorkspaceHeading"
+      "PaperWorkspaceHeading",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -2073,7 +2092,9 @@
       "PaperField",
       "PaperPromptField",
       "PaperWorkspaceComposer",
-      "PaperMenuToggleInfo"
+      "PaperMenuToggleInfo",
+      "PaperComposerOptionsToggle",
+      "PaperComposerOptionsPanel"
     ],
     "stage": "6",
     "kind": "surface"
@@ -2108,7 +2129,8 @@
     "targets": [
       "PaperPage",
       "PaperField",
-      "PaperPanel"
+      "PaperPanel",
+      "PaperLazyColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2209,7 +2231,8 @@
     "targets": [
       "PaperPage",
       "PaperPluginHost",
-      "PaperListRow"
+      "PaperListRow",
+      "PaperLazyColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2398,7 +2421,8 @@
     "targets": [
       "PaperDialog",
       "PaperListRow",
-      "PaperChoice"
+      "PaperChoice",
+      "PaperScrollColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -2456,7 +2480,8 @@
     "targets": [
       "PaperSettingsSection",
       "PaperChoice",
-      "PaperPanel"
+      "PaperPanel",
+      "PaperScrollColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -2480,7 +2505,8 @@
     "targets": [
       "PaperSettingsSection",
       "PaperListRow",
-      "PaperField"
+      "PaperField",
+      "PaperScrollColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -2529,7 +2555,8 @@
     "annotationLine": 236,
     "targets": [
       "PaperDialog",
-      "PaperScroll"
+      "PaperScroll",
+      "PaperScrollColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -2615,7 +2642,8 @@
     "targets": [
       "PaperSettingsSection",
       "PaperNavigation",
-      "PaperChoice"
+      "PaperChoice",
+      "PaperScrollColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -2641,7 +2669,9 @@
     "targets": [
       "PaperSettingsSection",
       "PaperField",
-      "PaperChoice"
+      "PaperChoice",
+      "PaperScrollColumn",
+      "PaperLazyColumn"
     ],
     "stage": "5",
     "kind": "surface"
@@ -2721,7 +2751,8 @@
     "targets": [
       "PaperPage",
       "PaperNavigation",
-      "PaperButton"
+      "PaperButton",
+      "PaperScrollColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2838,7 +2869,8 @@
       "PaperField",
       "PaperListRow",
       "PaperChoice",
-      "PaperStatus"
+      "PaperStatus",
+      "PaperLazyColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2888,7 +2920,8 @@
       "PaperPanel",
       "PaperListRow",
       "PaperChoice",
-      "PaperStatus"
+      "PaperStatus",
+      "PaperScrollColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2915,7 +2948,8 @@
       "PaperListRow",
       "PaperField",
       "PaperButton",
-      "PaperStatus"
+      "PaperStatus",
+      "PaperScrollColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2953,7 +2987,8 @@
       "PaperListRow",
       "PaperChoice",
       "PaperButton",
-      "PaperStatus"
+      "PaperStatus",
+      "PaperScrollColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -2966,7 +3001,8 @@
       "PaperPanel",
       "PaperField",
       "PaperListRow",
-      "PaperButton"
+      "PaperButton",
+      "PaperScrollColumn"
     ],
     "stage": "7",
     "kind": "surface"
@@ -3250,7 +3286,8 @@
     "targets": [
       "PaperResearchQuestionRow",
       "PaperButton",
-      "PaperDivider"
+      "PaperDivider",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3263,7 +3300,8 @@
       "PaperResearchSourceRow",
       "PaperButton",
       "PaperMenuHost",
-      "PaperResearchSourceGroupHeader"
+      "PaperResearchSourceGroupHeader",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3275,7 +3313,7 @@
     "targets": [
       "PaperIconButton",
       "PaperTooltip",
-      "PaperText"
+      "PaperPanelIcon"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3312,7 +3350,9 @@
       "PaperPromptField",
       "PaperComposerExpandButton",
       "PaperIconButton",
-      "PaperButton"
+      "PaperButton",
+      "PaperComposerOptionsToggle",
+      "PaperComposerOptionsPanel"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3326,7 +3366,8 @@
       "PaperChoice",
       "PaperField",
       "PaperButton",
-      "PaperListRow"
+      "PaperListRow",
+      "PaperLazyColumn"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3347,6 +3388,61 @@
     "annotationLine": 136,
     "targets": [
       "PaperResearchSourceRow"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchBrowserDialog.kt",
+    "symbol": "ResearchBrowserDialog",
+    "annotationLine": 11,
+    "targets": [
+      "PaperWideDialog"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchBrowserDialog.kt",
+    "symbol": "ResearchBrowserContent",
+    "annotationLine": 18,
+    "targets": [
+      "PaperText",
+      "PaperButton"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",
+    "symbol": "ResearchBrowserPreview",
+    "annotationLine": 25,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ResearchWorkspacePreviews.kt",
+    "symbol": "ResearchModelFailurePreview",
+    "annotationLine": 37,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSessionFeedPreviews.kt",
+    "symbol": "UnifiedStickySessionFeedPreview",
+    "annotationLine": 59,
+    "targets": [
+      "PaperSessionRow",
+      "PaperStickyTree",
+      "PaperTheme"
     ],
     "stage": "6",
     "kind": "surface"

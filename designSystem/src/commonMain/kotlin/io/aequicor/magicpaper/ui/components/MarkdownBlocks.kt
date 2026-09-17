@@ -67,15 +67,11 @@ internal fun textBlockRanges(text: String, start: Int = 0, end: Int = text.lengt
 /** Partition the parsed tree, rather than parsing arbitrary substrings as independent Markdown. */
 internal fun markdownRenderBlocks(root: ASTNode, source: String): List<ASTNode> {
     fun split(node: ASTNode): List<ASTNode> {
+        // A fence is one visual/copy unit. Its renderer owns a bounded lazy viewport
+        // for long code, rather than giving each performance slice a new card.
+        if (node.type == Element.CODE_FENCE || node.type == Element.CODE_BLOCK) return listOf(node)
         if (node.endOffset - node.startOffset <= MESSAGE_BLOCK_CHARS &&
             source.substring(node.startOffset, node.endOffset).count { it == '\n' } < 32) return listOf(node)
-        if (node.type == Element.CODE_FENCE || node.type == Element.CODE_BLOCK) {
-            val content = node.children.filter { it.type == Token.CODE_FENCE_CONTENT || it.type == Token.CODE_LINE }
-            if (content.isEmpty()) return listOf(MarkdownBlockNode(node, emptyList(), code = node.endOffset until node.endOffset))
-            return textBlockRanges(source, content.first().startOffset, content.last().endOffset).map {
-                MarkdownBlockNode(node, emptyList(), it.first, it.last + 1, code = it)
-            }
-        }
         if (node.type == Element.ORDERED_LIST || node.type == Element.UNORDERED_LIST) {
             val items = node.children.filter { it.type == Element.LIST_ITEM }
             val number = source.substring(node.startOffset, minOf(node.startOffset + 12, node.endOffset))

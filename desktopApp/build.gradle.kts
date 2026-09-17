@@ -183,3 +183,14 @@ if (protocolPackageType != null) {
         }
     }
 }
+
+// Isolated native-window checks never create the application runtime or open user data.
+tasks.withType<Test>().configureEach {
+    val nativeWindowTest = providers.gradleProperty("magicpaper.window.native").orElse("false").get()
+    systemProperty("magicpaper.window.native", nativeWindowTest)
+    systemProperty("magicpaper.computer.input.native", providers.gradleProperty("magicpaper.computer.input.native").orElse("false").get())
+    if (nativeWindowTest == "true" && System.getProperty("os.name").startsWith("Mac")) {
+        // Test synchronization with the OS animation completion callback only.
+        jvmArgs("--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED")
+    }
+}

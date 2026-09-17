@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 
@@ -49,7 +50,7 @@ internal fun PaperResearchRailsPreview() {
     }
 }
 
-@Preview(name = "Question and source rows", group = "Research", widthDp = 300, heightDp = 340)
+@Preview(name = "Compact question and source rows", group = "Research", widthDp = 300, heightDp = 340)
 @Preview(name = "Rows with large text", group = "Research", widthDp = 340, heightDp = 520, fontScale = 2f)
 @Composable
 internal fun PaperResearchRowsPreview() {
@@ -66,21 +67,46 @@ internal fun PaperResearchRowsPreview() {
     }
 }
 
+@Preview(name = "Compact source errors", group = "Research", widthDp = 300, heightDp = 300)
+@Preview(name = "Compact source errors large text", group = "Research", widthDp = 360, heightDp = 600, fontScale = 2f)
+@Composable
+internal fun PaperResearchCompactSourcesPreview(onRemove: () -> Unit = {}, onRead: () -> Unit = {}) = PaperTheme {
+    PaperResearchPane(Modifier.fillMaxSize()) {
+        PaperResearchSourceRow("Vibe coding — Wikipedia", true, {}, detail = "en.wikipedia.org") {
+            PaperIconButton("Действия с источником Wikipedia", {}) { PaperMoreIcon() }
+        }
+        PaperResearchSourceRow("What is Code Quality? — Code Quality Explained", true, {}, detail = "aws.amazon.com",
+            readProblem = "Истекло время ожидания страницы", readProblemLabel = "Timeout", onReadProblem = onRead, onRemove = onRemove) {
+            PaperIconButton("Действия с источником AWS", {}) { PaperMoreIcon() }
+        }
+        PaperResearchSourceRow("What is Code Quality? Overview and How to Improve Code Quality", true, {}, detail = "perforce.com",
+            readProblem = "Ошибка HTTP 403", readProblemLabel = "HTTP 403", onReadProblem = onRead, onRemove = onRemove) {
+            PaperIconButton("Действия с источником Perforce", {}) { PaperMoreIcon() }
+        }
+        PaperResearchSourceRow("Страница с проверкой", false, {}, detail = "example.org",
+            readProblem = "CAPTCHA или защита сайта", readProblemLabel = "CAPTCHA", onReadProblem = onRead, onRemove = onRemove) {
+            PaperIconButton("Действия с источником", {}) { PaperMoreIcon() }
+        }
+    }
+}
+
 @Preview(name = "Source controls", group = "Research", widthDp = 300, heightDp = 220)
 @Preview(name = "Source controls large text", group = "Research", widthDp = 340, heightDp = 400, fontScale = 2f)
 @Composable
-internal fun PaperResearchSourceControlsPreview() = PaperTheme {
+internal fun PaperResearchSourceControlsPreview(onOpenWebsite: () -> Unit = {}) = PaperTheme {
     var expanded by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(false) }
     var checked by remember { mutableStateOf(true) }
     PaperResearchPane(Modifier.fillMaxSize()) {
         PaperResearchSourceGroupHeader("Общие для чата", expanded, { expanded = !expanded },
+            modifier = Modifier.testTag("source-group"),
             selectedCount = if (checked) 1 else 0, totalCount = 1, onSelectionChange = { checked = it }) {
-            PaperIconButton("Добавить файлы", {}) { PaperText("+") }
+            PaperIconButton("Добавить файлы", {}) { PaperNoteAddIcon() }
         }
-        if (expanded) PaperResearchSourceRow("system_design_replit.md · GitHub", checked, { checked = it }, keepActionsVisible = menu, detail = "github.com") {
+        if (expanded) PaperResearchSourceRow("system_design_replit.md · GitHub", checked, { checked = it },
+            modifier = Modifier.testTag("source-row"), keepActionsVisible = menu, detail = "github.com", onOpenWebsite = onOpenWebsite) {
             Box {
-                PaperIconButton("Действия с источником", { menu = true }) { PaperText("⋯") }
+                PaperIconButton("Действия с источником", { menu = true }) { PaperMoreIcon() }
                 PaperMenuHost(menu, { menu = false }) {
                     PaperMenuAction("Открыть", { menu = false })
                 }
@@ -98,7 +124,7 @@ internal fun PaperResearchSourceSelectionPreview() = PaperTheme {
             for ((selected, total) in listOf(0 to 3, 1 to 3, 3 to 3, 0 to 0)) {
                 PaperResearchSourceGroupHeader("Общие для чата", expanded = selected != total, onToggle = {},
                     selectedCount = selected, totalCount = total, onSelectionChange = {}) {
-                    PaperIconButton("Добавить файлы", {}) { PaperText("+") }
+                    PaperIconButton("Добавить файлы", {}) { PaperNoteAddIcon() }
                 }
             }
         }

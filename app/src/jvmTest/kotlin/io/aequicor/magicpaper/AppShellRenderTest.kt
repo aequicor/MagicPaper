@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.semantics.SemanticsActions
@@ -35,6 +39,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import java.awt.EventQueue
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -64,30 +69,60 @@ class AppShellRenderTest {
             root.navigate(AppRoute.Docs()); root.awaitIdle()
             val child = root.stack.value.active.instance
             val journal = root.navigationState.value.journal
-            ImageComposeScene(1000, 760) { App(runtime, root) }.use { scene ->
+            val toolbarHeight = mutableStateOf(40.dp)
+            val compact = mutableStateOf(false)
+            val scene = onUi { ImageComposeScene(1000, 760) {
+                CompositionLocalProvider(LocalWindowToolbarHeight provides toolbarHeight.value) { App(runtime, root, compact = compact.value) }
+            } }
+            try {
                 var frame = 0L
-                fun draw() { repeat(6) { scene.render(frame++ * 16_000_000L).close() } }
+                fun draw() { repeat(6) { onUi { scene.render(frame++ * 16_000_000L).close() } } }
                 draw()
                 assertTrue(scene.hasText("Документация"))
-                assertTrue(scene.hasText("✦ Новый чат"))
-                scene.action("Показать или скрыть боковую панель").config[SemanticsActions.OnClick].action!!.invoke()
+                assertTrue(scene.hasAction("Настройки"))
+                assertFalse(scene.hasAction("Назад"))
+                assertFalse(scene.hasAction("Вперёд"))
+                assertFalse(scene.hasText("Справочник"))
+                val normalTop = scene.text("Документация").boundsInRoot.top
+                onUi { toolbarHeight.value = 0.dp }; draw()
+                assertFalse(scene.hasText("MagicPaper"))
+                assertFalse(scene.hasAction("Настройки"))
+                assertFalse(scene.hasAction("Расходы"))
+                assertFalse(scene.hasAction("Скрыть список сессий"))
+                assertEquals(normalTop - 40f, scene.text("Документация").boundsInRoot.top, .5f)
+                assertSame(child, root.stack.value.active.instance)
+                val fullscreenDirectory = File("build/reports/app-shell").apply { mkdirs() }
+                onUi { scene.render(frame++ * 16_000_000L).use { image ->
+                    File(fullscreenDirectory, "fullscreen.png").writeBytes(image.encodeToData()!!.use { it.bytes })
+                } }
+                onUi { toolbarHeight.value = 40.dp }; draw()
+                assertTrue(scene.hasText("MagicPaper"))
+                assertTrue(scene.hasAction("Настройки"))
+                assertEquals(normalTop, scene.text("Документация").boundsInRoot.top, .5f)
+                assertTrue(scene.hasAction("Новый чат"))
+                onUi { compact.value = true }; draw()
+                assertFalse(scene.hasAction("Новый чат"))
+                assertSame(child, root.stack.value.active.instance)
+                onUi { compact.value = false }; draw()
+                assertTrue(scene.hasAction("Новый чат"), "Compact mode must preserve the normal sidebar preference")
+                onUi { scene.action("Скрыть список сессий").config[SemanticsActions.OnClick].action!!.invoke() }
                 draw()
-                assertFalse(scene.hasText("✦ Новый чат"))
+                assertFalse(scene.hasAction("Новый чат"))
                 assertTrue(scene.hasText("Документация"))
                 assertSame(child, root.stack.value.active.instance)
                 assertEquals(journal.visits, root.navigationState.value.journal.visits)
                 assertEquals(journal.cursor, root.navigationState.value.journal.cursor)
                 val directory = File("build/reports/app-shell").apply { mkdirs() }
-                scene.render(frame++ * 16_000_000L).use { image ->
+                onUi { scene.render(frame++ * 16_000_000L).use { image ->
                     File(directory, "sidebar-hidden.png").writeBytes(image.encodeToData()!!.use { it.bytes })
-                }
-                scene.action("Показать или скрыть боковую панель").config[SemanticsActions.OnClick].action!!.invoke()
+                } }
+                onUi { scene.action("Показать список сессий").config[SemanticsActions.OnClick].action!!.invoke() }
                 draw()
-                assertTrue(scene.hasText("✦ Новый чат"))
+                assertTrue(scene.hasAction("Новый чат"))
                 assertTrue(scene.hasText("Документация"))
-                scene.render(frame * 16_000_000L).use { image ->
+                onUi { scene.render(frame * 16_000_000L).use { image ->
                     File(directory, "sidebar-visible.png").writeBytes(image.encodeToData()!!.use { it.bytes })
-                }
+                } }
                 // The real per-visit SaveableStateRegistry rejects unsupported lazy
                 // keys during composition. Exercise the selected article branch too.
                 root.navigate(AppRoute.Docs("request-pins")); root.awaitIdle()
@@ -100,20 +135,30 @@ class AppShellRenderTest {
                 root.navigate(AppRoute.Chat()); root.awaitIdle(); draw()
                 assertTrue(scene.hasText("MagicPaper"))
                 val titleLayouts = mutableListOf<TextLayoutResult>()
-                scene.text("MagicPaper").config[SemanticsActions.GetTextLayoutResult].action!!.invoke(titleLayouts)
+                onUi { scene.text("MagicPaper").config[SemanticsActions.GetTextLayoutResult].action!!.invoke(titleLayouts) }
                 assertEquals(13.sp, titleLayouts.single().layoutInput.style.fontSize)
                 assertEquals(FontFamily.SansSerif, titleLayouts.single().layoutInput.style.fontFamily)
-                assertTrue(scene.hasText("✦ Новый чат"), "The global session list is visible when a chat opens")
-                scene.action("Показать или скрыть боковую панель").config[SemanticsActions.OnClick].action!!.invoke()
+                assertTrue(scene.hasAction("Новый чат"), "The global session list is visible when a chat opens")
+                onUi { scene.action("Скрыть список сессий").config[SemanticsActions.OnClick].action!!.invoke() }
                 draw()
-                assertFalse(scene.hasText("✦ Новый чат"))
+                assertFalse(scene.hasAction("Новый чат"))
                 root.navigate(AppRoute.Docs()); root.awaitIdle(); draw()
                 root.navigate(AppRoute.Chat()); root.awaitIdle(); draw()
-                assertFalse(scene.hasText("✦ Новый чат"), "Chat shell configuration survives switching visits")
-                scene.render(frame * 16_000_000L).use { image ->
+                assertFalse(scene.hasAction("Новый чат"), "Chat shell configuration survives switching visits")
+                onUi { scene.render(frame * 16_000_000L).use { image ->
                     File(directory, "chat-sidebar-visible.png").writeBytes(image.encodeToData()!!.use { it.bytes })
-                }
-            }
+                } }
+                val chatChild = root.stack.value.active.instance
+                onUi { compact.value = true; scene.constraints = androidx.compose.ui.unit.Constraints.fixed(480, 640) }; draw()
+                assertSame(chatChild, root.stack.value.active.instance)
+                assertFalse(scene.hasAction("Новый чат"))
+                assertTrue(scene.hasText("MagicPaper"))
+                onUi { scene.render(frame * 16_000_000L).use { image ->
+                    val pixels = javax.imageio.ImageIO.read(image.encodeToData()!!.use { it.bytes }.inputStream())
+                    javax.imageio.ImageIO.write(pixels.getSubimage(0, 0, 480, 640), "png", File(directory, "computer-compact-chat.png"))
+                    pixels.flush()
+                } }
+            } finally { onUi { scene.close() } }
             root.awaitIdle()
             val persisted = Json.parseToJsonElement(requireNotNull(runtime.koin.get<PersistenceStores>().navigation.load())).jsonObject
             assertTrue("presentationRefs" in persisted)
@@ -125,7 +170,18 @@ class AppShellRenderTest {
         }
     }
 
-    private fun ImageComposeScene.nodes() = semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+    // Compose's render dispatcher and AWT event loop must share the UI thread;
+    // rendering on the JUnit worker can deadlock snapshot observers with live flows.
+    private fun <T> onUi(block: () -> T): T {
+        if (EventQueue.isDispatchThread()) return block()
+        var result: Result<T>? = null
+        EventQueue.invokeAndWait { result = runCatching(block) }
+        return result!!.getOrThrow()
+    }
+    private fun ImageComposeScene.nodes() = onUi { semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) } }
+    private fun ImageComposeScene.hasAction(label: String) = nodes().any {
+        it.config.contains(SemanticsActions.OnClick) && it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().contains(label)
+    }
     private fun ImageComposeScene.hasText(text: String) = nodes().any { node ->
         node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true
     }

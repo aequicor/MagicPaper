@@ -19,22 +19,23 @@ internal class DesktopComputerPermissions(
     private val mainHost: () -> PermissionHost = ::mainPermissionHost,
     private val helperHost: suspend () -> PermissionHost = ::helperPermissionHost,
     private val open: suspend (List<String>) -> Unit = ::openPermissionLocation,
+    private val desktopCaptureUsesHelper: Boolean = NativeApplicationDesktop.supported,
 ) : ComputerPermissions {
     @Volatile private var targets: Set<PermissionTarget> = emptySet()
 
     override suspend fun inspect(computer: ComputerAccess, application: ComputerAccess): ComputerPermissionReport = withContext(Dispatchers.IO) {
         if (platform != PermissionPlatform.MACOS) return@withContext ComputerPermissionReport(platform)
         val checks = buildList {
-            if (computer != ComputerAccess.OFF) {
+            if (computer != ComputerAccess.OFF && (!desktopCaptureUsesHelper || computer == ComputerAccess.CONTROL)) {
                 val host = mainHost()
-                add(PermissionCheck(ComputerPermission.SCREEN_RECORDING, host.target, host.screen))
+                if (!desktopCaptureUsesHelper) add(PermissionCheck(ComputerPermission.SCREEN_RECORDING, host.target, host.screen))
                 if (computer == ComputerAccess.CONTROL) add(PermissionCheck(ComputerPermission.ACCESSIBILITY, host.target, host.accessibility))
             }
-            if (application != ComputerAccess.OFF) {
+            if (application != ComputerAccess.OFF || (desktopCaptureUsesHelper && computer != ComputerAccess.OFF)) {
                 // Window discovery and inspection currently need both permissions, even in view-only mode.
                 val host = helperHost()
                 add(PermissionCheck(ComputerPermission.SCREEN_RECORDING, host.target, host.screen))
-                add(PermissionCheck(ComputerPermission.ACCESSIBILITY, host.target, host.accessibility))
+                if (application != ComputerAccess.OFF) add(PermissionCheck(ComputerPermission.ACCESSIBILITY, host.target, host.accessibility))
             }
         }
         ensureActive()

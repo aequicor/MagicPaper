@@ -18,7 +18,7 @@ import io.aequicor.magicpaper.designsystem.PaperTitleBarLaneGap
 import io.aequicor.magicpaper.designsystem.paperChatTopShadow
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
+import io.aequicor.magicpaper.designsystem.PaperLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -27,6 +27,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +63,7 @@ import io.aequicor.magicpaper.designsystem.PaperContentEntrance
 import io.aequicor.magicpaper.designsystem.PaperResearchReadingMeasure
 import io.aequicor.magicpaper.designsystem.paperResearchComposerAlignment
 import io.aequicor.magicpaper.designsystem.PaperResearchSourceLink
+import io.aequicor.magicpaper.designsystem.PaperResearchSourcesDisclosure
 import io.aequicor.magicpaper.designsystem.PaperResearchFollowUps
 import io.aequicor.magicpaper.logging.AppLog
 
@@ -173,7 +175,7 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     val controlsBottomPadding = maxOf(floatingControlsBottomPadding, footerHeight - 8.dp)
     Box(modifier = Modifier.fillMaxWidth().then(modifier)) {
         if (messages.isNotEmpty() || busy) {
-            LazyColumn(
+            PaperLazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
                     .paperChatTopShadow(scrolled, topOffset = topInset),
@@ -284,13 +286,14 @@ private fun MessageBubble(message: ChatMessage,
 private fun ResearchSourceFootnotes(message: ChatMessage) {
     val uriHandler = LocalUriHandler.current
     var openError by remember(message.id) { mutableStateOf(false) }
+    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
     val sources = remember(message.sources) { message.sources.distinctBy { it.url } }
     Column {
         PaperDivider()
         Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            PaperText("Источники ответа", role = PaperTextRole.CHROME)
+            PaperResearchSourcesDisclosure(sources.size, expanded, { expanded = it })
             if (openError) PaperText("Не удалось открыть источник. Повторите попытку.", role = PaperTextRole.LABEL, color = LocalPaperColors.current.error)
-            sources.forEachIndexed { index, source ->
+            if (expanded) sources.forEachIndexed { index, source ->
                 PaperResearchSourceLink(source.title.ifBlank { source.url }, {
                     try { uriHandler.openUri(source.url) }
                     catch (failure: Exception) {

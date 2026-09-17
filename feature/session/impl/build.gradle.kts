@@ -73,6 +73,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
     systemProperty("magicpaper.application.native", providers.gradleProperty("magicpaper.application.native").getOrElse("false"))
+    systemProperty("magicpaper.computer.windows.native", providers.gradleProperty("magicpaper.computer.windows.native").getOrElse("false"))
     systemProperty("magicpaper.application.testInstallation", layout.buildDirectory.dir("application-use/native-acceptance").get().asFile.absolutePath)
 }
 
@@ -87,10 +88,12 @@ val installAgentBrowser by tasks.registering(JavaExec::class) {
 val nodeProtocolTest by tasks.registering(Exec::class) {
     group = "verification"
     description = "Check the native provider and planning wire protocols with local fixtures."
-    commandLine(providers.gradleProperty("magicpaper.node").getOrElse("node"), "--test", "src/jvmTest/resources/coding/planning-tools.test.mjs", "src/jvmTest/resources/coding/provider-bridge.test.mjs", "src/jvmTest/resources/coding/shell-timeout.test.mjs")
+    commandLine(providers.gradleProperty("magicpaper.node").getOrElse("node"), "--test", "src/jvmTest/resources/coding/planning-tools.test.mjs", "src/jvmTest/resources/coding/provider-bridge.test.mjs", "src/jvmTest/resources/coding/shell-timeout.test.mjs", "src/jvmTest/resources/computer/screenshot-context.test.mjs")
     workingDir(projectDir)
     inputs.dir("src/jvmMain/resources/coding")
     inputs.dir("src/jvmTest/resources/coding")
+    inputs.file("src/jvmTest/resources/computer/screenshot-context.test.mjs")
+    inputs.file("src/jvmMain/resources/computer/screenshot-context.js")
 }
 tasks.named("check") { dependsOn(nodeProtocolTest) }
 

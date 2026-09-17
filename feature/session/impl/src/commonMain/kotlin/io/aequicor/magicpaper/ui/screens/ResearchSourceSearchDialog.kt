@@ -1,7 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,8 +52,9 @@ internal fun ResearchSourceSearchDialog(sharedResources: List<ResearchResource>,
             }
             PaperField(query, { query = it; error = null; results = emptyList() }, "Запрос или ссылка", Modifier.fillMaxWidth(), enabled = !busy, errorMessage = error)
             PaperButton(if (busy) "Ищу…" else if (researchUrl(query) != null) "Сохранить ссылку" else "Найти", ::submit,
-                enabled = !busy && query.isNotBlank(), busy = busy)
-            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                enabled = !busy && query.isNotBlank(), busy = busy,
+                leadingIcon = if (researchUrl(query) != null) ({ PaperNoteAddIcon() }) else null)
+            PaperLazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(results, key = { it.url }) { hit ->
                     val added = (sharedResources + if (target == ResearchResourceScope.QUESTION) questionResources else emptyList())
                         .any { it.url == hit.url }
@@ -66,7 +66,7 @@ internal fun ResearchSourceSearchDialog(sharedResources: List<ResearchResource>,
                                 try { error = onAddResult(hit, selectedScope).exceptionOrNull()?.message }
                                 finally { busy = false }
                             }
-                        }, enabled = !busy && !added) { PaperText(if (added) "✓" else "+") }
+                        }, enabled = !busy && !added) { if (added) PaperText("✓") else PaperNoteAddIcon() }
                     })
                 }
             }

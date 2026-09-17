@@ -18,7 +18,6 @@ import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.BoldHighlight
 import dev.snipme.highlights.model.ColorHighlight
 import dev.snipme.highlights.model.SyntaxLanguage
-import dev.snipme.highlights.model.SyntaxThemes
 import java.awt.EventQueue
 import kotlinx.coroutines.runBlocking
 import org.intellij.markdown.MarkdownElementTypes
@@ -124,7 +123,7 @@ class PaperMarkdownHighlightTest {
 
     /** Isolated sequential reference, independent of the renderer's asynchronous builders. */
     private fun expectedStyles(text: String, kotlin: Boolean): List<AnnotatedString.Range<SpanStyle>> {
-        val builder = Highlights.Builder().theme(SyntaxThemes.default(darkMode = false)).code(text)
+        val builder = Highlights.Builder().theme(paperCodeSyntaxTheme).code(text)
         if (kotlin) builder.language(SyntaxLanguage.getByName("kotlin")!!)
         return builder.build().getHighlights().map { highlight ->
             val style = when (highlight) {

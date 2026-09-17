@@ -20,17 +20,19 @@ internal fun UnifiedSidebarItem.isStickySession(selectedId: String?, viewingCodi
         codingStatus == CodingSessionStatus.WORKING ||
         codingStatus == CodingSessionStatus.WAITING ||
         codingStatus == CodingSessionStatus.CONFIRMATION ||
-        codingStatus == CodingSessionStatus.UNREAD || unread
+        codingStatus == CodingSessionStatus.UNREAD || (!isCoding && unread)
 
 internal fun sidebarFeedRows(
     groups: List<UnifiedSidebarGroup>,
     collapsedGroups: Set<String>,
     sticky: (UnifiedSidebarItem) -> Boolean = { false },
+    retained: (UnifiedSidebarItem) -> Boolean = { false },
 ): List<SidebarFeedRow> = buildList {
     fun session(item: UnifiedSidebarItem, group: UnifiedSidebarGroup, stickyAncestors: MutableList<String>) {
         val key = "${if (item.isCoding) "coding" else "chat"}:${item.id}"
         val header = sticky(item)
-        add(SidebarFeedRow(PaperStickyTreeEntry(key, stickyAncestors.toList(), header), group, item))
+        add(SidebarFeedRow(PaperStickyTreeEntry(key, stickyAncestors.toList(), header,
+            retainAfterBranch = header && retained(item)), group, item))
         if (header) stickyAncestors += key
         item.children.forEach { child ->
             session(child, group, stickyAncestors)
@@ -64,6 +66,7 @@ internal fun UnifiedSessionFeed(
     val rows = sidebarFeedRows(
         groups, collapsedGroups,
         sticky = { it.isStickySession(selectedId, viewingCoding) },
+        retained = { it.id == selectedId && it.isCoding == viewingCoding },
     )
     val byKey = rows.associateBy { it.entry.key }
     fun retainViewport() {
@@ -83,14 +86,14 @@ internal fun UnifiedSessionFeed(
                 indicator = { PaperText("▱", role = PaperTextRole.CHROME) },
                 actions = {
                     PaperIconButton(label = "Новая сессия: ${row.group.projectName.orEmpty()}",
-                        onClick = { row.group.projectId?.let(onAddSession) }) { PaperText("+", role = PaperTextRole.CHROME) }
+                        onClick = { row.group.projectId?.let(onAddSession) }) { PaperNoteAddIcon() }
                 },
             )
         } else {
             PaperSessionRow(
                 title = item.displayName,
                 selected = item.id == selectedId && item.isCoding == viewingCoding,
-                depth = 0,
+                depth = if (row.group.showsProjectHeader) 1 else 0,
                 subtitle = item.sidebarSubtitle(showProject = false),
                 onClick = { retainViewport(); onSelect(item.id, item.isCoding) },
                 keepActionsVisible = menuKey == key,

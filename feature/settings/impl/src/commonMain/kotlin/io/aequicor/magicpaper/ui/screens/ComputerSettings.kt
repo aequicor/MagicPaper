@@ -1,8 +1,6 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -29,7 +27,7 @@ internal fun ComputerSettingsContent(
     saving: Boolean, permissions: ComputerPermissionUi, onBack: () -> Unit, onChange: (AppSettings) -> Unit,
     onRefresh: () -> Unit, onOpen: (ComputerPermission) -> Unit, onReveal: (PermissionTarget) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    PaperScrollColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PaperButton("‹ Настройки", onBack, kind = PaperButtonKind.QUIET)
         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             PaperText("Управление компьютером", role = PaperTextRole.HEADLINE)

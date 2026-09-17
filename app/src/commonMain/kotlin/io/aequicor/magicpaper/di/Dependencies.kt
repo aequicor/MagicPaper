@@ -41,6 +41,7 @@ internal fun buildRuntime(
     onPlatformClosed: suspend () -> Unit = {},
     layoutEditor: LayoutEditor = UnavailableLayoutEditor,
     modelLimits: ModelLimitCatalog? = null,
+    researchPageBrowser: ResearchPageBrowser? = null,
 ): MagicPaperRuntime = MagicPaperRuntime(navigationSession, onPlatformStarted, onPlatformClosed) { applicationScope ->
     var resetting = false
     module {
@@ -141,7 +142,7 @@ internal fun buildRuntime(
             layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
-            researchSearch = get(), usage = get(), sourceAccess = get(),
+            researchSearch = get(), usage = get(), sourceAccess = get(), sourceBrowser = researchPageBrowser,
             layoutProject = { boundId ->
                 val coding = get<CodingService>().state.value.coding
                 if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }

@@ -15,7 +15,7 @@ internal fun ResearchActivity(steps: List<CodingStep>, busy: Boolean, paused: Bo
     var expanded by rememberSaveable { mutableStateOf(busy || paused || failed) }
     var linkError by remember { mutableStateOf(false) }
     val uri = LocalUriHandler.current
-    val activity = remember(steps, busy, paused, answering) { researchActivityEntries(steps, busy, paused, answering) }
+    val activity = remember(steps, busy, paused, answering, failed) { researchActivityEntries(steps, busy, paused, answering, failed) }
     val references = remember(sources) { sources.distinctBy { it.url } }
     val sourceStep = activity.indexOfLast { it.search }
     val state = when {
@@ -64,7 +64,7 @@ private val sourceReadSummary = Regex("^(Прочитано источников
 
 /** Reading counts describe the operation; a pending runtime call is not a completed analysis. */
 internal fun researchActivityEntries(steps: List<CodingStep>, busy: Boolean, paused: Boolean,
-    answering: Boolean = false): List<ResearchActivityEntry> {
+    answering: Boolean = false, failed: Boolean = false): List<ResearchActivityEntry> {
     val entries = steps.researchActivity().filter { it.isVisibleActivity }
         .distinctBy { it.id.ifBlank { "${it.kind}:${it.title}" } }.map { step ->
             val search = step.tool in setOf("web.search", "web_search", "search")
@@ -79,6 +79,8 @@ internal fun researchActivityEntries(steps: List<CodingStep>, busy: Boolean, pau
             val title = when { search -> "Поиск дополнительных материалов"; checking -> "Проверка выбранных источников"; else -> text }
             val readSummary = if (checking) sourceReadSummary.matchEntire(text) else null
             val detail = when {
+                step.kind == CodingStepKind.ERROR && text == RESEARCH_MODEL_FAILURE ->
+                    "Проверьте подключение к модели и нажмите «Продолжить»."
                 readSummary != null -> readSummary.groupValues[1]
                 search || checking -> text.takeUnless { it == title }
                 state == PaperResearchStepState.PAUSED -> "Приостановлено"
@@ -92,7 +94,7 @@ internal fun researchActivityEntries(steps: List<CodingStep>, busy: Boolean, pau
         }
     // This is the observable wait between completed tools and the next runtime event,
     // not a fabricated thinking/search stage or a guessed plan.
-    return if ((busy || paused) && entries.none { it.state == PaperResearchStepState.ACTIVE || it.state == PaperResearchStepState.PAUSED })
+    return if (!failed && (busy || paused) && entries.none { it.state == PaperResearchStepState.ACTIVE || it.state == PaperResearchStepState.PAUSED })
         entries + ResearchActivityEntry(if (answering) "Подготовка ответа" else "Ответ агента",
             if (paused) "Приостановлено" else if (answering) "Ответ поступает…" else "Ожидаю ответ…",
             if (answering) "Готовлю ответ" else "Ожидаю ответ агента",

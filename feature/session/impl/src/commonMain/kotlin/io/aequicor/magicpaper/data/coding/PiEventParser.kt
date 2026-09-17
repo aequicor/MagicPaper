@@ -84,7 +84,7 @@ object PiEventParser {
             "auto_retry_end" -> if (obj["success"] == JsonPrimitive(true)) {
                 CodingEvent.Notice("Автоповтор удался")
             } else {
-                CodingEvent.Failed(obj.primitive("error") ?: "Провайер отказал после автоповторов")
+                CodingEvent.Failed(obj.primitive("error")?.takeIf { it.isNotBlank() } ?: "Провайдер отказал после автоповторов")
             }
             "message_update" -> parseDelta(obj, summaryOnly)
             // message_end даёт несколько событий — его разбирает parseEvents.
@@ -137,7 +137,8 @@ object PiEventParser {
         if (message.primitive("role") != "assistant") return emptyList()
         val stopReason = message.primitive("stopReason").orEmpty()
         if (stopReason == "error") {
-            return listOf(CodingEvent.Failed(message.primitive("errorMessage") ?: "агент вернул ошибку"))
+            return listOf(CodingEvent.Failed(message.primitive("errorMessage")?.takeIf { it.isNotBlank() }
+                ?: "Модель завершила запрос с ошибкой без описания."))
         }
         val blocks = message["content"]?.jsonArray
         val text = blocks

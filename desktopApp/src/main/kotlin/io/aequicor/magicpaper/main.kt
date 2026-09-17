@@ -2,6 +2,7 @@ package io.aequicor.magicpaper
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -9,15 +10,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.FrameWindowScope
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.platform.LocalDensity
 import io.aequicor.magicpaper.ui.window.DesktopWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowChrome
 import io.aequicor.magicpaper.ui.window.LocalWindowScope
@@ -190,6 +194,34 @@ private fun runMagicPaperWindow(
             // Linux: fully undecorated — Compose draws the entire chrome.
             undecorated = mode == DesktopWindowMode.LINUX_CUSTOM,
         ) {
+            val codingRuntime = remember(runtime) { runtime.koin.get<io.aequicor.magicpaper.domain.CodingRuntime>() }
+            val computer = codingRuntime.computerUse
+            val computerState = computer?.state?.collectAsState()?.value
+            val compact = computerState?.desktopActive == true
+            var feedbackError by remember { mutableStateOf(false) }
+            DisposableEffect(compact, window) {
+                val previousPlacement = state.placement
+                val previouslyMinimized = state.isMinimized
+                if (compact) { state.placement = WindowPlacement.Floating; state.isMinimized = false }
+                val geometry = if (compact) DesktopComputerWindow(window) else null
+                onDispose {
+                    geometry?.close()
+                    if (geometry != null) { state.placement = previousPlacement; state.isMinimized = previouslyMinimized }
+                }
+            }
+            val feedback = remember(window) { DesktopComputerFeedback() }
+            DisposableEffect(feedback) { onDispose { feedback.close() } }
+            LaunchedEffect(computerState?.activity, compact) {
+                if (!compact) { feedback.close(); feedbackError = false }
+                else computerState?.activity?.let { activity ->
+                    if (!feedbackError) try { feedback.show(activity) }
+                    catch (error: Exception) {
+                        feedback.close()
+                        feedbackError = true
+                        AppLog.error("desktop_host", "computer.feedback.failed", fields = mapOf("causeType" to error.javaClass.simpleName))
+                    }
+                }
+            }
             LaunchedEffect(root, window) {
                 for (links in activations) {
                     AppLog.info("desktop_host", "activation_received", mapOf("count" to links.size.toString()))
@@ -224,8 +256,9 @@ private fun runMagicPaperWindow(
             DisposableEffect(windowsTitleBar) {
                 onDispose { windowsTitleBar?.dispose() }
             }
+            val fullscreen = state.placement == WindowPlacement.Fullscreen
             val titleBarInsets = when (mode) {
-                DesktopWindowMode.MAC_SYSTEM -> rememberMacTitleBarInsets()
+                DesktopWindowMode.MAC_SYSTEM -> rememberMacTitleBarInsets(fullscreen)
                 DesktopWindowMode.WINDOWS_JBR_CUSTOM -> PaddingValues(
                     start = (windowsTitleBar?.leftInset ?: 0f).dp,
                     end = (windowsTitleBar?.rightInset ?: 0f).dp,
@@ -241,9 +274,16 @@ private fun runMagicPaperWindow(
                 LocalWindowTitleBarInsets provides titleBarInsets,
                 LocalWindowsTitleBarController provides windowsTitleBar,
                 // macOS: одна строка с нативным «светофором», без второго ряда ниже.
-                LocalWindowToolbarHeight provides if (mode == DesktopWindowMode.MAC_SYSTEM) MacTitleBarHeight else 40.dp,
+                LocalWindowToolbarHeight provides desktopToolbarHeight(mode, state.placement, LocalDensity.current.fontScale),
             ) {
-                App(runtime, root)
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) { App(runtime, root, compact = compact) }
+                    if (compact) PaperTheme {
+                        io.aequicor.magicpaper.designsystem.PaperComputerControlBar(
+                            if (feedbackError) "Подсветка экрана недоступна" else computerState?.detail.orEmpty(),
+                            onStop = { computerState?.sessionId?.let(codingRuntime::abort); computer?.disable() })
+                    }
+                }
             }
         }
     }
@@ -256,17 +296,7 @@ private fun runMagicPaperWindow(
  * start — зона «светофора», чтобы под ним не оказалось интерактивных элементов.
  */
 @Composable
-private fun FrameWindowScope.rememberMacTitleBarInsets(): PaddingValues {
-    var insets by remember { mutableStateOf(macInsets(fullScreen = false)) }
-    fun read() {
-        // В полноэкранном режиме окно занимает ровно весь экран (с точностью
-        // до пикселя), меню и тайтлбар прячутся — инсеты обнуляем.
-        val bounds = window.bounds
-        val screen = window.graphicsConfiguration?.bounds
-        val fullScreen = screen != null &&
-            bounds.width == screen.width && bounds.height == screen.height
-        insets = macInsets(fullScreen)
-    }
+internal fun FrameWindowScope.rememberMacTitleBarInsets(fullscreen: Boolean): PaddingValues {
     DisposableEffect(window) {
         val rootPane = (window as? JFrame)?.rootPane
         fun applyTitleBarStyle() {
@@ -282,16 +312,12 @@ private fun FrameWindowScope.rememberMacTitleBarInsets(): PaddingValues {
         val listener = object : ComponentAdapter() {
             override fun componentResized(e: ComponentEvent) {
                 applyTitleBarStyle()
-                read()
             }
-
-            override fun componentMoved(e: ComponentEvent) = read()
         }
         window.addComponentListener(listener)
-        read()
         onDispose { window.removeComponentListener(listener) }
     }
-    return insets
+    return macInsets(fullscreen)
 }
 
 private fun macInsets(fullScreen: Boolean): PaddingValues {

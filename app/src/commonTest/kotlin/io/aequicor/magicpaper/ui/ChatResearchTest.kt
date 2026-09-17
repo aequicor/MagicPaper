@@ -11,6 +11,146 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatResearchTest {
+    @Test fun lateBrowserReadCannotRestoreARemovedAndRecreatedSource() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val read = CompletableDeferred<ResearchBrowserContent>()
+        val browser = object : ResearchPageBrowser {
+            override suspend fun open(url: String) = object : ResearchBrowserPage {
+                override suspend fun read() = read.await()
+                override suspend fun close() = Unit
+            }
+        }
+        val service = service(f, runtime, sourceAccess = ResearchSourceAccess { "Verify you are human" }, sourceBrowser = browser)
+        try {
+            val url = "https://example.org/article"
+            service.addWebsite("first", url).getOrThrow()
+            val original = f.chats.session("first")!!.resources.single()
+            service.openSourceBrowser("first", original.key)
+            advanceUntilIdle()
+            service.readSourceBrowser()
+            runCurrent()
+            service.removeResource("first", original.id).getOrThrow()
+            service.addWebsite("first", url).getOrThrow()
+            read.complete(ResearchBrowserContent(url, "Old snapshot"))
+            advanceUntilIdle()
+            assertEquals(ResearchBrowserPhase.FAILED, service.state.value.sourceBrowser?.phase)
+            assertContains(service.state.value.sourceBrowser?.problem.orEmpty(), "удалён")
+            service.send("Обсудим новый источник")
+            advanceUntilIdle()
+            assertTrue(runtime.calls.single().session.resources.isEmpty())
+            runtime.finish("first", "Пока нет прочитанного материала")
+            advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun browserReadRecoversAnUnavailableSourceAndSharesItOnlyInsideItsNotebook() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        var pageClosed = false
+        val browser = object : ResearchPageBrowser {
+            override suspend fun open(url: String) = object : ResearchBrowserPage {
+                override suspend fun read() = ResearchBrowserContent(url, "User approved readable article")
+                override suspend fun close() { pageClosed = true }
+            }
+        }
+        val service = service(f, runtime, sourceAccess = ResearchSourceAccess { "Verify you are human" }, sourceBrowser = browser)
+        try {
+            service.addWebsite("first", "https://example.org/article").getOrThrow()
+            service.send("Обсудим статью")
+            advanceUntilIdle()
+            assertTrue(runtime.calls.single().session.resources.isEmpty())
+            runtime.finish("first", "Источник пока недоступен")
+            advanceUntilIdle()
+            val resource = f.chats.session("first")!!.resources.single()
+            service.openSourceBrowser("first", resource.key)
+            advanceUntilIdle()
+            assertEquals(ResearchBrowserPhase.READY, service.state.value.sourceBrowser?.phase)
+            service.newQuestion().getOrThrow()
+            val sibling = service.state.value.current!!.id
+            service.readSourceBrowser()
+            advanceUntilIdle()
+            assertTrue(pageClosed)
+            assertNull(service.state.value.sourceBrowser)
+            assertTrue(service.state.value.sourceReadProblems.getValue("first").isEmpty())
+            assertNull(f.chats.session("first")!!.resources.single().readableText, "Browser text must not persist in the library")
+            service.send("Перескажи выбранную статью")
+            advanceUntilIdle()
+            assertEquals("User approved readable article", runtime.calls.last().session.resources.single().readableText)
+            runtime.finish(sibling, "Пересказ прочитанной статьи")
+            advanceUntilIdle()
+            service.setResourceEnabled(sibling, resource.key, false).getOrThrow()
+            service.send("Продолжим без источников")
+            advanceUntilIdle()
+            assertTrue(runtime.calls.last().session.resources.isEmpty(), "Browser import must respect selection")
+            runtime.finish(sibling, "Ответ без источников")
+            advanceUntilIdle()
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+    @Test fun twoReadableSourcesAreEnoughWhenThreePagesFailAndAToolReadFails() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime, sourceAccess = ResearchSourceAccess { url -> when {
+            url.endsWith("timeout") -> withTimeout(10) { delay(100); "late page" }
+            url.endsWith("blocked") -> "Verify you are human"
+            url.endsWith("error") -> error("transport failure")
+            else -> "Verified article text"
+        } })
+        try {
+            for (source in listOf("ok1", "ok2", "timeout", "blocked", "error"))
+                service.addWebsite("first", "https://example.org/$source").getOrThrow()
+            service.send("Исследуй вопрос по доступным материалам")
+            advanceUntilIdle()
+            assertTrue(service.state.value.busy)
+            assertEquals(2, runtime.calls.single().session.resources.size)
+            assertEquals(3, service.state.value.sourceReadProblems.getValue("first").size)
+            runtime.events.getValue("first").send(CodingEvent.ToolStarted("web.read", "", "extra-read"))
+            runtime.events.getValue("first").send(CodingEvent.ToolFinished("web.read", true, "extra-read"))
+            runtime.finish("first", "Ответ по двум прочитанным источникам")
+            advanceUntilIdle()
+            val stored = f.chats.session("first")!!
+            assertNull(stored.pendingRun)
+            assertFalse(service.state.value.busy)
+            assertEquals(5, stored.resources.size)
+            assertEquals(2, stored.messages.last().sources.size)
+            assertContains(stored.messages.last().text, "Ответ по двум прочитанным источникам")
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun modelFailureHasOneSafeErrorAndCanResumeWithoutLosingSourcesOrDuplicatingTheQuestion() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val service = service(f, runtime)
+        try {
+            service.addWebsite("first", "https://example.org/readable").getOrThrow()
+            service.send("Исследуй материал")
+            advanceUntilIdle()
+            runtime.events.getValue("first").send(CodingEvent.Failed(" "))
+            runtime.events.getValue("first").send(CodingEvent.Finished)
+            advanceUntilIdle()
+            val stored = f.chats.session("first")!!
+            assertEquals(ExecutionIntent.STOP, stored.pendingRun?.intent)
+            assertFalse(service.state.value.busy)
+            assertEquals(RESEARCH_MODEL_FAILURE, stored.pendingActivity.single { it.kind == CodingStepKind.ERROR }.title)
+            assertContains(service.state.value.notice.orEmpty(), "подключение к модели")
+            assertEquals(1, stored.resources.size)
+            service.resume()
+            advanceUntilIdle()
+            assertEquals(2, runtime.calls.size)
+            assertEquals(1, runtime.calls.last().session.resources.size)
+            runtime.finish("first", "Ответ после восстановления подключения")
+            advanceUntilIdle()
+            val completed = f.chats.session("first")!!
+            assertNull(completed.pendingRun)
+            assertEquals(1, completed.messages.count { it.role == ChatRole.USER })
+            assertContains(completed.messages.last().text, "Ответ после восстановления подключения")
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun followUpSendsOnceInItsQuestionAndPreservesTheComposerDraft() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
@@ -154,11 +294,12 @@ class ChatResearchTest {
 
     private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatRepository = f.chats,
         search: SearchEngine? = null, pins: RequestPinService? = null,
-        sourceAccess: ResearchSourceAccess = ResearchSourceAccess { "Readable fixture evidence" }): DefaultChatService {
+        sourceAccess: ResearchSourceAccess = ResearchSourceAccess { "Readable fixture evidence" },
+        sourceBrowser: ResearchPageBrowser? = null): DefaultChatService {
         f.seed()
         return DefaultChatService(runtime, repository, f.settings, f.profiles, pins,
             workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs,
-            researchSearch = search, sourceAccess = sourceAccess)
+            researchSearch = search, sourceAccess = sourceAccess, sourceBrowser = sourceBrowser)
             .also { it.start(); it.activate("first") }
     }
 

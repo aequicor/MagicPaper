@@ -80,7 +80,7 @@ final class ApplicationAdapter {
         var output: [[String: Any]] = []
         var seen = Set<pid_t>()
         for candidate in content.windows {
-            guard let owner = candidate.owningApplication, owner.processID != getpid(), seen.insert(owner.processID).inserted,
+            guard let owner = candidate.owningApplication, owner.processID != getpid(), owner.processID != getppid(), seen.insert(owner.processID).inserted,
                   let launched = NSRunningApplication(processIdentifier: owner.processID)?.launchDate else { continue }
             let app = AXUIElementCreateApplication(owner.processID)
             AXUIElementSetMessagingTimeout(app, 2)
@@ -144,6 +144,29 @@ final class ApplicationAdapter {
     }
     func request(_ args: [String: Any]) async throws -> [String: Any] {
         guard let action = args["action"] as? String else { throw Failure.unsupported }
+        // Internal desktop capture: the parent JVM (including every overlay/dialog) is excluded.
+        // Match global logical bounds, not array indices, so negative-origin/Retina screens work.
+        if action == "desktop_capture" {
+            if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
+            guard CGPreflightScreenCaptureAccess() else { throw Failure.permission }
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let x = args["x"] as? Int, let y = args["y"] as? Int,
+                  let width = args["width"] as? Int, let height = args["height"] as? Int,
+                  let display = content.displays.first(where: {
+                      let bounds = CGDisplayBounds($0.displayID)
+                      return Int(bounds.minX) == x && Int(bounds.minY) == y &&
+                          Int(bounds.width) == width && Int(bounds.height) == height
+                  }) else { throw Failure.stale }
+            let own = content.applications.filter { $0.processID == getppid() || $0.processID == getpid() }
+            let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+            let config = SCStreamConfiguration()
+            let scale = min(1, 1600 / Double(max(width, height)))
+            config.width = max(1, Int(Double(width) * scale)); config.height = max(1, Int(Double(height) * scale))
+            config.showsCursor = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { throw Failure.capture }
+            return ["png": png.base64EncodedString(), "width": image.width, "height": image.height]
+        }
         // Internal preflight for native acceptance/diagnostics; never opens a consent prompt.
         if action == "permissions" {
             return ["accessibility": AXIsProcessTrusted(), "screen_capture": CGPreflightScreenCaptureAccess()]

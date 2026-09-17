@@ -112,9 +112,10 @@ class UnifiedSessionFeedRenderTest {
             }.minBy { it.boundsInRoot.top }
             val task = scene.text("Обновить рабочее пространство")
             val selectedSession = scene.text("Этап 6: проверка интерфейса")
-            assertTrue(project.boundsInRoot.top >= 0f)
+            assertTrue(selectedSession.boundsInRoot.top >= 0f)
+            assertTrue(project.boundsInRoot.top >= selectedSession.boundsInRoot.bottom)
             assertTrue(task.boundsInRoot.top >= project.boundsInRoot.bottom)
-            assertTrue(selectedSession.boundsInRoot.top >= task.boundsInRoot.bottom)
+            assertTrue(task.boundsInRoot.left > project.boundsInRoot.left, "Project sessions are indented")
             assertTrue(abs(task.boundsInRoot.left - selectedSession.boundsInRoot.left) < 1f,
                 "Sticky session rows must remain on the same visual level")
             scene.save("one-level-sticky-sessions")
@@ -217,7 +218,7 @@ class UnifiedSessionFeedRenderTest {
         }
     }
 
-    @Test fun selectedWorkingAndWaitingSessionsStackUnderTheirProject() {
+    @Test fun selectionRetainsItsSlotAboveTheCurrentProjectAndStatusHeaders() {
         fun session(id: String, title: String, status: io.aequicor.magicpaper.domain.CodingSessionStatus) =
             UnifiedSidebarItem(id, title, 100, true, projectId = "p", projectName = "Project", codingStatus = status)
         val items = listOf(
@@ -241,13 +242,55 @@ class UnifiedSessionFeedRenderTest {
             val working = scene.text("Рабочий чат")
             val waiting = scene.text("Чат ждёт ответа")
 
-            assertTrue(project.boundsInRoot.top >= 0f)
-            assertTrue(selected.boundsInRoot.top >= project.boundsInRoot.bottom)
-            assertTrue(working.boundsInRoot.top >= selected.boundsInRoot.bottom)
+            assertTrue(selected.boundsInRoot.top >= 0f)
+            assertTrue(project.boundsInRoot.top >= selected.boundsInRoot.bottom)
+            assertTrue(working.boundsInRoot.top >= project.boundsInRoot.bottom)
             assertTrue(waiting.boundsInRoot.top >= working.boundsInRoot.bottom)
             assertTrue(abs(selected.boundsInRoot.left - working.boundsInRoot.left) < 1f)
             assertTrue(abs(working.boundsInRoot.left - waiting.boundsInRoot.left) < 1f)
             scene.save("flat-status-headers")
+        }
+    }
+
+    @Test fun selectedChatAndUnreadStickButReadySessionsWithOldUnreadFlagScrollAway() {
+        val groups = sidebarStickyPreviewGroups()
+        val state = LazyListState(firstVisibleItemIndex = 10)
+        ImageComposeScene(320, 520) {
+            PaperTheme { io.aequicor.magicpaper.designsystem.PaperSurface {
+                UnifiedSessionFeed(groups, "chat", false, emptySet(), {}, { _, _ -> }, {}, {}, {}, state = state)
+            } }
+        }.use { scene ->
+            scene.settle()
+            val chat = scene.text("Выбранный чат")
+            val project = scene.text("MagicPaper")
+            val unread = scene.text("Непрочитанный ответ")
+            assertTrue(chat.boundsInRoot.top >= 0f)
+            assertTrue(project.boundsInRoot.top >= chat.boundsInRoot.bottom)
+            assertTrue(unread.boundsInRoot.top >= project.boundsInRoot.bottom)
+            assertTrue(unread.boundsInRoot.left > project.boundsInRoot.left)
+            assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Готова к работе" } })
+            scene.save("selected-chat-and-unread")
+            repeat(8) {
+                scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 20f), scrollDelta = Offset(0f, 3f), type = PointerType.Mouse)
+                scene.settle()
+            }
+            assertTrue(state.firstVisibleItemIndex > 10)
+            assertEquals(chat.boundsInRoot.top, scene.text("Выбранный чат").boundsInRoot.top)
+            assertEquals(unread.boundsInRoot.top, scene.text("Непрочитанный ответ").boundsInRoot.top)
+        }
+    }
+
+    @Test fun stickyPreviewFitsNarrowWidthWithLargeText() {
+        ImageComposeScene(240, 720) {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) { UnifiedStickySessionFeedPreview() }
+        }.use { scene ->
+            scene.settle()
+            for (title in listOf("Выбранный чат", "MagicPaper", "Непрочитанный ответ")) {
+                val bounds = scene.text(title).boundsInRoot
+                assertTrue(bounds.left >= 0 && bounds.right <= 240)
+                assertTrue(bounds.top >= 0 && bounds.bottom <= 720)
+            }
+            scene.save("selected-chat-and-unread-large-text")
         }
     }
 

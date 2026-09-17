@@ -115,10 +115,9 @@ class ChatTranscriptDesignTest {
                 repeat(20) { onUi { scene.render(it * 32_000_000L).close() }; Thread.sleep(5) }
                 onUi {
                     val input = scene.nodes().first { it.config.contains(SemanticsActions.SetText) }
-                    val attach = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Файлы и параметры вопроса") }
-                    val plus = scene.text("+")
-                    assertTrue(plus.boundsInRoot.top >= attach.boundsInRoot.top && plus.boundsInRoot.bottom <= attach.boundsInRoot.bottom,
-                        "Attachment glyph must fit the control at ${case.scale} text scale")
+                    val attach = scene.nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Показать параметры и ресурсы") }
+                    assertTrue(attach.boundsInRoot.width >= 28 && attach.boundsInRoot.height >= 28,
+                        "Options disclosure retains its hit target at ${case.scale} text scale")
                     val labels = if (case.name == "busy") listOf("Пауза") else listOf("Отправить")
                     for (label in labels) {
                         val action = scene.action(label)

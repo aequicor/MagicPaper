@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonArray
 internal object PiAgentToolExtension {
     fun source(session: ToolSession) = """
         export default function(pi) {
+          ${io.aequicor.magicpaper.data.computer.PiScreenshotContext.source}
           const url = process.env.MAGICPAPER_AGENT_TOOLS_URL;
           const token = process.env.MAGICPAPER_AGENT_TOOLS_TOKEN;
           if (!url || !token) return;

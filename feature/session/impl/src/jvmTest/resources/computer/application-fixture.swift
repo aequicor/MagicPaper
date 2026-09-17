@@ -43,10 +43,13 @@ final class Fixture: NSObject {
         case "edit": text.stringValue = "Edited independently"
         case "close": target.close()
         case "snapshot": break
+        case "reveal": cover.orderFrontRegardless()
         default: return ["error": "unsupported"]
         }
         let mouse = CGEvent(source: nil)?.location ?? .zero
         return ["count": count, "text": text.stringValue,
+                "x": cover.frame.minX, "y": NSScreen.screens[0].frame.height - cover.frame.maxY,
+                "width": cover.frame.width, "height": cover.frame.height,
                 "foreground": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
                 "mouse_x": mouse.x, "mouse_y": mouse.y,
                 "clipboard_sequence": NSPasteboard.general.changeCount]

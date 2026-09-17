@@ -1,8 +1,6 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -20,7 +18,7 @@ fun renderFavoriteModelPicker(
     footer: @Composable () -> Unit = {},
 ) {
     PaperDialog(title = title, onDismissRequest = onDismiss, modifier = Modifier.widthIn(max = 480.dp).heightIn(max = 600.dp)) {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            PaperScrollColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 val choices = profiles.filter { it.connectionConfigured }.flatMap { p -> p.displayModels.map { p to it } }
                 if (choices.isEmpty()) PaperText("Добавьте избранные модели в настройках.")
                 choices.forEach { (p, key) ->

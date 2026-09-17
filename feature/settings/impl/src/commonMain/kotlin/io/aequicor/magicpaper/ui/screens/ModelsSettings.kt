@@ -4,8 +4,6 @@ import io.aequicor.magicpaper.designsystem.*
 
 import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -30,7 +28,7 @@ fun ModelsSettings(vm: DefaultSettingsComponent, state: SettingsState) {
     val operational = ProfileResolver.resolve(null as ChatSession?, state.settings, state.availableLlmProfiles)
     val default = state.settings.defaultModel ?: operational?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) }
     val favorites = state.llmProfiles.flatMap { p -> p.displayModels.map { p to it } }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    PaperScrollColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         PaperAction(onClick = vm::closeModelsSettings) { PaperText("‹ Настройки") }
         PaperText("Модели", style = paperTextStyle(PaperTextRole.TITLE))
         Spacer(Modifier.height(4.dp))
@@ -238,7 +236,7 @@ private fun ModelDescriptionEditor(vm: DefaultSettingsComponent, profile: LlmPro
 @Composable
 private fun EditorDialog(title: String, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     PaperDialog(title = title, onDismissRequest = onDismiss, dismissLabel = "Закрыть") {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
+        PaperScrollColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
     }
 }
 

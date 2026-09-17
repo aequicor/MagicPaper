@@ -28,14 +28,22 @@ class ResearchSourceAccess(private val readPage: (suspend (String) -> String)? =
                     ?: throw ResearchPageUnavailable("Истекло время ожидания страницы")
                 researchPageProblem(text, text, plain = true)?.let { throw ResearchPageUnavailable(it) }
                 ResearchSourceCheck(resource.copy(snippet = "", readableText = text.take(30_000)))
+            } catch (timeout: TimeoutCancellationException) {
+                // A reader can have a shorter, nested deadline. It only makes this
+                // page unavailable; a cancelled parent still stops the whole run.
+                currentCoroutineContext().ensureActive()
+                unavailable(resource, timeout, "Истекло время ожидания страницы")
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                AppLog.error("chat", "source.read.failed", fields = mapOf("resourceId" to resource.id,
-                    "causeType" to failure::class.simpleName.orEmpty()))
-                ResearchSourceCheck(resource.copy(snippet = "", readableText = null),
-                    (failure as? ResearchPageUnavailable)?.reason ?: "Не удалось загрузить страницу")
+                unavailable(resource, failure, (failure as? ResearchPageUnavailable)?.reason ?: "Не удалось загрузить страницу")
             }
         }
+    }
+
+    private fun unavailable(resource: ResearchResource, failure: Exception, problem: String): ResearchSourceCheck {
+        AppLog.error("chat", "source.read.failed", fields = mapOf("entityId" to resource.id,
+            "failure" to failure::class.simpleName.orEmpty(), "recovery" to "skip_source"))
+        return ResearchSourceCheck(resource.copy(snippet = "", readableText = null), problem)
     }
 }
 

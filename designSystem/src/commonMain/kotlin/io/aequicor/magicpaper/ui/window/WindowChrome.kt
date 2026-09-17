@@ -28,7 +28,7 @@ val LocalWindowChrome = staticCompositionLocalOf<WindowChrome?> { null }
  */
 val LocalWindowTitleBarInsets = staticCompositionLocalOf { PaddingValues() }
 
-/** Высота компактного desktop-тулбара; null сохраняет размер сенсорных кнопок. */
+/** Высота desktop-тулбара: 0 dp скрывает его в fullscreen; null сохраняет сенсорный размер. */
 val LocalWindowToolbarHeight = staticCompositionLocalOf<Dp?> { null }
 
 /**

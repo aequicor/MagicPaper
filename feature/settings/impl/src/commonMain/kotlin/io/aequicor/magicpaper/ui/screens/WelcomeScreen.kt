@@ -24,9 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -121,10 +119,10 @@ fun WelcomeScreen(
                     modifier = Modifier.fillMaxSize().widthIn(max = 560.dp),
                     contentAlignment = Alignment.TopCenter,
                 ) {
-                    Column(
+                    PaperScrollColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
+                            ,
                     ) {
                         when (p) {
                             0 -> WelcomeIntro()

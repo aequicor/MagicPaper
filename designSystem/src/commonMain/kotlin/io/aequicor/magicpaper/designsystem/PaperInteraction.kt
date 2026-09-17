@@ -23,6 +23,9 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
+/** Composite rows paint one hover surface; their child actions retain press and focus feedback. */
+internal val LocalPaperChildHoverFeedback = staticCompositionLocalOf { true }
+
 /** One outline for the hit region, full-surface feedback and keyboard focus. */
 public fun Modifier.paperClickable(
     enabled: Boolean = true,
@@ -61,6 +64,7 @@ internal fun Modifier.paperFeedback(
     val pressed by source.collectIsPressedAsState()
     val focused by source.collectIsFocusedAsState()
     val colors = LocalPaperColors.current
+    val hoverFeedback = showHover && LocalPaperChildHoverFeedback.current
     var pointerFocus by remember { mutableStateOf(false) }
     LaunchedEffect(focused) { if (!focused) pointerFocus = false }
     clip(shape)
@@ -77,7 +81,7 @@ internal fun Modifier.paperFeedback(
         val outline = shape.createOutline(size, layoutDirection, this)
         if (enabled) {
             if (showPress && (pressed || state == PaperControlState.PRESSED)) drawOutline(outline, colors.pressed)
-            else if (showHover && (hovered || state == PaperControlState.HOVER)) drawOutline(outline, colors.hover)
+            else if (hoverFeedback && (hovered || state == PaperControlState.HOVER)) drawOutline(outline, colors.hover)
             if (focused && showFocus && !pointerFocus || state == PaperControlState.FOCUSED) {
                 // A light separator keeps the focus ring visible on a dark primary button.
                 drawOutline(outline, colors.surface, style = Stroke(8.dp.toPx()))

@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
+import io.aequicor.magicpaper.designsystem.PaperLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import io.aequicor.magicpaper.designsystem.PaperButton
+import io.aequicor.magicpaper.designsystem.PaperNoteAddIcon
 import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperChoice
 import io.aequicor.magicpaper.designsystem.PaperDivider
@@ -29,12 +30,13 @@ fun SessionsPanel(vm: DefaultChatComponent, sessions: List<ChatSession>, current
     Column(Modifier.width(240.dp).fillMaxHeight()) {
         PaperText("Свитки", role = PaperTextRole.TITLE, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
         PaperDivider()
-        LazyColumn(Modifier.weight(1f)) {
+        PaperLazyColumn(Modifier.weight(1f)) {
             items(sessions, key = { it.id }) { session ->
                 SessionRow(session, session.id == currentId, { vm.selectSession(session.id) }, { vm.deleteSession(session.id) })
             }
         }
-        PaperButton("✦ Новый свиток", vm::newSession, Modifier.padding(8.dp), kind = PaperButtonKind.QUIET)
+        PaperButton("Новый свиток", vm::newSession, Modifier.padding(8.dp), kind = PaperButtonKind.QUIET,
+            leadingIcon = { PaperNoteAddIcon() })
     }
 }
 

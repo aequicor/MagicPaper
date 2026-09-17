@@ -1,9 +1,9 @@
 package io.aequicor.magicpaper.ui.components
 
+import io.aequicor.magicpaper.designsystem.PaperScrollColumn
+
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -109,7 +109,7 @@ private fun Questionnaire(
                 }
             }
             key(if (reviewing) "review" else question.id) {
-                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                PaperScrollColumn(Modifier.weight(1f, fill = false),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (reviewing) {
                         questions.forEach { q ->

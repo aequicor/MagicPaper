@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 import io.aequicor.magicpaper.domain.TaskWorktreePhase
 import io.aequicor.magicpaper.designsystem.PaperHoverActions
+import io.aequicor.magicpaper.designsystem.PaperNoteAddIcon
 import io.aequicor.magicpaper.designsystem.PaperRowMenu
 import io.aequicor.magicpaper.designsystem.PaperWorkspaceHeading
 import io.aequicor.magicpaper.designsystem.PaperWorkspaceComposer
@@ -53,7 +54,6 @@ import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -66,9 +66,7 @@ import io.aequicor.magicpaper.designsystem.paperClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CornerSize
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,7 +83,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import io.aequicor.magicpaper.designsystem.paperChatTopShadow
@@ -110,6 +107,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -584,7 +583,7 @@ internal fun ProjectsPanel(
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            PaperLazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 ui.projects.forEach { project ->
                     val selected = project.id == ui.current?.id
                     val expanded = selected && !projectCollapsed
@@ -751,12 +750,8 @@ private fun ProjectRow(
             // The action is deliberately available only on the current project: the
             // creation dialog saves into the ViewModel's current project.
             if (selected) {
-                PaperTextAction(
-                    onClick = onAddSession,
-                    modifier = Modifier.semantics { contentDescription = "Новая сессия" },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                ) {
-                    PaperText("Новая сессия", style = LocalPaperTypography.current.label)
+                PaperTooltip("Новая сессия") {
+                    PaperIconButton("Новая сессия", onAddSession) { PaperNoteAddIcon() }
                 }
             }
             PaperRowMenu(
@@ -904,7 +899,8 @@ private fun ProjectsEmptyHint(hasProject: Boolean, onCreate: () -> Unit) {
             color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(16.dp))
-        io.aequicor.magicpaper.designsystem.PaperButton(if (hasProject) "Новая сессия" else "Открыть проект", onCreate)
+        io.aequicor.magicpaper.designsystem.PaperButton(if (hasProject) "Новая сессия" else "Открыть проект", onCreate,
+            leadingIcon = if (hasProject) ({ PaperNoteAddIcon() }) else null)
     }
 }
 
@@ -1040,7 +1036,7 @@ internal fun CodingChat(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()
         .onGloballyPositioned { journalTopInWindow = it.boundsInWindow().top }) {
             val questionHeight = maxHeight * 0.75f
-            LazyColumn(
+            PaperLazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().paperChatScrollInput(scroll)
                     .paperChatTopShadow(scrolled, effectHeight = effectHeight, topOffset = localTopInset),
@@ -1732,7 +1728,6 @@ internal fun CodingComposer(
     worktreeSwitchEnabled: Boolean = true,
     worktreeInformation: String = "Работа в отдельной Git-копии. После завершения результат автоматически вливается в исходную ветку",
     onWorktreeChange: (() -> Unit)? = null,
-    directAttachmentAction: Boolean = false,
     compactPrimaryAction: Boolean = false,
     documentComposer: Boolean = research,
 ) {
@@ -1741,6 +1736,16 @@ internal fun CodingComposer(
     var attachments by state.attachments
     LaunchedEffect(text) {
         if (text != editorValue.text) editorValue = TextFieldValue(text, TextRange(text.length))
+    }
+    var menuOpen by remember(state) { mutableStateOf(false) }
+    var searchMenuOpen by remember(state) { mutableStateOf(false) }
+    var engineMenuOpen by remember(state) { mutableStateOf(false) }
+    val optionsFocus = remember { FocusRequester() }
+    fun closeMenu() {
+        menuOpen = false
+        searchMenuOpen = false
+        engineMenuOpen = false
+        optionsFocus.requestFocus()
     }
     val hasInput = text.isNotBlank() || attachments.isNotEmpty()
     val primaryAction = when {
@@ -1768,7 +1773,131 @@ internal fun CodingComposer(
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val trailingLimit = maxWidth * 0.40f
         val narrowContext = maxWidth < 600.dp
-        PaperWorkspaceComposer(document = documentComposer) {
+        PaperWorkspaceComposer(document = documentComposer, options = {
+            PaperComposerOptionsPanel(menuOpen, ::closeMenu,
+                maxHeight = (maxHeight * .4f).coerceIn(80.dp, 240.dp)) {
+                if (engineMenuOpen && onEngineChange != null) {
+                    PaperRichMenuAction(
+                        text = { PaperText("Backend движок", role = PaperTextRole.CHROME) },
+                        leadingIcon = { PaperText("‹", role = PaperTextRole.CHROME) },
+                        onClick = { engineMenuOpen = false },
+                    )
+                    PaperDivider()
+                    CodingEngine.entries.forEach { option ->
+                        PaperRichMenuAction(
+                            text = { PaperText(option.title, role = PaperTextRole.CHROME) },
+                            trailingIcon = if (engine == option) { { PaperText("✓", role = PaperTextRole.CHROME) } } else null,
+                            onClick = { closeMenu(); onEngineChange(option) },
+                        )
+                    }
+                } else if (searchMenuOpen && onSearchProvider != null) {
+                    PaperRichMenuAction(
+                        text = { PaperText("Поисковый движок", role = PaperTextRole.CHROME) },
+                        leadingIcon = { PaperText("‹", role = PaperTextRole.CHROME) },
+                        onClick = { searchMenuOpen = false },
+                    )
+                    PaperDivider()
+                    SearchProvider.entries.forEach { provider ->
+                        PaperRichMenuAction(
+                            text = { PaperText(provider.menuLabel, role = PaperTextRole.CHROME) },
+                            trailingIcon = if (searchProvider == provider) { { PaperText("✓", role = PaperTextRole.CHROME) } } else null,
+                            onClick = { closeMenu(); onSearchProvider(provider) },
+                        )
+                    }
+                } else {
+                    if (onSkills != null) PaperRichMenuAction(text = { PaperText("Навыки", role = PaperTextRole.CHROME) },
+                        onClick = { closeMenu(); onSkills() })
+                    PaperRichMenuAction(
+                        text = { PaperText("Прикрепить файлы", role = PaperTextRole.CHROME) },
+                        enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
+                        leadingIcon = { PaperNoteAddIcon(tint = LocalPaperColors.current.action) },
+                        onClick = {
+                            onPickAttachments(attachments.size) {
+                                attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE)
+                            }
+                        },
+                    )
+                    if (onInteractionMode != null) {
+                        val currentMode = if (planning) CodingInteractionMode.PLANNING else if (research) CodingInteractionMode.RESEARCH else CodingInteractionMode.CODE
+                        CodingInteractionMode.entries.forEach { mode ->
+                            PaperRichMenuAction(
+                                text = { PaperText(when (mode) {
+                                    CodingInteractionMode.CODE -> "Обычный режим"
+                                    CodingInteractionMode.RESEARCH -> "Режим исследования"
+                                    CodingInteractionMode.PLANNING -> "Режим планирования"
+                                }, role = PaperTextRole.CHROME) },
+                                trailingIcon = if (currentMode == mode) { { PaperText("✓", role = PaperTextRole.CHROME) } } else null,
+                                enabled = modeSwitchEnabled && !busy && (!planning || mode == CodingInteractionMode.PLANNING),
+                                onClick = { closeMenu(); if (currentMode != mode) onInteractionMode(mode) },
+                            )
+                        }
+                    } else if (onPlanning != null) {
+                        PaperRichMenuAction(
+                            text = { PaperText("Режим планирования", role = PaperTextRole.CHROME) },
+                            leadingIcon = { PaperText("🔀", role = PaperTextRole.CHROME) },
+                            trailingIcon = if (planning) { { PaperText("✓", role = PaperTextRole.CHROME) } } else null,
+                            onClick = {
+                                closeMenu()
+                                if (!planning) onPlanning()
+                            },
+                        )
+                    }
+                    if (onWorktreeChange != null) {
+                        PaperMenuToggleInfo("Worktree", worktreeChecked, worktreeSwitchEnabled,
+                            worktreeInformation, onCheckedChange = { closeMenu(); onWorktreeChange() })
+                    }
+                    // Feature flags toggle section
+                    if (onToggleFeatureFlag != null) {
+                        if (onSearchProvider != null || engine != null || onInteractionMode != null || onPlanning != null) PaperDivider()
+                        io.aequicor.magicpaper.domain.FeatureFlag.entries.forEach { flag ->
+                            val isEnabled = featureFlags.isEnabled(flag)
+                            PaperRichMenuAction(
+                                text = {
+                                    Column {
+                                        PaperText("⚡ ${flag.title}", role = PaperTextRole.CHROME)
+                                        PaperText(flag.description, style = LocalPaperTypography.current.chrome,
+                                            color = LocalPaperColors.current.secondaryText)
+                                    }
+                                },
+                                trailingIcon = if (isEnabled) { { PaperText("✓", role = PaperTextRole.CHROME) } } else null,
+                                onClick = { closeMenu(); onToggleFeatureFlag(flag) },
+                            )
+                        }
+                    }
+                    if (onSearchProvider != null || engine != null) PaperDivider()
+                    if (onSearchProvider != null) {
+                        PaperRichMenuAction(
+                            text = {
+                                Column {
+                                    PaperText("Поисковый движок", role = PaperTextRole.CHROME)
+                                    PaperText(searchProvider.menuLabel, style = LocalPaperTypography.current.chrome,
+                                        color = LocalPaperColors.current.secondaryText)
+                                }
+                            },
+                            trailingIcon = { PaperText("›", role = PaperTextRole.CHROME) },
+                            onClick = { searchMenuOpen = true },
+                        )
+                    }
+                    if (engine != null) {
+                        if (onEngineChange != null) PaperRichMenuAction(
+                            text = {
+                                Column {
+                                    PaperText("Backend движок", role = PaperTextRole.CHROME)
+                                    PaperText(engine.title, style = LocalPaperTypography.current.chrome,
+                                        color = LocalPaperColors.current.secondaryText)
+                                }
+                            },
+                            trailingIcon = { PaperText("›", role = PaperTextRole.CHROME) },
+                            onClick = { engineMenuOpen = true },
+                        ) else Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                            PaperText("Движок", style = LocalPaperTypography.current.chrome)
+                            PaperText(engine.title, style = LocalPaperTypography.current.chrome,
+                                color = LocalPaperColors.current.secondaryText)
+                        }
+                    }
+                }
+            }
+        }) {
             PendingAttachmentsRow(attachments, { index ->
                 attachments = attachments.filterIndexed { itemIndex, _ -> itemIndex != index }
             })
@@ -1800,144 +1929,11 @@ internal fun CodingComposer(
                     placeholder = promptPlaceholder,
                 )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box {
-                    var menuOpen by remember { mutableStateOf(false) }
-                    var searchMenuOpen by remember { mutableStateOf(false) }
-                    var engineMenuOpen by remember { mutableStateOf(false) }
-                    fun closeMenu() {
-                        menuOpen = false
-                        searchMenuOpen = false
-                        engineMenuOpen = false
-                    }
-                    PaperTextAction(onClick = {
-                        if (directAttachmentAction) onPickAttachments(attachments.size) { attachments = (attachments + it).take(MAX_ATTACHMENTS_PER_MESSAGE) }
-                        else { searchMenuOpen = false; engineMenuOpen = false; menuOpen = true }
-                    },
-                        modifier = Modifier.widthIn(min = 32.dp).heightIn(min = 32.dp).semantics { contentDescription = if (directAttachmentAction) "Прикрепить файлы" else "Инструменты и параметры сессии" },
-                        contentPadding = PaddingValues(0.dp)) {
-                        PaperText("+", style = LocalPaperTypography.current.title, color = LocalPaperColors.current.action)
-                    }
-                    PaperMenuHost(menuOpen, ::closeMenu) {
-                        if (engineMenuOpen && onEngineChange != null) {
-                            PaperRichMenuAction(
-                                text = { PaperText("Backend движок") },
-                                leadingIcon = { PaperText("‹") },
-                                onClick = { engineMenuOpen = false },
-                            )
-                            PaperDivider()
-                            CodingEngine.entries.forEach { option ->
-                                PaperRichMenuAction(
-                                    text = { PaperText(option.title) },
-                                    trailingIcon = if (engine == option) { { PaperText("✓") } } else null,
-                                    onClick = { closeMenu(); onEngineChange(option) },
-                                )
-                            }
-                        } else if (searchMenuOpen && onSearchProvider != null) {
-                            PaperRichMenuAction(
-                                text = { PaperText("Поисковый движок") },
-                                leadingIcon = { PaperText("‹") },
-                                onClick = { searchMenuOpen = false },
-                            )
-                            PaperDivider()
-                            SearchProvider.entries.forEach { provider ->
-                                PaperRichMenuAction(
-                                    text = { PaperText(provider.menuLabel) },
-                                    trailingIcon = if (searchProvider == provider) { { PaperText("✓") } } else null,
-                                    onClick = { closeMenu(); onSearchProvider(provider) },
-                                )
-                            }
-                        } else {
-                            PaperRichMenuAction(text = { PaperText("Навыки") }, enabled = onSkills != null,
-                                onClick = { closeMenu(); onSkills?.invoke() })
-                            PaperRichMenuAction(
-                                text = { PaperText("Прикрепить файлы") },
-                                leadingIcon = { PaperText("📎") },
-                                onClick = {
-                                    closeMenu()
-                                    onPickAttachments(attachments.size) { attachments = attachments + it }
-                                },
-                            )
-                            if (onInteractionMode != null) {
-                                val currentMode = if (planning) CodingInteractionMode.PLANNING else if (research) CodingInteractionMode.RESEARCH else CodingInteractionMode.CODE
-                                CodingInteractionMode.entries.forEach { mode ->
-                                    PaperRichMenuAction(
-                                        text = { PaperText(when (mode) {
-                                            CodingInteractionMode.CODE -> "Обычный режим"
-                                            CodingInteractionMode.RESEARCH -> "Режим исследования"
-                                            CodingInteractionMode.PLANNING -> "Режим планирования"
-                                        }) },
-                                        trailingIcon = if (currentMode == mode) { { PaperText("✓") } } else null,
-                                        enabled = modeSwitchEnabled && !busy && (!planning || mode == CodingInteractionMode.PLANNING),
-                                        onClick = { closeMenu(); if (currentMode != mode) onInteractionMode(mode) },
-                                    )
-                                }
-                            } else if (onPlanning != null) {
-                                PaperRichMenuAction(
-                                    text = { PaperText("Режим планирования") },
-                                    leadingIcon = { PaperText("🔀") },
-                                    trailingIcon = if (planning) { { PaperText("✓") } } else null,
-                                    onClick = {
-                                        closeMenu()
-                                        if (!planning) onPlanning()
-                                    },
-                                )
-                            }
-                            if (onWorktreeChange != null) {
-                                PaperMenuToggleInfo("Worktree", worktreeChecked, worktreeSwitchEnabled,
-                                    worktreeInformation, onCheckedChange = { closeMenu(); onWorktreeChange() })
-                            }
-                            // Feature flags toggle section
-                            if (onToggleFeatureFlag != null) {
-                                if (onSearchProvider != null || engine != null || onInteractionMode != null || onPlanning != null) PaperDivider()
-                                io.aequicor.magicpaper.domain.FeatureFlag.entries.forEach { flag ->
-                                    val isEnabled = featureFlags.isEnabled(flag)
-                                    PaperRichMenuAction(
-                                        text = {
-                                            Column {
-                                                PaperText("⚡ ${flag.title}")
-                                                PaperText(flag.description, style = LocalPaperTypography.current.body,
-                                                    color = LocalPaperColors.current.secondaryText)
-                                            }
-                                        },
-                                        trailingIcon = if (isEnabled) { { PaperText("✓") } } else null,
-                                        onClick = { closeMenu(); onToggleFeatureFlag(flag) },
-                                    )
-                                }
-                            }
-                            if (onSearchProvider != null || engine != null) PaperDivider()
-                            if (onSearchProvider != null) {
-                                PaperRichMenuAction(
-                                    text = {
-                                        Column {
-                                            PaperText("Поисковый движок")
-                                            PaperText(searchProvider.menuLabel, style = LocalPaperTypography.current.body,
-                                                color = LocalPaperColors.current.secondaryText)
-                                        }
-                                    },
-                                    trailingIcon = { PaperText("›") },
-                                    onClick = { searchMenuOpen = true },
-                                )
-                            }
-                            if (engine != null) {
-                                if (onEngineChange != null) PaperRichMenuAction(
-                                    text = {
-                                        Column {
-                                            PaperText("Backend движок")
-                                            PaperText(engine.title, style = LocalPaperTypography.current.body,
-                                                color = LocalPaperColors.current.secondaryText)
-                                        }
-                                    },
-                                    trailingIcon = { PaperText("›") },
-                                    onClick = { engineMenuOpen = true },
-                                ) else Column(Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                                    PaperText("Движок", style = LocalPaperTypography.current.body)
-                                    PaperText(engine.title, style = LocalPaperTypography.current.body,
-                                        color = LocalPaperColors.current.secondaryText)
-                                }
-                            }
-                        }
-                    }
-                }
+                PaperComposerOptionsToggle(menuOpen, {
+                    menuOpen = !menuOpen
+                    searchMenuOpen = false
+                    engineMenuOpen = false
+                }, Modifier.focusRequester(optionsFocus))
                 if (!narrowContext && (onInteractionMode != null || planning || research)) CodingModeLabel(planning, research)
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     Row(Modifier.widthIn(max = trailingLimit),

@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
+import io.aequicor.magicpaper.designsystem.PaperScrollColumn
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -8,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
@@ -63,7 +63,7 @@ internal fun EngineChoices(selected: CodingEngine, enabled: Boolean = true, onSe
 @Composable
 fun EnginesSettings(vm: DefaultSettingsComponent, state: SettingsState) {
     val coding by vm.coding.state.collectAsState()
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    PaperScrollColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PaperButton("‹ Настройки", vm::closeEnginesSettings, kind = PaperButtonKind.QUIET)
         PaperText("Движки", role = PaperTextRole.HEADLINE)
         PaperText("Движок новых сессий", role = PaperTextRole.TITLE)

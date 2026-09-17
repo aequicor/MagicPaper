@@ -18,6 +18,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
     val engine = createDesktopCodingRuntime(computer, subscription, skills::selection, skills::recordRun, skills.runObserver)
     return buildRuntime(
         layoutEditor = io.aequicor.magicpaper.data.layout.DesktopLayoutEditor(),
+        researchPageBrowser = io.aequicor.magicpaper.data.browser.DesktopResearchPageBrowser(),
         // Пределы моделей из каталога установленного движка: эндпоинты без метаданных
         // (например, DashScope compatible-mode) иначе остаются на значении конфигурации.
         modelLimits = engineModelLimits(),

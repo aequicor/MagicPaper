@@ -2,7 +2,6 @@
 
 package io.aequicor.magicpaper.designsystem
 
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
@@ -35,10 +34,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
@@ -182,7 +181,7 @@ public fun PaperInput(
     val colors = LocalPaperColors.current
     val source = remember { MutableInteractionSource() }
     val shape = RoundedCornerShape(6.dp)
-    BasicTextField(value, onValueChange, modifier = modifier.fillMaxWidth(),
+    PaperBasicTextField(value, onValueChange, modifier = modifier.fillMaxWidth(),
         enabled = enabled, singleLine = singleLine, minLines = minLines, maxLines = maxLines,
         textStyle = textStyle.copy(color = colors.text),
         visualTransformation = visualTransformation, interactionSource = source,
@@ -279,6 +278,7 @@ public fun PaperButton(
     accessibilityLabel: String = label,
     focusRequester: FocusRequester? = null,
     maxLines: Int = 1,
+    leadingIcon: (@Composable () -> Unit)? = null,
 ) {
     val colors = LocalPaperColors.current
     val policy = LocalPaperPlatformPolicy.current
@@ -305,7 +305,18 @@ public fun PaperButton(
     ) {
         Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
             if (loading) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), color = foreground, strokeWidth = 2.dp)
-            else PaperText(label, role = PaperTextRole.CHROME, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = if (!active || state == PaperControlState.SELECTED || state == PaperControlState.ERROR) colors.text else foreground, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+            else {
+                val ink = if (!active || state == PaperControlState.SELECTED || state == PaperControlState.ERROR) colors.text else foreground
+                if (leadingIcon == null) PaperText(label, role = PaperTextRole.CHROME,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = ink, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+                else androidx.compose.runtime.CompositionLocalProvider(LocalContentColor provides ink) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        leadingIcon()
+                        PaperText(label, Modifier.weight(1f, fill = false), role = PaperTextRole.CHROME,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = ink, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
         }
     }
 }
@@ -456,7 +467,7 @@ public data class PaperMenuItem(val label: String, val enabled: Boolean = true, 
 
 @Composable
 public fun PaperMenu(expanded: Boolean, onDismissRequest: () -> Unit, items: List<PaperMenuItem>, modifier: Modifier = Modifier) {
-    DropdownMenu(expanded, onDismissRequest, modifier) {
+    PaperMenuHost(expanded, onDismissRequest, modifier) {
         items.forEach { item -> PaperAction(modifier = Modifier.fillMaxWidth(), onClick = { onDismissRequest(); item.onClick() }, enabled = item.enabled) { PaperText(item.label, role = PaperTextRole.LABEL, color = if (item.destructive) LocalPaperColors.current.error else LocalPaperColors.current.text) } }
     }
 }
@@ -506,11 +517,12 @@ public fun PaperProgress(modifier: Modifier = Modifier, progress: Float? = null,
 
 @Composable
 public fun PaperList(modifier: Modifier = Modifier, contentPadding: PaddingValues = PaddingValues(0.dp), content: @Composable () -> Unit) {
-    Column(modifier.verticalScroll(rememberScrollState()).padding(contentPadding)) { content() }
+    PaperScrollColumn(modifier, contentPadding = contentPadding) { content() }
 }
 
-/** A scroll container that stays usable on every target; desktop hosts may add scrollbars outside it. */
+/** A scroll container with an overlay scrollbar on pointer platforms. */
 @Composable
 public fun PaperScrollArea(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier.verticalScroll(rememberScrollState()), content = { content() })
+    val state = rememberScrollState()
+    PaperScrollViewport(state, modifier) { Box(Modifier.verticalScroll(state), content = { content() }) }
 }

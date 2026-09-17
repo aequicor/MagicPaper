@@ -2,7 +2,6 @@ package io.aequicor.magicpaper.plugins.builtin
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -185,14 +184,14 @@ class CodingPlanningPlugin(
             }
         }
         PaperWizard(modifier.fillMaxWidth()) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            PaperScrollColumn(Modifier, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             PaperText("Планирование", role = PaperTextRole.HEADLINE)
             if (locked == null) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 projects.forEach { p -> PaperChoice(project?.id == p.id, { projectId = p.id }, enabled = !busy && !submitting, label = p.name) }
             }
             if (formState.error != null) PaperText("Не удалось сохранить черновик планирования.", color = LocalPaperColors.current.error)
-            if (!loaded || !formState.loaded) { PaperProgress(Modifier.fillMaxWidth()); notice?.let { PaperText(it, color = LocalPaperColors.current.error) }; return@Column }
-            if (project == null) { PaperText("Сначала добавьте проект в разделе «Проекты и код»."); return@Column }
+            if (!loaded || !formState.loaded) { PaperProgress(Modifier.fillMaxWidth()); notice?.let { PaperText(it, color = LocalPaperColors.current.error) }; return@PaperScrollColumn }
+            if (project == null) { PaperText("Сначала добавьте проект в разделе «Проекты и код»."); return@PaperScrollColumn }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PlanningStep.entries.filter { it != PlanningStep.STATUS }.forEachIndexed { index, target ->
                     PaperChoice(step == target, { navigate(target) }, enabled = !busy && !submitting && when (target) {
@@ -340,7 +339,7 @@ class CodingPlanningPlugin(
         PaperText("Уточнение цели", role = PaperTextRole.TITLE)
         val dialogueScroll = rememberScrollState()
         LaunchedEffect(plan.dialogue.size, dialogueScroll.maxValue) { dialogueScroll.animateScrollTo(dialogueScroll.maxValue) }
-        Column(Modifier.heightIn(max = 360.dp).verticalScroll(dialogueScroll)) {
+        PaperScrollColumn(Modifier.heightIn(max = 360.dp), state = dialogueScroll) {
             if (plan.dialogue.isEmpty() && !busy) PaperText("Начните уточнение: модель задаст вопросы о результате и ограничениях.", color = LocalPaperColors.current.secondaryText)
             plan.dialogue.forEach { message ->
                 PaperPanel(Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -356,7 +355,7 @@ class CodingPlanningPlugin(
         if (busy || activity.isNotEmpty()) PaperPanel(Modifier.fillMaxWidth()) {
             val activityScroll = rememberScrollState()
             LaunchedEffect(activity, activityScroll.maxValue) { activityScroll.scrollTo(activityScroll.maxValue) }
-            Column(Modifier.heightIn(max = 320.dp).verticalScroll(activityScroll).padding(12.dp)) {
+            PaperScrollColumn(Modifier.heightIn(max = 320.dp), state = activityScroll, contentPadding = PaddingValues(12.dp)) {
                 if (busy) PaperProgress(Modifier.fillMaxWidth())
                 activity.forEach { CodingStepRow(it, busy) }
             }
@@ -552,7 +551,7 @@ private fun milestoneLabel(status: MilestoneStatus) = when (status) {
                     PaperAction(onClick = onDismiss) { PaperText("Закрыть", role = PaperTextRole.LABEL) }
                 }
                 val scroll = rememberScrollState()
-                Column(Modifier.weight(1f).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                PaperScrollColumn(Modifier.weight(1f), state = scroll, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (stage != null) {
                         PaperText(milestoneLabel(stage.status), role = PaperTextRole.TITLE)
                         stage.assignment?.let { PaperText("${it.displayName.ifBlank { it.modelId }} · ${it.effort.shortLabel}", color = LocalPaperColors.current.secondaryText) }

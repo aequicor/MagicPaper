@@ -129,17 +129,17 @@ class MarkdownBlocksTest {
         }
     }
 
-    @Test fun fencedIndentedAndUnclosedCodeKeepTheWholeBodyInBoundedParts() {
+    @Test fun fencedIndentedAndUnclosedCodeKeepOneVisualAndCopyUnit() {
         val code = (1..1000).joinToString("\n") { "println(\"line $it 😀\")" }
         for (source in listOf("```kotlin\n$code\n```", "```kotlin\n$code", code.lineSequence().joinToString("\n") { "    $it" })) {
             val doc = document(source)
             val original = doc.node.children.first { it.type == Element.CODE_FENCE || it.type == Element.CODE_BLOCK }
             val content = original.children.filter { it.type == Token.CODE_FENCE_CONTENT || it.type == Token.CODE_LINE }
             val expected = source.substring(content.first().startOffset, content.last().endOffset)
-            val ranges = doc.blocks.filterIsInstance<MarkdownBlockNode>().mapNotNull { it.code }
-            assertTrue(ranges.size > 20)
-            assertTrue(ranges.all { it.count() <= MESSAGE_BLOCK_CHARS })
-            assertEquals(expected, ranges.joinToString("") { source.substring(it) })
+            val block = doc.blocks.single { it.type == Element.CODE_FENCE || it.type == Element.CODE_BLOCK }
+            assertSame(original, block, "Code must not acquire duplicate cards or headers at performance boundaries")
+            val renderedContent = block.children.filter { it.type == Token.CODE_FENCE_CONTENT || it.type == Token.CODE_LINE }
+            assertEquals(expected, source.substring(renderedContent.first().startOffset, renderedContent.last().endOffset))
         }
     }
 

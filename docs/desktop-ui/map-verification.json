@@ -1,8 +1,8 @@
 {
   "criterion": "4aa76be6-198a-4448-8af5-69bd0c97e7f2/ac-research-map",
   "status": "PASS",
-  "explicitBindings": 290,
-  "composableDeclarations": 286,
+  "explicitBindings": 295,
+  "composableDeclarations": 291,
   "entries": 4,
   "missingBindings": [],
   "staleBindings": [],
@@ -11,7 +11,7 @@
   "byStage": {
     "3": 0,
     "5": 76,
-    "6": 172,
+    "6": 177,
     "7": 35,
     "tools": 7
   },

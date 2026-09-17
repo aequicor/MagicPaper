@@ -11,6 +11,7 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 import com.sun.jna.NativeLibrary
 import kotlin.math.roundToInt
+import kotlinx.serialization.json.*
 
 internal data class ComputerDisplay(val id: String, val width: Int, val height: Int, val x: Int = 0, val y: Int = 0)
 internal data class DesktopCapture(val png: ByteArray, val width: Int, val height: Int)
@@ -21,6 +22,11 @@ internal interface ComputerDesktop {
     fun checkPermissions(access: ComputerAccess, request: Boolean = false)
     fun displays(): List<ComputerDisplay>
     fun capture(display: ComputerDisplay): DesktopCapture
+    fun capture(display: ComputerDisplay, checkActive: () -> Unit): DesktopCapture {
+        checkActive()
+        return capture(display).also { checkActive() }
+    }
+    fun close() = Unit
     fun perform(action: ComputerAction, display: ComputerDisplay, checkActive: () -> Unit)
 }
 
@@ -35,6 +41,9 @@ internal data class ComputerAction(
 )
 
 internal class AwtComputerDesktop : ComputerDesktop {
+    private var captureAdapter: NativeApplicationDesktop? = null
+    @Synchronized private fun captureAdapter() = captureAdapter ?: NativeApplicationDesktop().also { captureAdapter = it }
+    @Synchronized override fun close() { captureAdapter?.close(); captureAdapter = null }
     private val mac = System.getProperty("os.name").startsWith("Mac", ignoreCase = true)
     // AWT Robot cannot reliably control a Wayland desktop. Do not silently control XWayland alone.
     override val supported: Boolean get() = !GraphicsEnvironment.isHeadless() &&
@@ -45,7 +54,7 @@ internal class AwtComputerDesktop : ComputerDesktop {
         if (!mac) return
         val cg = NativeLibrary.getInstance("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
         fun canCapture() = cg.getFunction("CGPreflightScreenCaptureAccess").invokeInt(emptyArray()) and 0xff != 0
-        if (!canCapture()) {
+        if (!NativeApplicationDesktop.supported && !canCapture()) {
             if (request) cg.getFunction("CGRequestScreenCaptureAccess").invokeInt(emptyArray())
             check(canCapture()) {
                 "Разрешите запись экрана для MagicPaper (при запуске из IDE — для Java/IDE) в «Системные настройки → Конфиденциальность и безопасность → Запись экрана», затем перезапустите приложение."
@@ -70,8 +79,23 @@ internal class AwtComputerDesktop : ComputerDesktop {
     private fun device(display: ComputerDisplay) = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
         .firstOrNull { it.iDstring == display.id } ?: error("Экран отключён. Сделайте новый снимок.")
 
-    override fun capture(display: ComputerDisplay): DesktopCapture {
-        val raw = Robot(device(display)).createScreenCapture(Rectangle(display.x, display.y, display.width, display.height))
+    override fun capture(display: ComputerDisplay): DesktopCapture = capture(display) { }
+
+    override fun capture(display: ComputerDisplay, checkActive: () -> Unit): DesktopCapture {
+        checkActive()
+        if (mac && NativeApplicationDesktop.supported) {
+            val result = try { captureAdapter().request(buildJsonObject {
+                    put("action", "desktop_capture"); put("x", display.x); put("y", display.y)
+                    put("width", display.width); put("height", display.height)
+                }, checkActive)
+            } catch (error: Exception) { close(); throw error }
+            return DesktopCapture(java.util.Base64.getDecoder().decode(result.requiredString("png")),
+                result["width"]!!.jsonPrimitive.int, result["height"]!!.jsonPrimitive.int)
+        }
+        val raw = withOwnWindowsExcludedFromCapture {
+            checkActive()
+            Robot(device(display)).createScreenCapture(Rectangle(display.x, display.y, display.width, display.height))
+        }
         val scale = minOf(1.0, 1600.0 / maxOf(raw.width, raw.height))
         val width = (raw.width * scale).roundToInt().coerceAtLeast(1)
         val height = (raw.height * scale).roundToInt().coerceAtLeast(1)
@@ -87,6 +111,19 @@ internal class AwtComputerDesktop : ComputerDesktop {
     }
 
     override fun perform(action: ComputerAction, display: ComputerDisplay, checkActive: () -> Unit) {
+        if (action.kind in listOf("type", "key")) check(Window.getWindows().none { it.isFocused }) {
+            "Фокус находится в MagicPaper. Сделайте свежий screenshot и сначала нажмите на целевое окно."
+        }
+        val inputBounds = if (action.kind in listOf("key", "type")) null else {
+            val endX = if (action.kind == "drag") action.toX else action.x
+            val endY = if (action.kind == "drag") action.toY else action.y
+            Rectangle(display.x + minOf(action.x, endX), display.y + minOf(action.y, endY),
+                kotlin.math.abs(endX - action.x) + 1, kotlin.math.abs(endY - action.y) + 1)
+        }
+        withOwnWindowsIgnoringMouse(inputBounds) { performInput(action, display, checkActive) }
+    }
+
+    private fun performInput(action: ComputerAction, display: ComputerDisplay, checkActive: () -> Unit) {
         val robot = Robot(device(display)).apply { autoDelay = 25 }
         val button = when (action.button) {
             "right" -> InputEvent.BUTTON3_DOWN_MASK
@@ -146,7 +183,9 @@ internal class AwtComputerDesktop : ComputerDesktop {
 internal object ComputerKeys {
     fun parse(names: List<String>): List<Int> {
         require(names.isNotEmpty() && names.size <= 6) { "keys: от 1 до 6 клавиш" }
-        val codes = names.map { name ->
+        val codes = names.flatMap { name ->
+            if (name.uppercase() in listOf("PLUS", "+")) return@flatMap listOf(KeyEvent.VK_SHIFT, KeyEvent.VK_EQUALS)
+            listOf(
             when (val key = name.uppercase()) {
                 "CTRL", "CONTROL" -> KeyEvent.VK_CONTROL
                 "CMD", "META", "COMMAND", "SUPER" -> KeyEvent.VK_META
@@ -167,12 +206,15 @@ internal object ComputerKeys {
                 "END" -> KeyEvent.VK_END
                 "PAGEUP" -> KeyEvent.VK_PAGE_UP
                 "PAGEDOWN" -> KeyEvent.VK_PAGE_DOWN
+                "ADD", "NUMPAD_ADD" -> KeyEvent.VK_ADD
+                "EQUALS", "OEM_PLUS", "=" -> KeyEvent.VK_EQUALS
+                "MINUS", "OEM_MINUS", "-" -> KeyEvent.VK_MINUS
                 else -> when {
                     key.length == 1 && (key[0] in 'A'..'Z' || key[0] in '0'..'9') -> key[0].code
                     key.matches(Regex("F([1-9]|1[0-2])")) -> KeyEvent.VK_F1 + key.drop(1).toInt() - 1
-                    else -> throw IllegalArgumentException("Неподдерживаемая клавиша: $name")
+                    else -> throw IllegalArgumentException("Неизвестная клавиша. Используйте CMD, CTRL, ALT, SHIFT, ENTER, TAB, ESC, SPACE, BACKSPACE, DELETE, стрелки, HOME, END, PAGEUP, PAGEDOWN, A–Z, 0–9, F1–F12, PLUS, MINUS, EQUALS или ADD. Для символов используйте type.")
                 }
-            }
+            })
         }
         require(codes.distinct().size == codes.size) { "Повторяющиеся клавиши" }
         return codes

@@ -1,8 +1,6 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -29,7 +27,7 @@ internal fun PlanningProposalCard(plan: Plan, awaitingAnswers: Boolean, onConfir
     }
     if (open) PaperDialog(title = "Предложение доработки", onDismissRequest = { open = false }, modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth().heightIn(max = 650.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                PaperScrollColumn(Modifier.weight(1f, fill = false),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     PlanningProposalDetails(plan, awaitingAnswers, onConfirm)
                 }

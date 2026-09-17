@@ -13,7 +13,7 @@ import kotlinx.serialization.serializer
 @Serializable internal data class BrowserFill(val tabId: String, val selector: String, val text: String)
 @Serializable internal data class BrowserPress(val tabId: String, val selector: String, val key: String)
 @Serializable internal data class BrowserEvaluate(val tabId: String, val script: String)
-@Serializable internal data class BrowserScreenshot(val tabId: String, val width: Int = 1280, val height: Int = 800)
+@Serializable internal data class BrowserScreenshot(val tabId: String, val width: Int = 1280, val height: Int = 800, val format: String = "jpeg")
 @Serializable internal enum class HtmlSource { RESPONSE, DOM }
 @Serializable internal data class BrowserValidate(val tabId: String? = null, val html: String? = null, val source: HtmlSource = HtmlSource.RESPONSE)
 
@@ -30,7 +30,7 @@ internal object BrowserToolCatalog {
         tool<BrowserFill>("fill", "Заполнить поле вкладки по селектору Playwright. Не отправляет форму автоматически.", true),
         tool<BrowserPress>("press", "Нажать клавишу в элементе, например Enter, Tab или ArrowDown. Enter может отправить форму.", true),
         tool<BrowserEvaluate>("evaluate", "Выполнить JavaScript в странице для проверки DOM, стилей и поведения. script — выражение или функция. Возвращает JSON; вывод ограничен. Может изменить страницу, выполняй только действия из задачи.", true),
-        tool<BrowserScreenshot>("screenshot", "Снимок видимой области страницы. width/height от 320 до 1920; возвращает изображение PNG для визуальной проверки."),
+        tool<BrowserScreenshot>("screenshot", "Снимок видимой области страницы. width/height от 320 до 1920. По умолчанию JPEG; format=png для точных пикселей и мелкого текста."),
         tool<BrowserValidate>("validate_html", "Локальная проверка HTML через Nu Html Checker, без отправки разметки внешнему сервису. Укажи ровно одно: html с исходным текстом или tabId. source=RESPONSE проверяет исходный ответ сервера; DOM — исправленную браузером разметку. Возвращает ошибки с позициями; не заменяет визуальную проверку."),
     )
 }

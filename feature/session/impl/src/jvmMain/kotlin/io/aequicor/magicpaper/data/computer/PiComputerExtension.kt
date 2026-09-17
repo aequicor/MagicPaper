@@ -7,6 +7,7 @@ internal object PiComputerExtension {
     val source: String get() = """
         import { randomUUID } from 'node:crypto';
         export default function(pi) {
+          ${PiScreenshotContext.source}
           const url = process.env.MAGICPAPER_COMPUTER_URL;
           const token = process.env.MAGICPAPER_COMPUTER_TOKEN;
           if (!url || !token) return;

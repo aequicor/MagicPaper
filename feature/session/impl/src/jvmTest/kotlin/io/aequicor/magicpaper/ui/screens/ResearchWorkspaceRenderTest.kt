@@ -6,6 +6,9 @@ import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.AnnotatedString
@@ -17,6 +20,170 @@ import kotlin.test.*
 
 @OptIn(ExperimentalComposeUiApi::class)
 class ResearchWorkspaceRenderTest {
+    @Test fun unavailableSourceRemovalUsesTheCorrectGroupAndIsDisabledWhileSaving() {
+        val state = androidx.compose.runtime.mutableStateOf(researchPreviewState().let { state ->
+            state.copy(sourceReadProblems = mapOf("research" to mapOf(
+                "url:https://developer.android.com/topic/architecture" to "Ошибка HTTP 500",
+                "url:https://developer.android.com/compose" to "Истекло время ожидания страницы")))
+        })
+        val saving = androidx.compose.runtime.mutableStateOf(false)
+        val removed = mutableListOf<Pair<String, io.aequicor.magicpaper.domain.ResearchResourceScope>>()
+        var selections = 0
+        val scene = onUi { ImageComposeScene(1280, 850) {
+            io.aequicor.magicpaper.designsystem.PaperTheme {
+                ResearchWorkspaceContent(state.value, saving = saving.value,
+                    onRemoveResource = { id, target -> removed += id to target },
+                    onResourceEnabled = { _, _ -> selections++ }) {}
+            }
+        } }
+        var frame = 0L
+        fun settle() = repeat(12) { onUi { scene.render(++frame * 32_000_000L).close() } }
+        fun click(button: SemanticsNode) {
+            scene.sendPointerEvent(PointerEventType.Press, button.boundsInRoot.center,
+                type = PointerType.Mouse, button = PointerButton.Primary)
+            scene.sendPointerEvent(PointerEventType.Release, button.boundsInRoot.center,
+                type = PointerType.Mouse, button = PointerButton.Primary)
+        }
+        val sharedLabel = "Убрать источник: Guide to app architecture"
+        val questionLabel = "Убрать источник: Jetpack Compose"
+        try {
+            settle()
+            onUi {
+                click(scene.action(sharedLabel))
+                click(scene.action(questionLabel))
+                assertEquals(listOf("architecture" to io.aequicor.magicpaper.domain.ResearchResourceScope.SHARED,
+                    "compose" to io.aequicor.magicpaper.domain.ResearchResourceScope.QUESTION), removed)
+                assertEquals(0, selections)
+                assertFalse(scene.nodes().any { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                    .contains("Убрать источник: План обучения.pdf") })
+                saving.value = true
+            }
+            settle()
+            onUi {
+                val button = scene.action(sharedLabel)
+                assertTrue(button.config.contains(SemanticsProperties.Disabled))
+                click(button)
+                assertEquals(2, removed.size)
+                state.value = state.value.copy(sourceReadProblems = emptyMap())
+            }
+            settle()
+            onUi { assertFalse(scene.nodes().any { node -> node.config.getOrNull(SemanticsProperties.ContentDescription)
+                .orEmpty().any { it.startsWith("Убрать источник:") } }, "Permanent delete actions disappear after source recovery") }
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun sourceDomainOpensTheValidatedPageAndRecoversFromBrowserFailure() {
+        val opened = mutableListOf<String>()
+        var fail = true
+        val handler = object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) {
+                if (fail) error("Test browser unavailable")
+                opened += uri
+            }
+        }
+        val scene = onUi { ImageComposeScene(1280, 1000) {
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides handler) { ResearchWorkspacePreview() }
+        } }
+        fun settle() { repeat(16) { onUi { scene.render(it * 32_000_000L).close() } } }
+        try {
+            settle()
+            val checkboxLabel = "Использовать источник: Guide to app architecture"
+            val before = onUi { scene.action(checkboxLabel).config[SemanticsProperties.ToggleableState] }
+            onUi { scene.action("Открыть сайт: developer.android.com").config[SemanticsActions.OnClick].action!!.invoke() }
+            settle()
+            onUi {
+                assertTrue(scene.text("Не удалось открыть источник. Повторите попытку.").boundsInRoot.height > 0)
+                fail = false
+                scene.action("Открыть сайт: developer.android.com").config[SemanticsActions.OnClick].action!!.invoke()
+            }
+            settle()
+            onUi {
+                assertEquals(listOf("https://developer.android.com/topic/architecture"), opened)
+                assertEquals(before, scene.action(checkboxLabel).config[SemanticsProperties.ToggleableState], "Opening the page does not toggle source selection")
+                assertFalse(scene.nodes().any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Не удалось открыть источник. Повторите попытку." } })
+            }
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun answerSourcesAreCollapsedUntilTheirOwnHeaderIsActivated() {
+        val scene = onUi { ImageComposeScene(1280, 1000) { ResearchWorkspacePreview() } }
+        fun settle() { repeat(16) { onUi { scene.render(it * 32_000_000L).close() } } }
+        fun hasCitation() = scene.nodes().any {
+            it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == "Kotlin Documentation" }
+        }
+        try {
+            settle()
+            onUi {
+                assertFalse(hasCitation())
+                val header = scene.action("Развернуть источники ответа")
+                assertEquals("Свёрнуто, источников: 2", header.config[SemanticsProperties.StateDescription])
+                header.config[SemanticsActions.OnClick].action!!.invoke()
+            }
+            settle()
+            onUi {
+                assertTrue(hasCitation())
+                scene.action("Свернуть источники ответа").config[SemanticsActions.OnClick].action!!.invoke()
+            }
+            settle()
+            onUi { assertFalse(hasCitation()) }
+            scene.capture("answer-sources-collapsed", 900_000_000L)
+        } finally { onUi { scene.close() } }
+    }
+
+    @Test fun browserReadHasExplicitActionBusyFeedbackAndRecoveryAtNarrowAndLargeTextSizes() {
+        val cases = io.aequicor.magicpaper.ui.ResearchBrowserPhase.entries.map { it to (it != io.aequicor.magicpaper.ui.ResearchBrowserPhase.OPENING) } +
+            (io.aequicor.magicpaper.ui.ResearchBrowserPhase.FAILED to false)
+        for (scale in listOf(1f, 2f)) for ((phase, pageOpen) in cases) {
+            var reads = 0
+            var closes = 0
+            val width = if (scale == 1f) 360 else 560
+            val scene = onUi { ImageComposeScene(width, 640) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale)) {
+                    ResearchBrowserPreview(phase, { reads++ }, { closes++ }, pageOpen)
+                }
+            } }
+            try {
+                repeat(6) { onUi { scene.render(it * 32_000_000L).close() } }
+                onUi {
+                    val read = scene.action(if (phase == io.aequicor.magicpaper.ui.ResearchBrowserPhase.FAILED && !pageOpen) "Повторить открытие" else "Прочитать страницу")
+                    assertTrue(read.boundsInRoot.right <= width)
+                    assertTrue(read.boundsInRoot.bottom <= 640)
+                    if (phase == io.aequicor.magicpaper.ui.ResearchBrowserPhase.READY || phase == io.aequicor.magicpaper.ui.ResearchBrowserPhase.FAILED) {
+                        read.config[SemanticsActions.OnClick].action!!.invoke()
+                        assertEquals(1, reads)
+                    } else assertTrue(read.config.contains(SemanticsProperties.Disabled))
+                    scene.action("Отмена").config[SemanticsActions.OnClick].action!!.invoke()
+                    assertEquals(1, closes)
+                }
+                scene.capture("browser-${phase.name.lowercase()}${if (!pageOpen) "-closed" else ""}-$scale", 240_000_000L)
+            } finally { onUi { scene.close() } }
+        }
+    }
+    @Test fun modelFailureExplainsRecoveryWithoutInventingAPausedAnswerOrDuplicatingTheError() {
+        for ((width, scale) in listOf(680 to 1f, 360 to 1f, 720 to 2f)) {
+            var resumed = 0
+            val scene = onUi { ImageComposeScene(width, 600) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale)) {
+                    ResearchModelFailurePreview { resumed++ }
+                }
+            } }
+            try {
+                repeat(8) { onUi { scene.render(it * 32_000_000L).close() } }
+                onUi {
+                    val text = scene.nodes().flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }.map { it.text }
+                    assertEquals(1, text.count { it == io.aequicor.magicpaper.domain.RESEARCH_MODEL_FAILURE })
+                    assertTrue(text.any { "подключение к модели" in it })
+                    assertFalse("Ответ агента" in text)
+                    assertFalse("Приостановлено" in text)
+                    assertTrue(scene.text(io.aequicor.magicpaper.domain.RESEARCH_MODEL_FAILURE).boundsInRoot.right <= width)
+                    scene.action("Продолжить").config[SemanticsActions.OnClick].action!!.invoke()
+                    assertEquals(1, resumed)
+                }
+                scene.capture(if (width == 360) "model-failure-narrow" else "model-failure-$scale", 320_000_000L)
+            } finally { onUi { scene.close() } }
+        }
+    }
+
     @Test fun groupSelectionIsIndependentOfDisclosureAndTheOtherGroup() {
         val scene = onUi { ImageComposeScene(1280, 850) { ResearchWorkspacePreview() } }
         var frame = 0L
@@ -266,7 +433,7 @@ class ResearchWorkspaceRenderTest {
                         assertTrue(scene.text("Источники").boundsInRoot.right <= case.width)
                         assertTrue(scene.text("Общие для чата").boundsInRoot.width > 0)
                         if (case.name == "unreadable-source") {
-                            val problem = scene.text("Не используется: CAPTCHA или защита сайта")
+                            val problem = scene.text("CAPTCHA")
                             assertTrue(problem.boundsInRoot.right <= case.width)
                             assertTrue(problem.boundsInRoot.bottom < scene.text("План обучения.pdf").boundsInRoot.top)
                         }

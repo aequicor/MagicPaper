@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -156,7 +155,7 @@ internal fun SessionBrowserControls(
 internal fun SessionBrowserResults(results: List<SessionSearchResult>, archivesOnly: Boolean, searching: Boolean,
     selectedId: String?, viewingCoding: Boolean, onSelect: (SessionSearchResult) -> Unit,
     onRestore: (SessionSearchResult) -> Unit, modifier: Modifier = Modifier, loading: Boolean = false) {
-    LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+    PaperLazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item(key = "session-browser-heading") {
             PaperText(if (archivesOnly) "Архив" else "Результаты поиска", role = PaperTextRole.TITLE,

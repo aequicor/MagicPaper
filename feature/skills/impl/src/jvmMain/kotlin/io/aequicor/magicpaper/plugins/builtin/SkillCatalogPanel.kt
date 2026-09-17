@@ -3,8 +3,6 @@ package io.aequicor.magicpaper.plugins.builtin
 import io.aequicor.magicpaper.designsystem.*
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -59,13 +57,13 @@ internal fun SkillCatalogPanel(
             catch (error: Exception) { AppLog.error("SkillCatalogPanel", "review_restore_failed", error); notice = "Не удалось открыть сохранённую проверку." }
         }
     }
-    Column(Modifier.widthIn(max = 680.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    PaperScrollColumn(Modifier.widthIn(max = 680.dp).heightIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         PaperText("Добавить скилы из репозиториев", style = LocalPaperTypography.current.headline)
         PaperAction(onClick = { onClose() }) { PaperText("Назад к проекту") }
         if (notice.isNotEmpty()) PaperText(notice)
         if (operationState.cleanupPending) PaperAction(onClick = operation::retryCleanup) { PaperText("Повторить очистку") }
         if (state.error != null || reviewState.error != null) { PaperText("Черновик не сохранён.", color = LocalPaperColors.current.error); PaperAction(onClick = { owner.draft.retry(); reviewOwner.draft.retry() }) { PaperText("Повторить сохранение") } }
-        if (!state.loaded || !reviewState.loaded) { PaperProgress(Modifier.fillMaxWidth()); return@Column }
+        if (!state.loaded || !reviewState.loaded) { PaperProgress(Modifier.fillMaxWidth()); return@PaperScrollColumn }
         if (busy) {
             PaperProgress(Modifier.fillMaxWidth())
             PaperAction(enabled = operationState.cancellable, onClick = { operation.cancel() }) { PaperText("Отменить загрузку") }

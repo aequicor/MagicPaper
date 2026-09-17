@@ -19,6 +19,8 @@ data class ChatState(
     val drafts: Map<String, CodingDraft> = emptyMap(),
     /** Last read failures by question and resource key; rechecked on the next explicit request. */
     val sourceReadProblems: Map<String, Map<String, String>> = emptyMap(),
+    val sourceBrowserSupported: Boolean = false,
+    val sourceBrowser: ResearchBrowserState? = null,
 ) {
     val notebooks: List<ChatSession> get() = sessions.filter { it.researchParentId == null }
     val notebook: ChatSession? get() = current?.let { question -> sessions.firstOrNull { it.id == question.researchChatId } }

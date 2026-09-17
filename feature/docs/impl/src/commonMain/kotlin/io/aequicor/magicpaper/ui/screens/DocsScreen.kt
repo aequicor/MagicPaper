@@ -2,7 +2,6 @@ package io.aequicor.magicpaper.ui.screens
 
 import io.aequicor.magicpaper.designsystem.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -26,9 +25,9 @@ fun DocsScreen(state: DocsState, articleId: String?, onQuery: (String) -> Unit, 
             state.error != null -> PaperText(requireNotNull(state.error))
             !state.loaded -> PaperText("Загрузка…")
             articleId != null && state.selectedArticle == null -> PaperText("Статья не найдена")
-            articleId != null -> LazyColumn { item(key = articleId) { DocCard(requireNotNull(state.selectedArticle)) } }
+            articleId != null -> PaperLazyColumn { item(key = articleId) { DocCard(requireNotNull(state.selectedArticle)) } }
             state.articles.isEmpty() -> PaperText("Статьи не найдены")
-            else -> LazyColumn { items(state.articles, key = { it.id }) { article ->
+            else -> PaperLazyColumn { items(state.articles, key = { it.id }) { article ->
                 Column {
                     PaperButton(article.title, { onArticle(article.id) }, kind = PaperButtonKind.QUIET)
                     DocCard(article, showTitle = false)

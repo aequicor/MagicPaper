@@ -3,8 +3,6 @@ package io.aequicor.magicpaper.plugins.builtin
 import io.aequicor.magicpaper.designsystem.*
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -59,7 +57,7 @@ internal class ProjectSkillsPanel(private val forms: SkillsFormDrafts, private v
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { operation.report(failure) }
             }
-            Column(Modifier.widthIn(max = 680.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperScrollColumn(Modifier.widthIn(max = 680.dp).heightIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 PaperText("Проект: $projectId")
                 PaperAction(enabled = !busy, onClick = { catalogOpen = true }) { PaperText("Добавить скилы из репозиториев") }
                 PaperText(CodingSkillProtection.reason("Pi"))

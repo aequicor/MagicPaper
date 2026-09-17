@@ -2,9 +2,7 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
@@ -29,12 +27,14 @@ internal fun CodingApprovalDock(
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             PaperText(request.title, role = PaperTextRole.TITLE, fontWeight = FontWeight.SemiBold)
             PaperText("Сессия «${request.sessionName}»" + if (approvals.size > 1) " · Ожидают решения: ${approvals.size}" else "", role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
-            SelectionContainer(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PaperText(request.reason)
-                    PaperText(request.details, role = PaperTextRole.CODE)
-                    if (request.kind == CodingApprovalKind.PERMISSIONS) PaperText("Доступ действует до завершения текущего запроса.")
-                    if (!request.canAllow) PaperText("Движок не передал достаточно данных для разового разрешения. Можно отклонить действие.")
+            PaperScrollArea(Modifier.weight(1f, fill = false)) {
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PaperText(request.reason)
+                        PaperText(request.details, role = PaperTextRole.CODE)
+                        if (request.kind == CodingApprovalKind.PERMISSIONS) PaperText("Доступ действует до завершения текущего запроса.")
+                        if (!request.canAllow) PaperText("Движок не передал достаточно данных для разового разрешения. Можно отклонить действие.")
+                    }
                 }
             }
             request.error?.let { PaperText(it, color = LocalPaperColors.current.error) }

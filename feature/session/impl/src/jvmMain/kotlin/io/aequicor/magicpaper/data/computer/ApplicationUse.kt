@@ -19,6 +19,8 @@ internal class ApplicationUse(
     fun execute(args: JsonObject, control: Boolean, checkActive: () -> Unit): JsonObject {
         require(args.keys.all { it in ApplicationTool.fields }) { "Неизвестный параметр application" }
         val action = args.requiredString("action")
+        val format = args.optionalString("format") ?: "jpeg"
+        require(format in listOf("jpeg", "png")) { "format: jpeg или png" }
         require(action in ApplicationTool.actions) { "Неизвестное действие application" }
         checkActive()
         if (action == "windows") {
@@ -56,7 +58,8 @@ internal class ApplicationUse(
                     put("text", JsonObject(result.filterKeys { it != "png" } + if (nodes != null) mapOf("snapshot_id" to JsonPrimitive(id)) else emptyMap()).toString())
                 })
                 result.optionalString("png")?.let { png -> add(buildJsonObject {
-                    put("type", "image"); put("mimeType", "image/png"); put("data", png)
+                    val encoded = encodeScreenshot(java.util.Base64.getDecoder().decode(png), format)
+                    put("type", "image"); put("mimeType", encoded.mimeType); put("data", java.util.Base64.getEncoder().encodeToString(encoded.bytes))
                 }) }
             })
             put("isError", false)
@@ -68,10 +71,11 @@ internal class ApplicationUse(
 
 internal object ApplicationTool {
     val actions = listOf("windows", "inspect", "screenshot", "invoke", "set_value", "increment", "decrement")
-    val fields = setOf("action", "window_id", "snapshot_id", "element_id", "text")
+    val fields = setOf("action", "window_id", "snapshot_id", "element_id", "text", "format")
     const val instructions = "Use application for background interaction with one native window on macOS or Windows. " +
         "First list windows, select the one requested by the user, then inspect its accessible elements. " +
         "Use screenshot for visual review of that window without capturing other applications. " +
+        "Screenshots default to JPEG; use format=png for exact pixels. " +
         "Actions require window_id, snapshot_id and element_id from the latest inspect (30 seconds, single use). " +
         "Only actions listed on that element are supported: invoke, set_value (replaces text), increment, decrement. " +
         "Never use focus, global mouse, keyboard, clipboard or shell automation as a fallback. Custom canvases may not expose elements. " +

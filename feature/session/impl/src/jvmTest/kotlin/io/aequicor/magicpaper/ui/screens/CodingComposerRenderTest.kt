@@ -67,7 +67,7 @@ class CodingComposerRenderTest {
         } finally { Dispatchers.resetMain() }
     }
 
-    @Test fun plusMenuExposesWorktreeAndKeepsInfoAvailableWhileLocked() = runTest {
+    @Test fun optionsPanelExposesWorktreeAndKeepsInfoAvailableWhileLocked() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {
             var toggles = 0
@@ -77,11 +77,11 @@ class CodingComposerRenderTest {
                     onWorktreeChange = { toggles++ }, onSend = { _, _ -> }, onAbort = {}, onPickAttachments = { _, _ -> })
             } }.use { scene ->
                 var frame = 0L
-                fun render() { repeat(4) { frame += 16_000_000L; scene.render(frame).close(); runCurrent() } }
+                fun render() { repeat(18) { frame += 16_000_000L; scene.render(frame).close(); runCurrent() } }
                 fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
                 fun nodes() = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                 render()
-                nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Инструменты и параметры сессии") }
+                nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription) == listOf("Показать параметры и ресурсы") }
                     .config[SemanticsActions.OnClick].action!!.invoke()
                 render()
                 val setting = nodes().single { it.config.getOrNull(SemanticsProperties.Role) == Role.Checkbox }
@@ -90,7 +90,7 @@ class CodingComposerRenderTest {
                 assertFalse(info.config.contains(SemanticsProperties.Disabled))
                 assertEquals(0, toggles)
                 val output = File("build/reports/session-input").apply { mkdirs() }
-                File(output, "worktree-plus-menu.png").writeBytes(scene.render(frame + 16_000_000L).use {
+                File(output, "worktree-options-panel.png").writeBytes(scene.render(frame + 16_000_000L).use {
                     it.encodeToData()!!.use { data -> data.bytes }
                 })
             }

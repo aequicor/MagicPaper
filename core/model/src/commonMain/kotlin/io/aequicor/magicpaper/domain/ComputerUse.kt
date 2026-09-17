@@ -14,4 +14,14 @@ data class ComputerUseState(
     val preview: Attachment? = null,
     val applicationAccess: ComputerAccess = ComputerAccess.OFF,
     val error: Boolean = false,
+    val desktopActive: Boolean = false,
+    val activity: ComputerActivity? = null,
+)
+
+/** Ephemeral visual feedback. Logical display coordinates; never contains text, keys or captured pixels. */
+data class ComputerActivity(
+    val sequence: Long,
+    val displayX: Int, val displayY: Int, val displayWidth: Int, val displayHeight: Int,
+    val action: String,
+    val cursorX: Int? = null, val cursorY: Int? = null,
 )

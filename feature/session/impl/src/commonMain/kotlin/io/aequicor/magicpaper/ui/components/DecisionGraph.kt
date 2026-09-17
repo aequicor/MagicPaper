@@ -2,9 +2,6 @@ package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -144,9 +141,9 @@ private fun points(value: Double): String {
             schedule.order.isEmpty() -> "Добавьте этапы в план"
             else -> "Выберите вариант над схемой · названия путей указаны на задачах"
         }, role = PaperTextRole.LABEL)
-        if (!showNetwork) Column(Modifier.heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
+        if (!showNetwork) PaperScrollColumn(Modifier.heightIn(max = 144.dp)) {
             projected.tree.filter { it.kind == DecisionKind.CHOICE }.forEach { choice ->
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                PaperScrollRow(Modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     PaperText(choice.title, role = PaperTextRole.LABEL, modifier = Modifier.width(180.dp))
                     choice.children.forEach { id -> projected.tree.firstOrNull { it.id == id }?.let { option ->
                         val enabled = remember(sourcePlan, choice.id, id) { runCatching { selectPlanningOption(sourcePlan, choice.id, id) }.isSuccess }

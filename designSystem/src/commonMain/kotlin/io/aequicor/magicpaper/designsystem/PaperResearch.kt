@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -119,11 +120,11 @@ public fun PaperResearchPane(
 public fun PaperResearchQuestionRow(number: Int, title: String, selected: Boolean, onClick: () -> Unit,
     modifier: Modifier = Modifier, enabled: Boolean = true) {
     val colors = LocalPaperColors.current
-    Row(modifier.fillMaxWidth().heightIn(min = 44.dp)
+    Row(modifier.fillMaxWidth().heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
         .background(if (selected) colors.selected else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(6.dp))
         .paperClickable(enabled = enabled, onClick = onClick)
         .semantics { role = Role.Tab; this.selected = selected; contentDescription = "Вопрос $number: $title" }
-        .padding(horizontal = 8.dp, vertical = 8.dp),
+        .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Top) {
         PaperText(number.toString(), Modifier.widthIn(min = 16.dp), role = PaperTextRole.CHROME,
             color = colors.secondaryText, maxLines = 1)
@@ -131,14 +132,19 @@ public fun PaperResearchQuestionRow(number: Int, title: String, selected: Boolea
     }
 }
 
-/** The title uses the full text column; metadata and its independent action share the next row. */
+/** One hover surface with independent selection, website and menu actions.
+ * The menu aligns with the checkbox; metadata keeps the full text-column width. */
 @Composable
 public fun PaperResearchSourceRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier, enabled: Boolean = true, keepActionsVisible: Boolean = false,
     detail: String? = null, file: Boolean = false, icon: ImageBitmap? = null,
-    readProblem: String? = null,
+    readProblem: String? = null, readProblemLabel: String? = null, onReadProblem: (() -> Unit)? = null,
+    onOpenWebsite: (() -> Unit)? = null,
+    onRemove: (() -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {}) {
     val colors = LocalPaperColors.current
+    val controlHeight = maxOf(LocalPaperPlatformPolicy.current.density.controlHeight,
+        with(LocalDensity.current) { LocalPaperTypography.current.chrome.lineHeight.toDp() })
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     var actionFocused by remember { mutableStateOf(false) }
@@ -147,41 +153,68 @@ public fun PaperResearchSourceRow(title: String, checked: Boolean, onCheckedChan
     val showActions = hovered || keepActionsVisible || touch ||
         LocalPaperPlatformPolicy.current.platform == PaperPlatform.ANDROID ||
         (actionFocused && inputMode.inputMode == InputMode.Keyboard)
-    Row(modifier.fillMaxWidth().heightIn(min = 40.dp).hoverable(interaction)
-        .pointerInput(Unit) {
-            awaitPointerEventScope {
-                while (true) if (awaitPointerEvent(PointerEventPass.Initial).changes.any { it.type == PointerType.Touch }) touch = true
-            }
-        }, verticalAlignment = Alignment.CenterVertically) {
-        PaperCheck(checked, onCheckedChange, Modifier.semantics { contentDescription = "Использовать источник: $title" }, enabled)
-        Column(Modifier.weight(1f).padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            PaperAction({ onCheckedChange(!checked) }, Modifier.fillMaxWidth(), enabled = enabled,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp)) {
-                PaperText(title, Modifier.fillMaxWidth(), role = PaperTextRole.CHROME, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis, color = when {
-                        readProblem != null -> colors.error
-                        checked -> colors.text
-                        else -> colors.secondaryText
-                    })
-            }
-            Row(Modifier.fillMaxWidth().padding(start = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    if (detail != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (icon != null && !file) PaperImage(icon, null, Modifier.size(14.dp), scale = PaperImageScale.FIT)
-                        else PaperResearchSourceIcon(file)
-                        PaperText(detail, Modifier.weight(1f), style = LocalPaperTypography.current.chrome.copy(
-                            fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
-                            color = LocalPaperColors.current.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    CompositionLocalProvider(LocalPaperChildHoverFeedback provides false) {
+        Row(modifier.fillMaxWidth().heightIn(min = 40.dp).clip(RoundedCornerShape(6.dp))
+            .background(if (hovered && enabled) colors.hover else Color.Transparent).hoverable(interaction)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) if (awaitPointerEvent(PointerEventPass.Initial).changes.any { it.type == PointerType.Touch }) touch = true
+                }
+            }, verticalAlignment = Alignment.Top) {
+            PaperCheck(checked, onCheckedChange, Modifier.heightIn(min = controlHeight)
+                .semantics { contentDescription = "Использовать источник: $title" }, enabled)
+            Column(Modifier.weight(1f)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    PaperText(title, Modifier.weight(1f).heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
+                        .paperClickable(enabled = enabled) { onCheckedChange(!checked) }
+                        .padding(horizontal = 2.dp, vertical = 3.dp), role = PaperTextRole.CHROME, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis, color = when {
+                            readProblem != null -> colors.error
+                            checked -> colors.text
+                            else -> colors.secondaryText
+                        })
+                    // Reserve the menu slot, so hover and keyboard focus never reflow the title.
+                    Row(Modifier.heightIn(min = controlHeight).onFocusChanged { actionFocused = it.hasFocus }.graphicsLayer {
+                        alpha = if (showActions) 1f else 0f
+                    }, verticalAlignment = Alignment.CenterVertically, content = trailing)
+                }
+                Row(Modifier.fillMaxWidth().padding(start = 2.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        if (detail != null) Row(Modifier.fillMaxWidth().then(
+                            if (file || onOpenWebsite == null) Modifier else Modifier
+                                .heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
+                                .semantics { contentDescription = "Открыть сайт: $detail" }
+                                .paperClickable(enabled = enabled, role = Role.Button, onClick = onOpenWebsite)),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (icon != null && !file) PaperImage(icon, null, Modifier.size(14.dp), scale = PaperImageScale.FIT)
+                            else PaperResearchSourceIcon(file)
+                            PaperText(detail, Modifier.weight(1f), style = LocalPaperTypography.current.chrome.copy(
+                                fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
+                                color = LocalPaperColors.current.secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    if (readProblem != null) PaperTooltip(readProblem) {
+                        Box(Modifier
+                            .then(if (onReadProblem == null) Modifier else Modifier.heightIn(min = LocalPaperPlatformPolicy.current.density.controlHeight)
+                                .paperClickable(enabled = enabled, onClick = onReadProblem))
+                            .padding(start = 6.dp).semantics {
+                                contentDescription = if (onReadProblem != null) "Прочитать в браузере: $readProblem" else readProblem
+                                if (onReadProblem != null) role = Role.Button
+                            }, contentAlignment = Alignment.Center) {
+                            PaperText(readProblemLabel ?: "Ошибка",
+                                style = LocalPaperTypography.current.chrome.copy(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
+                                color = colors.error, maxLines = 1)
+                        }
+                    }
+                    // Unreadable sources can be removed directly, independently of the hover-only menu.
+                    if (readProblem != null && onRemove != null) PaperTooltip("Убрать источник") {
+                        PaperIconButton("Убрать источник: $title", onRemove,
+                            Modifier.padding(start = 4.dp), enabled = enabled) {
+                            PaperDeleteIcon(tint = colors.error)
+                        }
                     }
                 }
-                // Reserve actions beside metadata only. Hover and Tab do not resize the title.
-                Row(Modifier.onFocusChanged { actionFocused = it.hasFocus }.graphicsLayer {
-                    alpha = if (showActions) 1f else 0f
-                }, verticalAlignment = Alignment.CenterVertically, content = trailing)
             }
-            if (readProblem != null) PaperText("Не используется: $readProblem", Modifier.padding(horizontal = 2.dp),
-                style = LocalPaperTypography.current.chrome.copy(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal),
-                color = colors.error)
         }
     }
 }
@@ -213,6 +246,15 @@ private fun PaperResearchSourceIcon(file: Boolean) {
     }
 }
 
+/** Overflow glyph with stable geometry, independent of font fallback and text scale. */
+@Composable
+public fun PaperMoreIcon(modifier: Modifier = Modifier) {
+    val color = LocalPaperColors.current.text
+    Canvas(modifier.size(16.dp)) {
+        for (x in listOf(.2f, .5f, .8f)) drawCircle(color, 1.2.dp.toPx(), Offset(size.width * x, size.height / 2))
+    }
+}
+
 /** Selection, disclosure and file addition are independent sibling actions. */
 @Composable
 public fun PaperResearchSourceGroupHeader(title: String, expanded: Boolean, onToggle: () -> Unit,
@@ -222,45 +264,54 @@ public fun PaperResearchSourceGroupHeader(title: String, expanded: Boolean, onTo
     val colors = LocalPaperColors.current
     val allSelected = totalCount > 0 && selectedCount == totalCount
     val partiallySelected = selectedCount > 0 && selectedCount < totalCount
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        PaperCheck(allSelected, onSelectionChange, Modifier.semantics {
-            contentDescription = if (allSelected) "Снять выбор со всех: $title" else "Выбрать все: $title"
-            stateDescription = when {
-                allSelected -> "Выбраны все"
-                partiallySelected -> "Выбрана часть"
-                else -> "Ничего не выбрано"
-            }
-        }, enabled = enabled && totalCount > 0, indeterminate = partiallySelected)
-        PaperAction(onToggle, Modifier.weight(1f).semantics {
-            contentDescription = if (expanded) "Свернуть: $title" else "Развернуть: $title"
-            stateDescription = if (expanded) "Развёрнуто" else "Свёрнуто"
-        }.onPreviewKeyEvent { event ->
-            if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
-                if (event.type == KeyEventType.KeyDown && expanded != (event.key == Key.DirectionRight)) onToggle()
-                true
-            } else false
-        }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                PaperText(title, Modifier.weight(1f), role = PaperTextRole.CHROME,
-                    color = colors.secondaryText, maxLines = 2)
-                Canvas(Modifier.width(12.dp).height(12.dp)) {
-                    val path = Path().apply {
-                        if (expanded) {
-                            moveTo(size.width * .2f, size.height * .35f)
-                            lineTo(size.width * .5f, size.height * .65f)
-                            lineTo(size.width * .8f, size.height * .35f)
-                        } else {
-                            moveTo(size.width * .35f, size.height * .2f)
-                            lineTo(size.width * .65f, size.height * .5f)
-                            lineTo(size.width * .35f, size.height * .8f)
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Column(modifier.fillMaxWidth()) {
+        CompositionLocalProvider(LocalPaperChildHoverFeedback provides false) {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+                .background(if (hovered) colors.hover else Color.Transparent).hoverable(interaction),
+                verticalAlignment = Alignment.CenterVertically) {
+                PaperCheck(allSelected, onSelectionChange, Modifier.semantics {
+                    contentDescription = if (allSelected) "Снять выбор со всех: $title" else "Выбрать все: $title"
+                    stateDescription = when {
+                        allSelected -> "Выбраны все"
+                        partiallySelected -> "Выбрана часть"
+                        else -> "Ничего не выбрано"
+                    }
+                }, enabled = enabled && totalCount > 0, indeterminate = partiallySelected)
+                PaperAction(onToggle, Modifier.weight(1f).semantics {
+                    contentDescription = if (expanded) "Свернуть: $title" else "Развернуть: $title"
+                    stateDescription = if (expanded) "Развёрнуто" else "Свёрнуто"
+                }.onPreviewKeyEvent { event ->
+                    if (event.key == Key.DirectionLeft || event.key == Key.DirectionRight) {
+                        if (event.type == KeyEventType.KeyDown && expanded != (event.key == Key.DirectionRight)) onToggle()
+                        true
+                    } else false
+                }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        PaperText(title, Modifier.weight(1f), role = PaperTextRole.CHROME,
+                            color = colors.secondaryText, maxLines = 2)
+                        Canvas(Modifier.width(12.dp).height(12.dp)) {
+                            val path = Path().apply {
+                                if (expanded) {
+                                    moveTo(size.width * .2f, size.height * .35f)
+                                    lineTo(size.width * .5f, size.height * .65f)
+                                    lineTo(size.width * .8f, size.height * .35f)
+                                } else {
+                                    moveTo(size.width * .35f, size.height * .2f)
+                                    lineTo(size.width * .65f, size.height * .5f)
+                                    lineTo(size.width * .35f, size.height * .8f)
+                                }
+                            }
+                            drawPath(path, colors.secondaryText, style = androidx.compose.ui.graphics.drawscope.Stroke(1.4.dp.toPx()))
                         }
                     }
-                    drawPath(path, colors.secondaryText, style = androidx.compose.ui.graphics.drawscope.Stroke(1.4.dp.toPx()))
                 }
+                trailing()
             }
         }
-        trailing()
+        if (expanded) PaperDivider()
     }
 }
 

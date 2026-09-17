@@ -10,7 +10,7 @@ class DesktopComputerPermissionsTest {
         org.junit.Assume.assumeTrue("macOS permission preflight", System.getProperty("os.name").startsWith("Mac"))
         val report = DesktopComputerPermissions().inspect(ComputerAccess.CONTROL, ComputerAccess.OFF)
         assertEquals(PermissionPlatform.MACOS, report.platform)
-        assertEquals(ComputerPermission.entries.toList(), report.checks.map { it.permission })
+        assertEquals(ComputerPermission.entries.toSet(), report.checks.map { it.permission }.toSet())
         assertTrue(report.checks.all { java.nio.file.Files.exists(Path.of(it.target.path)) })
     }
 
@@ -21,7 +21,7 @@ class DesktopComputerPermissionsTest {
         val opened = mutableListOf<List<String>>()
         val port = DesktopComputerPermissions(PermissionPlatform.MACOS,
             { main++; PermissionHost(app, true, false) },
-            { helper++; PermissionHost(adapter, false, true) }, { opened += it })
+            { helper++; PermissionHost(adapter, false, true) }, { opened += it }, desktopCaptureUsesHelper = false)
         assertTrue(port.inspect(ComputerAccess.OFF, ComputerAccess.OFF).checks.isEmpty())
         assertEquals(0, main + helper)
         val screen = port.inspect(ComputerAccess.SCREEN, ComputerAccess.OFF)
@@ -49,7 +49,23 @@ class DesktopComputerPermissionsTest {
 
     @Test fun errorsArePropagatedInsteadOfReportedAsGranted() = runTest {
         val port = DesktopComputerPermissions(PermissionPlatform.MACOS, { error("probe unavailable") })
-        assertFailsWith<IllegalStateException> { port.inspect(ComputerAccess.SCREEN, ComputerAccess.OFF) }
+        assertFailsWith<IllegalStateException> { port.inspect(ComputerAccess.CONTROL, ComputerAccess.OFF) }
+    }
+
+    @Test fun excludedDesktopCaptureRequestsScreenAccessForHelperAndInputAccessForMainProcess() = runTest {
+        val app = PermissionTarget("App", "/tmp/app")
+        val helper = PermissionTarget("Helper", "/tmp/helper")
+        var mainProbes = 0
+        val port = DesktopComputerPermissions(PermissionPlatform.MACOS,
+            { mainProbes++; PermissionHost(app, false, true) }, { PermissionHost(helper, true, false) },
+            { error("Preflight must never prompt") }, desktopCaptureUsesHelper = true)
+        val screen = port.inspect(ComputerAccess.SCREEN, ComputerAccess.OFF)
+        assertEquals(listOf(PermissionCheck(ComputerPermission.SCREEN_RECORDING, helper, true)), screen.checks)
+        assertEquals(0, mainProbes)
+        val control = port.inspect(ComputerAccess.CONTROL, ComputerAccess.OFF)
+        assertEquals(setOf(PermissionCheck(ComputerPermission.ACCESSIBILITY, app, true),
+            PermissionCheck(ComputerPermission.SCREEN_RECORDING, helper, true)), control.checks.toSet())
+        assertEquals(3, port.inspect(ComputerAccess.CONTROL, ComputerAccess.CONTROL).checks.size)
     }
 
     @Test fun actualBundleOrDevelopmentExecutableIsUsedNotInventedApplicationPath() {

@@ -63,6 +63,7 @@ class PiCodingRuntime(
     rootDir: File = File(File(System.getProperty("user.home"), ".MagicPaper"), "coding"),
     override val computerUse: io.aequicor.magicpaper.data.computer.DesktopComputerUse? = null,
     private val subscriptionToken: (suspend () -> String)? = null,
+    private val browserAvailability: io.aequicor.magicpaper.data.browser.BrowserAvailability = io.aequicor.magicpaper.data.browser.BrowserAvailability(),
 ) : CodingRuntime {
     override var globalFeatureFlags: FeatureFlagState = FeatureFlagState()
 
@@ -364,7 +365,7 @@ class PiCodingRuntime(
         // изображения плейсхолдером — даже если модель в принципе vision.
         val imageInput = !restricted && (computerUse?.grant(session.id) != null || PiModelsConfig.supportsImageInput(codingProfile.modelId))
         writePiConfig(codingProfile, sessionHome(session.id), imageInput = imageInput, speedBoost = speedBoost, planning = planning)
-        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, flags, session))
+        writeAtomically(File(sessionHome(session.id), HINTS_FILE), codingSystemPrompt(io.aequicor.magicpaper.domain.CodingEngine.PI, planning, codingProfile.advanced.systemPromptOverride, research, session.runtimePlanningRules, flags, session, browserAvailable = browserAvailability.available))
         // Вложения раскладываем в изолированную папку; пути уходят в промпт —
         // агент читает их своими инструментами (текст и изображения).
         val attachedPaths = materializeAttachments(session.id, attachments)
@@ -404,7 +405,8 @@ class PiCodingRuntime(
         val computerBridge = if (restricted) null else computerUse?.bridge(session.id)
         val researchBridge = if (research) ResearchCheckBridge(session, project) else null
         val agentTools = currentCoroutineContext()[ToolSession]
-        val agentBridge = agentTools?.let { AgentToolBridge(it, cacheToolDefinitions = speedBoost) }
+        val agentBridge = agentTools?.let { AgentToolBridge(it, cacheToolDefinitions = speedBoost,
+            browser = io.aequicor.magicpaper.data.browser.BrowserToolSession(availability = browserAvailability)) }
         val questionnaireBridge = if (planning || agentTools != null) null else io.aequicor.magicpaper.data.questionnaire.QuestionnaireBridge(questionnaireRegistry, session)
         try {
             if (agentTools != null) writeAtomically(File(sessionHome(session.id), "agent-tools.mjs"), PiAgentToolExtension.source(agentTools))
@@ -419,7 +421,7 @@ class PiCodingRuntime(
             val maxContinues = if (speedBoost) MAX_OUTPUT_CONTINUES + 1 else MAX_OUTPUT_CONTINUES
             while (true) {
                 outcome = runPiAttempt(node, dir, session, codingProfile, promptText, piSessionId, emitEvent, computerBridge, questionnaireBridge, planning, researchBridge, agentBridge, agentTools, latency, latencyFields)
-                val canContinue = outcome.truncated != null && !outcome.answerSeen &&
+                val canContinue = outcome.truncated != null && !outcome.answerSeen && outcome.failure == null &&
                     !outcome.aborted && outcome.exitCode == 0 && !outcome.piSessionId.isNullOrBlank() &&
                     continues < maxContinues && !abortedSessions.contains(session.id)
                 if (!canContinue) break
@@ -446,7 +448,9 @@ class PiCodingRuntime(
         lateCalls.forEach { call -> CodingLatencyDiagnostics.log(call, latencyFields) }
         CodingLatencyDiagnostics.log(timing, latencyFields)
         if (!outcome.aborted && timing.wallMs >= SLOW_RUN_NOTICE_MS) emit(CodingEvent.Notice(timing.describe()))
-        if (!outcome.answerSeen) {
+        if (outcome.failure != null) {
+            emit(checkNotNull(outcome.failure))
+        } else if (!outcome.answerSeen) {
             emit(CodingEvent.Failed(failureReason(codingProfile, outcome, continues)))
         }
         emit(CodingEvent.Finished)
@@ -511,7 +515,7 @@ class PiCodingRuntime(
         val stderrFile = File.createTempFile("magicpaper-pi-stderr", ".log")
         stderrFile.deleteOnExit()
         var process: Process? = null
-        var answerSeen = false
+        val attemptEvents = PiAttemptEvents()
         var truncated: CodingEvent.OutputTruncated? = null
         var capturedId: String? = null
         var streamBroken: String? = null
@@ -592,8 +596,6 @@ class PiCodingRuntime(
                         when (event) {
                             is CodingEvent.SessionStarted ->
                                 if (event.sessionId.isNotBlank()) capturedId = event.sessionId
-                            is CodingEvent.FinalText -> answerSeen = true
-                            is CodingEvent.Failed -> answerSeen = true
                             is CodingEvent.OutputTruncated -> truncated = event
                             is CodingEvent.Compaction -> AppLog.info(
                                 "coding.pi", "compaction",
@@ -608,7 +610,7 @@ class PiCodingRuntime(
                         // фиксируется в момент прибытия, то есть вместе с задержкой, которую
                         // реально видел пользователь.
                         latency?.apply(event)?.forEach { call -> CodingLatencyDiagnostics.log(call, latencyFields) }
-                        emit(event)
+                        attemptEvents.accept(event)?.let { emit(it) }
                     }
                 }
             }
@@ -621,10 +623,11 @@ class PiCodingRuntime(
                     "sessionId" to session.id,
                   //  "projectId" to project?.id.orEmpty(),
                     "operationId" to session.id,
-                    "status" to if (exit == 0) "ok" else "failed",
+                    "status" to if (exit == 0 && attemptEvents.failure == null) "ok" else "failed",
                  //   "attempt" to attempt.toString(),
                     "result" to when {
-                        answerSeen -> "answered"
+                        attemptEvents.failure != null -> "model_failed"
+                        attemptEvents.answerSeen -> "answered"
                         truncated != null -> "truncated"
                         streamBroken != null -> "stream_broken"
                         else -> "no_answer"
@@ -632,7 +635,8 @@ class PiCodingRuntime(
                 ),
             )
             return AttemptOutcome(
-                answerSeen = answerSeen,
+                answerSeen = attemptEvents.answerSeen,
+                failure = attemptEvents.failure,
                 truncated = truncated,
                 aborted = abortedSessions.contains(session.id),
                 piSessionId = capturedId,
@@ -644,7 +648,8 @@ class PiCodingRuntime(
             throw e
         } catch (e: Exception) {
             return AttemptOutcome(
-                answerSeen = answerSeen,
+                answerSeen = attemptEvents.answerSeen,
+                failure = attemptEvents.failure,
                 truncated = truncated,
                 aborted = abortedSessions.contains(session.id),
                 piSessionId = capturedId,
@@ -669,6 +674,7 @@ class PiCodingRuntime(
     /** Итог одного запуска pi-агента (см. [runPiAttempt]). */
     private data class AttemptOutcome(
         val answerSeen: Boolean = false,
+        val failure: CodingEvent.Failed? = null,
         val truncated: CodingEvent.OutputTruncated? = null,
         val aborted: Boolean = false,
         val piSessionId: String? = null,

@@ -26,8 +26,8 @@ class ComputerUsePiIntegrationTest {
         val model = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         model.createContext("/") { exchange ->
             requests += Json.parseToJsonElement(exchange.requestBody.readBytes().decodeToString()).jsonObject
-            val chunks = if (requests.size == 1) listOf(
-                """{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"shot","type":"function","function":{"name":"$tool","arguments":""}}]}}]}""",
+            val chunks = if (requests.size <= 2) listOf(
+                """{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"shot-${requests.size}","type":"function","function":{"name":"$tool","arguments":""}}]}}]}""",
                 """{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"$arguments"}}]}}]}""",
                 """{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}""",
             ) else listOf(
@@ -68,10 +68,12 @@ class ComputerUsePiIntegrationTest {
                     process.outputStream.use { it.write("Describe the test screen".toByteArray()) }
                     assertTrue(process.waitFor(25, TimeUnit.SECONDS), "pi did not finish")
                     assertEquals(0, process.exitValue(), output.readText().take(4000))
-                    assertEquals(2, requests.size, output.readText().take(4000))
+                    assertEquals(3, requests.size, output.readText().take(4000))
                     val definitions = requests.first()["tools"]!!.jsonArray
                     assertTrue(definitions.any { it.jsonObject["function"]?.jsonObject?.get("name") == JsonPrimitive(tool) })
-                    assertContains(requests.last()["messages"].toString(), "data:image/png;base64,")
+                    val sent = requests.last()["messages"].toString()
+                    assertEquals(1, Regex("data:image/jpeg;base64,").findAll(sent).count(), "Only the latest screenshot should reach the model")
+                    assertContains(sent, "Earlier screenshot image omitted")
                     assertContains(output.readText(), "SCREEN_RECEIVED")
                     if (tool == "computer") assertNotNull(computer.state.value.preview)
                     else { assertNull(computer.state.value.preview); assertEquals(0, desktop.captures) }

@@ -14,6 +14,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class CodingSystemPromptsTest {
+    @Test fun explicitInteractionChannelWinsAndUnavailableBrowserIsNotAdvertised() {
+        for (engine in CodingEngine.entries) {
+            val prompt = codingSystemPrompt(engine, false, "", browserAvailable = false)
+            assertTrue(INTERACTION_CHANNEL_INSTRUCTIONS in prompt)
+            assertFalse(BROWSER_INSTRUCTIONS in prompt)
+            assertFalse("magicpaper_browser_" in prompt)
+            assertTrue("Не пытайся запускать его повторно" in prompt)
+        }
+    }
     @Test fun browserAndUiGuidesReachBothEnginesInEveryMode() {
         for (engine in CodingEngine.entries) for ((planning, research) in listOf(false to false, true to false, false to true)) {
             val prompt = codingSystemPrompt(engine, planning, "PROJECT RULES", research)

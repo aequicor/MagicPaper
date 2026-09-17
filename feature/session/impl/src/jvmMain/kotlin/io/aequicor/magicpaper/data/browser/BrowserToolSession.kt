@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class BrowserToolSession(
     private val launch: (Playwright) -> Browser = { it.chromium().launch() },
     private val createPlaywright: () -> Playwright = { Playwright.create() },
+    private val availability: BrowserAvailability = BrowserAvailability(),
 ) : AutoCloseable {
     private val dispatcher = Executors.newSingleThreadExecutor { task ->
         Thread(task, "magicpaper-browser").apply { isDaemon = true }
@@ -30,25 +31,19 @@ internal class BrowserToolSession(
     private val json = Json { encodeDefaults = true }
     private var nextTab = 0
 
-    val commands = BrowserToolCatalog.definitions.map { definition ->
+    val commands get() = if (!availability.available) emptyList() else BrowserToolCatalog.definitions.map { definition ->
         JsonToolCommand(definition) { _, _, arguments -> execute(definition.id, arguments) }
     }
 
     private fun browserContext(): BrowserContext {
         context?.let { return it }
-        try {
-            val driver = playwright ?: createPlaywright().also { playwright = it }
-            val instance = browser ?: launch(driver).also { browser = it }
-            return instance.newContext(Browser.NewContextOptions().setAcceptDownloads(false)).also { created ->
-                created.setDefaultTimeout(15_000.0)
-                created.setDefaultNavigationTimeout(30_000.0)
-                created.onPage { page -> register(page) }
-                context = created
-            }
-        } catch (error: Exception) {
-            // Launch has not issued a page action. An unavailable binary is a recoverable refusal.
-            AppLog.error("coding.browser", "launch.failed", mapOf("causeType" to error.javaClass.simpleName))
-            throw ToolStateRejection("Не удалось запустить Chromium. Проверьте доступ к загрузкам Playwright и повторите открытие страницы.")
+        val driver = playwright ?: availability.start("driver") { createPlaywright() }.also { playwright = it }
+        val instance = browser ?: availability.start("chromium") { launch(driver) }.also { browser = it }
+        return instance.newContext(Browser.NewContextOptions().setAcceptDownloads(false)).also { created ->
+            created.setDefaultTimeout(15_000.0)
+            created.setDefaultNavigationTimeout(30_000.0)
+            created.onPage { page -> register(page) }
+            context = created
         }
     }
 
@@ -117,13 +112,17 @@ internal class BrowserToolSession(
                 }
                 "browser.screenshot" -> json.decodeFromJsonElement<BrowserScreenshot>(arguments).let {
                     if (it.width !in 320..1920 || it.height !in 320..1920) throw ToolArgumentRejection("Размер снимка должен быть от 320 до 1920 пикселей.")
+                    if (it.format !in listOf("jpeg", "png")) throw ToolArgumentRejection("format: jpeg или png")
                     val page = tab(it.tabId).page
                     page.setViewportSize(it.width, it.height)
+                    val options = Page.ScreenshotOptions().setType(if (it.format == "png")
+                        com.microsoft.playwright.options.ScreenshotType.PNG else com.microsoft.playwright.options.ScreenshotType.JPEG)
+                    if (it.format == "jpeg") options.setQuality(80)
                     buildJsonObject {
                         put("tabId", it.tabId); put("url", page.url())
                         put("image", buildJsonObject {
-                            put("type", "image"); put("mimeType", "image/png")
-                            put("data", Base64.getEncoder().encodeToString(page.screenshot()))
+                            put("type", "image"); put("mimeType", "image/${it.format}")
+                            put("data", Base64.getEncoder().encodeToString(page.screenshot(options)))
                         })
                     }
                 }

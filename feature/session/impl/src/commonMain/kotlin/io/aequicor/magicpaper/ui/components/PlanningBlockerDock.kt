@@ -1,9 +1,7 @@
 package io.aequicor.magicpaper.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -33,9 +31,11 @@ internal fun PlanningBlockerCard(
     PaperApprovalDock(modifier) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PaperText("Выполнение остановлено", role = PaperTextRole.TITLE)
-            SelectionContainer(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    blockers.forEach { PaperText(it.text) }
+            PaperScrollArea(Modifier.weight(1f, fill = false)) {
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        blockers.forEach { PaperText(it.text) }
+                    }
                 }
             }
             if (blockers.none { it.issue.retryBlocked }) PaperButton(blockers.recoveryActionLabel(), onRetry, enabled = !busy)

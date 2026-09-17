@@ -25,7 +25,11 @@ kotlin {
         compilerOptions { jvmTarget = JvmTarget.JVM_11 }
     }
 
+    applyDefaultHierarchyTemplate()
     sourceSets {
+        val skikoMain by creating { dependsOn(commonMain.get()) }
+        jvmMain { dependsOn(skikoMain) }
+        webMain { dependsOn(skikoMain) }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)

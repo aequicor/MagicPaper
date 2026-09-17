@@ -38,9 +38,13 @@ fun ChatSession.availableResearchResources(notebook: ChatSession): List<Research
         it.url in excludedQuestionResourceUrls || it.discovered && it.url in notebook.excludedResourceUrls
     }).distinctBy { it.key }.filterNot { it.key in disabledResourceKeys }
 
+/** Fixed application-owned label; raw provider errors must not enter research activity. */
+const val RESEARCH_MODEL_FAILURE = "Не удалось получить ответ от модели"
+
 /** Activity is an observable operation log, not a copy of private model reasoning or the answer. */
 fun List<CodingStep>.researchActivity(): List<CodingStep> = filterNot { it.kind == CodingStepKind.ANSWER }
     .map { if (it.kind == CodingStepKind.THINKING || it.kind == CodingStepKind.SUMMARY)
         it.copy(title = "Анализирую материалы", result = "")
-        else if (it.kind == CodingStepKind.ERROR) it.copy(title = "Не удалось выполнить действие", result = "")
+        else if (it.kind == CodingStepKind.ERROR) it.copy(
+            title = if (it.title == RESEARCH_MODEL_FAILURE) RESEARCH_MODEL_FAILURE else "Не удалось выполнить действие", result = "")
         else it.copy(result = "") }

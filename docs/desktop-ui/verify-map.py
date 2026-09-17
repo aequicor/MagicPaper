@@ -22,8 +22,9 @@ STAGES = {
     '7': 'e3995487-9da9-419d-ac67-e5774675cc1e',
     'tools': 'paper-editor-integration',
 }
-COMPONENTS = set('''PaperAppShell PaperTheme PaperTokens PaperTypography
+COMPONENTS = set('''PaperAppShell PaperTheme PaperSurface PaperTokens PaperTypography
 PaperBackground PaperWindowHost PaperWindowInsets PaperCommandMenu PaperNavigation
+PaperComputerControlBar PaperComputerFeedback
 PaperSplitPane PaperPluginHost PaperToolbar PaperIconButton PaperNotice PaperPanel
 PaperGraphCanvas PaperGraphNode PaperField PaperButton PaperChatTranscript PaperComposer
 PaperMarkdown PaperDialog PaperChoice PaperListRow PaperStatus PaperImage
@@ -33,7 +34,7 @@ PaperActivityIndicator PaperWorkspaceHeading PaperWorkspaceComposer PaperPromptF
 PaperMenuToggleInfo PaperPage PaperTab PaperTreeRow PaperTreeGroupHeader PaperContentEntrance PaperSettingsSection PaperMenu
 PaperExpandableImage PaperCheck PaperFileTransfer PaperMessageActions PaperQuestionnaireChoice
 PaperResearchFollowUps PaperResearchSourceGroupHeader PaperResearchActivityPanel PaperResearchActivityStep PaperResearchSourceLink PaperComposerExpandButton PaperAction PaperResearchQuestionRow PaperResearchSourceRow PaperResearchPane PaperResearchCountBadge PaperBrandMark PaperWideDialog PaperDivider PaperMenuHost
-PaperSessionRow PaperStickyTree'''.split())
+PaperComposerOptionsToggle PaperComposerOptionsPanel PaperSessionRow PaperStickyTree PaperPanelIcon PaperScrollViewport PaperScrollColumn PaperScrollRow PaperLazyColumn PaperScrollArea'''.split())
 PATTERN = re.compile(
     r'@(?:androidx\.compose\.runtime\.)?Composable\s+'
     r'(?:@[\w.]+(?:\([^\n]*\))?\s+)*'
