@@ -21,6 +21,8 @@ data class ChatState(
     val sourceReadProblems: Map<String, Map<String, String>> = emptyMap(),
     val sourceBrowserSupported: Boolean = false,
     val sourceBrowser: ResearchBrowserState? = null,
+    /** Configured research search system; shown wherever search is offered or reported. */
+    val researchSearchLabel: String = "",
 ) {
     val notebooks: List<ChatSession> get() = sessions.filter { it.researchParentId == null }
     val notebook: ChatSession? get() = current?.let { question -> sessions.firstOrNull { it.id == question.researchChatId } }

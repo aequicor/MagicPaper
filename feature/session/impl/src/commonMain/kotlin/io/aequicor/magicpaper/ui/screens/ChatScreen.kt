@@ -76,11 +76,9 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     val profile = ProfileResolver.resolve(state.current, state.settings, state.availableLlmProfiles)
     val draft = state.current?.id?.let { state.drafts[it] }
     val context = usage?.contexts?.get("chat:${state.current?.id}")?.takeIf { it.model == profile?.modelId }
-    val activeSources = state.current?.let { question -> state.notebook?.let { question.availableResearchResources(it) } }.orEmpty()
-        .mapNotNull { resource -> resource.url.takeIf { it.isNotBlank() }?.let { SearchHit(resource.title, it) } }
     ResearchWorkspace(vm, state) {
         PaperResearchReading {
-            MessagesList(state.current, state.busy, draft = draft, activitySources = activeSources, modifier = Modifier.fillMaxSize(),
+            MessagesList(state.current, state.busy, draft = draft, modifier = Modifier.fillMaxSize(),
                 onEdit = { id, text -> vm.editMessage(checkNotNull(state.current).id, id, text) },
                 onDelete = { id -> vm.deleteMessage(checkNotNull(state.current).id, id) },
                 onFork = { id -> vm.forkSession(checkNotNull(state.current).id, id) },
@@ -115,7 +113,6 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
 @Composable
 internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifier = Modifier,
     draft: CodingDraft? = null,
-    activitySources: List<SearchHit> = emptyList(),
     onPause: (() -> Unit)? = null,
     onResume: (() -> Unit)? = null,
     onEdit: (suspend (String, String) -> Result<Unit>)? = null,
@@ -189,7 +186,6 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
                             fragment = fragment, working = message.id == pendingId && busy,
                             paused = message.id == pendingId && !busy && session?.pendingRun != null,
                             failed = message.id == pendingId && draft?.failedMessage != null,
-                            liveSources = if (message.id == pendingId) activitySources else message.sources,
                             showFollowUps = message.id == savedMessages.lastOrNull()?.id,
                             onFollowUp = onFollowUp?.takeIf { historyEnabled && session?.pendingRun == null &&
                                 message.id == savedMessages.lastOrNull()?.id }?.let { send -> { question -> send(message.id, question) } },
@@ -245,7 +241,7 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
 @Composable
 private fun MessageBubble(message: ChatMessage,
     fragment: ChatMessageFragment = ChatMessageFragment(message),
-    working: Boolean = false, paused: Boolean = false, failed: Boolean = false, liveSources: List<SearchHit> = emptyList(),
+    working: Boolean = false, paused: Boolean = false, failed: Boolean = false,
     onPause: (() -> Unit)? = null, onResume: (() -> Unit)? = null,
     onFollowUp: ((String) -> Unit)? = null,
     showFollowUps: Boolean = false,
@@ -261,7 +257,7 @@ private fun MessageBubble(message: ChatMessage,
                         .paperResearchMessage(fragment.first, fragment.last, isUser),
                 ) {
                     if (fragment.first && !isUser && (message.researchActivity.isNotEmpty() || working || paused)) {
-                        ResearchActivity(message.researchActivity, working, paused, failed, liveSources, onPause, onResume,
+                        ResearchActivity(message.researchActivity, working, paused, failed, onPause, onResume,
                             answering = message.text.isNotBlank())
                     }
                     if (fragment.parts != null) {

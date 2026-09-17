@@ -59,7 +59,10 @@ internal fun researchPreviewState(empty: Boolean = false, busy: Boolean = false)
                 "разберите типы, функции и null-безопасность в Kotlin. Навигацию и хранение данных добавляйте по мере необходимости.", 2,
                 followUps = listOf("Подобрать первый проект под мой опыт", "Сравнить учебные материалы по Kotlin и Compose",
                     "Написать статью: путь от первого экрана до Android-приложения"),
-                researchActivity = listOf(CodingStep(CodingStepKind.TOOL, "Найдено источников: 2", tool = "web.search", id = "search-complete")),
+                researchActivity = listOf(CodingStep(CodingStepKind.TOOL, "Найдено источников: 2", tool = "web.search", id = "search-complete",
+                    system = "Поиск: Querit.ai · чтение найденных страниц: загрузчик MagicPaper",
+                    sources = listOf(SearchHit("Kotlin Documentation", "https://kotlinlang.org/docs/home.html"),
+                        SearchHit("Jetpack Compose", "https://developer.android.com/compose")))),
                 sources = listOf(
                     SearchHit("Kotlin Documentation", "https://kotlinlang.org/docs/home.html", "Официальное руководство по языку Kotlin и корутинам."),
                     SearchHit("Jetpack Compose", "https://developer.android.com/compose", "Документация по современному UI Android."),
@@ -80,8 +83,12 @@ internal fun researchPreviewState(empty: Boolean = false, busy: Boolean = false)
         "Какие ресурсы помогут составить план на месяц?", 5)) else root
     return ChatState(sessions = if (empty) listOf(selected) else listOf(selected, architecture, compose), current = selected, busy = busy,
         drafts = if (busy) mapOf(root.id to CodingDraft(active = true, steps = listOf(
-            CodingStep(CodingStepKind.TOOL, "Проверены выбранные источники", tool = "read", id = "checked"),
-            CodingStep(CodingStepKind.TOOL, "Найдено источников: 2", tool = "web.search", id = "searching"),
+            CodingStep(CodingStepKind.TOOL, "Проверены выбранные источники", tool = "read", id = "checked",
+                system = "Чтение: загрузчик страниц MagicPaper (прямые HTTP-запросы)"),
+            CodingStep(CodingStepKind.TOOL, "Найдено источников: 2", tool = "web.search", id = "searching",
+                system = "Поиск: Querit.ai · чтение найденных страниц: загрузчик MagicPaper",
+                sources = listOf(SearchHit("Kotlin Documentation", "https://kotlinlang.org/docs/home.html"),
+                    SearchHit("Jetpack Compose — руководство и примеры", "https://developer.android.com/compose"))),
             CodingStep(CodingStepKind.TOOL, "Чтение и сравнение материалов", tool = "read", running = true, id = "reading")))) else emptyMap())
 }
 
@@ -138,8 +145,6 @@ internal fun ResearchWorkspacePreview(
                     onSelectQuestion = { id -> state = state.copy(current = state.sessions.first { it.id == id }) }) {
                     PaperResearchReading {
                         MessagesList(state.current, state.busy, draft = state.drafts[state.current?.id],
-                            activitySources = if (busy) listOf(SearchHit("Kotlin Documentation", "https://kotlinlang.org/docs/home.html"),
-                                SearchHit("Jetpack Compose — руководство и примеры", "https://developer.android.com/compose")) else emptyList(),
                             onPause = {}, onResume = {}, modifier = Modifier.fillMaxSize(),
                             onFollowUp = { _, question -> state = state.copy(current = state.current?.let { current ->
                                 current.copy(messages = current.messages + ChatMessage("preview-follow-up", ChatRole.USER, question, 5))

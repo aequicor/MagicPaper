@@ -387,6 +387,14 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
         return false
     }
 
+    /** The run owner observes which system performed an operation and which references it newly returned. */
+    fun noteOperation(tool: String, callId: String, system: String = "", sources: List<SearchHit>? = null) {
+        val index = steps.indexOfLast { it.tool == tool && (callId.isBlank() || it.callId == callId) }
+        if (index < 0) return
+        val step = steps[index]
+        steps[index] = step.copy(system = system.ifBlank { step.system }, sources = sources ?: step.sources)
+    }
+
     /** Provider item identities survive interleaving and late/repeated final snapshots. */
     private fun updateSource(kind: CodingStepKind, sourceId: String, value: String, append: Boolean) {
         val source = kind to sourceId
@@ -679,6 +687,10 @@ data class CodingStep(
     val sourceTimelineId: String? = null,
     /** Structured images produced by this exact tool call; legacy logs leave this empty. */
     val images: List<CodingImageReference> = emptyList(),
+    /** The system/API that actually performed this search or read; empty in old logs. */
+    val system: String = "",
+    /** References this individual search operation newly returned; empty in old logs. */
+    val sources: List<SearchHit> = emptyList(),
 )
 
 /** Роли в журнале проекта. */

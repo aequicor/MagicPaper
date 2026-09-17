@@ -29,6 +29,22 @@ class CodingRunRecorderTest {
     }
 
     @Test
+    fun noteOperationKeepsTheSystemAndOnlyFreshReferencesOnTheSearchStep() {
+        val recorder = CodingRunRecorder()
+        recorder.apply(CodingEvent.ToolStarted("web.search", "query", "call"))
+        recorder.noteOperation("web.search", "call", system = "Поиск: Querit.ai")
+        recorder.apply(CodingEvent.ToolFinished("web.search", false, "call", title = "Найдено источников: 2",
+            sources = listOf(SearchHit("All", "https://example.org/all"))))
+        recorder.noteOperation("web.search", "call", system = "Поиск: Querit.ai",
+            sources = listOf(SearchHit("Fresh", "https://example.org/fresh")))
+        val step = recorder.timeline().single { it.tool == "web.search" }
+        assertEquals("Поиск: Querit.ai", step.system)
+        assertEquals(listOf("https://example.org/fresh"), step.sources.map { it.url },
+            "The step keeps only the references the owner confirmed as new")
+        assertFalse(step.running)
+    }
+
+    @Test
     fun piSummaryFinalReconcilesBeforeAndAfterTextWithoutCreatingThinking() {
         val recorder = CodingRunRecorder()
         recorder.apply(CodingEvent.MessageStarted)

@@ -114,7 +114,8 @@ class DefaultChatService(
     }
     override val state: StateFlow<ChatState> = _state.asStateFlow()
     override fun updateConfiguration(settings: AppSettings, profiles: List<LlmProfile>, subscriptionAvailable: Boolean, subscriptionSignedIn: Boolean) {
-        _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn) }
+        _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn,
+            researchSearchLabel = if (researchSearch != null) settings.descriptionSearchLabel() else "") }
     }
     override suspend fun start() {
         val settings = settingsRepo.load()
@@ -722,6 +723,9 @@ class DefaultChatService(
                     val researchRequest = researchRequest(trimmed)
                     val storedQuestion = checkNotNull(chats.session(session.id))
                     val storedRoot = checkNotNull(chats.session(session.researchChatId))
+                    // URLs attached before this run: a search step must never present them as its own finds.
+                    val knownSourceUrls = (storedRoot.resources + storedQuestion.questionResources)
+                        .map { it.url }.filter { it.isNotBlank() }.toMutableSet()
                     val autoSearch = researchRequest.autoSearch(
                         hasHistory = historyBefore.isNotEmpty(),
                         hasSources = storedQuestion.availableResearchResources(storedRoot).isNotEmpty(),
@@ -736,6 +740,12 @@ class DefaultChatService(
                         val result = discoverResearchSources(session.id, trimmed, settings, operationFields, sharedDiscovery)
                         recorder.apply(CodingEvent.ToolFinished("web.search", result.isFailure, searchId,
                             title = result.fold({ "Найдено источников: ${it.size}" }, { "Поиск недоступен" })))
+                        val discovered = result.getOrDefault(emptyList()).distinctBy { it.url }
+                        val freshDiscovered = discovered.filter { it.url !in knownSourceUrls }
+                        knownSourceUrls += discovered.map { it.url }
+                        recorder.noteOperation("web.search", searchId,
+                            system = searchSystemLabel("web.search", freshDiscovered, updated.engine, readsPages = false),
+                            sources = freshDiscovered)
                         publishDraft()
                     }
                     if (resumed == null && researchRequest.urls.isNotEmpty()) researchEdits.withLock {
@@ -753,6 +763,7 @@ class DefaultChatService(
                     if (checksWebSources) {
                         recorder.apply(CodingEvent.ToolStarted("web.read", "", readId,
                             title = if (researchRequest.sourceTask) "Читаю указанные источники" else "Проверяю доступность источников"))
+                        recorder.noteOperation("web.read", readId, system = readSystemLabel(candidates))
                         publishDraft()
                     }
                     val sourceChecks = sourceAccess.check(browserSources.apply(root.id, candidates)).associateBy { it.resource.key }.toMutableMap()
@@ -771,6 +782,7 @@ class DefaultChatService(
                                 if (unreadableCount > 0) "; недоступно: $unreadableCount" else ""))
                         publishDraft()
                     }
+                    knownSourceUrls += candidates.mapNotNull { it.url.takeIf { it.isNotBlank() } }
                     val initialSources = availableResources.mapNotNull { resource -> resource.url.takeIf { it.isNotEmpty() }?.let {
                         SearchHit(resource.title, it, resource.snippet)
                     } }
@@ -796,6 +808,20 @@ class DefaultChatService(
                         publishDraft(event !is CodingEvent.TextDelta && event !is CodingEvent.ThinkingDelta && event !is CodingEvent.ToolProgress)
                         if (event is CodingEvent.ToolStarted || event is CodingEvent.ToolFinished) {
                             updateChat(session.id) { it.copy(pendingActivity = previousActivity + recorder.draft(true).steps.researchActivity()) }
+                        }
+                        // Search and reading may be billed separately: name the system of each operation
+                        // and keep only the references this individual search newly returned.
+                        val searchTool = (event as? CodingEvent.ToolStarted)?.tool ?: (event as? CodingEvent.ToolFinished)?.tool
+                        if (searchTool != null && searchTool in researchSearchTools) {
+                            val callId = (event as? CodingEvent.ToolStarted)?.callId ?: (event as? CodingEvent.ToolFinished)?.callId ?: ""
+                            val hits = event.researchSources().filter { hit ->
+                                !researchRequest.sourceTask || researchUrl(hit.url)?.let { "url:$it" in sourceChecks } == true
+                            }.distinctBy { it.url }
+                            val fresh = hits.filter { it.url !in knownSourceUrls }
+                            knownSourceUrls += hits.map { it.url }
+                            recorder.noteOperation(searchTool, callId,
+                                system = searchSystemLabel(searchTool, fresh, updated.engine, readsPages = searchTool == "web.search"),
+                                sources = if (event is CodingEvent.ToolFinished) fresh else null)
                         }
                         val candidatesFound = event.researchSources().filter { hit ->
                             !researchRequest.sourceTask || researchUrl(hit.url)?.let { "url:$it" in sourceChecks } == true
@@ -909,6 +935,31 @@ class DefaultChatService(
         val message = "Поиск недоступен. Исследование продолжится по доступным источникам."
         _state.update { it.copy(notice = message) }
         return Result.failure(IllegalStateException(message))
+    }
+
+    /** Search and reading can be billed by different systems, so each operation names its own.
+     * Application search reports the providers that actually returned the hits; native engine
+     * search tools report the engine, and the application search tool also reads found pages. */
+    private fun searchSystemLabel(tool: String, hits: List<SearchHit>, engine: CodingEngine?, readsPages: Boolean): String {
+        if (tool != "web.search") {
+            val engineName = engine?.title ?: "агента"
+            return "Поиск: встроенный инструмент движка $engineName ($tool)"
+        }
+        val providers = hits.map { it.provider }.filter { it.isNotBlank() }.distinct()
+        val name = providers.ifEmpty { listOfNotNull(researchSearch?.displayName) }.joinToString(", ")
+            .ifBlank { _state.value.settings.descriptionSearchLabel() }
+        return "Поиск: $name" + if (readsPages) " · чтение найденных страниц: загрузчик MagicPaper" else ""
+    }
+
+    /** Selected pages are read by the application loader, unless a manual browser snapshot is reused. */
+    private fun readSystemLabel(candidates: List<ResearchResource>): String {
+        val web = candidates.filter { it.url.isNotBlank() }
+        val browser = web.count { it.readableText != null }
+        val parts = buildList {
+            if (web.size > browser) add("загрузчик страниц MagicPaper (прямые HTTP-запросы)")
+            if (browser > 0) add("снимки страниц из браузера приложения")
+        }
+        return "Чтение: " + parts.joinToString(" + ").ifBlank { "MagicPaper" }
     }
 
     // ---- Настройки ---------------------------------------------------------

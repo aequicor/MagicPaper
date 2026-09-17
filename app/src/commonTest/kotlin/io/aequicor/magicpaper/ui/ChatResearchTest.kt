@@ -236,6 +236,42 @@ class ChatResearchTest {
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
+    @Test fun searchActivityNamesItsSystemAndListsOnlySourcesNewToTheQuestion() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture()
+        val runtime = Runtime()
+        val search = object : SearchEngine {
+            override val provider = SearchProvider.QUERIT
+            override val displayName = "Fixture search"
+            override fun isConfigured(settings: AppSettings) = true
+            override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> = emptyList()
+        }
+        val service = service(f, runtime, search = search)
+        try {
+            service.addWebsite("first", "https://example.org/attached")
+            service.send("Найди дополнительные материалы")
+            advanceUntilIdle()
+            runtime.events.getValue("first").send(CodingEvent.ToolStarted("web.search", "запрос", "call-1"))
+            runtime.events.getValue("first").send(CodingEvent.ToolFinished("web.search", false, "call-1",
+                resultPreview = "https://example.org/attached https://example.org/fresh",
+                sources = listOf(SearchHit("Attached", "https://example.org/attached", provider = "Fixture search"),
+                    SearchHit("Fresh", "https://example.org/fresh", provider = "Fixture search"))))
+            runtime.finish("first", "Ответ по найденному")
+            advanceUntilIdle()
+            val activity = service.state.value.current!!.messages.last().researchActivity
+            val searchStep = activity.last { it.tool == "web.search" }
+            assertEquals(listOf("https://example.org/fresh"), searchStep.sources.map { it.url },
+                "An already attached source must not be presented as a search find")
+            val autoSearch = activity.first { it.tool == "web.search" }
+            assertTrue(autoSearch.sources.isEmpty(), "An automatic search without hits lists nothing")
+            assertContains(searchStep.system, "Fixture search", message = "The search step must name its provider")
+            assertContains(searchStep.system, "загрузчик MagicPaper", message = "Verified reading inside the search tool must be named")
+            val readStep = activity.first { it.tool == "web.read" }
+            assertContains(readStep.system, "загрузчик страниц MagicPaper", message = "The read step must name its reader")
+            assertTrue(readStep.sources.isEmpty(), "A read operation reports counts, not references")
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun unreadablePagesAreExcludedBeforeTheNativeRunAndRecheckedOnTheNextQuestion() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()

@@ -97,7 +97,7 @@ public fun PaperResearchActivityPanel(title: String, state: PaperResearchStepSta
 @Composable
 public fun PaperResearchActivityStep(title: String, detail: String?, state: PaperResearchStepState,
     last: Boolean, modifier: Modifier = Modifier, contentLabel: String? = null,
-    detailProblem: String? = null,
+    detailProblem: String? = null, system: String? = null,
     content: @Composable ColumnScope.() -> Unit = {}) {
     val colors = LocalPaperColors.current
     val tone = when (state) {
@@ -136,6 +136,10 @@ public fun PaperResearchActivityStep(title: String, detail: String?, state: Pape
         Column(Modifier.weight(1f).padding(bottom = if (last) 0.dp else 18.dp)) {
             PaperText(title, style = LocalPaperTypography.current.chrome.copy(
                 fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium))
+            // Search and reading can be billed by different systems; the operation names its own.
+            if (!system.isNullOrBlank()) PaperText(system, Modifier.padding(top = 2.dp),
+                style = LocalPaperTypography.current.chrome.copy(fontSize = 11.sp, lineHeight = 16.sp,
+                    fontWeight = FontWeight.Normal), color = colors.secondaryText)
             if (!detail.isNullOrBlank() || !detailProblem.isNullOrBlank()) PaperText(buildAnnotatedString {
                 if (!detail.isNullOrBlank()) append(detail)
                 if (!detailProblem.isNullOrBlank()) {
@@ -188,9 +192,9 @@ internal fun PaperResearchActivityPreview() = PaperTheme {
             PaperResearchActivityPanel("Изучаю найденные источники", PaperResearchStepState.ACTIVE, true, {},
                 actionLabel = "Остановить", onAction = {}) {
                 PaperResearchActivityStep("Проверка выбранных источников", "Прочитано источников: 4", PaperResearchStepState.COMPLETE, false,
-                    detailProblem = "недоступно: 2")
+                    detailProblem = "недоступно: 2", system = "Чтение: загрузчик страниц MagicPaper")
                 PaperResearchActivityStep("Поиск дополнительных материалов", "Найдено источников: 2", PaperResearchStepState.COMPLETE, false,
-                    contentLabel = "Доступные источники") {
+                    system = "Поиск: Querit.ai", contentLabel = "Найденные источники") {
                     PaperResearchSourceLink("Kotlin Documentation", {})
                     PaperResearchSourceLink("Jetpack Compose — руководство и примеры", {})
                 }

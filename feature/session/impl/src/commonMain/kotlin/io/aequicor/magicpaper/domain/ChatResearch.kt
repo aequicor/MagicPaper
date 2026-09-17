@@ -39,6 +39,9 @@ internal fun researchPrompt(question: String, resources: List<ResearchResource>,
     append(question)
 }
 
+/** The application search tool and native engine search tools share one activity presentation. */
+internal val researchSearchTools = setOf("web.search", "web_search", "search")
+
 /** Native engines expose different search payloads. Only actual HTTP(S) references become resources. */
 internal fun researchReferences(text: String, searchResult: Boolean = false): List<SearchHit> {
     if (searchResult && text.trimStart().startsWith("[")) {

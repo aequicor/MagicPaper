@@ -10,14 +10,12 @@ import io.aequicor.magicpaper.logging.AppLog
 /** Only observed operations and their outcomes; no generated thoughts or simulated progress. */
 @Composable
 internal fun ResearchActivity(steps: List<CodingStep>, busy: Boolean, paused: Boolean = false,
-    failed: Boolean = false, sources: List<SearchHit> = emptyList(),
+    failed: Boolean = false,
     onPause: (() -> Unit)? = null, onResume: (() -> Unit)? = null, answering: Boolean = false) {
     var expanded by rememberSaveable { mutableStateOf(busy || paused || failed) }
     var linkError by remember { mutableStateOf(false) }
     val uri = LocalUriHandler.current
     val activity = remember(steps, busy, paused, answering, failed) { researchActivityEntries(steps, busy, paused, answering, failed) }
-    val references = remember(sources) { sources.distinctBy { it.url } }
-    val sourceStep = activity.indexOfLast { it.search }
     val state = when {
         failed -> PaperResearchStepState.FAILED
         busy -> PaperResearchStepState.ACTIVE
@@ -35,20 +33,18 @@ internal fun ResearchActivity(steps: List<CodingStep>, busy: Boolean, paused: Bo
         actionLabel = if (busy) "Остановить" else "Продолжить", onAction = action) {
         activity.forEachIndexed { index, step ->
             PaperResearchActivityStep(step.title, step.detail, step.state, last = index == activity.lastIndex,
-                detailProblem = step.detailProblem,
-                contentLabel = if (index == sourceStep && references.isNotEmpty()) "Доступные источники" else null) {
-                // Available references include shared materials; never imply that
-                // this individual search discovered the entire question library.
-                if (index == sourceStep && references.isNotEmpty()) {
-                    references.forEachIndexed { sourceIndex, source ->
-                        PaperResearchSourceLink(source.title.ifBlank { source.url }, {
-                            try { uri.openUri(source.url) }
-                            catch (failure: Exception) {
-                                AppLog.error("chat", "activity.source.open.failed", failure, mapOf("sourceIndex" to sourceIndex.toString()))
-                                linkError = true
-                            }
-                        })
-                    }
+                detailProblem = step.detailProblem, system = step.system,
+                contentLabel = if (step.sources.isNotEmpty()) "Найденные источники" else null) {
+                // Only the references this individual search newly returned; the attached
+                // library lives in the sources pane and must not repeat under a search step.
+                step.sources.forEachIndexed { sourceIndex, source ->
+                    PaperResearchSourceLink(source.title.ifBlank { source.url }, {
+                        try { uri.openUri(source.url) }
+                        catch (failure: Exception) {
+                            AppLog.error("chat", "activity.source.open.failed", failure, mapOf("sourceIndex" to sourceIndex.toString()))
+                            linkError = true
+                        }
+                    })
                 }
             }
         }
@@ -57,7 +53,8 @@ internal fun ResearchActivity(steps: List<CodingStep>, busy: Boolean, paused: Bo
 }
 
 internal data class ResearchActivityEntry(val title: String, val detail: String?, val heading: String,
-    val state: PaperResearchStepState, val search: Boolean = false, val detailProblem: String? = null)
+    val state: PaperResearchStepState, val search: Boolean = false, val detailProblem: String? = null,
+    val system: String? = null, val sources: List<SearchHit> = emptyList())
 
 // Read counts are also stored in older transcripts as the web.read step's title.
 private val sourceReadSummary = Regex("^(Прочитано источников: \\d+); (недоступно: ([1-9]\\d*))$")
@@ -67,7 +64,7 @@ internal fun researchActivityEntries(steps: List<CodingStep>, busy: Boolean, pau
     answering: Boolean = false, failed: Boolean = false): List<ResearchActivityEntry> {
     val entries = steps.researchActivity().filter { it.isVisibleActivity }
         .distinctBy { it.id.ifBlank { "${it.kind}:${it.title}" } }.map { step ->
-            val search = step.tool in setOf("web.search", "web_search", "search")
+            val search = step.tool in researchSearchTools
             val checking = step.tool == "web.read"
             val text = step.title.removePrefix("⚒ ")
             val state = when {
@@ -90,7 +87,9 @@ internal fun researchActivityEntries(steps: List<CodingStep>, busy: Boolean, pau
                 search -> "Ищу дополнительные источники"
                 checking -> "Читаю выбранные источники"
                 else -> text
-            }, state, search, detailProblem = readSummary?.groupValues?.get(2))
+            }, state, search, detailProblem = readSummary?.groupValues?.get(2),
+                system = step.system.takeIf { it.isNotBlank() },
+                sources = if (search) step.sources.distinctBy { it.url } else emptyList())
         }
     // This is the observable wait between completed tools and the next runtime event,
     // not a fabricated thinking/search stage or a guessed plan.

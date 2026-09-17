@@ -280,7 +280,8 @@ private fun ColumnScope.ResearchSourcesPane(state: ChatState, saving: Boolean,
     }
     error?.let { PaperText(it, Modifier.padding(12.dp), role = PaperTextRole.LABEL, color = LocalPaperColors.current.error) }
     PaperButton("Найти ещё", { searchOpen = true }, Modifier.fillMaxWidth().padding(12.dp), kind = PaperButtonKind.SECONDARY)
-    if (searchOpen) ResearchSourceSearchDialog(shared, local, onSearchResources, onAddSearchResult, onAddWebsite, { searchOpen = false })
+    if (searchOpen) ResearchSourceSearchDialog(shared, local, onSearchResources, onAddSearchResult, onAddWebsite, { searchOpen = false },
+        searchLabel = state.researchSearchLabel)
 }
 
 @Composable
