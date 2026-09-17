@@ -15,17 +15,28 @@ internal class FakeComputerDesktop : ComputerDesktop {
     var monitors = listOf(ComputerDisplay("retina", 2560, 1440, -2560, 0))
     val performed = mutableListOf<ComputerAction>()
     var captures = 0
+    var nativeScale = 1
+    val captureRequests = mutableListOf<DesktopCaptureRequest>()
     var denied = false
     var onCapture: () -> Unit = {}
     var onPerform: ((() -> Unit) -> Unit)? = null
     override fun checkPermissions(access: ComputerAccess, request: Boolean) { check(!denied) { "Screen recording permission denied" } }
     override fun displays() = monitors
-    override fun capture(display: ComputerDisplay): DesktopCapture {
+    override fun capture(display: ComputerDisplay, request: DesktopCaptureRequest, checkActive: () -> Unit): DesktopCapture {
+        checkActive()
         captures++
+        captureRequests += request
         onCapture()
-        val image = BufferedImage(1600, 900, BufferedImage.TYPE_INT_RGB)
+        checkActive()
+        val region = request.region
+        val scale = if (request.resolution == ScreenshotResolution.NATIVE) nativeScale.toDouble()
+            else minOf(1.0, 1600.0 / maxOf(region.width, region.height))
+        val width = (region.width * scale).toInt().coerceAtLeast(1)
+        val height = (region.height * scale).toInt().coerceAtLeast(1)
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
         val bytes = ByteArrayOutputStream().use { ImageIO.write(image, "png", it); it.toByteArray() }
-        return DesktopCapture(bytes, 1600, 900)
+        image.flush()
+        return DesktopCapture(bytes, width, height)
     }
     override fun perform(action: ComputerAction, display: ComputerDisplay, checkActive: () -> Unit) {
         checkActive()

@@ -6,11 +6,7 @@ import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
-import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
-import javax.imageio.ImageIO
 import com.sun.jna.NativeLibrary
-import kotlin.math.roundToInt
 import kotlinx.serialization.json.*
 
 internal data class ComputerDisplay(val id: String, val width: Int, val height: Int, val x: Int = 0, val y: Int = 0)
@@ -21,11 +17,9 @@ internal interface ComputerDesktop {
     val supported: Boolean
     fun checkPermissions(access: ComputerAccess, request: Boolean = false)
     fun displays(): List<ComputerDisplay>
-    fun capture(display: ComputerDisplay): DesktopCapture
-    fun capture(display: ComputerDisplay, checkActive: () -> Unit): DesktopCapture {
-        checkActive()
-        return capture(display).also { checkActive() }
-    }
+    fun capture(display: ComputerDisplay,
+        request: DesktopCaptureRequest = DesktopCaptureRequest(DesktopRegion.full(display)),
+        checkActive: () -> Unit = {}): DesktopCapture
     fun close() = Unit
     fun perform(action: ComputerAction, display: ComputerDisplay, checkActive: () -> Unit)
 }
@@ -79,35 +73,38 @@ internal class AwtComputerDesktop : ComputerDesktop {
     private fun device(display: ComputerDisplay) = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
         .firstOrNull { it.iDstring == display.id } ?: error("Экран отключён. Сделайте новый снимок.")
 
-    override fun capture(display: ComputerDisplay): DesktopCapture = capture(display) { }
-
-    override fun capture(display: ComputerDisplay, checkActive: () -> Unit): DesktopCapture {
+    override fun capture(display: ComputerDisplay, request: DesktopCaptureRequest, checkActive: () -> Unit): DesktopCapture {
         checkActive()
+        val region = request.region.also { it.validate(display) }
         if (mac && NativeApplicationDesktop.supported) {
             val result = try { captureAdapter().request(buildJsonObject {
                     put("action", "desktop_capture"); put("x", display.x); put("y", display.y)
                     put("width", display.width); put("height", display.height)
+                    put("resolution", request.resolution.wireName)
+                    put("region_x", region.x); put("region_y", region.y)
+                    put("region_width", region.width); put("region_height", region.height)
                 }, checkActive)
             } catch (error: Exception) { close(); throw error }
             return DesktopCapture(java.util.Base64.getDecoder().decode(result.requiredString("png")),
                 result["width"]!!.jsonPrimitive.int, result["height"]!!.jsonPrimitive.int)
         }
-        val raw = withOwnWindowsExcludedFromCapture {
-            checkActive()
-            Robot(device(display)).createScreenCapture(Rectangle(display.x, display.y, display.width, display.height))
+        val device = device(display)
+        val transform = device.defaultConfiguration.defaultTransform
+        require(request.resolution != ScreenshotResolution.NATIVE ||
+            region.width.toDouble() * transform.scaleX * region.height * transform.scaleY <= MAX_NATIVE_SCREENSHOT_PIXELS) {
+            "Слишком большой снимок. Запросите screenshot с region для нужной области."
         }
-        val scale = minOf(1.0, 1600.0 / maxOf(raw.width, raw.height))
-        val width = (raw.width * scale).roundToInt().coerceAtLeast(1)
-        val height = (raw.height * scale).roundToInt().coerceAtLeast(1)
-        val resized = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-        val g = resized.createGraphics()
+        val variants = withOwnWindowsExcludedFromCapture {
+            checkActive()
+            val bounds = Rectangle(display.x + region.x, display.y + region.y, region.width, region.height)
+            val robot = Robot(device)
+            if (request.resolution == ScreenshotResolution.NATIVE) robot.createMultiResolutionScreenCapture(bounds).resolutionVariants
+            else listOf(robot.createScreenCapture(bounds))
+        }
         try {
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
-            g.drawImage(raw, 0, 0, width, height, null)
-        } finally { g.dispose(); raw.flush() }
-        val bytes = ByteArrayOutputStream().use { out -> ImageIO.write(resized, "png", out); out.toByteArray() }
-        resized.flush()
-        return DesktopCapture(bytes, width, height)
+            checkActive()
+            return encodeDesktopCapture(variants.maxBy { it.getWidth(null).toLong() * it.getHeight(null) }, request.resolution)
+        } finally { variants.forEach { it.flush() } }
     }
 
     override fun perform(action: ComputerAction, display: ComputerDisplay, checkActive: () -> Unit) {

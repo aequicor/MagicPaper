@@ -80,6 +80,9 @@ internal val INTERACTION_CHANNEL_INSTRUCTIONS = """
     недоступен, сообщи об этом и предложи доступный вариант; не переключайся молча.
     По свежему снимку выполняй одно действие и проверяй результат. После ошибки или
     таймаута сначала проверь фактическое состояние, а не повторяй ввод вслепую.
+    Для мелкого текста computer.screenshot поддерживает resolution=native и region
+    в координатах последнего снимка: это свежий захват с высокой детализацией.
+    format=png задаёт сжатие, а не разрешение. Выбирай подходящий способ просмотра.
     """.trimIndent()
 
 internal fun codingSystemPrompt(engine: CodingEngine?, planning: Boolean, override: String, research: Boolean = false,

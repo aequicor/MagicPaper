@@ -62,8 +62,17 @@ class ComputerUseBridgeTest {
             assertEquals("no-store", result.headers().firstValue("cache-control").orElse(""))
             assertFalse(result.result().failed())
             assertEquals("image", result.result()["content"]!!.jsonArray[1].jsonObject["type"]!!.jsonPrimitive.content)
+            val crop = post(bridge, tool(4, request("screenshot") {
+                put("screenshot_id", result.result().screenshotId())
+                put("region", buildJsonObject { put("x", 400); put("y", 200); put("width", 100); put("height", 50) })
+            })).result()
+            assertFalse(crop.failed())
+            assertEquals("image/png", crop["content"]!!.jsonArray[1].jsonObject.requiredString("mimeType"))
+            val metadata = Json.parseToJsonElement(crop["content"]!!.jsonArray[0].jsonObject.requiredString("text")).jsonObject
+            assertEquals(JsonPrimitive(160), metadata["width"])
+            assertEquals(JsonPrimitive(80), metadata["height"])
             computer.disable("a")
-            assertEquals(403, post(bridge, tool(4, request("screenshot"))).statusCode())
+            assertEquals(403, post(bridge, tool(5, request("screenshot"))).statusCode())
         }
         assertEquals(ComputerAccess.OFF, computer.state.value.access)
     }
@@ -122,7 +131,8 @@ class ComputerUseBridgeTest {
 
     /** Optional local Node smoke test: executes the actual generated extension against the bridge. */
     @Test fun piExtensionReturnsVisionContentAndThrowsForDeniedInput(): Unit = runBlocking {
-        val node = System.getenv("MAGICPAPER_COMPUTER_NODE") ?: return@runBlocking
+        val node = System.getenv("MAGICPAPER_COMPUTER_NODE")
+        org.junit.Assume.assumeTrue("Local Node extension check is opt-in", node != null)
         val native = FakeApplicationDesktop()
         val computer = DesktopComputerUse(FakeComputerDesktop(), applicationFactory = { native })
         computer.configure(ComputerAccess.SCREEN, ComputerAccess.CONTROL)
@@ -134,18 +144,29 @@ class ComputerUseBridgeTest {
                 import register from './computer.mjs';
                 import assert from 'node:assert/strict';
                 const tools = {};
-                register({ registerTool(t) { tools[t.name] = t; } });
+                const contextHooks = [];
+                const api = () => ({
+                  registerTool(t) { tools[t.name] = t; },
+                  on(event, handler) { assert.equal(event, 'context'); contextHooks.push(handler); }
+                });
+                register(api());
                 let tool = tools.computer;
                 assert.deepEqual(Object.keys(tools).sort(), ['application', 'computer']);
                 assert.equal(tool.name, 'computer');
                 assert.equal(tool.parameters.type, 'object');
                 const shot = await tool.execute('one', { action: 'screenshot' });
                 assert.equal(shot.content[1].type, 'image');
-                assert.equal(shot.content[1].mimeType, 'image/png');
-                const id = JSON.parse(shot.content[0].text).screenshot_id;
+                assert.equal(shot.content[1].mimeType, 'image/jpeg');
+                const region = await tool.execute('detail', { action: 'screenshot',
+                  screenshot_id: JSON.parse(shot.content[0].text).screenshot_id,
+                  region: { x: 400, y: 200, width: 100, height: 50 } });
+                assert.equal(region.content[1].mimeType, 'image/png');
+                assert.equal(JSON.parse(region.content[0].text).width, 160);
+                const id = JSON.parse(region.content[0].text).screenshot_id;
                 await assert.rejects(() => tool.execute('two', { action: 'click', screenshot_id: id, x: 1, y: 1 }), /только просмотр/);
                 // A continuation loads a new extension, with its own distinct RPC ids.
-                register({ registerTool(t) { tools[t.name] = t; } });
+                register(api());
+                assert.equal(contextHooks.length, 2);
                 tool = tools.computer;
                 assert.equal((await tool.execute('three', { action: 'screenshot' })).content[1].type, 'image');
                 const inspected = await tools.application.execute('four', { action: 'inspect', window_id: 'w' });

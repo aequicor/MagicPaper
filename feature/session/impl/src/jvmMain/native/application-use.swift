@@ -22,7 +22,7 @@ final class ApplicationAdapter {
     var windows: [String: Window] = [:]
     var elements: [String: Element] = [:]
 
-    enum Failure: String, Error { case permission, stale, unsupported, capture, unavailable }
+    enum Failure: String, Error { case permission, stale, unsupported, capture, unavailable; case captureTooLarge = "capture_too_large" }
 
     func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var result: CFTypeRef?
@@ -160,8 +160,17 @@ final class ApplicationAdapter {
             let own = content.applications.filter { $0.processID == getppid() || $0.processID == getpid() }
             let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
             let config = SCStreamConfiguration()
-            let scale = min(1, 1600 / Double(max(width, height)))
-            config.width = max(1, Int(Double(width) * scale)); config.height = max(1, Int(Double(height) * scale))
+            let rx = args["region_x"] as? Int ?? 0, ry = args["region_y"] as? Int ?? 0
+            let rw = args["region_width"] as? Int ?? width, rh = args["region_height"] as? Int ?? height
+            guard rx >= 0, ry >= 0, rw > 0, rh > 0, rx <= width, ry <= height,
+                  rw <= width - rx, rh <= height - ry else { throw Failure.unsupported }
+            let resolution = args["resolution"] as? String ?? "overview"
+            guard resolution == "overview" || resolution == "native" else { throw Failure.unsupported }
+            let scale = resolution == "native" ? Double(filter.pointPixelScale) : min(1, 1600 / Double(max(rw, rh)))
+            config.width = max(1, Int((Double(rw) * scale).rounded()))
+            config.height = max(1, Int((Double(rh) * scale).rounded()))
+            guard Double(config.width) * Double(config.height) <= 16_777_216 else { throw Failure.captureTooLarge }
+            config.sourceRect = CGRect(x: rx, y: ry, width: rw, height: rh)
             config.showsCursor = false
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { throw Failure.capture }

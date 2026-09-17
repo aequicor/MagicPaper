@@ -78,12 +78,19 @@ class DesktopComputerWindowsIntegrationTest {
                     robot.getPixelColor(x, y).let { it.red > 180 && it.blue > 180 && it.green < 80 }
                 }
                 val display = desktop.displays().first()
-                fun assertCapture() {
-                    val capture = desktop.capture(display)
+                fun assertCapture(options: DesktopCaptureRequest = DesktopCaptureRequest(DesktopRegion.full(display))) {
+                    val capture = desktop.capture(display, options)
                     val image = ImageIO.read(capture.png.inputStream())
                     try {
-                        val px = ((x - display.x).toDouble() * image.width / display.width).toInt()
-                        val py = ((y - display.y).toDouble() * image.height / display.height).toInt()
+                        val region = options.region
+                        val px = ((x - display.x - region.x).toDouble() * image.width / region.width).toInt()
+                        val py = ((y - display.y - region.y).toDouble() * image.height / region.height).toInt()
+                        if (options.resolution == ScreenshotResolution.NATIVE) {
+                            val density = own!!.graphicsConfiguration.defaultTransform
+                            // Fractional Windows scaling rounds a logical edge to a physical pixel.
+                            assertEquals(region.width * density.scaleX, image.width.toDouble(), 1.0)
+                            assertEquals(region.height * density.scaleY, image.height.toDouble(), 1.0)
+                        }
                         val color = Color(image.getRGB(px, py))
                         assertTrue(color.blue > 180 && color.red < 80 && color.green < 80,
                             "Capture must show the external blue fixture, not an own window or black rectangle: $color")
@@ -103,6 +110,7 @@ class DesktopComputerWindowsIntegrationTest {
                 }
                 awaitCondition("Layered feedback fixture must be visible") { robot.getPixelColor(x, y).green > 180 }
                 assertCapture() // Includes the persistent layered, mouse-transparent effect window.
+                assertCapture(DesktopCaptureRequest(DesktopRegion(x - display.x - 20, y - display.y - 15, 40, 30), ScreenshotResolution.NATIVE))
                 desktop.perform(ComputerAction("click", x - display.x, y - display.y), display) {}
                 awaitCondition("Agent click must pass through both own windows to another process") { clicks() == 2 }
                 assertEquals(0, ownClicks.get())
@@ -120,7 +128,7 @@ class DesktopComputerWindowsIntegrationTest {
                 val report = Path.of("build/reports/computer-use/windows-native.txt")
                 Files.createDirectories(report.parent)
                 Files.writeString(report, "PASS: ${System.getProperty("os.name")} ${System.getProperty("os.version")}; " +
-                    "opaque/layered exclusion, external-process clicks, own input restoration and cancellation. " +
+                    "opaque/layered exclusion, native-density region, external-process clicks, own input restoration and cancellation. " +
                     "Desktop images were inspected in memory only.\n")
             }
         } finally {
