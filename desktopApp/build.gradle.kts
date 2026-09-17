@@ -1,5 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
+import java.net.URI
+import java.security.MessageDigest
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.jvm.toolchain.JvmVendorSpec
@@ -201,10 +203,57 @@ if (packagingHost.startsWith("windows")) {
         addAll((System.getenv("PATH") ?: "").split(File.pathSeparator)
             .filter { it.isNotBlank() }.map { File(it, "ISCC.exe").absolutePath })
     }
+    // The compiler toolchain follows the WiX/downloadWix precedent: a host without a
+    // local Inno Setup downloads the official installer once, verifies its published
+    // checksum and unpacks it per-user into the build directory (no administrator
+    // rights, removable like any per-user program). An installed compiler always wins.
+    val innoToolsDir = rootProject.layout.buildDirectory.dir("tools/inno-setup-6")
+    val provisionedIscc = File(innoToolsDir.get().asFile, "ISCC.exe").absolutePath
+    val provisionInnoSetup by tasks.registering {
+        group = "compose desktop"
+        description = "Unpacks a per-user Inno Setup 6 compiler into the build directory when none is installed."
+        val toolsDir = innoToolsDir.get().asFile
+        val external = isccCandidates
+        val provisioned = provisionedIscc
+        outputs.dir(toolsDir)
+        onlyIf { external.none { File(it).isFile } && !File(provisioned).isFile }
+        doLast {
+            toolsDir.mkdirs()
+            val installer = File(toolsDir, "innosetup-6.7.3.exe")
+            if (!installer.isFile) {
+                val url = URI("https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe").toURL()
+                url.openStream().use { input -> installer.outputStream().use(input::copyTo) }
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            installer.inputStream().use { stream ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = stream.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            check(hash.equals("9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732", ignoreCase = true)) {
+                "Inno Setup installer checksum mismatch: $hash"
+            }
+            val builder = ProcessBuilder(installer.absolutePath, "/VERYSILENT", "/SUPPRESSMSGBOXES",
+                "/NORESTART", "/CURRENTUSER", "/DIR=" + toolsDir.absolutePath)
+            builder.environment()["__COMPAT_LAYER"] = "RunAsInvoker"
+            builder.redirectErrorStream(true)
+            val process = builder.start()
+            val log = process.inputStream.bufferedReader().readText()
+            val exit = process.waitFor()
+            check(exit == 0 && File(provisioned).isFile) {
+                "Inno Setup unpacking failed (exit $exit): $log"
+            }
+            installer.delete()
+        }
+    }
     val packageReleaseInnoSetup by tasks.registering(Exec::class) {
         group = "compose desktop"
         description = "Builds the per-user Windows installer (Inno Setup) from the release app-image."
-        dependsOn("createReleaseDistributable")
+        dependsOn("createReleaseDistributable", provisionInnoSetup)
         inputs.dir(imageDir)
         inputs.file(innoScript)
         outputs.dir(innoOutput)
@@ -215,11 +264,12 @@ if (packagingHost.startsWith("windows")) {
         val iconPath = windowsIconPath
         val appImageDir = imageDir
         val version = appVersion
-        val candidates = isccCandidates
+        val candidates = isccCandidates + provisionedIscc
         doFirst {
             val iscc = candidates.firstOrNull { File(it).isFile }
-                ?: throw GradleException("Inno Setup 6 compiler (ISCC.exe) not found. " +
-                    "Install Inno Setup or set INNO_SETUP_PATH to its directory. Searched: " +
+                ?: throw GradleException("Inno Setup 6 compiler (ISCC.exe) unavailable: no installed " +
+                    "compiler and the per-user provisioning into the build directory did not produce one " +
+                    "(offline host?). Install Inno Setup or set INNO_SETUP_PATH to its directory. Searched: " +
                     candidates.joinToString(", "))
             File(outDir).mkdirs()
             commandLine(iscc, "/DAppVersion=$version", "/DAppDir=$appImageDir", "/DSetupIcon=$iconPath",
