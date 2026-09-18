@@ -1724,6 +1724,17 @@ class DefaultCodingService(
                 var current = updateStoredCodingSession(session) { latest ->
                     require(latest.interactionMode == session.interactionMode) { "Режим сессии изменился. Отправьте запрос повторно." }
                     request = request.copy(interactionMode = request.interactionMode ?: latest.interactionMode)
+                    // Незавершённая задача сессии владеет запуском: новый запрос или возобновление становится
+                    // следующим шагом той же задачи. Иначе идентификатор запроса уже не совпадает с сохранённой
+                    // задачей, и TaskWorktreeService.begin отклоняет каждый запуск навсегда («Сначала завершите
+                    // предыдущую задачу») — агент не может ни продолжить работу, ни завершить её.
+                    if (latest.interactionMode == CodingInteractionMode.CODE && latest.stageId == null &&
+                        latest.sessionKind != SessionKind.SESSION)
+                        latest.taskWorktree?.takeIf { it.phase != TaskWorktreePhase.COMPLETE && it.taskId != request.runId }
+                            ?.let { unfinished ->
+                                AppLog.info("coding", "run.task.continued", operationFields + ("taskId" to unfinished.taskId))
+                                request = request.copy(runId = unfinished.taskId)
+                            }
                     // Название по всему запросу даёт модель; локальная свёртка остаётся, только если её нет.
                     latest.namedFromPrompt(request.prompt, localSummaryAllowed = sessionTitles == null)
                         .copy(pendingRun = request,
@@ -1751,7 +1762,10 @@ class DefaultCodingService(
                 }
                 var executionProject = project
                 var workspaceRecord = current.taskWorktree?.takeIf { it.taskId == request.runId }
-                if (request.worktreeEnabled == true && current.interactionMode == CodingInteractionMode.CODE && current.stageId == null && current.sessionKind != SessionKind.SESSION) {
+                // Найденная незавершённая задача продолжает работать в своей копии, даже если чекпоинт
+                // не просил worktree (устаревший/восстановленный запрос): брошенная копия с неслитой работой
+                // не должна отправлять агента в исходную папку.
+                if ((request.worktreeEnabled == true || workspaceRecord != null) && current.interactionMode == CodingInteractionMode.CODE && current.stageId == null && current.sessionKind != SessionKind.SESSION) {
                     val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
                     updateCodingSession(session.id) { it.copy(worktreeAvailability = capability) }
                     if (workspaceRecord != null || capability.available) {

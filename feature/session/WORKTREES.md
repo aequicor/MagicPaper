@@ -16,7 +16,12 @@ Legacy pending requests and plans have a null mode and retain their old behavior
 restart, clarification, questionnaire answers and Stop/Continue do not create a
 new worktree; each of them is a run start and may bring the existing copy onto the
 current destination tip (see Destination distance). A subsequent completed-task
-request gets a new branch at the current source HEAD. Each session has one
+request gets a new branch at the current source HEAD. An unfinished task owns
+every further run of its session: a new request or a resume whose checkpoint
+points elsewhere adopts the task identity at run acceptance and becomes the
+task's next step, so a crash that orphaned the original checkpoint cannot wedge
+the session — `begin` would otherwise reject every launch with no way for the
+agent to run or finish the work. Each session has one
 directory slot; only a clean, completed slot whose branch and commit match the
 recorded receipt may be reused.
 
@@ -171,6 +176,8 @@ Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`
 `GitTaskWorkspaceTest.preRunUpdateLeavesTheConflictOnTheWorkingBranch`,
 `GitTaskWorkspaceTest.captureFinishesATransferTheAgentResolvedButLeftUncontinued`,
 `GitTaskWorkspaceTest.restartWhileRunningKeepsTheWorktreeAndActualizesItsBranchOnResume`,
+`CodingWorktreeTest.newPromptInSessionWithUnfinishedTaskContinuesThatTask`,
+`CodingWorktreeTest.resumedCrashedSessionWithForeignCheckpointContinuesItsTask`,
 `CodingWorktreeTest.concurrentCompletionsSerializeTheirMergesPerProject`,
 `PlanningExecutionServiceTest.worktreePlanDeliversOnlyAfterAcceptanceAndUsesIsolatedSource`,
 `PaperMenuToggleInfoTest` and

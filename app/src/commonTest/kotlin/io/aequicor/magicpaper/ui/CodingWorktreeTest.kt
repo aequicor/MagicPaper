@@ -458,4 +458,73 @@ class CodingWorktreeTest {
             assertEquals(response, reopened.messages("p", "s").single { it.id == "response" })
         } finally { service?.close(); Dispatchers.resetMain() }
     }
+
+    /** Новый запрос в сессии с незавершённой задачей продолжает её, а не отклоняется в begin навсегда. */
+    @Test fun newPromptInSessionWithUnfinishedTaskContinuesThatTask() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); f.seed()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project)
+            // Упавшая сессия: задача осталась незавершённой, чекпоинт её запуска уже потерян,
+            // поэтому новый запрос приходит с собственным идентификатором.
+            repo.saveSession(session.copy(
+                taskWorktree = TaskWorktree("old-task", "/source", "main", "base", "/isolated", "task",
+                    phase = TaskWorktreePhase.RUNNING, error = "Не удалось продолжить работу. Проверьте подключение и состояние сессии.")))
+            repo.saveMessages("p", "s", listOf(CodingMessage("old-message", CodingRole.USER, "Первая задача", createdAt = 1)))
+            val reopened = JsonCodingProjectRepository(f.kv, f.json)
+            val port = Workspace()
+            val worktrees = TaskWorktreeService(reopened, port, LocalPlanningWorkspace())
+            val runtime = Runtime(worktrees)
+            service = f.prepareCoding(runtime, reopened, taskWorktrees = worktrees)
+            runCurrent()
+            service.sendCodingPromptTo("s", "Заверши начатую задачу"); runCurrent()
+            val finished = reopened.sessions("p").single()
+            assertEquals(TaskWorktreePhase.COMPLETE, finished.taskWorktree?.phase,
+                reopened.messages("p", "s").lastOrNull { it.failed }?.text ?: "ожидается завершение задачи")
+            assertEquals("old-task", finished.taskWorktree?.taskId, "запуск продолжает незавершённую задачу")
+            assertEquals(1, runtime.calls.size)
+            assertEquals(listOf("/isolated"), runtime.calls.map { it.first.path })
+            assertContains(runtime.prompts.single(), "Заверши начатую задачу")
+            assertEquals(1, port.deliveries)
+            assertNull(finished.pendingRun)
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
+    /** Возобновление после падения с чекпоинтом другого запроса продолжает сохранённую задачу, а не падает в begin. */
+    @Test fun resumedCrashedSessionWithForeignCheckpointContinuesItsTask() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); f.seed()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project)
+            // После падения чекпоинт остановки ссылается на повтор пользователя, а не на задачу сессии.
+            repo.saveSession(session.copy(
+                pendingRun = CodingRunCheckpoint("retry-request", "Повтор после падения", worktreeEnabled = true,
+                    intent = ExecutionIntent.STOP, stoppedByUser = true),
+                taskWorktree = TaskWorktree("old-task", "/source", "main", "base", "/isolated", "task",
+                    phase = TaskWorktreePhase.RUNNING, error = "Не удалось продолжить работу. Проверьте подключение и состояние сессии.")))
+            repo.saveMessages("p", "s", listOf(
+                CodingMessage("old-message", CodingRole.USER, "Первая задача", createdAt = 1),
+                CodingMessage("retry-request-response", CodingRole.AGENT, "Не удалось завершить прогон", createdAt = 2, failed = true)))
+            val reopened = JsonCodingProjectRepository(f.kv, f.json)
+            val port = Workspace()
+            val worktrees = TaskWorktreeService(reopened, port, LocalPlanningWorkspace())
+            val runtime = Runtime(worktrees)
+            service = f.prepareCoding(runtime, reopened, taskWorktrees = worktrees)
+            runCurrent()
+            assertTrue(service.state.value.coding.sessions.single().canResume)
+            service.resumeCodingSession("s"); runCurrent()
+            val finished = reopened.sessions("p").single()
+            assertEquals(TaskWorktreePhase.COMPLETE, finished.taskWorktree?.phase,
+                reopened.messages("p", "s").lastOrNull { it.failed }?.text ?: "ожидается завершение задачи")
+            assertEquals("old-task", finished.taskWorktree?.taskId)
+            assertEquals(1, runtime.calls.size, "возобновление возвращает агента к работе")
+            assertContains(runtime.prompts.single(), "Продолжи незавершённую работу")
+            assertEquals(1, port.deliveries)
+            assertNull(finished.pendingRun)
+        } finally { service?.close(); Dispatchers.resetMain() }
+    }
 }
