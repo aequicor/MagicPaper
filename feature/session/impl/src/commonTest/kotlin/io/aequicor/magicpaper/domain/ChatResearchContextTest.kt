@@ -13,6 +13,13 @@ class ChatResearchContextTest {
         assertEquals("https://example.org/report", CodingEvent.FinalText("See [Report](https://example.org/report)").researchSources().single().url)
     }
 
+    @Test fun searchReferencesPreserveProviderFromJsonResult() {
+        val event = CodingEvent.ToolFinished("web.search", false,
+            resultPreview = """[{"title":"Doc","url":"https://example.org/doc","snippet":"Text","provider":"Google"}]""")
+        val hits = event.researchSources()
+        assertEquals("Google", hits.single().provider, "Provider must survive JSON round-trip so the UI names the actual API")
+    }
+
     @Test fun sourceInventoryAndDocumentTextAreExplicitlySeparatedFromInstructions() {
         val prompt = researchPrompt("Что показывают измерения?", listOf(ResearchResource("source", "Отчёт", "https://example.org/")))
         assertTrue(prompt.contains("https://example.org/"))

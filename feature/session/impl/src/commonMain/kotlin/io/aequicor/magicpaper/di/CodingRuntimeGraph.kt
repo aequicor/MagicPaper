@@ -123,6 +123,7 @@ class CodingRuntimeGraph(
             if (checked == null) put("snippet", kotlinx.serialization.json.JsonPrimitive(hit.snippet))
             else put("text", kotlinx.serialization.json.JsonPrimitive(checked.first { it.url == hit.url }.readableText.orEmpty()))
             put("url", kotlinx.serialization.json.JsonPrimitive(hit.url))
+            if (hit.provider.isNotBlank()) put("provider", kotlinx.serialization.json.JsonPrimitive(hit.provider))
         }) } }
     }
     }
