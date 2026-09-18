@@ -251,6 +251,25 @@ class SessionCodingWorkspaceTest {
         assertTrue(port.acquire(owner)); port.release(owner)
     } }
 
+    @Test fun staleSourceLeaseYieldsOnlyToProvenNativeStop() = runTest { withContext(Dispatchers.Default) {
+        val source = repository(); val port = workspace(); val f = Fixture(source, port)
+        var confirmed = false
+        val native = Native { _, _ -> emit(CodingEvent.FinalText("Answer")); emit(CodingEvent.Finished) }
+        native.reconciliation = { check(confirmed) { "native stop uncertain" } }
+        f.initialize(native)
+        val project = f.f.project.copy(path = source.path)
+        f.tree.runtime!!.run(project, f.f.root, "Work", null).collect()
+        val next = project.copy(id = "task-source-next")
+        assertFalse(port.acquire(next), "Неподтверждённая остановка держит исходную папку")
+        // Задача не получает доступ к папке без доказательства остановки чужого исполнителя.
+        assertFalse(f.tree.releaseUnownedRootLeases())
+        assertFalse(port.acquire(next))
+        confirmed = true
+        assertTrue(f.tree.releaseUnownedRootLeases())
+        assertTrue(port.acquire(next)); port.release(next)
+        assertFalse(f.tree.releaseUnownedRootLeases(), "Освобождённое удержание не возвращается")
+    } }
+
     private fun workspace(checkpoint: (String) -> Unit = {}) = GitPlanningWorkspace(Files.createTempDirectory("session-workspace-").toFile(), checkpoint)
     private fun repository(): File = Files.createTempDirectory("session-source-").toFile().also { source ->
         git(source, "init")

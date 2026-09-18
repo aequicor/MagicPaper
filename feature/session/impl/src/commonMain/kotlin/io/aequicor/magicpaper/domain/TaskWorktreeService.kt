@@ -13,6 +13,12 @@ class TaskWorktreeService(
     private val leases: PlanningWorkspace,
 ) {
     var requireQuiescent: suspend (String) -> Unit = {}
+    /**
+     * Снимает блокировки папок, у которых не осталось живого исполнителя; true — если что-то освобождено.
+     * Прерванная очистка рантайма иначе удерживала бы исходную папку до перезапуска приложения,
+     * и каждая новая задача проекта падала бы вместо ожидания.
+     */
+    var releaseUnownedLeases: suspend () -> Boolean = { false }
     private val retainedLeases = MutableStateFlow<Map<String, CodingProject>>(emptyMap())
     val changes = MutableStateFlow(0L)
     suspend fun availability(project: CodingProject) = workspace.availability(project)
@@ -47,7 +53,7 @@ class TaskWorktreeService(
             }
         }
         check(previous == null || previous.phase == TaskWorktreePhase.COMPLETE) { "Сначала завершите предыдущую задачу" }
-        return leased(project.copy(id = "task-source-$sessionId")) {
+        return leased(project.copy(id = "task-source-$sessionId"), sessionId, SOURCE_FOLDER) {
             val record = workspace.describe(project, sessionId, taskId, taskLabel(current)).copy(
                 reuseBranch = previous?.branch.orEmpty(), reuseCommit = previous?.mergeCommit.orEmpty())
             projects.updateSession(project.id, sessionId) { current ->
@@ -112,7 +118,8 @@ class TaskWorktreeService(
         if (record.phase == TaskWorktreePhase.DELIVERING && workspace.delivered(record))
             return save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.COMPLETE, error = null) }
         suspend fun execution(action: suspend () -> Unit) {
-            if (executionLeaseHeld) action() else leased(project.copy(id = "task-merge-$sessionId", path = record.path), action)
+            if (executionLeaseHeld) action() else leased(project.copy(id = "task-merge-$sessionId", path = record.path),
+                sessionId, TASK_COPY, action)
         }
         if (record.phase in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY, TaskWorktreePhase.CAPTURING)) {
             check(planAccepted || record.phase == TaskWorktreePhase.CAPTURING ||
@@ -154,7 +161,7 @@ class TaskWorktreeService(
                 execution { workspace.verify(record) }
                 verifyMerged(record)
                 record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.DELIVERING) }
-                leased(project.copy(id = "task-delivery-$sessionId", path = record.sourcePath)) {
+                leased(project.copy(id = "task-delivery-$sessionId", path = record.sourcePath), sessionId, SOURCE_FOLDER) {
                     if (!planAccepted) check(session(project.id, sessionId).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
                     workspace.deliver(record)
                 }
@@ -168,12 +175,44 @@ class TaskWorktreeService(
         }
     }
 
-    private suspend fun <T> leased(owner: CodingProject, action: suspend () -> T): T =
-        checkNotNull(leasedOrNull(owner, action)) { "Рабочая папка занята. Повторите продолжение после завершения другой задачи" }
+    /**
+     * Папку удерживает один исполнитель, а удерживать её может и чужой прогон: ожидание ограничено,
+     * постоянную занятость разрешает пользователь. До первого повтора снимается блокировка без живого
+     * исполнителя, иначе задача ждала бы таймаут из-за уже завершившегося прогона.
+     */
+    private suspend fun <T : Any> leased(owner: CodingProject, sessionId: String, folder: String, action: suspend () -> T): T {
+        var waited = 0L
+        var reconciled = false
+        while (true) {
+            val result = leasedOrNull(owner, action)
+            if (result != null) {
+                if (waited > 0) AppLog.info("coding.worktree", "lease.released",
+                    mapOf("sessionId" to sessionId, "waitedMillis" to waited.toString()))
+                return result
+            }
+            if (!reconciled) {
+                reconciled = true
+                if (releaseUnownedLeases()) continue
+            }
+            if (waited >= SOURCE_LEASE_WAIT_MILLIS) {
+                val busy = TaskWorkspaceBusy(owner.path, folder)
+                AppLog.error("coding.worktree", "lease.busy", busy,
+                    mapOf("sessionId" to sessionId, "folder" to folder, "waitedMillis" to waited.toString()))
+                throw busy
+            }
+            delay(SOURCE_LEASE_POLL_MILLIS)
+            waited += SOURCE_LEASE_POLL_MILLIS
+        }
+    }
 
     private companion object {
         /** Имя ветки и subject коммита ограничивает порт; здесь сырой текст просто не разрастается. */
         const val MAX_TASK_LABEL = 160
+        /** Соседняя доставка держит папку секунды; дольше ждёт только пользователь, а не прогон. */
+        const val SOURCE_LEASE_WAIT_MILLIS = 60_000L
+        const val SOURCE_LEASE_POLL_MILLIS = 250L
+        const val SOURCE_FOLDER = "Исходная папка проекта"
+        const val TASK_COPY = "Рабочая копия задачи"
     }
 
     private suspend fun <T> leasedOrNull(owner: CodingProject, action: suspend () -> T): T? {

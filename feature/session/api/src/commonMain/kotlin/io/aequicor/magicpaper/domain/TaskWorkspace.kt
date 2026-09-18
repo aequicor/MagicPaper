@@ -2,6 +2,14 @@ package io.aequicor.magicpaper.domain
 
 class TaskDestinationChanged : IllegalStateException("Исходная ветка обновилась; требуется повторная проверка слияния")
 
+/**
+ * Папку удерживает другой исполнитель. Ожидание ограничено, поэтому занятая папка — действенная
+ * ошибка с продолжением, а не каскадный отказ всех задач проекта: сохранённый результат задачи
+ * переживает её, а «Продолжить» довершает Git-операцию без повторного прогона агента.
+ */
+class TaskWorkspaceBusy(val path: String, folder: String) : IllegalStateException(
+    "$folder $path занята другой сессией. Дождитесь её завершения и нажмите «Продолжить»")
+
 /** Native Git operations; the session owner persists every intent before calling this port. */
 interface TaskWorkspace {
     suspend fun availability(project: CodingProject): WorktreeAvailability

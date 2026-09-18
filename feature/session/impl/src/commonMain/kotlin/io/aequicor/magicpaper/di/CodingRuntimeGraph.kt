@@ -36,6 +36,8 @@ class CodingRuntimeGraph(
     val runtime = codingRuntime?.let { io.aequicor.magicpaper.data.coding.MeteredCodingRuntime(ToolEnabledCodingRuntime(it, toolHost, sessionTree), usageLedger) }
     init {
     taskWorktrees?.requireQuiescent = { sessionTree?.requireTaskQuiescent(it) }
+    // Задача ждёт папку только у живого исполнителя; удержание без него снимает сверка движка.
+    taskWorktrees?.releaseUnownedLeases = { sessionTree?.releaseUnownedRootLeases() == true }
     toolHost.taskHandoff = { context, result ->
         checkNotNull(taskWorktrees).handoff(context, result.outcome == TaskHandoffOutcome.RESULT, result.checks)
     }

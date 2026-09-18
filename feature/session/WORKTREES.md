@@ -72,6 +72,17 @@ interrupted replay without a saved CONFLICT phase is aborted and repeated, and a
 CONFLICT is continued after the agent stages its resolution. A merge left in progress by an
 older application version is still completed, not discarded.
 
+## Shared writer leases
+
+Task preparation and branch delivery touch the source checkout, so they take the same
+`PlanningWorkspace` writer lease as an ordinary run in that folder. A held folder is a bounded wait,
+not a cascade: `TaskWorktreeService` first asks the runtime to reclaim a retained lease whose
+session no longer owns a working area — the engine's reconciliation is the proof, never a UI status —
+then polls, and only afterwards reports `TaskWorkspaceBusy` naming the folder. The saved phase and
+response let the next continuation finish the Git operation without another native run. An uncertain
+scope close keeps the lease until that proof exists; resuming the same session reconciles its
+previous generation and releases it.
+
 ## Destination distance
 
 A task can outlive the destination tip it started from, and an agent editing a stale copy
@@ -121,7 +132,10 @@ is disabled. While a task runs, the session shows its delivery phase, or the
 measured distance to the destination branch when the copy could not be updated.
 Previews: `PaperMenuToggleInfoPreview`, group **Menu setting**.
 
-Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`,
+Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`
+(`newTaskWaitsForTheSourceFolderInsteadOfFailing`,
+`permanentlyBusySourceFolderKeepsTheSavedResultRecoverable`), `SessionCodingWorkspaceTest`
+(`staleSourceLeaseYieldsOnlyToProvenNativeStop`),
 `CodingSystemPromptsTest.destinationDistanceAndPreRunUpdateReachTheAgent`,
 `PlanningExecutionServiceTest.worktreePlanDeliversOnlyAfterAcceptanceAndUsesIsolatedSource`,
 `PaperMenuToggleInfoTest` and

@@ -208,6 +208,55 @@ class CodingWorktreeTest {
         assertEquals(1, port.deliveries)
     } }
 
+    /**
+     * Занятая исходная папка — ожидание, а не отказ: удержание без живого исполнителя снимает
+     * сверка движка, и задача идёт дальше к слиянию.
+     */
+    @Test fun newTaskWaitsForTheSourceFolderInsteadOfFailing() = runTest {
+        val f = ModelSettingsFixture()
+        val repo = JsonCodingProjectRepository(f.kv, f.json)
+        repo.save(project); repo.saveSession(session)
+        val leases = LocalPlanningWorkspace()
+        val otherSession = project.copy(id = "root-other-session")
+        assertTrue(leases.acquire(otherSession), "Исходную папку держит другой прогон")
+        var reclaimed = false
+        val port = Workspace()
+        val worktrees = TaskWorktreeService(repo, port, leases)
+        worktrees.releaseUnownedLeases = { leases.release(otherSession); reclaimed = true; true }
+        val record = worktrees.begin(project, session.id, "task")
+        assertTrue(reclaimed, "Сверка удержаний предшествует ожиданию")
+        assertEquals(TaskWorktreePhase.RUNNING, record.phase)
+        assertEquals(1, port.opens)
+    }
+
+    /** Постоянная занятость остаётся действенной ошибкой: сохранённый ответ и фаза доставки переживают её. */
+    @Test fun permanentlyBusySourceFolderKeepsTheSavedResultRecoverable() = runTest {
+        val f = ModelSettingsFixture()
+        val repo = JsonCodingProjectRepository(f.kv, f.json)
+        val response = CodingMessage("response", CodingRole.AGENT, "Saved answer", createdAt = 2)
+        repo.save(project)
+        repo.saveSession(session.copy(pendingRun = CodingRunCheckpoint("task", "Task", responseId = "response"),
+            taskWorktree = TaskWorktree("task", "/source", "main", "base", "/isolated", "task",
+                phase = TaskWorktreePhase.MERGING, resultCommit = "result", targetCommit = "base",
+                executionResponse = response)))
+        val leases = LocalPlanningWorkspace()
+        val otherSession = project.copy(id = "root-other-session")
+        assertTrue(leases.acquire(otherSession))
+        val port = Workspace()
+        val worktrees = TaskWorktreeService(repo, port, leases).apply { releaseUnownedLeases = { false } }
+        val busy = assertFailsWith<TaskWorkspaceBusy> {
+            worktrees.complete(project, session.id, "task", planAccepted = true, repair = {})
+        }
+        assertContains(busy.message.orEmpty(), "/source")
+        assertEquals(0, port.deliveries)
+        assertEquals(TaskWorktreePhase.DELIVERING, repo.sessions(project.id).single().taskWorktree?.phase)
+        leases.release(otherSession)
+        val finished = worktrees.complete(project, session.id, "task", planAccepted = true, repair = {})
+        assertEquals(TaskWorktreePhase.COMPLETE, finished.phase)
+        assertEquals(1, port.deliveries)
+        assertEquals(response, repo.sessions(project.id).single().taskWorktree?.executionResponse)
+    }
+
     @Test fun applicationGraphBindsHandoffToActualTaskAndWaitsForNativeOwner() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var service: DefaultCodingService? = null

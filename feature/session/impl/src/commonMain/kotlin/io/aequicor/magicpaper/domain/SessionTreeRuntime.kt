@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.util.Id
+import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.domain.tools.ToolExecutionContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
@@ -115,12 +116,56 @@ class SessionTreeRuntime(
             // A generation owns its lease; the workspace port excludes all other writers to this path.
             val owner = project.copy(id = "root-${session.id}-${session.runtimeGeneration}")
             withContext(NonCancellable) {
-                require(planningWorkspace.acquire(owner)) { "Рабочая копия уже используется другой сессией" }
+                require(planningWorkspace.acquire(owner)) { "Рабочая копия ${project.path} уже используется другой сессией" }
                 handle.directRootLease = RootLease(session.id, session.runtimeGeneration, owner)
             }
         }
         (handle.workspace?.let { project.copy(path = it.record.attempt.path) } ?: project).also { handle.executionProject = it }
     }
+
+    /**
+     * Прерванная очистка держит блокировку до доказательства остановки исполнителя; повторная сверка —
+     * то же доказательство, что и явная остановка. Освобождается только блокировка этой сессии.
+     */
+    private suspend fun releaseRetainedRootLeases(sessionId: String): Boolean {
+        val workspaces = planningWorkspace ?: return false
+        val native = runtime ?: return false
+        var released = false
+        while (true) {
+            val candidate = lock.withLock { retainedRootLeases.values.firstOrNull { it.sessionId == sessionId } }
+                ?: return released
+            try { native.reconcile(candidate.sessionId) } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                AppLog.error("coding.workspace", "lease.reconcile.failed", failure, mapOf("sessionId" to sessionId))
+                return released
+            }
+            try { workspaces.release(candidate.owner) } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                // Без подтверждения освобождения владелец обязан остаться: иначе папку откроют два писателя.
+                AppLog.error("coding.workspace", "lease.release.failed", failure, mapOf("sessionId" to sessionId))
+                return released
+            }
+            lock.withLock { if (retainedRootLeases[candidate.owner.id] === candidate) retainedRootLeases.remove(candidate.owner.id) }
+            AppLog.info("coding.workspace", "lease.reclaimed",
+                mapOf("sessionId" to sessionId, "generation" to candidate.generation.toString()))
+            released = true
+        }
+    }
+
+    /**
+     * Задача, которой мешает занятая папка, вправе снять чужое удержание, если у сессии уже нет
+     * рабочей области: доказательство даёт движок, а не состояние интерфейса. Вызывается вне
+     * блокировки рабочей области, потому что освобождение самой себя под этим замком зависло бы.
+     */
+    suspend fun releaseUnownedRootLeases(): Boolean {
+        var released = false
+        while (true) {
+            val candidate = lock.withLock { retainedRootLeases.values.firstOrNull { it.sessionId !in handles } } ?: return released
+            if (!releaseRetainedRootLeases(candidate.sessionId)) return released
+            released = true
+        }
+    }
+
     suspend fun sourceProject(session: CodingSession, project: CodingProject): CodingProject = lock.withLock {
         val handle = handles[session.id] ?: error("Рабочая область не запущена")
         require(handle.generation == session.runtimeGeneration) { "Рабочая область другого поколения" }
@@ -177,6 +222,8 @@ class SessionTreeRuntime(
                 if (interrupted.observed == SessionObservedState.UNKNOWN && interrupted.legacyAttempt == null) {
                     requireNotNull(runtime) { "Движок недоступен для сверки" }.reconcile(session.id)
                     organisms.store.reconcileInterruptedRun(current.organismId!!, session.id, interrupted.generation, interrupted.version)
+                    // Сверка подтвердила остановку прежнего поколения: его удержанная папка больше не занята.
+                    releaseRetainedRootLeases(session.id)
                 }
                 val node = organisms.store.beginRun(current.organismId!!, session.id)
                 current = current.copy(runtimeGeneration = node.generation, planningRulesSnapshot = node.rules)
