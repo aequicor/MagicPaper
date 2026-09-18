@@ -42,9 +42,21 @@ primary workflow; add a specialist only for the part of the task that needs it.
 | Design module boundaries, public contracts or ownership | [magicpaper-code-design](skills/magicpaper-code-design/SKILL.md) |
 | Build or review visual/interactive UI | [magicpaper-desktop-ui](skills/magicpaper-desktop-ui/SKILL.md) |
 | Choose, write or run relevant checks | [magicpaper-testing](skills/magicpaper-testing/SKILL.md) |
+| Keep a design quality gate while creating or revising UI | [no-ai-design-slop](skills/ui/no-ai-design-slop/SKILL.md) |
+| Audit an existing screen or render for design slop | [audit-ai-design-slop](skills/ui/audit-ai-design-slop/SKILL.md) |
+| Write a spec-driven UI prompt before implementation | [design-first-ui-prompting](skills/ui/design-first-ui-prompting/SKILL.md) |
+| Choose motion timing, easing and choreography | [animation-systems](skills/ui/animation-systems/SKILL.md) |
 
 Canonical skill sources live in `skills/`; `.agents/skills/` contains discovery
 links. These are development workflows, separate from the app's installed skills.
+
+`skills/ui/` vendors third-party UI-creation skills from
+[MengTo/skills](https://github.com/MengTo/skills) (MIT, © Meng To; provenance and
+catalog in [skills/ui/README.md](skills/ui/README.md)). They are design
+playbooks, not contracts: `magicpaper-desktop-ui`, `docs/desktop-ui/BRANDBOOK.md`
+and the Paper API boundary win on any conflict. Their web recipes (Tailwind, CSS,
+GSAP, IntersectionObserver) must be re-expressed with Paper tokens and Compose
+modifiers, never copied into a feature module.
 
 ## Minimize tool calls
 
@@ -178,6 +190,11 @@ Run `python3 docs/desktop-ui/verify-design-system.py --self-test` and relevant
 Gradle checks. Keep user-facing copy limited to labels, actions, results,
 validation and information needed for decisions; implementation explanations
 belong in code.
+
+For a chat or journal surface that renders streamed agent output, read
+[docs/desktop-ui/STREAMING-CHAT.md](docs/desktop-ui/STREAMING-CHAT.md) before
+changing follow-end scrolling, chunk coalescing or Markdown parsing: it maps each
+cause of a jumping transcript to its `:designSystem` owner.
 
 By default, center button content horizontally and vertically within the hit area;
 center an icon and label together as one group. Use a different alignment only

@@ -49,17 +49,24 @@ def main() -> None:
         fail("unexpected license or host contract")
 
     declared = {item["path"]: item for item in manifest["files"]}
+    # Manifest paths are POSIX; a Windows checkout must not fail on separators.
     actual = {
-        str(path.relative_to(SKILL))
+        path.relative_to(SKILL).as_posix()
         for path in SKILL.rglob("*")
         if path.is_file() and path != MANIFEST
     }
     if set(declared) != actual:
         fail(f"manifest file set differs: declared={sorted(declared)}, actual={sorted(actual)}")
+    lf_normalized = 0
     for relative, item in declared.items():
         data = (SKILL / relative).read_bytes()
         if item["size"] != len(data) or item["sha256"] != hashlib.sha256(data).hexdigest():
-            fail(f"manifest digest/size mismatch: {relative}")
+            # The manifest records the LF bytes git stores; `core.autocrlf` materializes
+            # CRLF in a Windows checkout. Verify exactly those bytes before failing.
+            stored = data.replace(b"\r\n", b"\n")
+            if item["size"] != len(stored) or item["sha256"] != hashlib.sha256(stored).hexdigest():
+                fail(f"manifest digest/size mismatch: {relative}")
+            lf_normalized += 1
 
     markdown_link = re.compile(r"\[[^]]+\]\(([^)]+)\)")
     for path in sorted(SKILL.rglob("*.md")):
@@ -84,7 +91,14 @@ def main() -> None:
     if "allow_implicit_invocation: true" not in agent or "$magicpaper-desktop-ui" not in agent:
         fail("implicit invocation metadata is missing")
 
-    print(f"PASS: magicpaper.desktop-ui@1.1.0; files={len(actual)}; manifestSha256={hashlib.sha256(manifest_bytes).hexdigest()}")
+    checkout = f"; lfNormalized={lf_normalized}" if lf_normalized else ""
+    # Report the hash of the stored (LF) manifest so a CRLF checkout stays comparable
+    # with the recorded evidence.
+    manifest_sha256 = hashlib.sha256(manifest_bytes.replace(b"\r\n", b"\n")).hexdigest()
+    print(
+        f"PASS: magicpaper.desktop-ui@1.1.0; files={len(actual)}"
+        f"{checkout}; manifestSha256={manifest_sha256}"
+    )
 
 
 if __name__ == "__main__":
