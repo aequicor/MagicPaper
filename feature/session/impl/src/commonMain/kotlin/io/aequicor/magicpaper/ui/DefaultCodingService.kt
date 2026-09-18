@@ -1425,6 +1425,8 @@ class DefaultCodingService(
     }
 
     private val clarifyingSessions = mutableSetOf<String>()
+    /** Повторное «Продолжить», пока предыдущее ещё принимается, отбрасывается: заметка не дублируется. */
+    private val resumingSessions = mutableSetOf<String>()
 
     override fun clarifyCodingSession(sessionId: String, text: String, attachments: List<Attachment>) {
         if (sessionId in changingHistory) return
@@ -1455,20 +1457,33 @@ class DefaultCodingService(
                         attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.STOP))
                 }
                 if (version != null) clearAcceptedComposer(draft, version)
+                // Уточнение попадает в историю сразу после durable-приёмки: последующие отказы
+                // (карантин прерванного инструмента и т.п.) не должны терять сообщение пользователя.
+                appendCodingMessage(ui.session, CodingMessage(Id.new(), CodingRole.USER, text.trim(), createdAt = Id.now(),
+                    attachments = attachments.map { it.asMeta() }))
                 codingRuntime?.abort(sessionId)
                 running.cancelAndJoin()
                 codingRuntime?.reconcile(sessionId)
                 val current = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session ?: return@launch
+                val organisms = planningChat?.organisms
+                val quarantined = organisms != null && organisms.store.organisms.value.values.any { organism ->
+                    current.id in organism.sessions && organism.unresolvedQuarantines(current.id).isNotEmpty()
+                }
+                if (quarantined) {
+                    // Исход прерванного инструмента не доказан: запуск невозможен до сверки. Уточнение
+                    // уже в истории и в pendingRun — «Продолжить» после сверки донесёт его до агента.
+                    AppLog.info("coding", "clarify.quarantined", mapOf("sessionId" to sessionId))
+                    revealQuarantineRecovery(sessionId)
+                    return@launch
+                }
                 launchCodingRun(current, checkNotNull(accepted.pendingRun).copy(intent = ExecutionIntent.RUN, stoppedByUser = false),
-                    recovering = true, clearComposer = false,
-                    additionalMessage = CodingMessage(Id.new(), CodingRole.USER, text.trim(), createdAt = Id.now(),
-                        attachments = attachments.map { it.asMeta() }))
+                    recovering = true, clearComposer = false)
             } finally { clarifyingSessions.remove(sessionId) }
         }
     }
 
     override fun resumeCodingSession(sessionId: String, text: String, attachments: List<Attachment>, fromQuestionnaire: Boolean) {
-        if (sessionId in changingHistory) return
+        if (sessionId in changingHistory || sessionId in resumingSessions) return
         val ui = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         if (!(if (fromQuestionnaire) ui.copy(interactions = emptyList()) else ui).canResume) return
         if (planningChat != null && (ui.plan != null || ui.session.planningMode || ui.session.stageId != null)) {
@@ -1482,12 +1497,22 @@ class DefaultCodingService(
             CodingRunCheckpoint(it.id, it.text)
         } ?: return
         val instruction = text.trim()
-        launchCodingRun(ui.session, request.copy(
-            prompt = request.prompt + if (instruction.isNotEmpty()) "\n\nУточнение пользователя: $instruction" else "",
-            attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.RUN, stoppedByUser = false,
-        ), recovering = true, additionalMessage = instruction.takeIf { it.isNotEmpty() || attachments.isNotEmpty() }?.let {
-            CodingMessage(Id.new(), CodingRole.USER, it, createdAt = Id.now(), attachments = attachments.map { attachment -> attachment.asMeta() })
-        })
+        val withNote = instruction.isNotEmpty() || attachments.isNotEmpty()
+        if (!resumingSessions.add(sessionId)) return
+        scope.launch {
+            try {
+                if (withNote) {
+                    // Заметка пользователя попадает в историю до запуска: отказ запуска (карантин и т.п.)
+                    // не должен терять её.
+                    appendCodingMessage(ui.session, CodingMessage(Id.new(), CodingRole.USER, instruction, createdAt = Id.now(),
+                        attachments = attachments.map { attachment -> attachment.asMeta() }))
+                }
+                launchCodingRun(ui.session, request.copy(
+                    prompt = request.prompt + if (instruction.isNotEmpty()) "\n\nУточнение пользователя: $instruction" else "",
+                    attachments = (request.attachments + attachments).distinctBy { it.id }, intent = ExecutionIntent.RUN, stoppedByUser = false,
+                ), recovering = true, resumeInstruction = withNote)
+            } finally { resumingSessions.remove(sessionId) }
+        }
     }
 
     private suspend fun clearAcceptedComposer(draft: io.aequicor.magicpaper.ui.components.CodingComposerDraft?, version: Long) {
@@ -1669,7 +1694,7 @@ class DefaultCodingService(
         return true
     }
 
-    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, additionalMessage: CodingMessage? = null, userInitiated: Boolean = true, clearComposer: Boolean = true, acquireComputerAccess: Boolean = userInitiated) {
+    private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, resumeInstruction: Boolean = false, userInitiated: Boolean = true, clearComposer: Boolean = true, acquireComputerAccess: Boolean = userInitiated) {
         val runtime = codingRuntime ?: return
         val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
         // A cancelled job still owns the session while its runtime and saved output
@@ -1711,7 +1736,6 @@ class DefaultCodingService(
                         inputAttachments = request.attachments,
                         images = request.attachments.mapNotNull { it.asCodingInputImage(checkNotNull(recorder.imageInvocation)) }))
                 }
-                additionalMessage?.let { appendCodingMessage(session, it) }
                 if (userInitiated && composerVersion != null) clearAcceptedComposer(composer, composerVersion)
                 updateCodingSession(session.id) { it.copy(running = true, draft = recorder.draft(active = true)) }
                 if (recovering) runtime.reconcile(session.id)
@@ -1750,7 +1774,8 @@ class DefaultCodingService(
                         current = updateStoredCodingSession(current) { it.copy(pendingRun = it.pendingRun?.copy(worktreeEnabled = false)) }
                     }
                 }
-                if (recovering && additionalMessage != null && workspaceRecord?.phase == TaskWorktreePhase.MERGING && workspaceRecord.error != null) {
+                // Продолжение с уточнением возвращает агента к работе даже из фазы с ошибкой слияния.
+                if (recovering && resumeInstruction && workspaceRecord?.phase == TaskWorktreePhase.MERGING && workspaceRecord.error != null) {
                     current = updateStoredCodingSession(current) { it.copy(taskWorktree = it.taskWorktree?.copy(
                         phase = TaskWorktreePhase.RUNNING, handoffGeneration = null, error = null)) }
                     workspaceRecord = current.taskWorktree

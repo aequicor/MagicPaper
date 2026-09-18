@@ -32,7 +32,11 @@ the application creates.
 
 Ordinary coding must submit `task.handoff` through the normal tool/receipt path.
 Both native engines receive the active task's delivery policy in their system
-instructions, including when resuming history. Worktree mode authorizes automatic
+instructions, including when resuming history. A clarification is saved to the
+session history the moment it is accepted, so a relaunch that is blocked — by a
+quarantine of an interrupted tool, for example — keeps the user's message for the
+next continuation instead of losing it; the blocked relaunch opens the recovery
+dialog instead of failing into a duplicated error. Worktree mode authorizes automatic
 delivery; the agent must not ask for merge/finish/pause confirmation. A successful
 handoff explicitly tells it to finish its response, without claiming delivery has
 already happened. Genuine missing requirements still use the questionnaire.

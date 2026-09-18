@@ -125,6 +125,8 @@ class CodingWorktreeTest {
         service.toggleWorktree("s"); runCurrent()
         assertTrue(repo.sessions("p").single().worktreeEnabled)
         service.clarifyCodingSession("s", "Clarification"); runCurrent()
+        // Уточнение попадает в историю сразу при приёмке и переживает любой отказ запуска.
+        assertEquals("Clarification", repo.messages("p", "s").last { it.role == CodingRole.USER }.text)
         assertEquals(2, runtime.calls.size)
         assertEquals(listOf("/isolated", "/isolated"), runtime.calls.map { it.first.path })
         assertEquals(original.branch, repo.sessions("p").single().taskWorktree?.branch)
@@ -255,6 +257,41 @@ class CodingWorktreeTest {
         assertEquals(TaskWorktreePhase.COMPLETE, finished.phase)
         assertEquals(1, port.deliveries)
         assertEquals(response, repo.sessions(project.id).single().taskWorktree?.executionResponse)
+    }
+
+    @Test fun clarificationDuringToolQuarantineKeepsTheMessageInsteadOfRelaunching() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var service: DefaultCodingService? = null
+        var graph: CodingRuntimeGraph? = null
+        try {
+            val f = ModelSettingsFixture(); f.seed()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project); repo.saveSession(session)
+            val port = Workspace()
+            val unused = TaskWorktreeService(repo, port, LocalPlanningWorkspace())
+            val base = Runtime(unused).apply { gate = CompletableDeferred() }
+            graph = CodingRuntimeGraph(f.kv, f.json, f.settings, f.profiles, repo, base, LocalPlanningWorkspace(), null,
+                f.usage, f.gateway, f.search, taskWorkspace = port)
+            service = f.prepareCoding(graph.runtime, repo, taskWorktrees = graph.taskWorktrees, planningChat = graph.planningChat)
+            service.sendCodingPromptTo("s", "Task")
+            // Прогон дошёл до агента и удерживается: уточнение будет отменять живой запуск.
+            withContext(Dispatchers.Default) { withTimeout(10_000) { while (base.calls.isEmpty()) delay(50) } }
+            // Прерванный инструмент с недоказанным исходом регистрирует карантин.
+            withContext(Dispatchers.Default) {
+                val store = graph.organisms!!.store
+                val organism = store.get(store.organisms.value.values.first { "s" in it.sessions }.id)
+                store.quarantine(organism.id, "s", organism.sessions.getValue("s").generation,
+                    "op-powershell", "Неизвестный исход powershell")
+            }
+            service.clarifyCodingSession("s", "Уточнение не должно пропасть")
+            withContext(Dispatchers.Default) {
+                withTimeout(10_000) { service.state.first { it.coding.interactions.any { it.kind == InteractionKind.RECOVER_RUN } } }
+            }
+            // Сообщение сохранено в истории, а запуск не перезапускался: исход не доказан.
+            assertEquals("Уточнение не должно пропасть",
+                repo.messages("p", "s").last { it.role == CodingRole.USER }.text)
+            assertEquals(1, base.calls.size)
+        } finally { service?.close(); graph?.close(); Dispatchers.resetMain() }
     }
 
     @Test fun applicationGraphBindsHandoffToActualTaskAndWaitsForNativeOwner() = runTest {
