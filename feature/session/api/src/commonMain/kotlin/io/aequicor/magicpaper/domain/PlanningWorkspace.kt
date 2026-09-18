@@ -24,4 +24,6 @@ interface PlanningWorkspace {
     /** A content fingerprint collected by the host; null means verification is unavailable. */
     suspend fun verificationSnapshot(path: String): String? = null
     suspend fun finishDeliveryConflict(path: String): Boolean = false
+    /** Владелец блокировки пути — для диагностики занятой папки; null, если порт не отслеживает владельцев. */
+    suspend fun holderOf(path: String): String? = null
 }

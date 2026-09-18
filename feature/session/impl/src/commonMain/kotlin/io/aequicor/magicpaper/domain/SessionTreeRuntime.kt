@@ -41,6 +41,8 @@ class SessionTreeRuntime(
     private val codingWorkspaces = planningWorkspace?.let { SessionCodingWorkspaces(it, organisms.store) }
     var runtime: CodingRuntime? = null
     var cancelQuestions: suspend (String) -> Unit = {}
+    /** Окно ожидания занятой папки: соседняя доставка держит её секунды, дольше ждёт пользователь. */
+    var rootLeaseWaitMillis: Long = 60_000L
     /** The owning planner admits a confirmed stage before this runtime receives authority. */
     var prepareSession: suspend (CodingSession) -> CodingSession = { it }
     /** Controller closure may be deferred when the failed callback belongs to that controller. */
@@ -107,16 +109,30 @@ class SessionTreeRuntime(
             } finally { if (registered) lock.withLock { if (handles[session.id] === handle) handles.remove(session.id) } }
         } }
     }
-    /** Занятая папка — ещё не доказательство живого исполнителя: удержание без рабочего места
-     * снимается сверкой движка, и только доказанно занятая папка отклоняет запуск. */
-    suspend fun projectForExecution(project: CodingProject, session: CodingSession): CodingProject = try {
-        executionProjectFor(project, session)
-    } catch (busy: RootLeaseBusy) {
-        // Освобождение чужих и своих устаревших удержаний нельзя выполнять под замком рабочей области.
-        releaseUnownedRootLeases()
-        releaseRetainedRootLeases(session.id)
-        try { executionProjectFor(project, session) }
-        catch (still: RootLeaseBusy) { throw IllegalArgumentException("Рабочая копия ${still.path} уже используется другой сессией", still) }
+    /** Занятая папка — ограниченное ожидание со сверкой удержаний, а не мгновенный отказ всему запуску. */
+    suspend fun projectForExecution(project: CodingProject, session: CodingSession): CodingProject {
+        var waited = 0L
+        while (true) {
+            try {
+                return executionProjectFor(project, session)
+            } catch (busy: RootLeaseBusy) {
+                if (waited >= rootLeaseWaitMillis) {
+                    val busyError = TaskWorkspaceBusy(busy.path, WORKING_FOLDER)
+                    AppLog.error("coding.workspace", "lease.busy", busyError,
+                        mapOf("sessionId" to session.id, "holder" to planningWorkspace?.holderOf(busy.path).orEmpty(),
+                            "waitedMillis" to waited.toString()))
+                    throw busyError
+                }
+                if (waited == 0L) AppLog.info("coding.workspace", "lease.waiting",
+                    mapOf("sessionId" to session.id, "holder" to planningWorkspace?.holderOf(busy.path).orEmpty()))
+                // Освобождение чужих и своих устаревших удержаний нельзя выполнять под замком рабочей области,
+                // и повторяемо: доказательство остановки может появиться в любой момент ожидания.
+                releaseRetainedRootLeases(session.id)
+                releaseUnownedRootLeases()
+                delay(ROOT_LEASE_POLL_MILLIS)
+                waited += ROOT_LEASE_POLL_MILLIS
+            }
+        }
     }
 
     private class RootLeaseBusy(val path: String) : IllegalStateException()
@@ -640,5 +656,10 @@ class SessionTreeRuntime(
         val persistedAliases = organisms.store.organisms.value.values.flatMap { it.auxiliaryRuns.values.filter { run -> !run.settled }.map { run -> run.ownerSessionId } }
         val ids = lock.withLock { closing = true; (handles.keys + children.keys + retainedRootLeases.values.map { it.sessionId } + workspaceIds + persistedAliases).toSet() }
         stop(ids)
+    }
+
+    private companion object {
+        const val ROOT_LEASE_POLL_MILLIS = 250L
+        const val WORKING_FOLDER = "Рабочая папка"
     }
 }

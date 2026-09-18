@@ -34,8 +34,14 @@ class GitPlanningWorkspaceTest {
             assertTrue(port.acquire(project))
             assertFailsWith<IOException> { port.release(project) }
             assertTrue(interrupted)
-            assertFalse(port.acquire(project), "A failed release keeps the original identity: $boundary")
-            assertFalse(port.acquire(alias), "An alias cannot bypass incomplete release: $boundary")
+            if (boundary == "project-lock-releasing") {
+                // Неудавшееся освобождение до погашения замка держит папку за исходным владельцем.
+                assertFalse(port.acquire(project), "A failed release keeps the original identity: $boundary")
+                assertFalse(port.acquire(alias), "An alias cannot bypass incomplete release: $boundary")
+            } else {
+                // Замок уже погашен: оставшаяся запись — мусор, который не должен занимать папку вечно.
+                assertTrue(port.acquire(project), "A dead lock must not block the checkout forever: $boundary")
+            }
             port.release(project)
             port.release(project)
             val next = GitPlanningWorkspace(data)

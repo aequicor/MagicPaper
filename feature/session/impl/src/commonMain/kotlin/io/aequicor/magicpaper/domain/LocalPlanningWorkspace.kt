@@ -21,6 +21,7 @@ class LocalPlanningWorkspace : PlanningWorkspace {
         if (owners[key] == project.id) owners.remove(key)
         Unit
     }
+    override suspend fun holderOf(path: String) = owners[path.trimEnd('/', '\\')]
     override suspend fun prepare(project: CodingProject, runId: String) = PlanWorkspace(project.path, project.path)
     override suspend fun stage(project: CodingProject, workspace: PlanWorkspace, attempt: StageAttempt) = attempt.copy(path = project.path)
     override suspend fun capture(attempt: StageAttempt) = ""

@@ -1839,6 +1839,8 @@ class DefaultCodingService(
                 val safeError = when {
                     blocked != null -> "Сессия заблокирована: исход прерванной операции не подтверждён. " +
                         "Откройте «Восстановление после прерванной операции» над диалогом."
+                    // Занятая папка — действенная ошибка для любого режима: ожидание уже сделано.
+                    e is TaskWorkspaceBusy -> e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
                     request.worktreeEnabled == true && (e is IllegalStateException || e is IllegalArgumentException) ->
                         e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
                     else -> "Не удалось продолжить работу. Проверьте подключение и состояние сессии."

@@ -81,11 +81,14 @@ session no longer owns a working area — the engine's reconciliation is the pro
 then polls, and only afterwards reports `TaskWorkspaceBusy` naming the folder. The saved phase and
 response let the next continuation finish the Git operation without another native run. An uncertain
 scope close keeps the lease until that proof exists; resuming the same session reconciles its
-previous generation and releases it. Every session start retries that release, so a restore that
-was rejected while the stale retention still held the folder does not loop forever; a direct code
-root acquires its folder through the same reclamation instead of failing on the first busy answer.
-Writer leases are exclusive per canonical checkout: its `owner.lock` file also excludes a parallel
-application instance on the same folder, while unrelated folders of the same profile stay usable.
+previous generation and releases it. Every session start retries that release and keeps retrying
+inside a bounded wait, so a restore that was rejected while the stale retention still held the
+folder does not loop forever, and a direct code root waits for the same window instead of failing
+on the first busy answer. A lease entry whose OS lock is already dead — debris of a failed cleanup —
+never blocks the folder: the port prunes it on the next acquisition. Timeout reports
+`TaskWorkspaceBusy` naming the folder and logs the holding owner for diagnosis. Writer leases are
+exclusive per canonical checkout: its `owner.lock` file also excludes a parallel application
+instance on the same folder, while unrelated folders of the same profile stay usable.
 
 ## Destination distance
 

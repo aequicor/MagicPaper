@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.planning
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
@@ -44,6 +45,7 @@ class GitPlanningWorkspace(
     override suspend fun acquire(project: CodingProject): Boolean = withContext(Dispatchers.IO) {
         synchronized(locks) {
             val path = File(project.path).canonicalPath
+            pruneDebris()
             if (project.id in locks || locks.values.any { it.path == path }) return@synchronized false
             val dir = root(project).apply { mkdirs() }
             // Writer identity may change between generations; exclusivity belongs to the canonical checkout.
@@ -53,6 +55,29 @@ class GitPlanningWorkspace(
             else { locks[project.id] = ProjectLock(path, file to lock); true }
         }
     }
+
+    /**
+     * Запись с погашенным замком — остаток неудачной очистки: писатель закончил, иначе замок был бы
+     * действительным (освобождение происходит только после завершения действия). Без этого папка
+     * оставалась бы занятой вечно, и её не сняло бы ни ожидание, ни сверка движка.
+     */
+    private fun pruneDebris() {
+        val stale = locks.entries.filter { !it.value.resources.second.isValid }
+        for (entry in stale) {
+            locks.remove(entry.key)
+            runCatching { entry.value.resources.first.close() }
+                .onFailure { AppLog.error("coding.workspace", "lease.debris.close.failed", it, mapOf("ownerId" to entry.key)) }
+        }
+        if (stale.isNotEmpty()) AppLog.info("coding.workspace", "lease.debris.pruned", mapOf("count" to stale.size.toString()))
+    }
+
+    override suspend fun holderOf(path: String): String? = withContext(Dispatchers.IO) {
+        synchronized(locks) {
+            pruneDebris()
+            locks.entries.firstOrNull { it.value.path == File(path).canonicalPath }?.key
+        }
+    }
+
     override suspend fun release(project: CodingProject) = withContext(Dispatchers.IO) {
         synchronized(locks) {
             val owned = locks[project.id]

@@ -219,10 +219,12 @@ class SessionCodingWorkspaceTest {
         val project = f.f.project.copy(path = source.path)
         val other = f.f.root.copy(id = "other-root", organismId = null, runtimeGeneration = 0)
         f.f.projects.saveSession(other)
+        // Живой прогон держит папку: соседний запуск ждёт ограниченное время и получает действенную ошибку.
+        f.tree.rootLeaseWaitMillis = 250
         val run = launch { f.tree.runtime!!.run(project, f.f.root, "Work", null).collect() }
         try {
             withTimeout(20_000) { started.await() }
-            assertFailsWith<IllegalArgumentException> { f.tree.runtime!!.run(project, other, "Other work", null).collect() }
+            assertFailsWith<TaskWorkspaceBusy> { f.tree.runtime!!.run(project, other, "Other work", null).collect() }
             assertFalse("other-root" in nativeSessions.value)
             assertEquals(SessionCodingWorkspacePhase.CAPTURED, f.record().phase)
             run.cancel(); withTimeout(5_000) { cleaning.await() }
@@ -272,8 +274,8 @@ class SessionCodingWorkspaceTest {
 
     @Test fun failedRootRestoreRetriesItsOwnStaleLeaseReleaseInsteadOfLooping() = runTest { withContext(Dispatchers.Default) {
         val source = repository()
-        // Три сбоя освобождения: сверка при восстановлении, повтор при запуске и повтор захвата —
-        // этого достаточно, чтобы восстановление отклонилось, а папка осталась удержанной прошлым поколением.
+        // Три сбоя освобождения: прогон, сверка при восстановлении и повтор при запуске. Дальше ожидание
+        // повторяет освобождение само и доводит восстановление до конца вместо вечного «занятой папки».
         var releaseFaults = 3
         val port = workspace { if (it == "project-lock-releasing" && releaseFaults-- > 0) error("injected release failure") }
         val f = Fixture(source, port)
@@ -281,19 +283,15 @@ class SessionCodingWorkspaceTest {
         val native = Native { _, _ -> emit(CodingEvent.FinalText("Answer")); emit(CodingEvent.Finished) }
         native.reconciliation = { check(confirmed) { "native stop uncertain" } }
         f.initialize(native)
+        f.tree.rootLeaseWaitMillis = 5_000
         val project = f.f.project.copy(path = source.path)
         suspend fun node() = f.f.store.get(f.f.root.organismId!!).sessions.getValue("root")
         // Первый прогон завершён без подтверждения остановки: папка удержана, состояние UNKNOWN.
         f.tree.runtime!!.run(project, f.f.root, "Work", null).collect()
         assertEquals(SessionObservedState.UNKNOWN, node().observed)
         confirmed = true
-        // Восстановление отклоняется занятой папкой — узел становится FAILED, а удержание остаётся:
-        // без повтора освобождения каждый «Продолжить» повторял бы тот же отказ.
-        assertFailsWith<IllegalArgumentException> { f.tree.runtime!!.run(project, f.f.root, "Continue", null).collect() }
-        assertEquals(SessionObservedState.FAILED, node().observed)
-        assertFalse(port.acquire(project.copy(id = "stuck-checker")), "Устаревшее удержание всё ещё занимает папку")
-        // Повторное восстановление обязано повторить освобождение и довести прогон до конца.
-        withTimeout(20_000) { f.tree.runtime!!.run(project, f.f.root, "Continue again", null).collect() }
+        // Восстановление повторяет освобождение внутри ожидания и завершается без ручного повтора.
+        withTimeout(20_000) { f.tree.runtime!!.run(project, f.f.root, "Continue", null).collect() }
         assertEquals(SessionObservedState.COMPLETED, node().observed)
         val checker = project.copy(id = "after-recovery")
         assertTrue(port.acquire(checker)); port.release(checker)

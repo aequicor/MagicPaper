@@ -177,12 +177,11 @@ class TaskWorktreeService(
 
     /**
      * Папку удерживает один исполнитель, а удерживать её может и чужой прогон: ожидание ограничено,
-     * постоянную занятость разрешает пользователь. До первого повтора снимается блокировка без живого
-     * исполнителя, иначе задача ждала бы таймаут из-за уже завершившегося прогона.
+     * постоянную занятость разрешает пользователь. На каждом шаге ожидания снимается блокировка без
+     * живого исполнителя: доказательство остановки может появиться в любой момент.
      */
     private suspend fun <T : Any> leased(owner: CodingProject, sessionId: String, folder: String, action: suspend () -> T): T {
         var waited = 0L
-        var reconciled = false
         while (true) {
             val result = leasedOrNull(owner, action)
             if (result != null) {
@@ -190,16 +189,15 @@ class TaskWorktreeService(
                     mapOf("sessionId" to sessionId, "waitedMillis" to waited.toString()))
                 return result
             }
-            if (!reconciled) {
-                reconciled = true
-                if (releaseUnownedLeases()) continue
-            }
             if (waited >= SOURCE_LEASE_WAIT_MILLIS) {
                 val busy = TaskWorkspaceBusy(owner.path, folder)
                 AppLog.error("coding.worktree", "lease.busy", busy,
-                    mapOf("sessionId" to sessionId, "folder" to folder, "waitedMillis" to waited.toString()))
+                    mapOf("sessionId" to sessionId, "folder" to folder, "holder" to leases.holderOf(owner.path).orEmpty(),
+                        "waitedMillis" to waited.toString()))
                 throw busy
             }
+            // Удержание могло стать снимаемым в любой момент ожидания: сверка повторяется на каждом шаге.
+            if (releaseUnownedLeases()) continue
             delay(SOURCE_LEASE_POLL_MILLIS)
             waited += SOURCE_LEASE_POLL_MILLIS
         }
