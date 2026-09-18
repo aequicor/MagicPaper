@@ -263,6 +263,44 @@ class PiModelsConfigTest {
     }
 
     @Test
+    fun glm53OffersOnlyTheLevelsZaiAccepts() {
+        // Прогон на glm-5.3-flash падал с 400 code 1210: пи отдавал «medium»,
+        // которого на вайре GLM-5.3 нет, а выключателей у модели не бывает.
+        val flash = profile("glm-5.3-flash", baseUrl = "https://api.z.ai/api/paas/v4/")
+        val setup = section(flash)
+        assertEquals("max", setup.thinkingLevel, "без выбора — штатный уровень вендора")
+        assertEquals(
+            "high",
+            section(flash.copy(effort = EffortSelection.of(ReasoningEffort.MEDIUM))).thinkingLevel,
+            "запрошенного уровня нет — берём ближайший разрешённый, а не 400",
+        )
+        assertEquals("low", section(flash.copy(effort = EffortSelection.of(ReasoningEffort.NONE))).thinkingLevel)
+        val map = setup.thinkingLevelMap
+        assertEquals("low", map["low"])
+        assertEquals("high", map["high"])
+        assertEquals("max", map["max"])
+        assertEquals(null, map["off"], "мышление нельзя выключить")
+        assertEquals(null, map["medium"], "уровня нет на вайре — pi обязан его спрятать")
+        assertEquals("zai", setup.thinkingFormat, "сервер Z.AI переключает мышление полем thinking")
+        assertTrue(PiModelsConfig.root(flash).compat().bool("supportsReasoningEffort")!!)
+    }
+
+    @Test
+    fun glmBefore52DeclaresNoEffortHandle() {
+        val glm = profile("glm-5.1", baseUrl = "https://api.z.ai/api/paas/v4/")
+        val setup = section(glm)
+        assertTrue(setup.enabled, "модель думает — пи обязан это знать")
+        assertFalse(setup.supportsReasoningEffort, "reasoning_effort появился только в GLM-5.2")
+        assertFalse(PiModelsConfig.root(glm).compat().bool("supportsReasoningEffort")!!)
+        assertEquals("zai", PiModelsConfig.root(glm).compat().str("thinkingFormat"))
+        assertNull(setup.thinkingLevel, "«сама решает» — переключатель не отправляем")
+        assertEquals(
+            "off",
+            section(glm.copy(effort = EffortSelection.of(ReasoningEffort.NONE))).thinkingLevel,
+        )
+    }
+
+    @Test
     fun providerSectionCarriesEndpointAndKey() {
         val provider = PiModelsConfig.root(qwen).provider()
         assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1", provider.str("baseUrl"), "без хвостового слэша")

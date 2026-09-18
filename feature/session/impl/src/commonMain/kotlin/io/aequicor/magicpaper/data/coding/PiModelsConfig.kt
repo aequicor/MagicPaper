@@ -13,6 +13,7 @@ import io.aequicor.magicpaper.domain.ReasoningEffort
 import io.aequicor.magicpaper.domain.ReasoningPresets
 import io.aequicor.magicpaper.domain.resolveEffort
 import io.aequicor.magicpaper.domain.supportsEffort
+import io.aequicor.magicpaper.domain.WireDialect
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -95,6 +96,12 @@ object PiModelsConfig {
     data class Reasoning(
         /** Поле `reasoning`: с `false` пи не шлёт никаких thinking-переключателей. */
         val enabled: Boolean,
+        /**
+         * Поле `compat.supportsReasoningEffort`: сервер принимает `reasoning_effort`.
+         * У моделей с одним переключателем `thinking.type` (Z.AI GLM 4.5…5.1) ручки
+         * усилия нет — пи обязан об этом знать, а не полагаться на вокабуляр по умолчанию.
+         */
+        val supportsReasoningEffort: Boolean,
         /** Потолок вывода, записанный в `maxTokens` (с подстраховкой для рассуждения). */
         val maxTokens: Int,
         /** Значение `--thinking`; null — переключатель не отправляем: уровень нечем выразить. */
@@ -128,7 +135,7 @@ object PiModelsConfig {
                 // несогласованности пи объявляет мышление, но не передаёт уровень.
                 put("compat", buildJsonObject {
                     put("supportsDeveloperRole", false)
-                    put("supportsReasoningEffort", reasoning.enabled)
+                    put("supportsReasoningEffort", reasoning.supportsReasoningEffort)
                     reasoning.thinkingFormat?.let { put("thinkingFormat", it) }
                     // Compat-флаги из ModelCapabilities: requiresAssistantAfterToolResult
                     // и т.д. — определяются один раз в resolve(), а не дублируются
@@ -184,6 +191,7 @@ object PiModelsConfig {
         val caps = ModelCapabilities.resolve(profile.provider, modelId, profile.baseUrl)
         return Reasoning(
             enabled = controls != null,
+            supportsReasoningEffort = controls != null && controls.dialect != WireDialect.THINKING_TOGGLE,
             maxTokens = maxTokens(profile, modelId),
             thinkingLevel = controls?.let { thinkingLevel(profile, modelId, it, levelMap) },
             thinkingFormat = if (controls != null) caps.thinkingFormat else null,

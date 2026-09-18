@@ -162,6 +162,12 @@ enum class WireDialect {
 
     /** `thinkingConfig.thinkingLevel` (Gemini 3). */
     THINKING_LEVEL,
+
+    /**
+     * `thinking.type = enabled|disabled` — переключатель есть, вокабуляра усилия
+     * нет (Z.AI GLM 4.5…5.1: `reasoning_effort` вендор добавил только в GLM-5.2).
+     */
+    THINKING_TOGGLE,
 }
 
 /** Границы бюджета мышления в токенах, которые принимает модель. */
@@ -317,10 +323,11 @@ fun ReasoningCapability.resolveEffort(selection: EffortSelection): ResolvedEffor
         if (mapped in controls.values) return ResolvedEffort(mapped, requested, clamped = true)
     }
 
-    var candidates = ReasoningEffort.LADDER.filter { it in controls.values }
+    val candidates = ReasoningEffort.LADDER.filter { it in controls.values }
         .filter { it != ReasoningEffort.NONE || requested == ReasoningEffort.NONE }
-    // Просили ВЫКЛ, но модель не умеет выключаться — сравнимся с самым слабым.
-    if (candidates.isEmpty()) candidates = ReasoningEffort.LADDER.filter { it in controls.values }
+    // Пусто — модель не объявляет уровня, которым честно выразить запрос.
+    // «Выключено» вместо включённого мышления подставлять нельзя (и наоборот),
+    // поэтому поле просто не уходит: решает сервер, как до выбора пользователя.
     if (candidates.isEmpty()) return ResolvedEffort(null, requested)
 
     val target = ReasoningEffort.rank(requested)
@@ -383,11 +390,47 @@ object ReasoningPresets {
         dialect = WireDialect.EFFORT,
     )
 
-    /** Самохостed-серверы с `reasoning_effort` (DeepSeek V4, GLM, Kimi, Qwen). */
+    /** Самохостed-серверы с `reasoning_effort` (DeepSeek V4, Kimi, Qwen). */
     val COMPAT_EFFORT = ReasoningCapability.Controls(
         values = LADDER_UP_TO_HIGH,
         default = ReasoningEffort.MEDIUM,
         dialect = WireDialect.EFFORT,
+    )
+
+    /**
+     * Z.AI GLM 4.5…5.1: у модели только переключатель `thinking.type` —
+     * `reasoning_effort` появился в GLM-5.2 и сервер его не принимает
+     * (docs.z.ai/api-reference/llm/chat-completion). «Включено» здесь —
+     * «модель сама решает, думать ли», то есть [ReasoningEffort.AUTO].
+     */
+    val GLM_THINKING_TOGGLE = ReasoningCapability.Controls(
+        values = setOf(ReasoningEffort.NONE, ReasoningEffort.AUTO),
+        default = ReasoningEffort.AUTO,
+        dialect = WireDialect.THINKING_TOGGLE,
+    )
+
+    /**
+     * Z.AI GLM-5.2: `reasoning_effort` принимает всю шкалу, но low/medium
+     * поднимает до high, xhigh — до max, а none/minimal выключают мышление.
+     * Объявляем только различные на вайре значения (тот же набор у кураторского
+     * каталога pi для `zai`), иначе ручка обещает уровень, которого нет.
+     */
+    val GLM_52_EFFORT = ReasoningCapability.Controls(
+        values = setOf(ReasoningEffort.NONE, ReasoningEffort.HIGH, ReasoningEffort.MAX),
+        default = ReasoningEffort.MAX,
+        dialect = WireDialect.EFFORT,
+    )
+
+    /**
+     * Z.AI GLM-5.3 и GLM-5.3-Flash: мышление обязательное — `thinking.type =
+     * disabled` сервер отвергает кодом 1210, а `reasoning_effort` принимает
+     * только low/high/max (любой другой ответ — то же 400). Штатный уровень — max.
+     */
+    val GLM_53_EFFORT = ReasoningCapability.Controls(
+        values = setOf(ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX),
+        default = ReasoningEffort.MAX,
+        dialect = WireDialect.EFFORT,
+        mandatory = true,
     )
 
     /** Условно-совместимая модель с reasoning/thinking в имени: уровни + режим на модели. */

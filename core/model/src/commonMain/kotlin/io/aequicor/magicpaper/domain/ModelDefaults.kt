@@ -140,7 +140,7 @@ object ModelDefaults {
     /** Сегменты-префиксы провайдеров в маршрутах каталогов-агрегаторов. */
     private val PROVIDER_SEGMENTS = setOf(
         "openrouter", "anthropic", "openai", "google", "mistral", "meta",
-        "deepseek", "qwen", "x-ai", "cohere", "perplexity",
+        "deepseek", "qwen", "x-ai", "cohere", "perplexity", "zai",
     )
 
     /**
@@ -175,12 +175,37 @@ object ModelDefaults {
         // вендоров через агрегаторы). Поколения без ручки усилия (gpt-4o и т.п.)
         // сюда не попадают — семейство само по себе ручку не обещает.
         when (ProviderCatalog.familyOf(bare)) {
-            "qwen", "glm", "kimi", "deepseek" -> return ReasoningPresets.COMPAT_EFFORT
+            "qwen", "kimi", "deepseek" -> return ReasoningPresets.COMPAT_EFFORT
+            "glm" -> return glmCapability(bare)
             "claude" -> return ReasoningPresets.ANTHROPIC_BUDGET
         }
         if ("reasoning" in bare || "thinking" in bare) return ReasoningPresets.REACT_EFFORT
         return ReasoningCapability.None
     }
+
+    /**
+     * Z.AI GLM: словарь усилия зависит от поколения модели, а не от семейства
+     * (docs.z.ai/api-reference/llm/chat-completion, docs.z.ai/guides/capabilities/thinking):
+     *  - GLM-5.3 и GLM-5.3-Flash — обязательное мышление и `low/high/max`;
+     *  - GLM-5.2 — `none/high/max` (остальные сервер сводит к ним);
+     *  - GLM 4.5…5.1 — только переключатель `thinking.type`.
+     * Поколению, которого ещё нет в справочнике, соответствует самый узкий
+     * известный договор: лишнее значение сервер отвергает 400, а недостающий
+     * уровень пользователь просто не увидит.
+     */
+    private fun glmCapability(id: String): ReasoningCapability {
+        val version = GLM_VERSION.matchAt(id, 0) ?: return ReasoningPresets.GLM_THINKING_TOGGLE
+        val major = version.groupValues[1].toIntOrNull() ?: return ReasoningPresets.GLM_THINKING_TOGGLE
+        val minor = version.groupValues[2].toIntOrNull() ?: 0
+        return when {
+            major > 5 || (major == 5 && minor >= 3) -> ReasoningPresets.GLM_53_EFFORT
+            major == 5 && minor == 2 -> ReasoningPresets.GLM_52_EFFORT
+            else -> ReasoningPresets.GLM_THINKING_TOGGLE
+        }
+    }
+
+    /** «glm-5.3-flash» → 5.3; «glm-4v-plus» → 4; «glm4.6» → 4.6. */
+    private val GLM_VERSION = Regex("^glm-?(\\d+)(?:\\.(\\d+))?")
 
     /** Anthropic: две эпохи — «адаптивное усилие» (4.6+) и бюджет токенов. */
     private fun anthropicCapability(id: String): ReasoningCapability {

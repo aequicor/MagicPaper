@@ -45,6 +45,7 @@ object LlmPayloads {
         capability: ReasoningCapability = ReasoningCapability.None,
     ): JsonObject {
         val resolved = profile.resolveEffort(capability)
+        val controls = capability as? ReasoningCapability.Controls
         val supportsVision = ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision
         val a = profile.advanced
         return buildJsonObject {
@@ -67,10 +68,22 @@ object LlmPayloads {
                     })
                 }
             })
-            resolved.level?.takeIf { it != ReasoningEffort.AUTO }?.let {
-                if (profile.provider == io.aequicor.magicpaper.domain.ProviderType.OPENROUTER) {
-                    put("reasoning", buildJsonObject { put("effort", it.wire) })
-                } else put("reasoning_effort", it.wire)
+            resolved.level?.takeIf { it != ReasoningEffort.AUTO }?.let { level ->
+                when {
+                    profile.provider == io.aequicor.magicpaper.domain.ProviderType.OPENROUTER ->
+                        put("reasoning", buildJsonObject { put("effort", level.wire) })
+                    // Модели без вокабуляра усилия (Z.AI GLM 4.5…5.1) понимают только
+                    // переключатель: `reasoning_effort` сервер отвергает. Выключаем
+                    // мышление ровно когда об этом просили — [resolveEffort] не
+                    // подменяет NONE другим уровнем, так что level здесь честный.
+                    controls?.dialect == WireDialect.THINKING_TOGGLE -> put(
+                        "thinking",
+                        buildJsonObject {
+                            put("type", if (level == ReasoningEffort.NONE) "disabled" else "enabled")
+                        },
+                    )
+                    else -> put("reasoning_effort", level.wire)
+                }
             }
             if (!resolved.enabled) a.safeTemperature?.let { put("temperature", it) }
             if (a.sendMaxTokens) put("max_tokens", a.safeMaxTokens)

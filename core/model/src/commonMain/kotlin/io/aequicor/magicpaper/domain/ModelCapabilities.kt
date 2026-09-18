@@ -20,7 +20,7 @@ data class ModelCapabilities(
 
     /**
      * Диалект переключателей мышления для pi-агента (`thinkingFormat` в models.json):
-     * `"qwen"`, `"qwen-chat-template"`, `null` — схема по умолчанию (reasoning_effort).
+     * `"qwen"`, `"qwen-chat-template"`, `"zai"`; `null` — схема по умолчанию (reasoning_effort).
      */
     val thinkingFormat: String? = null,
 
@@ -123,9 +123,12 @@ data class ModelCapabilities(
          *
          * - Qwen на наружных эндпоинтах — `enable_thinking` (`"qwen"`)
          * - Qwen на локальных серверах — `chat_template_kwargs` (`"qwen-chat-template"`)
+         * - GLM на сервере Z.AI — `thinking.type` (`"zai"`); в маршруте агрегатора
+         *   (OpenRouter и т.п.) этой формы нет — там усилием рулит `reasoning.effort`
          * - Остальным — `null` (pi выберет `reasoning_effort` самостоятельно)
          */
         private fun resolveThinkingFormat(family: String, baseUrl: String): String? = when {
+            family == "glm" && isZaiEndpoint(baseUrl) -> "zai"
             family != "qwen" -> null
             isLocalEndpoint(baseUrl) -> "qwen-chat-template"
             else -> "qwen"
@@ -162,6 +165,15 @@ data class ModelCapabilities(
             return host == "localhost" || host == "::1" || host == "0.0.0.0" ||
                 host == "host.docker.internal" ||
                 host.startsWith("127.") || host.startsWith("192.168.") || host.startsWith("10.")
+        }
+
+        /**
+         * Собственный сервер Z.AI (глобальный или китайский open.bigmodel.cn) —
+         * только там GLM принимает поле `thinking`. Те же хосты распознаёт pi.
+         */
+        private fun isZaiEndpoint(baseUrl: String): Boolean {
+            val url = baseUrl.lowercase()
+            return "api.z.ai" in url || "open.bigmodel.cn" in url
         }
     }
 }

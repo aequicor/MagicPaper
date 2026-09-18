@@ -135,9 +135,16 @@ object ProviderCatalog {
             keyHint = "…",
             requiresKey = true,
             models = listOf(
-                ModelInfo("glm-5.2", ReasoningPresets.COMPAT_EFFORT),
-                ModelInfo("glm-5v-turbo", ReasoningPresets.COMPAT_EFFORT),
-                ModelInfo("glm-5.1", ReasoningPresets.COMPAT_EFFORT),
+                // Ручка усилия у GLM зависит от поколения: 5.3 думает всегда и
+                // знает low/high/max, 5.2 — none/high/max, остальным доступен
+                // только переключатель `thinking.type`.
+                ModelInfo("glm-5.3", ReasoningPresets.GLM_53_EFFORT),
+                ModelInfo("glm-5.3-flash", ReasoningPresets.GLM_53_EFFORT),
+                ModelInfo("glm-5.2", ReasoningPresets.GLM_52_EFFORT),
+                ModelInfo("glm-5.1", ReasoningPresets.GLM_THINKING_TOGGLE),
+                ModelInfo("glm-5", ReasoningPresets.GLM_THINKING_TOGGLE),
+                ModelInfo("glm-4.7", ReasoningPresets.GLM_THINKING_TOGGLE),
+                ModelInfo("glm-5v-turbo", ReasoningPresets.GLM_THINKING_TOGGLE),
             ),
         ),
         ProviderSpec(

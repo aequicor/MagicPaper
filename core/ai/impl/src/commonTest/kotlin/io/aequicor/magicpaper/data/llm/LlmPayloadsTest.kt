@@ -7,6 +7,7 @@ import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.LlmChatRole
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.ReasoningCapability
 import io.aequicor.magicpaper.domain.ReasoningEffort
@@ -96,6 +97,46 @@ class LlmPayloadsTest {
         val p = profile(advanced = AdvancedLlmOptions(temperature = 1.7))
         val payload = LlmPayloads.openAi(p, messages, ReasoningCapability.None)
         assertEquals(1.7, payload.num("temperature"))
+    }
+
+    /** Профиль Z.AI: возможности берутся из [ModelDefaults], как в живом запросе. */
+    private fun zaiPayload(effort: EffortSelection, modelId: String = "glm-5.3-flash"): JsonObject {
+        val p = profile(effort = effort, modelId = modelId).copy(baseUrl = "https://api.z.ai/api/paas/v4")
+        return LlmPayloads.openAi(p, messages, ModelDefaults.capability(p))
+    }
+
+    @Test
+    fun glm53SendsOnlyEffortsTheServerAccepts() {
+        // Воспроизведение 400 code 1210 («This model always engages in thinking and
+        // cannot be disabled; please use low, high, or max»): GLM-5.3 и 5.3-Flash
+        // принимают только low/high/max, а «medium» пришёл из общего пресета семейства.
+        for (asked in ReasoningEffort.entries) {
+            val payload = zaiPayload(EffortSelection.of(asked))
+            val effort = payload.str("reasoning_effort")
+            assertTrue(effort == null || effort in setOf("low", "high", "max"), "$asked → $effort")
+            assertNull(payload["thinking"], "$asked: выключать мышление GLM-5.3 нечем")
+        }
+        assertEquals("low", zaiPayload(EffortSelection.of(ReasoningEffort.NONE)).str("reasoning_effort"), "сравниваемся со самым слабым")
+        assertEquals("high", zaiPayload(EffortSelection.of(ReasoningEffort.MEDIUM)).str("reasoning_effort"))
+        assertEquals("max", zaiPayload(EffortSelection.of(ReasoningEffort.XHIGH)).str("reasoning_effort"))
+        assertNull(zaiPayload(EffortSelection.Default).str("reasoning_effort"), "«по умолчанию» поля не выдумывает")
+    }
+
+    @Test
+    fun glmBefore52SendsTheThinkingSwitchNotReasoningEffort() {
+        // До GLM-5.2 вокабуляра усилия нет: `reasoning_effort` сервер не понимает,
+        // а мышление выключается полем `thinking.type`.
+        val off = zaiPayload(EffortSelection.of(ReasoningEffort.NONE), modelId = "glm-5.1")
+        assertEquals("disabled", off.obj("thinking")?.str("type"))
+        assertNull(off.str("reasoning_effort"))
+        assertNull(
+            zaiPayload(EffortSelection.of(ReasoningEffort.AUTO), modelId = "glm-5.1")["thinking"],
+            "«сама решает» — переключатель не отправляем",
+        )
+        assertNull(
+            zaiPayload(EffortSelection.of(ReasoningEffort.HIGH), modelId = "glm-5.1")["thinking"],
+            "уровня нет, но просившего нельзя молча перевести в «выключено»",
+        )
     }
 
     @Test
