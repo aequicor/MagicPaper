@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.di
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
 import io.aequicor.magicpaper.data.llm.*
+import io.aequicor.magicpaper.data.media.HttpMediaGenerationGateway
 import io.aequicor.magicpaper.data.search.*
 import io.aequicor.magicpaper.data.skills.*
 import io.aequicor.magicpaper.data.storage.*
@@ -42,6 +43,7 @@ internal fun buildRuntime(
     layoutEditor: LayoutEditor = UnavailableLayoutEditor,
     modelLimits: ModelLimitCatalog? = null,
     researchPageBrowser: ResearchPageBrowser? = null,
+    mediaStore: MediaStore = UnavailableMediaStore,
 ): MagicPaperRuntime = MagicPaperRuntime(navigationSession, onPlatformStarted, onPlatformClosed) { applicationScope ->
     var resetting = false
     module {
@@ -51,6 +53,7 @@ internal fun buildRuntime(
         single<SecretStore> { persistence.secrets }
         single<DraftRepository> { persistence.drafts }
         single<DraftBlobStore> { persistence.blobs }
+        single<MediaStore> { mediaStore }
         single<NavigationSnapshotStore> { persistence.navigation }
         single<CoroutineScope> { applicationScope }
         single<ProfileBridge> { bridge }
@@ -65,6 +68,29 @@ internal fun buildRuntime(
         single<RequestPinRepository> { JsonRequestPinRepository(get(), get()) }
         single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get())) }
         single { appHttpClient() } onClose { it?.close() }
+        single<MediaGenerationGateway> { HttpMediaGenerationGateway(get(), get()) }
+        single { DefaultMediaGenerationService(get(), get(), get(), get(), get(), applicationScope,
+            ownerExists = { owner ->
+                val projectId = owner.projectId
+                if (projectId == null) get<ChatRepository>().session(owner.sessionId) != null
+                else get<CodingProjectRepository>().sessions(projectId).any { it.id == owner.sessionId }
+            }).also { service ->
+                service.authorizeSubmission = { owner, kind ->
+                    val projectId = owner.projectId
+                    if (projectId == null) {
+                        val chats = get<ChatRepository>()
+                        val session = chats.session(owner.sessionId)
+                        val parentId = session?.researchParentId
+                        val root = if (parentId == null) session else chats.session(parentId)
+                        root?.mediaTools?.enabled(kind) == true &&
+                            session?.pendingRun?.let { it.runId == owner.requestId && !it.stoppedByUser } == true
+                    } else {
+                        val session = get<CodingProjectRepository>().sessions(projectId).firstOrNull { it.id == owner.sessionId }
+                        session?.mediaTools?.enabled(kind) == true && session.runtimeGeneration == owner.runtimeGeneration
+                    }
+                }
+            } }
+        single<MediaGenerationService> { get<DefaultMediaGenerationService>() }
         single { ResearchSiteIcons(get()) }
         single { io.aequicor.magicpaper.data.ResearchPageReader(get()) }
         single { ResearchSourceAccess(get<io.aequicor.magicpaper.data.ResearchPageReader>()::read) }
@@ -109,6 +135,18 @@ internal fun buildRuntime(
         single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
         single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
             planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get(), taskWorkspace = taskWorkspace, sourceAccess = get()).also { graph ->
+                graph.toolHost.mediaGeneration = get()
+                get<DefaultMediaGenerationService>().onTerminal = graph.toolHost::reconcileMediaCompletion
+                graph.toolHost.mediaAllowed = { context, kind ->
+                    if (context.projectId == "chat-${context.ownerSessionId}") {
+                        val chats = get<ChatRepository>()
+                        val session = chats.session(context.ownerSessionId)
+                        val parentId = session?.researchParentId
+                        val owner = if (parentId != null) chats.session(parentId) else session
+                        owner?.mediaTools?.enabled(kind) == true
+                    } else get<CodingProjectRepository>().sessions(context.projectId)
+                        .firstOrNull { it.id == context.ownerSessionId }?.mediaTools?.enabled(kind) == true
+                }
                 graph.toolHost.orchestration = io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(
                     io.aequicor.magicpaper.domain.tools.OrchestrationActions { context, operation, tool, arguments ->
                         graph.toolHost.receiver(context, operation, tool, arguments)
@@ -143,6 +181,7 @@ internal fun buildRuntime(
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
             researchSearch = get(), usage = get(), sourceAccess = get(), sourceBrowser = researchPageBrowser,
+            mediaGeneration = get(),
             layoutProject = { boundId ->
                 val coding = get<CodingService>().state.value.coding
                 if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }
@@ -152,10 +191,12 @@ internal fun buildRuntime(
             onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },
             draftRepository = get(), draftBlobs = get(),
             taskWorktrees = get<CodingRuntimeGraph>().taskWorktrees,
+            mediaGeneration = get(),
             removePluginDrafts = { project, plans -> get<PluginService>().removeProjectDrafts(project, plans) }) }
         single { DefaultSettingsService(get(), get(), get(), get(), get(), get(),
             skills = get(), planning = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),
             openAiSubscription = openAiSubscription, searchConnectionChecker = get(), usage = get(), draftRepository = get(),
+            mediaGeneration = get(), mediaStore = get(),
             applyRuntimeSettings = { get<CodingService>().applySettings(it) },
             clearCodingOverrides = { get<CodingService>().clearProfileOverrides(it) },
             onDataChanged = { get<ChatService>().start(); get<CodingService>().reload(); get<PluginService>().start() },
@@ -169,10 +210,12 @@ internal fun buildRuntime(
                 get<DefaultRequestPinService>().resetForWipe()
                 get<PluginService>().prepareForReset()
                 get<CodingRuntimeGraph>().pauseForReset()
+                get<MediaGenerationService>().prepareForReset()
                 openAiSubscription?.logout()
                 get<CodingProjectRepository>().wipe()
                 get<CodingRuntimeGraph>().clearForReset()
                 persistence.clearOwnedData()
+                mediaStore.clear()
                 store.clear()
             },
             finishApplicationReset = {
@@ -180,6 +223,7 @@ internal fun buildRuntime(
                     resetting = false
                     try {
                         get<CodingRuntimeGraph>().resumeAfterReset()
+                        get<MediaGenerationService>().resumeAfterReset()
                         get<ChatService>().start()
                         get<CodingService>().reload()
                         get<PluginService>().start()

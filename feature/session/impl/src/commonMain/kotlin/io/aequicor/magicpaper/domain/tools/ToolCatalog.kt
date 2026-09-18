@@ -25,6 +25,8 @@ import kotlinx.serialization.json.*
 @Serializable data class ToolScheduleManage(val commands: List<ScheduleCommand>)
 @Serializable data class ToolQuestions(val questions: List<PlanningQuestion>)
 @Serializable data class ToolSearch(val query: String)
+@Serializable data class MediaToolArgs(val prompt: String, val caption: String = "", val width: Int = 0,
+    val height: Int = 0, val durationSeconds: Int = 0)
 @Serializable enum class TaskHandoffOutcome { RESULT, BLOCKED }
 @Serializable data class TaskHandoff(val outcome: TaskHandoffOutcome, val checks: List<List<String>> = emptyList())
 
@@ -48,6 +50,8 @@ object ToolCatalog {
         ToolDefinition("research_check", "Защищённая проверка", empty, ToolCategory.EXEC, workers, native = true),
         ToolDefinition("context.get", "Актуальное состояние проекта, плана и сессий", empty, ToolCategory.READ),
         app<ToolSearch>("web.search", "Поиск источников в интернете", category = ToolCategory.SEARCH),
+        app<MediaToolArgs>("image.generate", "Создать изображение по описанию. Дождись готового результата: он содержит сохранённый файл, который можно использовать в проекте. Не вызывай повторно для проверки готовности.", workers, mutating = true),
+        app<MediaToolArgs>("video.generate", "Создать видео по описанию. Генерация занимает несколько минут; вызов возвращает готовый сохранённый файл. Не вызывай повторно для проверки готовности.", workers, mutating = true),
         ToolDefinition("questionnaire", QuestionnaireContract.description, QuestionnaireContract.schema, ToolCategory.ACTION),
         app<TaskHandoff>("task.handoff", "Обязательная передача завершённой worktree-задачи: outcome=RESULT; при реальной блокировке — BLOCKED. checks — команды проверок как массивы аргументов без shell. После успешного RESULT закончи ответ: приложение проверит результат и автоматически выполнит слияние. Подтверждение слияния через опросник не требуется", setOf(ToolRole.CHAT), true),
         app<PlanToolProposal>("plan.propose", "Передать проект плана с объяснением, деревом решений и этапами. Не запускает исполнителей", setOf(ToolRole.PLANNER), true, true),

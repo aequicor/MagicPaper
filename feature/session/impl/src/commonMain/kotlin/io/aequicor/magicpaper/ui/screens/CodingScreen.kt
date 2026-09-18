@@ -319,6 +319,7 @@ private fun SessionArea(
     defaultEngine: CodingEngine,
     globalFeatureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
 ) {
+    val mediaConnections = vm.mediaGeneration?.state?.collectAsState()?.value.orEmpty()
     val sessionInfo = active.session
     // Переключатель источника/модели/усилия активной сессии.
     var switcherOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
@@ -366,6 +367,11 @@ private fun SessionArea(
             CodingChat(
                 project = project,
                 session = effective,
+                mediaOptions = {
+                    SessionMediaToolOptions(sessionInfo.mediaTools, mediaConnections,
+                        onChange = { kind, allowed -> vm.setMediaToolEnabled(sessionInfo.id, kind, allowed) },
+                        onSettings = vm::openModelsSettings, enabled = !sessionInfo.archived)
+                },
                 onEditMessage = { id, text -> vm.editMessage(sessionInfo.id, id, text) },
                 onDeleteMessage = { id -> vm.deleteMessage(sessionInfo.id, id) },
                 onForkSession = { id -> vm.forkSession(sessionInfo.id, id) },
@@ -915,6 +921,7 @@ internal fun CodingChat(
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
     onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean = { _, _ -> false },
     modelChip: (@Composable () -> Unit)? = null,
+    mediaOptions: (@Composable () -> Unit)? = null,
     planningService: PlanningChatService? = null,
     planningQuestionsSession: CodingSessionUi = session,
     onOpenSession: (String) -> Unit = {},
@@ -1143,6 +1150,7 @@ internal fun CodingChat(
                     enabled = engineReady,
                     busy = busy,
                     controls = modelChip,
+                    mediaOptions = mediaOptions,
                     planning = session.session.planningMode,
                     research = session.session.researchMode,
                     onInteractionMode = onInteractionMode,
@@ -1381,6 +1389,10 @@ private fun CodingMessageBubble(
  */
 @Composable
 internal fun CodingStepRow(step: CodingStep, live: Boolean, message: CodingMessage? = null) {
+    step.media?.let { media ->
+        io.aequicor.magicpaper.ui.components.GeneratedMediaView(media, live)
+        return
+    }
     if (!step.isVisibleInChat(LocalPaperHideSystemSteps.current)) return
     when (step.kind) {
         CodingStepKind.ANSWER -> {
@@ -1704,6 +1716,7 @@ internal fun CodingComposer(
     enabled: Boolean,
     busy: Boolean,
     controls: (@Composable () -> Unit)? = null,
+    mediaOptions: (@Composable () -> Unit)? = null,
     planning: Boolean = false,
     research: Boolean = false,
     promptPlaceholder: String = if (research) "Вопрос о проекте…" else "Что нужно сделать?",
@@ -1814,6 +1827,7 @@ internal fun CodingComposer(
                         )
                     }
                 } else {
+                    mediaOptions?.let { it(); PaperDivider() }
                     if (onSkills != null) PaperRichMenuAction(text = { PaperText("Навыки", role = PaperTextRole.CHROME) },
                         onClick = { closeMenu(); onSkills() })
                     if (onInteractionMode != null) {

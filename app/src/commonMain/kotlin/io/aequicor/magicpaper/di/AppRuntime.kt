@@ -49,6 +49,7 @@ class MagicPaperRuntime internal constructor(
     private var codingService: CodingService? = null
     private var pluginService: PluginService? = null
     private var codingGraph: CodingRuntimeGraph? = null
+    private var mediaService: MediaGenerationService? = null
 
     fun start() {
         if (starting != null || closed) return
@@ -58,8 +59,11 @@ class MagicPaperRuntime internal constructor(
                 // Migrate and hydrate saved credentials before any runtime can restore work.
                 koin.get<SettingsRepository>().load()
                 koin.get<LlmProfileRepository>().load()
+                val media = koin.get<MediaGenerationService>().also { mediaService = it }
+                media.refreshAvailability()
                 // Track graph ownership before dependent constructors can fail.
                 codingGraph = koin.get()
+                media.recoverPending()
                 val settings = koin.get<SettingsService>().also { settingsService = it }
                 val chat = koin.get<ChatService>().also { chatService = it }
                 val coding = koin.get<CodingService>().also { codingService = it }
@@ -117,6 +121,7 @@ class MagicPaperRuntime internal constructor(
                 cleanup("chat") { chatService?.close() }
                 cleanup("coding") { codingService?.close() }
                 cleanup("execution") { codingGraph?.close() }
+                cleanup("media") { mediaService?.close() }
                 cleanup("settings") { settingsService?.close() }
                 cleanup("plugins") { pluginService?.close() }
                 cleanup("platform") { onPlatformClosed() }

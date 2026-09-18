@@ -11,6 +11,7 @@ internal fun toolArgumentPreview(id: String, args: JsonObject): String {
         "stage.handoff" -> text("text")
         "stage.resolve", "stage.pause" -> text("reason")
         "web.search" -> text("query")
+        "image.generate", "video.generate" -> text("caption").ifBlank { text("prompt") }
         "session.manage" -> text("name").ifBlank { text("kind") }
         "schedule.manage" -> "Правил: ${(args["commands"] as? JsonArray)?.size ?: 0}"
         "questionnaire" -> (args["questions"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.get("title")?.jsonPrimitive?.contentOrNull }.joinToString("; ")

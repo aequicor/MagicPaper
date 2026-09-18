@@ -22,6 +22,7 @@ import io.aequicor.magicpaper.domain.ProfileMigrator
 import io.aequicor.magicpaper.domain.ProfileResolver
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.SettingsRepository
+import io.aequicor.magicpaper.domain.withGeneratedMedia
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
@@ -32,7 +33,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
@@ -63,13 +66,23 @@ class DefaultSettingsService(
     private val clearApplicationData: suspend () -> Unit = {},
     private val finishApplicationReset: suspend () -> Unit = {},
     private val draftRepository: io.aequicor.magicpaper.data.storage.DraftRepository = io.aequicor.magicpaper.data.storage.InMemoryDraftRepository(),
+    private val mediaGeneration: MediaGenerationService? = null,
+    private val mediaStore: io.aequicor.magicpaper.data.storage.MediaStore = io.aequicor.magicpaper.data.storage.UnavailableMediaStore,
 ) : SettingsService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val profileAvailabilityMutex = Mutex()
     val drafts = SettingsDrafts(draftRepository, scope, json)
     private val _state = MutableStateFlow(SettingsState())
     override val state: StateFlow<SettingsState> = _state.asStateFlow()
+    private var mediaStateJob: kotlinx.coroutines.Job? = null
+    private fun observeMedia() {
+        if (mediaStateJob?.isActive == true) return
+        mediaGeneration?.let { service -> scope.launch {
+            service.state.collect { connections -> _state.update { it.copy(mediaConnections = connections, mediaSupported = mediaStore.available) } }
+        }.also { mediaStateJob = it } }
+    }
     override suspend fun start() {
+        observeMedia()
         var settings = migrateLegacyModel(settingsRepo.load())
         val profiles = profileRepo.load().map { it.migrateModelLibrary() }
         drafts.allowProfiles(profiles.map { it.id })
@@ -86,6 +99,7 @@ class DefaultSettingsService(
             showWelcome = !settings.onboardingDone, modelDescriptions = planning?.dossiers().orEmpty(),
             openAiSubscription = it.openAiSubscription.copy(available = openAiSubscription != null)) }
         if (openAiSubscription != null && profiles.any { it.provider == ProviderType.OPENAI_SUBSCRIPTION }) refreshOpenAiSubscription()
+        mediaGeneration?.refreshAvailability()
     }
     override fun dismissNotice() { _state.update { it.copy(notice = null) } }
     private suspend fun migrateLegacyModel(settings: AppSettings): AppSettings {
@@ -139,7 +153,8 @@ class DefaultSettingsService(
 
     /** The overview draft does not own automation policy; never replay its old permissions. */
     internal fun saveOverviewSettings(settings: AppSettings) = saveSettings(settings.copy(
-        computerAccess = _state.value.settings.computerAccess, applicationAccess = _state.value.settings.applicationAccess))
+        computerAccess = _state.value.settings.computerAccess, applicationAccess = _state.value.settings.applicationAccess,
+        media = _state.value.settings.media))
 
     internal fun saveComputerAccess(computer: ComputerAccess, application: ComputerAccess) =
         saveSettings(_state.value.settings.copy(computerAccess = computer, applicationAccess = application), clearOverviewDraft = false)
@@ -169,6 +184,7 @@ class DefaultSettingsService(
                 ?: "Настройки сохранены."
             val cleared = clearSavedDraft(draftPoint)
             _state.update { it.copy(settings = settings, notice = if (cleared) notice else it.notice) }
+            mediaGeneration?.refreshAvailability()
             } finally { _state.update { it.copy(settingsSaving = false) } }
         }
     }
@@ -203,6 +219,7 @@ class DefaultSettingsService(
                 }
                 onProfileSaved(profile.id)
                 clearSavedDraft(draftPoint)
+                mediaGeneration?.refreshAvailability()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { persistenceFailed("save_profile", failure, "Не удалось сохранить источник. Повторите действие.") }
         }
@@ -260,6 +277,7 @@ class DefaultSettingsService(
             profileAvailabilityMutex.withLock {
                 try {
                     profileRepo.save(updated)
+                    mediaGeneration?.refreshAvailability()
                     onDataChanged()
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) {
@@ -570,22 +588,31 @@ class DefaultSettingsService(
 
     override fun exportProfile() {
         scope.launch {
+            try {
             val s = _state.value
+            val operations = mediaGeneration?.operations?.value.orEmpty()
+            val sessions = chats.sessions().map { it.withGeneratedMedia(operations) }
             val bundle = ProfileBundle(
                 exportedAt = Id.now(),
                 settings = s.settings.copy(computerAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF,
                     applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF),
                 plugins = settingsRepo.pluginStates(),
-                sessions = chats.sessions(),
+                sessions = sessions,
+                generatedAssets = exportMediaAssets(sessions, mediaStore),
                 skills = skills?.all().orEmpty(),
                 llmProfiles = s.llmProfiles,
                 modelDescriptions = planning?.dossiers().orEmpty(),
                 usage = usage.state.value,
             )
-            val encoded = json.encodeToString(ProfileBundle.serializer(), bundle)
+            val encoded = withContext(Dispatchers.Default) { json.encodeToString(ProfileBundle.serializer(), bundle) }
             val ok = bridge.export(encoded)
             _state.update {
                 it.copy(notice = if (ok) "Профиль экспортирован." else "Не удалось экспортировать профиль.")
+            }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                logPersistenceFailure("SettingsService", "export_failed", failure)
+                _state.update { it.copy(notice = "Не удалось экспортировать профиль. Проверьте доступность сохранённых файлов и повторите действие.") }
             }
         }
     }
@@ -600,8 +627,10 @@ class DefaultSettingsService(
                 _state.update { it.copy(notice = "Импорт отменён или недоступен на этой платформе.") }
                 return@launch
             }
-            val bundle = runCatching { json.decodeFromString(ProfileBundle.serializer(), raw) }.getOrElse {
-                logPersistenceFailure("SettingsService", "import_decode_failed", it)
+            val bundle = try { withContext(Dispatchers.Default) { json.decodeFromString(ProfileBundle.serializer(), raw) } }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                logPersistenceFailure("SettingsService", "import_decode_failed", failure)
                 _state.update { st -> st.copy(notice = "Файл профиля повреждён. Выберите другой файл.") }
                 return@launch
             }
@@ -609,6 +638,7 @@ class DefaultSettingsService(
             // Imported data cannot authorize this machine or retain an active lease.
             val importedSettings = bundle.settings.copy(computerAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF,
                 applicationAccess = io.aequicor.magicpaper.domain.ComputerAccess.OFF)
+            importMediaAssets(bundle, mediaStore)
             applyRuntimeSettings(importedSettings).getOrThrow()
             usage.replace(bundle.usage)
             settingsRepo.savePluginStates(bundle.plugins)
@@ -652,6 +682,50 @@ class DefaultSettingsService(
         }
     }
     override fun prepareProfileEditor() { _state.update { it.copy(editorModels = emptyList(), editorModelsError = null, editorModelsLoading = false) } }
+
+    override suspend fun readMediaAsset(asset: MediaAsset): ByteArray = mediaStore.read(asset)
+    override suspend fun mediaAssetPath(asset: MediaAsset): String? = mediaStore.localPath(asset)
+    override suspend fun recoverMediaResult(mediaId: String): GeneratedMedia? = mediaGeneration?.recoverMedia(mediaId)
+
+    override fun saveMediaSelection(kind: MediaKind, selection: MediaModelSelection?, verify: Boolean) {
+        if (_state.value.settingsSaving) return
+        if (selection != null && (selection.profileId.isBlank() || selection.modelId.isBlank() || selection.baseUrl.isBlank())) {
+            _state.update { it.copy(notice = "Выберите подключение, модель и адрес сервера.") }
+            return
+        }
+        val point = drafts.capture(SettingsDrafts.mediaKey(kind))
+        _state.update { it.copy(settingsSaving = true) }
+        scope.launch {
+            try {
+                val updated = settingsRepo.load().let { it.copy(media = it.media.withSelection(kind, selection)) }
+                settingsRepo.save(updated)
+                _state.update { it.copy(settings = updated) }
+                clearSavedDraft(point)
+                mediaGeneration?.refreshAvailability()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                persistenceFailed("save_media_selection", failure, "Не удалось сохранить модель. Повторите действие.")
+                return@launch
+            } finally { _state.update { it.copy(settingsSaving = false) } }
+            if (verify && selection != null) {
+                val service = mediaGeneration
+                if (service == null || !mediaStore.available) {
+                    _state.update { it.copy(notice = "Генерация медиа недоступна на этой платформе.") }
+                    return@launch
+                }
+                try {
+                    val profile = profileRepo.load().firstOrNull { it.id == selection.profileId }
+                    if (profile == null || !profile.enabled) {
+                        _state.update { it.copy(notice = "Выбранное подключение недоступно.") }
+                    } else service.check(kind, selection, profile)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    logPersistenceFailure("SettingsService", "check_media_failed", failure)
+                    _state.update { it.copy(notice = "Не удалось завершить проверку. Повторите действие.") }
+                }
+            }
+        }
+    }
     /** Drain this application's writers while retaining its reusable supervisor. */
     suspend fun prepareForReset() {
         val caller = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]

@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 interface ChatService {
     val state: StateFlow<ChatState>
     val requestPins: RequestPinService?
+    val mediaGeneration: MediaGenerationService? get() = null
+    fun setMediaToolEnabled(sessionId: String, kind: MediaKind, enabled: Boolean)
     fun updateConfiguration(settings: AppSettings, profiles: List<LlmProfile>, subscriptionAvailable: Boolean, subscriptionSignedIn: Boolean = false)
     suspend fun start()
     fun activate(id: String?)

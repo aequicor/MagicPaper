@@ -70,4 +70,8 @@ internal fun ToolReceipt.validateUpdate(next: ToolReceipt) {
         next.native && next.phase == phase && next.result == result && next.error == error) {
         "Подтверждённый исход нативного вызова нельзя заменить"
     }
+    require(toolId !in setOf("image.generate", "video.generate") || phase != ToolPhase.FAILED ||
+        next.phase == phase && next.result == result && next.error == error) {
+        "Подтверждённый исход генерации нельзя заменить"
+    }
 }

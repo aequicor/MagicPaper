@@ -44,6 +44,9 @@ class SettingsDrafts(private val repository: DraftRepository, private val scope:
                 profile = draft.profile?.copy(apiKey = secrets["profile"].orEmpty())) })
     }
     internal fun settings(initial: AppSettings) = session(SETTINGS, SettingsFormDraft(settings = initial, agentLimits = AgentLimitsDraft.from(initial.agentLimits)))
+    internal fun media(kind: MediaKind, initial: MediaModelSelection?) = session(mediaKey(kind), SettingsFormDraft(fields = mapOf(
+        "profile" to initial?.profileId.orEmpty(), "model" to initial?.modelId.orEmpty(), "url" to initial?.baseUrl.orEmpty(),
+        "protocol" to (initial?.protocol ?: if (kind == MediaKind.IMAGE) MediaProtocol.OPENAI_IMAGES else MediaProtocol.DASHSCOPE_VIDEO).name)))
     internal fun profile(initial: LlmProfile) = session(profileKey(initial.id), SettingsFormDraft(profile = initial))
     internal fun welcome(initial: AppSettings) = session(WELCOME, SettingsFormDraft(settings = initial,
         profile = LlmProfile(id = Id.new(), name = "Мой источник", createdAt = Id.now())))
@@ -95,6 +98,7 @@ class SettingsDrafts(private val repository: DraftRepository, private val scope:
     companion object {
         internal const val SETTINGS = "settings:overview"
         internal const val WELCOME = "settings:welcome"
+        internal fun mediaKey(kind: MediaKind) = "settings:media:${kind.name}"
         internal fun profileKey(id: String) = "settings:profile:$id"
         internal fun variantKey(id: String, model: String) = "settings:variant:" + Json.encodeToString(listOf(id, model))
         internal fun descriptionKey(id: String, model: String) = "settings:description:" + Json.encodeToString(listOf(id, model))

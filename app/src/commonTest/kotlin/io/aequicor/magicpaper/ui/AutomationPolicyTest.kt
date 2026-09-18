@@ -83,7 +83,8 @@ class AutomationPolicyTest {
             })
         try {
             service.start()
-            service.exportProfile(); runCurrent()
+            service.exportProfile()
+            service.state.first { it.notice == "Профиль экспортирован." }
             val bundle = f.json.decodeFromString(ProfileBundle.serializer(), exported)
             assertEquals(ComputerAccess.OFF, bundle.settings.computerAccess)
             assertEquals(ComputerAccess.OFF, bundle.settings.applicationAccess)

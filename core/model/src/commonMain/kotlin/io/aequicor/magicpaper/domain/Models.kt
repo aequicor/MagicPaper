@@ -29,6 +29,8 @@ data class ChatMessage(
     val researchActivity: List<CodingStep> = emptyList(),
     /** Suggested next user messages; displayed as actions, never executed on restoration. */
     val followUps: List<String> = emptyList(),
+    /** Empty for legacy records; new media replies retain their reading order. */
+    val content: List<TranscriptBlock> = emptyList(),
 )
 
 /** Сессия (свиток) чата. */
@@ -73,6 +75,8 @@ data class ChatSession(
     val pendingActivity: List<CodingStep> = emptyList(),
     /** Local removals must not suppress discovery in another question, including the root. */
     val excludedQuestionResourceUrls: Set<String> = emptySet(),
+    val mediaTools: SessionMediaTools = SessionMediaTools(),
+    val pendingContent: List<TranscriptBlock> = emptyList(),
 )
 
 /** Доступные поисковые движки. */
@@ -111,6 +115,7 @@ data class AppSettings(
     val hideSystemSteps: Boolean = true,
     /** Экспериментальные возможности, включённые глобально для всех сессий. */
     val featureFlags: FeatureFlagState = FeatureFlagState(),
+    val media: MediaSettings = MediaSettings(),
     // ---- Легаси-поля «одной модели» -------------------------------------
     // Сохраняются для совместимости со старыми файлами настроек; при первом
     // запуске переносятся в профиль подключением (см. ProfileMigrator).
@@ -135,7 +140,7 @@ data class PluginState(
 /** Полный переносимый профиль: настройки + плагины + история чатов + навыки + подключения. */
 @Serializable
 data class ProfileBundle(
-    val version: Int = 2,
+    val version: Int = 3,
     val exportedAt: Long,
     val settings: AppSettings,
     val plugins: List<PluginState>,
@@ -144,4 +149,5 @@ data class ProfileBundle(
     val llmProfiles: List<LlmProfile> = emptyList(),
     val modelDescriptions: List<ModelDossier> = emptyList(),
     val usage: UsageArchive = UsageArchive(),
+    val generatedAssets: List<ExportedMediaAsset> = emptyList(),
 )

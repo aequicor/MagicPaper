@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.designsystem.PaperTheme
+import io.aequicor.magicpaper.designsystem.PaperSurface
 import java.io.File
 import kotlin.math.abs
 import kotlin.test.*
@@ -113,8 +114,8 @@ class UnifiedSessionFeedRenderTest {
             val task = scene.text("Обновить рабочее пространство")
             val selectedSession = scene.text("Этап 6: проверка интерфейса")
             assertTrue(selectedSession.boundsInRoot.top >= 0f)
-            assertTrue(project.boundsInRoot.top >= selectedSession.boundsInRoot.bottom)
             assertTrue(task.boundsInRoot.top >= project.boundsInRoot.bottom)
+            assertTrue(selectedSession.boundsInRoot.top >= task.boundsInRoot.bottom)
             assertTrue(task.boundsInRoot.left > project.boundsInRoot.left, "Project sessions are indented")
             assertTrue(abs(task.boundsInRoot.left - selectedSession.boundsInRoot.left) < 1f,
                 "Sticky session rows must remain on the same visual level")
@@ -218,7 +219,7 @@ class UnifiedSessionFeedRenderTest {
         }
     }
 
-    @Test fun selectionRetainsItsSlotAboveTheCurrentProjectAndStatusHeaders() {
+    @Test fun selectionRetainsItsListOrderBelowTheCurrentProject() {
         fun session(id: String, title: String, status: io.aequicor.magicpaper.domain.CodingSessionStatus) =
             UnifiedSidebarItem(id, title, 100, true, projectId = "p", projectName = "Project", codingStatus = status)
         val items = listOf(
@@ -243,8 +244,8 @@ class UnifiedSessionFeedRenderTest {
             val waiting = scene.text("Чат ждёт ответа")
 
             assertTrue(selected.boundsInRoot.top >= 0f)
-            assertTrue(project.boundsInRoot.top >= selected.boundsInRoot.bottom)
-            assertTrue(working.boundsInRoot.top >= project.boundsInRoot.bottom)
+            assertTrue(selected.boundsInRoot.top >= project.boundsInRoot.bottom)
+            assertTrue(working.boundsInRoot.top >= selected.boundsInRoot.bottom)
             assertTrue(waiting.boundsInRoot.top >= working.boundsInRoot.bottom)
             assertTrue(abs(selected.boundsInRoot.left - working.boundsInRoot.left) < 1f)
             assertTrue(abs(working.boundsInRoot.left - waiting.boundsInRoot.left) < 1f)
@@ -291,6 +292,83 @@ class UnifiedSessionFeedRenderTest {
                 assertTrue(bounds.top >= 0 && bounds.bottom <= 720)
             }
             scene.save("selected-chat-and-unread-large-text")
+        }
+    }
+
+    @Test fun orderedStickyPreviewPreservesSelectionAndLatestStatusesAtTheFourRowLimit() {
+        for ((width, scale) in listOf(320 to 1f, 240 to 2f)) {
+            ImageComposeScene(width, 720) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, scale)) { UnifiedOrderedStickySessionFeedPreview() }
+            }.use { scene ->
+                scene.settle()
+                val titles = listOf("MagicPaper", "Выбранная сессия", "Новый результат", "Нужно подтверждение")
+                val bounds = titles.map { scene.text(it).boundsInRoot }
+                bounds.zipWithNext().forEach { (before, after) -> assertTrue(before.bottom <= after.top) }
+                assertTrue(bounds.all { it.left >= 0 && it.right <= width })
+                assertTrue(scene.nodes().none { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty()
+                    .any { it.text == "Текущая работа" || it.text == "Ожидает ответа" } })
+                scene.save("ordered-sticky-$width-${(scale * 100).toInt()}")
+            }
+        }
+    }
+
+    @Test fun collapsingPinnedProjectReleasesHiddenSessionsAndExpandingRestoresListOrder() {
+        val groups = sidebarOrderedStickyPreviewGroups() + sidebarStickyPreviewGroups()
+        val collapsed = mutableStateOf(emptySet<String>())
+        val state = LazyListState(firstVisibleItemIndex = 9)
+        ImageComposeScene(320, 520) {
+            PaperTheme { PaperSurface {
+                UnifiedSessionFeed(groups, "ordered-1", true, collapsed.value,
+                    { group -> collapsed.value = if (group.key in collapsed.value) collapsed.value - group.key else collapsed.value + group.key },
+                    { _, _ -> }, {}, {}, {}, state = state)
+            } }
+        }.use { scene ->
+            scene.settle()
+            assertTrue(scene.text("Выбранная сессия").boundsInRoot.top > 0)
+            scene.clickDescription("Свернуть: MagicPaper")
+            scene.settle()
+            val hiddenTitles = listOf("Выбранная сессия", "Новый результат", "Нужно подтверждение")
+            assertTrue(scene.nodes().none { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty()
+                .any { it.text in hiddenTitles } })
+            scene.save("collapsed-sticky-project")
+            scene.clickDescription("Раскрыть: MagicPaper")
+            scene.settle()
+            val firstProject = scene.nodes().filter { it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == "MagicPaper" }
+                .minBy { it.boundsInRoot.top }
+            assertTrue(firstProject.boundsInRoot.bottom <= scene.text("Текущая работа").boundsInRoot.top)
+            assertTrue(scene.text("Текущая работа").boundsInRoot.bottom <= scene.text("Выбранная сессия").boundsInRoot.top)
+        }
+    }
+
+    @Test fun changingSelectionAndScrollingBackDoesNotLeaveOldOrDuplicatePins() {
+        val selected = mutableStateOf("ordered-1")
+        val state = LazyListState(firstVisibleItemIndex = 9)
+        ImageComposeScene(320, 520) {
+            PaperTheme { PaperSurface {
+                UnifiedSessionFeed(sidebarOrderedStickyPreviewGroups(), selected.value, true, emptySet(), {},
+                    { id, _ -> selected.value = id }, {}, {}, {}, state = state)
+            } }
+        }.use { scene ->
+            scene.settle()
+            val target = scene.nodes().first { node ->
+                node.config.getOrNull(SemanticsActions.OnClick) != null && node.children.any { child ->
+                    child.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == "Сессия 10"
+                }
+            }
+            assertTrue(target.config[SemanticsActions.OnClick].action!!.invoke())
+            scene.settle()
+            assertEquals("ordinary-10", selected.value)
+            assertTrue(scene.nodes().none { it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == "Выбранная сессия" })
+            state.requestScrollToItem(0)
+            scene.settle()
+            val titles = listOf("MagicPaper", "Текущая работа", "Выбранная сессия", "Ожидает ответа", "Новый результат")
+            titles.forEach { title ->
+                assertEquals(1, scene.nodes().count { it.config.getOrNull(SemanticsProperties.Text)?.singleOrNull()?.text == title })
+            }
+            titles.map { scene.text(it).boundsInRoot }.zipWithNext().forEach { (before, after) ->
+                assertTrue(before.bottom <= after.top)
+            }
+            assertEquals(0, state.firstVisibleItemIndex)
         }
     }
 

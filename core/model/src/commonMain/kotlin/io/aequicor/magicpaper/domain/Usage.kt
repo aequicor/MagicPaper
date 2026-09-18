@@ -27,7 +27,7 @@ data class TokenUsage(
     }
 }
 
-@Serializable enum class UsageKind { MODEL, SEARCH, CONTENT }
+@Serializable enum class UsageKind { MODEL, SEARCH, CONTENT, IMAGE, VIDEO }
 @Serializable enum class CostKind { REPORTED, ESTIMATED }
 @Serializable data class UsageCost(val amount: Double, val currency: String = "USD", val kind: CostKind = CostKind.REPORTED)
 @Serializable data class ModelPricing(
@@ -65,6 +65,8 @@ class UsageOwner(val scope: UsageScope, val updatesContext: Boolean = true) : Ab
     val requests: Long = 1, val pages: Long = 0, val tokens: TokenUsage = TokenUsage(),
     val cost: UsageCost? = null, val subscription: Boolean = false, val completed: Boolean = false,
     val contentRequests: Long = if (kind == UsageKind.CONTENT) requests else 0,
+    val generatedImages: Long? = null,
+    val generatedVideoSeconds: Double? = null,
 )
 
 @Serializable data class ContextUsageSnapshot(

@@ -60,6 +60,7 @@ class DefaultChatService(
     val usage: UsageLedger? = null,
     private val sourceAccess: ResearchSourceAccess = ResearchSourceAccess(),
     sourceBrowser: ResearchPageBrowser? = null,
+    override val mediaGeneration: MediaGenerationService? = null,
 ) : ChatService {
     private val _state = MutableStateFlow(ChatState(sourceBrowserSupported = sourceBrowser != null))
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -113,6 +114,20 @@ class DefaultChatService(
         }
     }
     override val state: StateFlow<ChatState> = _state.asStateFlow()
+    override fun setMediaToolEnabled(sessionId: String, kind: MediaKind, enabled: Boolean) {
+        val session = _state.value.sessions.firstOrNull { it.id == sessionId } ?: return
+        scope.launch {
+            try {
+                updateChat(session.researchChatId) { it.copy(mediaTools = it.mediaTools.withEnabled(kind, enabled)) }
+                AppLog.info("chat", "media.policy.changed", mapOf("sessionId" to session.researchChatId,
+                    "kind" to kind.name, "enabled" to enabled.toString()))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("chat", "media.policy.failed", failure, mapOf("sessionId" to session.researchChatId))
+                _state.update { it.copy(notice = "Не удалось сохранить параметры медиа. Повторите попытку.") }
+            }
+        }
+    }
     override fun updateConfiguration(settings: AppSettings, profiles: List<LlmProfile>, subscriptionAvailable: Boolean, subscriptionSignedIn: Boolean) {
         _state.update { it.copy(settings = settings, llmProfiles = profiles, subscriptionAvailable = subscriptionAvailable, subscriptionSignedIn = subscriptionSignedIn,
             researchSearchLabel = if (researchSearch != null) settings.descriptionSearchLabel() else "") }
@@ -153,7 +168,7 @@ class DefaultChatService(
             val response = session.messages.firstOrNull { it.id == request.responseId }
             if (response != null) {
                 updateChat(session.id) { latest ->
-                    if (latest.pendingRun?.messageId == request.messageId) latest.copy(pendingRun = null) else latest
+                    if (latest.pendingRun?.messageId == request.messageId) latest.copy(pendingRun = null, pendingActivity = emptyList(), pendingContent = emptyList()) else latest
                 }
                 continue
             }
@@ -445,6 +460,7 @@ class DefaultChatService(
 
     private suspend fun deleteStoredQuestion(id: String, deletingIds: List<String>) {
         chatJobs.value[id]?.cancelAndJoin()
+        mediaGeneration?.deleteSession(id)
         pendingCreations[id]?.await()
         queuedComputerRequests.update { requests -> requests.filterValues { it != id } }
         chats.session(id)?.let { runtime.deleteChatSession(it) }
@@ -511,7 +527,7 @@ class DefaultChatService(
             require(message.role == ChatRole.USER && (text.isNotBlank() || message.attachments.isNotEmpty()))
             val edited = message.copy(text = text.trim())
             session.copy(messages = session.messages.through(messageId) { it.id }.dropLast(1) + edited,
-                nativeSessionId = "", pendingRun = null, updatedAt = Id.now())
+                nativeSessionId = "", pendingRun = null, pendingContent = emptyList(), pendingActivity = emptyList(), updatedAt = Id.now())
         }
         val message = saved.messages.last()
         changingHistory.remove(sessionId)
@@ -523,20 +539,22 @@ class DefaultChatService(
         updateChat(sessionId) { session ->
             require(session.messages.any { it.id == messageId })
             session.copy(messages = session.messages.filterNot { it.id == messageId }, nativeSessionId = "",
-                pendingRun = null, updatedAt = Id.now())
+                pendingRun = null, pendingContent = emptyList(), pendingActivity = emptyList(), updatedAt = Id.now())
         }
         Unit
     }
 
     override suspend fun forkSession(sessionId: String, throughMessageId: String?): Result<String> = changeHistory(sessionId, "fork") {
-        val source = checkNotNull(chats.session(sessionId))
+        val source = checkNotNull(chats.session(sessionId)).withGeneratedMedia(mediaGeneration?.operations?.value.orEmpty())
+        val notebook = if (source.researchChatId == source.id) source else checkNotNull(chats.session(source.researchChatId))
         val now = Id.now()
         val fork = source.copy(id = Id.new(), title = "${source.title} — форк", createdAt = now, updatedAt = now,
-            messages = source.messages.through(throughMessageId) { it.id }.map { it.copy(id = Id.new()) },
-            nativeSessionId = "", pendingRun = null, pendingActivity = emptyList(), queuedPrompts = emptyList(), acquireComputerAccess = false,
+            messages = source.messages.through(throughMessageId) { it.id }.map { it.forFork() },
+            nativeSessionId = "", pendingRun = null, pendingActivity = emptyList(), pendingContent = emptyList(), queuedPrompts = emptyList(), acquireComputerAccess = false,
             archived = false, archiveRestoredAt = null,
             researchParentId = null, selectedQuestionId = null,
-            resources = chats.session(source.researchChatId)?.resources.orEmpty())
+            resources = notebook.resources, excludedResourceUrls = notebook.excludedResourceUrls,
+            researchResourcesInitialized = true, mediaTools = notebook.mediaTools)
         chats.save(fork)
         _state.update { it.copy(sessions = listOf(fork) + it.sessions) }
         onOpenSession(fork.id)
@@ -648,7 +666,9 @@ class DefaultChatService(
         // Allow parallel chat sessions - each session has its own job
         if (session.id in chatJobs.value || session.id in deletingSessions || session.researchChatId in deletingSessions || session.id in changingHistory) return
 
-        val request = resumed ?: CodingRunCheckpoint(Id.new(), trimmed, visible, responseId = Id.new())
+        val request = (resumed ?: CodingRunCheckpoint(Id.new(), trimmed, visible, responseId = Id.new())).let {
+            if (it.responseTimelineId.isBlank()) it.copy(responseTimelineId = Id.new()) else it
+        }
         val userMessage = ChatMessage(
             id = request.messageId,
             role = ChatRole.USER,
@@ -679,8 +699,13 @@ class DefaultChatService(
                 sessions = st.sessions.map { if (it.id == updated.id) updated else it },
             )
         }
-        val recorder = CodingRunRecorder()
         val previousActivity = if (resumed != null) session.pendingActivity else emptyList()
+        val previousContent = if (resumed != null) session.pendingContent.interruptedMedia() else emptyList()
+        val previousIds = previousActivity.map { it.id } + previousContent.map { it.id }
+        val nextSequence = previousIds.mapNotNull { id -> id.removePrefix("${request.responseTimelineId}:").toIntOrNull() }
+            .maxOrNull()?.plus(1) ?: 0
+        val recorder = CodingRunRecorder(CodingImageInvocation(session.id, request.runId,
+            request.messageId, request.responseId, request.responseTimelineId), initialSequence = nextSequence)
         val sharedDiscovery = _state.value.sessions.filter { it.researchChatId == session.researchChatId }
             .all { question -> question.messages.none { it.role == ChatRole.USER && it.id != request.messageId } }
         var lastDraftUpdate = 0L
@@ -702,6 +727,7 @@ class DefaultChatService(
                     engine = updated.engine, layoutProjectId = updated.layoutProjectId,
                     title = updated.title, updatedAt = updated.updatedAt, pendingRun = request, archived = false,
                     pendingActivity = previousActivity,
+                    pendingContent = previousContent,
                     queuedPrompts = latest.queuedPrompts.filterNot { it.messageId == request.messageId },
                     messages = if (latest.messages.any { it.id == userMessage.id }) latest.messages else latest.messages + userMessage) }
                 if (resumed == null && visible.isNotEmpty()) {
@@ -795,7 +821,8 @@ class DefaultChatService(
                         "результаты команд и состояние файлов; не повторяй завершённые действия.\n\n" + trimmed else trimmed
                     val excluded = sourceChecks.values.toList().unavailableSourceContext(allowSearch = !researchRequest.sourceTask)
                     val prompt = if (excluded.isEmpty()) userPrompt else "$excluded\n\nВопрос пользователя:\n$userPrompt"
-                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess, resources = availableResources), prompt, requestProfile, researchAttachments).collect { event ->
+                    runtime.runChat(accepted.copy(acquireComputerAccess = acquireComputerAccess, resources = availableResources,
+                        mediaTools = root.mediaTools), prompt, requestProfile, researchAttachments).collect { event ->
                         if (event is CodingEvent.SessionStarted && event.sessionId.isNotBlank()) {
                             updateChat(session.id) { it.copy(nativeSessionId = event.sessionId) }
                         }
@@ -806,8 +833,11 @@ class DefaultChatService(
                             CodingEvent.Failed(RESEARCH_MODEL_FAILURE)
                         } else event)
                         publishDraft(event !is CodingEvent.TextDelta && event !is CodingEvent.ThinkingDelta && event !is CodingEvent.ToolProgress)
-                        if (event is CodingEvent.ToolStarted || event is CodingEvent.ToolFinished) {
-                            updateChat(session.id) { it.copy(pendingActivity = previousActivity + recorder.draft(true).steps.researchActivity()) }
+                        if (event is CodingEvent.ToolStarted || event is CodingEvent.ToolFinished ||
+                            event is CodingEvent.ToolProgress && event.media != null) {
+                            val steps = recorder.draft(true).steps
+                            updateChat(session.id) { it.copy(pendingActivity = previousActivity + steps.researchActivity(),
+                                pendingContent = mergeTranscriptContent(previousContent, steps.transcriptContent())) }
                         }
                         // Search and reading may be billed separately: name the system of each operation
                         // and keep only the references this individual search newly returned.
@@ -842,7 +872,7 @@ class DefaultChatService(
                         if (event is CodingEvent.FinalText) { outputAttachments = event.attachments }
                         if (event is CodingEvent.Finished) finished = true
                     }
-                    val response = recorder.message(Id.new(), Id.now())
+                    val response = recorder.message(request.responseId, Id.now())
                     check(finished && !response.failed) { if (modelReplyFailed) "research_model_reply_failed" else "research_reply_incomplete" }
                     val unavailable = sourceChecks.values.filter { it.problem != null }
                     val citesUnavailable = researchReferences(response.text).any { hit ->
@@ -859,7 +889,12 @@ class DefaultChatService(
                         "- ${it.resource.title}: ${it.problem}."
                     }
                     val reply = researchReply(verifiedAnswer)
-                    SessionAnswer(reply.text + readNotice, sources, outputAttachments, previousActivity + response.steps.researchActivity(), reply.followUps)
+                    val ordered = mergeTranscriptContent(previousContent, response.steps.transcriptContent()).researchContent()
+                    val content = if (citesUnavailable) listOf(TranscriptBlock.Markdown("${request.responseId}:notice", reply.text)) +
+                        ordered.filterIsInstance<TranscriptBlock.Media>() else ordered
+                    val completeText = content.filterIsInstance<TranscriptBlock.Markdown>().joinToString("\n\n") { it.text }.ifBlank { reply.text }
+                    SessionAnswer(completeText + readNotice, sources, outputAttachments, previousActivity + response.steps.researchActivity(), reply.followUps,
+                        content + if (readNotice.isBlank()) emptyList() else listOf(TranscriptBlock.Markdown("${request.responseId}:sources", readNotice)))
                 }
                 val agentMessage = ChatMessage(
                     id = request.responseId.ifBlank { Id.new() },
@@ -870,8 +905,9 @@ class DefaultChatService(
                     attachments = answer.attachments,
                     researchActivity = answer.activity,
                     followUps = answer.followUps,
+                    content = answer.content,
                 )
-                updateChat(session.id) { latest -> latest.copy(messages = latest.messages.filterNot { it.id == agentMessage.id } + agentMessage, updatedAt = Id.now(), pendingRun = null, pendingActivity = emptyList()) }
+                updateChat(session.id) { latest -> latest.copy(messages = latest.messages.filterNot { it.id == agentMessage.id } + agentMessage, updatedAt = Id.now(), pendingRun = null, pendingActivity = emptyList(), pendingContent = emptyList()) }
                 _state.update { it.copy(drafts = it.drafts - session.id) }
                 AppLog.info("chat", "send.completed", operationFields)
             } catch (e: CancellationException) {
@@ -896,7 +932,8 @@ class DefaultChatService(
                             val activity = previousActivity + stopped.steps.researchActivity()
                             _state.update { it.copy(drafts = it.drafts + (session.id to CodingDraft(
                                 steps = previousActivity + stopped.steps, failedMessage = if (stopped.failed) "Не удалось завершить исследование" else null))) }
-                            try { updateChat(session.id) { it.copy(pendingActivity = activity) } }
+                            try { updateChat(session.id) { it.copy(pendingActivity = activity,
+                                pendingContent = mergeTranscriptContent(previousContent, stopped.steps.transcriptContent()).interruptedMedia()) } }
                             catch (cancelled: CancellationException) { throw cancelled }
                             catch (failure: Exception) {
                                 AppLog.error("chat", "activity.save.failed", failure, operationFields)

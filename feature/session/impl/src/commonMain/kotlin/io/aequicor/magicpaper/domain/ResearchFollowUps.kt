@@ -45,6 +45,12 @@ internal fun ChatMessage.researchReply(): ResearchReply =
     if (role == ChatRole.USER || followUps.isNotEmpty()) ResearchReply(text, followUps)
     else researchReply(text)
 
+/** Follow-up metadata remains outside the book's reading fragments, including during streaming. */
+internal fun List<TranscriptBlock>.researchContent(streaming: Boolean = false): List<TranscriptBlock> = mapNotNull { block ->
+    if (block !is TranscriptBlock.Markdown) block
+    else researchReply(block.text, streaming).text.takeIf { it.isNotBlank() }?.let { block.copy(text = it) }
+}
+
 private val legacyOption = Regex("^([1-3])[.)] +(.+)$")
 private val legacyAction = Regex("^(Разобрать|Составить|Сравнить|Проверить|Подобрать|Обсудить|Уточнить|Написать)(?:\\s|$)", RegexOption.IGNORE_CASE)
 

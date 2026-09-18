@@ -25,6 +25,8 @@ data class SettingsState(
     val catalogRefreshing: Set<String> = emptySet(),
     val openAiSubscription: OpenAiSubscriptionUi = OpenAiSubscriptionUi(),
     val notice: String? = null,
+    val mediaSupported: Boolean = false,
+    val mediaConnections: Map<MediaKind, MediaConnectionStatus> = emptyMap(),
 ) {
     val availableLlmProfiles: List<LlmProfile> get() = llmProfiles.filter {
         it.enabled && (it.provider != ProviderType.OPENAI_SUBSCRIPTION || openAiSubscription.available)

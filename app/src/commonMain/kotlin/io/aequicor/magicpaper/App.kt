@@ -35,7 +35,13 @@ fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>, compact: Bool
         ) {
             PaperSurface(Modifier.fillMaxSize(), kind = PaperSurfaceKind.CANVAS) {
                 when (val status = readiness) {
-                    RuntimeState.Ready -> AppShell(runtime, root, compact)
+                    RuntimeState.Ready -> {
+                        val configuration by runtime.koin.get<SettingsService>().state.collectAsState()
+                        GeneratedMediaProvider(runtime.koin.get<io.aequicor.magicpaper.data.storage.MediaStore>(),
+                            runtime.koin.get<MediaGenerationService>(), animate = configuration.settings.paperAnimationEnabled) {
+                            AppShell(runtime, root, compact)
+                        }
+                    }
                     is RuntimeState.Failed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { PaperText(status.message) }
                     RuntimeState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { PaperText("Загрузка…") }
                     RuntimeState.Closed -> Unit

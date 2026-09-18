@@ -24,6 +24,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
         modelLimits = engineModelLimits(),
         store = FileKeyValueStore(),
         persistence = persistence,
+        mediaStore = if (System.getProperty("os.name").let { it.startsWith("Mac", true) || it.startsWith("Windows", true) }) FileMediaStore() else UnavailableMediaStore,
         navigationSession = navigationSession,
         projectSkills = skills.projectSkills,
         bridge = DesktopProfileBridge(),

@@ -5,6 +5,8 @@ import kotlinx.serialization.json.*
 fun toolDisplayName(id: String): String = when (id) {
     "context.get" -> "Состояние плана"
     "web.search" -> "Поиск источников"
+    "image.generate" -> "Создание изображения"
+    "video.generate" -> "Создание видео"
     "questionnaire" -> "Вопросы пользователю"
     "plan.propose" -> "Предложение плана"
     "plan.refine" -> "Разработка плана"
