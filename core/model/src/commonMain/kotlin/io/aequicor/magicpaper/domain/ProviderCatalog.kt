@@ -138,8 +138,10 @@ object ProviderCatalog {
                 // Ручка усилия у GLM зависит от поколения: 5.3 думает всегда и
                 // знает low/high/max, 5.2 — none/high/max, остальным доступен
                 // только переключатель `thinking.type`.
-                ModelInfo("glm-5.3", ReasoningPresets.GLM_53_EFFORT),
+                // Модели по умолчанию — 5.3-Flash: он первый в ряду мультимодальных
+                // GLM-5 (вложения и скриншоты) при цене ниже 5.3.
                 ModelInfo("glm-5.3-flash", ReasoningPresets.GLM_53_EFFORT),
+                ModelInfo("glm-5.3", ReasoningPresets.GLM_53_EFFORT),
                 ModelInfo("glm-5.2", ReasoningPresets.GLM_52_EFFORT),
                 ModelInfo("glm-5.1", ReasoningPresets.GLM_THINKING_TOGGLE),
                 ModelInfo("glm-5", ReasoningPresets.GLM_THINKING_TOGGLE),

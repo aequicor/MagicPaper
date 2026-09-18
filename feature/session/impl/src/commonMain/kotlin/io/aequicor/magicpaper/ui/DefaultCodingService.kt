@@ -1662,7 +1662,7 @@ class DefaultCodingService(
                 AppLog.info("coding", "run.input.rejected", mapOf(
                     "sessionId" to session.id, "requestId" to requestId,
                     "model" to profile.modelId, "reason" to "image-input-unsupported"))
-                _state.update { it.copy(notice = "Выбранная модель не поддерживает изображения. Выберите модель с поддержкой изображений и повторите отправку.") }
+                _state.update { it.copy(notice = "Модель ${profile.modelId} не поддерживает изображения. Выберите модель с поддержкой изображений и повторите отправку.") }
                 return false
             }
         }

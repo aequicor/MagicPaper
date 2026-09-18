@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.TRUNCATED_HEADLINE
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -155,6 +156,45 @@ class PiEventParserTest {
         val event = PiEventParser.parse(line)
         assertIs<CodingEvent.Failed>(event)
         assertEquals("модель недоступна", event.message)
+    }
+
+    @Test
+    fun exhaustedRetryKeepsTheProviderReason() {
+        // pi кладёт причину в `finalError` (docs/rpc.md). Пока читали `error`, провайдер
+        // «отказывал после автоповторов» без объяснения: 400 из ответа терялся.
+        val refused = PiEventParser.parse(
+            """{"type":"auto_retry_end","success":false,"attempt":3,"finalError":"400 code 1210: bad reasoning_effort"}""",
+        )
+        assertIs<CodingEvent.Failed>(refused)
+        assertEquals("400 code 1210: bad reasoning_effort", refused.message)
+        // Без причины честно говорим, что автоповторы кончились, и не выдумываем её.
+        val silent = PiEventParser.parse("""{"type":"auto_retry_end","success":false,"attempt":3}""")
+        assertIs<CodingEvent.Failed>(silent)
+        assertEquals("Провайдер отказал после автоповторов", silent.message)
+        val succeeded = PiEventParser.parse("""{"type":"auto_retry_end","success":true,"attempt":2}""")
+        assertIs<CodingEvent.Notice>(succeeded)
+    }
+
+    @Test
+    fun retryNoticeNamesAttemptAndReason() {
+        val notice = PiEventParser.parse(
+            """{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"529 overloaded_error: Overloaded"}""",
+        )
+        assertIs<CodingEvent.Notice>(notice)
+        assertEquals("Сбой у провайдера, автоповтор №1 из 3… Причина: 529 overloaded_error: Overloaded", notice.message)
+    }
+
+    @Test
+    fun multilineProviderBodyStaysOneReadableLine() {
+        // У прокси в причине оказывается многострочная HTML-страница — подпись в
+        // таймлайне не должна разваливаться и расти до бесконечности.
+        val html = "<html>\\n  <body>" + "x".repeat(600) + "</body> </html>"
+        val line = """{"type":"auto_retry_end","success":false,"finalError":"$html"}"""
+        val event = PiEventParser.parse(line)
+        assertIs<CodingEvent.Failed>(event)
+        assertEquals(401, event.message.length, "обрезка с многоточием")
+        assertTrue(event.message.endsWith("…"), event.message.take(40))
+        assertFalse("\n" in event.message)
     }
 
     @Test

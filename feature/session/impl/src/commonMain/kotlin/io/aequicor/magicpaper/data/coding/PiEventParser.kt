@@ -79,12 +79,24 @@ object PiEventParser {
                     else -> CompactionPhase.COMPLETED
                 }, obj.primitive("reason").orEmpty()))
             "auto_retry_start" -> CodingEvent.Notice(
-                "Сбой у провайдера, автоповтор №${obj.primitive("attempt") ?: "?"}…"
+                buildString {
+                    append("Сбой у провайдера, автоповтор №").append(obj.primitive("attempt") ?: "?")
+                    obj.primitive("maxAttempts")?.let { append(" из ").append(it) }
+                    append("…")
+                    providerReason(obj.primitive("errorMessage"))?.let { append(" Причина: ").append(it) }
+                },
             )
             "auto_retry_end" -> if (obj["success"] == JsonPrimitive(true)) {
                 CodingEvent.Notice("Автоповтор удался")
             } else {
-                CodingEvent.Failed(obj.primitive("error")?.takeIf { it.isNotBlank() } ?: "Провайдер отказал после автоповторов")
+                // Причина у pi живёт в `finalError` (docs/rpc.md), поля `error` в событии
+                // нет: с ним провайдер «отказывал после автоповторов» без объяснения,
+                // и 400 от сервера терялся ещё до ленты.
+                CodingEvent.Failed(
+                    providerReason(obj.primitive("finalError"))
+                        ?: providerReason(obj.primitive("error"))
+                        ?: "Провайдер отказал после автоповторов",
+                )
             }
             "message_update" -> parseDelta(obj, summaryOnly)
             // message_end даёт несколько событий — его разбирает parseEvents.
@@ -252,6 +264,20 @@ object PiEventParser {
     }
 
     private fun JsonObject.type(): String? = primitive("type")
+
+    /**
+     * Причина отказа провайдера для показа человеку: одна строка разумной длины.
+     * pi кладёт в неё и тело HTTP-ошибки, а у прокси это многострочный HTML, который
+     * ломает подпись в таймлайне; технические подробности остаются в логах.
+     */
+    private fun providerReason(text: String?): String? = text
+        ?.takeIf { it.isNotBlank() }
+        ?.replace(Regex("\\s+"), " ")
+        ?.trim()
+        ?.let { if (it.length <= PROVIDER_REASON_LIMIT) it else it.take(PROVIDER_REASON_LIMIT) + "…" }
+
+    /** Потолок длины причины отказа: дальше строка перестаёт быть читаемой подписью. */
+    private const val PROVIDER_REASON_LIMIT = 400
 
     private fun JsonObject.primitive(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull

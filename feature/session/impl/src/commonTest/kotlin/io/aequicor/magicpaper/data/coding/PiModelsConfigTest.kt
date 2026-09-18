@@ -73,6 +73,19 @@ class PiModelsConfigTest {
             "Text-only модель — флаг не выставляется")
     }
 
+    @Test fun glm53FlashCarriesImagesToTheCodingAgent() {
+        // 5.3-Flash принимает изображения: pi обязан объявить input: image, иначе он
+        // вырежет image_url, и прогон останется без картинки. Обычный GLM-5.3 — текст.
+        val flash = profile("glm-5.3-flash", baseUrl = "https://api.z.ai/api/paas/v4/")
+        assertTrue(PiModelsConfig.supportsImageInput(flash.modelId))
+        assertEquals(
+            listOf("text", "image"),
+            PiModelsConfig.root(flash, imageInput = true).model()["input"]!!.jsonArray.map { it.toString().trim('"') },
+        )
+        assertEquals(true, PiModelsConfig.root(flash, imageInput = true).compat().bool("requiresAssistantAfterToolResult"))
+        assertFalse(PiModelsConfig.supportsImageInput("glm-5.3"))
+    }
+
     @Test fun nonOpenAiCompatDoesNotRequireAssistantAfterToolResult() {
         // Anthropic и Google имеют собственные форматы сообщений и не требуют
         // промежуточного assistant между toolResult и user.

@@ -39,6 +39,20 @@ class ModelCapabilitiesTest {
     }
 
     @Test
+    fun glm53FlashIsMultimodalWhileGlm53IsTextOnly() {
+        // docs.z.ai/guides/llm/glm-5.3-flash: «Video / Image / Text / File» и блок
+        // `type: image_url` — первый мультимодальный GLM-5 без «v» в имени.
+        val flash = ModelCapabilities.resolve(ProviderType.OPENAI_COMPATIBLE, "glm-5.3-flash")
+        assertTrue(flash.vision, "5.3-Flash принимает изображения: иначе чат молча теряет вложение")
+        assertTrue(flash.requiresAssistantAfterToolResult, "сервер Z.AI требует чередование ролей при vision")
+        for (id in listOf("glm-5.3", "glm-5.2", "glm-5.1", "glm-4.7")) {
+            assertFalse(ModelCapabilities.resolve(ProviderType.OPENAI_COMPATIBLE, id).vision, id)
+        }
+        // «v» в имени по-прежнему основной признак ряда V.
+        assertTrue(ModelCapabilities.resolve(ProviderType.OPENAI_COMPATIBLE, "glm-5v-turbo").vision)
+    }
+
+    @Test
     fun glmOnZaiEndpointUsesTheThinkingSwitch() {
         // Z.AI переключает мышление полем `thinking`; на своём сервере это факт,
         // а не догадка pi по адресу.

@@ -80,7 +80,7 @@ data class ModelCapabilities(
          *  - Claude 3+ (Haiku 3, Sonnet 3/4/5, Opus 3/4);
          *  - GPT-4 и новее (gpt-4*, gpt-5*, o-серия);
          *  - Gemini (все поколения мультимодальные);
-         *  - GLM-4V и новее;
+         *  - GLM-4V и новее, а также GLM-5.3-Flash (без «v» в имени);
          *  - Grok с vision.
          */
         private fun resolveVision(provider: ProviderType, family: String, id: String): Boolean = when {
@@ -93,8 +93,8 @@ data class ModelCapabilities(
                 id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> true
             // Gemini (все поколения мультимодальные)
             family == "gemini" -> true
-            // GLM-4V+
-            family == "glm" && id.contains("v") -> true
+            // GLM-4V+ и единственный мультимодальный GLM-5 без «v» в имени
+            family == "glm" && (id.contains("v") || isGlmFlashMultimodal(id)) -> true
             // Grok vision
             id.contains("grok") && id.contains("vision") -> true
             else -> false
@@ -115,6 +115,16 @@ data class ModelCapabilities(
             if (id.contains("-preview") || id.contains("2026-05-20")) return false
             return id.contains("-max") || id.contains("-plus") || id.contains("-flash")
         }
+
+        /**
+         * GLM-5.3-Flash — «the first native multimodal model in the GLM-5 series»
+         * (docs.z.ai/guides/llm/glm-5.3-flash: вход Video / Image / Text / File, блок
+         * `type: image_url`). Тот же договор у каталога pi (`input: text, image`).
+         * GLM-5.3 и остальные ряды GLM-5 принимают только текст, поэтому правило
+         * не расползается на всё семейство: «v» в имени по-прежнему основной признак.
+         */
+        private fun isGlmFlashMultimodal(id: String): Boolean =
+            id.substringAfterLast('/').startsWith("glm-5.3-flash")
 
         // ---- Thinking format ---------------------------------------------------------
 
