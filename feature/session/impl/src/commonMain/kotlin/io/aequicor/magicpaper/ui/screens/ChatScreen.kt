@@ -174,7 +174,9 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
             val blocks = message.readingBlocks()
             blocks.flatMapIndexed { blockIndex, block ->
                 val parts = messageParts[readingBlockKey(message, block.id)]
-                val indexes = if (parts == null || parts.size == 0) listOf(0) else (0 until parts.size).toList()
+                // A blank block keeps exactly one fragment, so the message still owns its
+                // attachments and footnotes; that fragment carries no text and is never indexed.
+                val indexes = if (parts == null || parts.isEmpty) listOf(0) else (0 until parts.size).toList()
                 indexes.map { index -> ChatMessageFragment(message, parts, index, block.id,
                     (block as? TranscriptBlock.Media)?.media, blockIndex == 0, blockIndex == blocks.lastIndex) }
             }
@@ -254,7 +256,7 @@ private data class ChatMessageFragment(val message: ChatMessage, val parts: Pape
     val blockId: String = message.id, val media: GeneratedMedia? = null, val firstBlock: Boolean = true, val lastBlock: Boolean = true) {
     val key: String get() = readingBlockKey(message, blockId).let { if (index == 0) it else "$it:text:$index" }
     val first: Boolean get() = firstBlock && index == 0
-    val last: Boolean get() = lastBlock && (parts == null || index == parts.size - 1)
+    val last: Boolean get() = lastBlock && (parts == null || parts.isEmpty || index == parts.size - 1)
     val contentType = Triple(message.role, if (media != null) "media" else parts?.contentType(index), first to last)
 }
 

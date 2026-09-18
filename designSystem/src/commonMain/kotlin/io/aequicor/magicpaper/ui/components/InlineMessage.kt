@@ -23,8 +23,13 @@ class PaperInlineMessageParts internal constructor(
 ) {
     val size: Int get() = document?.inlineBlocks?.size ?: ranges.size
 
+    /** An empty answer (a question asked with only an attachment, or an answer interrupted before its
+     * first chunk) parses into no fragments at all. Callers keep one blank fragment for it, so every
+     * accessor must stay total over that fragment instead of failing the whole composition. */
+    val isEmpty: Boolean get() = size == 0
+
     /** Opaque structural key for lazy reuse; paragraphs should not recycle table or heading trees. */
-    fun contentType(index: Int): String = document?.inlineBlocks?.get(index)?.firstOrNull {
+    fun contentType(index: Int): String = document?.inlineBlocks?.getOrNull(index)?.firstOrNull {
         it.type != org.intellij.markdown.MarkdownTokenTypes.EOL &&
             it.type != org.intellij.markdown.MarkdownTokenTypes.WHITE_SPACE
     }?.type?.toString() ?: "plain-text"
@@ -34,10 +39,11 @@ class PaperInlineMessageParts internal constructor(
         color: Color = LocalPaperColors.current.text) {
         // Lazy fragments already bound visible work. Preserve selection/layout rather
         // than rebuilding the text tree at both ends of every scroll gesture.
-        if (document != null) MarkdownDocumentBody(document, document.inlineBlocks[index])
-        else {
+        val parsed = document
+        if (parsed != null) parsed.inlineBlocks.getOrNull(index)?.let { MarkdownDocumentBody(parsed, it) }
+        else ranges.getOrNull(index)?.let { range ->
             androidx.compose.foundation.text.selection.SelectionContainer {
-                PaperText(source.substring(ranges[index]), style = style, color = color)
+                PaperText(source.substring(range), style = style, color = color)
             }
         }
     }
