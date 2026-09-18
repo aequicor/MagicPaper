@@ -51,7 +51,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.awt.desktop.AppReopenedListener
 import java.util.concurrent.atomic.AtomicBoolean
 import java.awt.Desktop
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import javax.swing.SwingUtilities
 import java.awt.Frame
 import java.awt.Image
@@ -77,6 +79,19 @@ private val AppIcons: List<Image> by lazy {
 private fun FrameWindowScope.setAppIcons() {
     if (AppIcons.isNotEmpty()) (window as? Frame)?.iconImages = AppIcons
 }
+
+/**
+ * Расположение самого запускаемого приложения: каталог `app` jpackage-образа (установленный
+ * пакет, `runDistributable`, portable-копия) либо каталог классов при запуске из Gradle/IDE.
+ * По нему брокер активации выбирает namespace экземпляра, поэтому запуск из исходников не
+ * передаёт свою активацию установленному приложению и не завершается молча.
+ */
+internal fun currentApplicationLocation(): Path? = runCatching {
+    val codeSource = DesktopActivationBroker::class.java.protectionDomain.codeSource ?: return@runCatching null
+    if (codeSource.location.protocol != "file") return@runCatching null
+    val origin = Paths.get(codeSource.location.toURI())
+    if (Files.isRegularFile(origin)) origin.parent else origin
+}.getOrNull()
 
 /** Нативная высота тайтлбара macOS (unified title bar). */
 private val MacTitleBarHeight = 28.dp
@@ -120,7 +135,10 @@ private fun runDesktopHost(args: Array<String>) {
         }
     }
     val acquisition = DesktopActivationBroker.acquire(
-        directory = Path.of(System.getProperty("user.home"), ".MagicPaper", "activation"),
+        directory = DesktopActivationBroker.activationDirectory(
+            root = Paths.get(System.getProperty("user.home"), ".MagicPaper", "activation"),
+            applicationLocation = currentApplicationLocation(),
+        ),
         initialLinks = args.filter { it.startsWith("magicpaper://", ignoreCase = true) },
         onActivation = ::enqueueActivation,
     )

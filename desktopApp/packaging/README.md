@@ -29,9 +29,16 @@ same Compose application image and a separate resource directory. The WiX overri
 is derived from the installed JBR's template and fails if its expected structure
 changes. No generated JDK template is checked in.
 
-The process acquires a per-user file lock before creating the application runtime.
-A second launch sends its bounded activation request over authenticated loopback
-IPC and exits. macOS OpenURI events enter the same activation queue. Queued links
+The process acquires a file lock in its own activation namespace
+(`~/.MagicPaper/activation/instance-<hash>`), derived from the directory that holds the
+running application code: the `app` directory of a jpackage image (installed package,
+`runDistributable`, portable copy) or the classes directory of an unpackaged Gradle/IDE
+launch. Launches of the same build share one owner: a second one sends its bounded
+activation request over authenticated loopback IPC and exits, so the `magicpaper://`
+handler always reaches the window that is already open. A launch of a different build —
+for example `main()` from the IDE while the installed application runs — takes its own
+namespace instead of forwarding to that foreign runtime and exiting without a window.
+macOS OpenURI events enter the same activation queue. Queued links
 are processed after startup and the welcome gate. The existing window is restored
 and focused on activation. Runtime locks are released by the OS after a crash;
 stale endpoint metadata is replaced only by the next lock owner.
@@ -46,6 +53,12 @@ Verify an installed package on every supported operating system:
 4. Visit A → B → A, go Back, quit, reopen, and verify both Back and Forward.
 5. Restart after force-ending the process and confirm a stale endpoint does not
    prevent startup. Uninstall and verify the package-owned protocol handler is gone.
+6. With the installed application running, launch the same installation again and verify
+   it exits after raising the existing window; then launch a build from another location
+   and verify it opens its own window instead of forwarding to the installed runtime.
 
 An unpackaged Gradle launch accepts URI arguments but does not install an OS URL
-handler. Protocol registration is tested using the installed package.
+handler. Protocol registration is tested using the installed package. Instances of
+different builds share the `~/.MagicPaper` data directory; the exclusive locks of the
+skill repository, experience journal and planning workspaces report contention
+explicitly.

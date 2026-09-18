@@ -28,7 +28,11 @@ import java.util.Properties
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** One owner of the user's runtime. Secondary launches forward activation before creating DI. */
+/**
+ * One owner of the user's runtime per application build. Secondary launches of the *same*
+ * build forward activation before creating DI; a launch of another build (IDE run, another
+ * worktree, a portable copy) never hands its start-over to a foreign runtime.
+ */
 internal class DesktopActivationBroker private constructor(
     private val directory: Path,
     private val channel: FileChannel,
@@ -130,7 +134,7 @@ internal class DesktopActivationBroker private constructor(
                             broker.writeEndpoint()
                             broker.listener.start()
                             if (initialLinks.isNotEmpty()) onActivation(initialLinks)
-                            AppLog.info("desktop_activation", "primary_acquired")
+                            AppLog.info("desktop_activation", "primary_acquired", mapOf("namespace" to namespaceName(directory)))
                             return Result.Primary(broker)
                         } catch (failure: Exception) {
                             try { server.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
@@ -141,7 +145,14 @@ internal class DesktopActivationBroker private constructor(
                     val forwarded = forward(directory, requestId, initialLinks)
                     if (forwarded.isSuccess) {
                         channel.close()
-                        AppLog.info("desktop_activation", "forwarded", mapOf("requestId" to requestId, "count" to initialLinks.size.toString()))
+                        AppLog.info("desktop_activation", "forwarded", mapOf(
+                            "requestId" to requestId,
+                            "count" to initialLinks.size.toString(),
+                            // Names the owner namespace and the process that has just been asked to
+                            // raise its window, so a launch that intentionally exits can be traced.
+                            "namespace" to namespaceName(directory),
+                            "ownerPid" to forwarded.getOrThrow().toString(),
+                        ))
                         return Result.Forwarded
                     }
                     lastFailure = forwarded.exceptionOrNull()
@@ -155,7 +166,31 @@ internal class DesktopActivationBroker private constructor(
             }
         }
 
-        private fun forward(directory: Path, requestId: String, links: List<String>): kotlin.Result<Unit> = runCatching {
+        /**
+         * Activation namespace of one application build. Launches running the same installed
+         * image or the same Gradle build output share the single runtime owner, so the native
+         * `magicpaper://` handler still reaches the running instance. A different location gets
+         * its own namespace: an unpackaged development launch must not silently exit because an
+         * installed copy owns the user's runtime. A `null` location keeps the legacy shared
+         * namespace rather than inventing a throwaway one.
+         */
+        fun activationDirectory(root: Path, applicationLocation: Path?): Path =
+            applicationLocation?.let { root.resolve(instanceKey(it)) } ?: root
+
+        private fun instanceKey(applicationLocation: Path): String {
+            // Real path first: it collapses the different spellings the OS and launchers use
+            // for one and the same installation (case, separators, short names, mount points).
+            val normalized = runCatching { applicationLocation.toRealPath() }
+                .getOrElse { applicationLocation.toAbsolutePath().normalize() }
+                .toString().replace('\\', '/')
+            val digest = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
+            return "instance-" + digest.take(6).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        }
+
+        private fun namespaceName(directory: Path): String = directory.fileName?.toString() ?: directory.toString()
+
+        /** Success carries the pid of the runtime that received the activation. */
+        private fun forward(directory: Path, requestId: String, links: List<String>): kotlin.Result<Long> = runCatching {
             val endpoint = directory.resolve(ENDPOINT)
             require(!Files.isSymbolicLink(endpoint) && Files.size(endpoint) < 4096)
             val properties = Properties().apply { Files.newInputStream(endpoint).use(::load) }
@@ -178,7 +213,7 @@ internal class DesktopActivationBroker private constructor(
                 }
                 check(DataInputStream(socket.getInputStream()).readBoolean())
             }
-            Unit
+            pid
         }
 
         private fun makePrivate(path: Path, directory: Boolean = false) {
