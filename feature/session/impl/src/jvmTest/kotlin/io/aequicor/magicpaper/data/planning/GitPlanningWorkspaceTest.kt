@@ -22,7 +22,7 @@ class GitPlanningWorkspaceTest {
     }
 
     @Test fun failedLeaseReleaseRetainsItsIdentityAndCanBeRetriedAtEveryBoundary() = runTest {
-        for (boundary in listOf("project-lock-releasing", "project-lock-released", "store-lock-releasing", "store-lock-released")) {
+        for (boundary in listOf("project-lock-releasing", "project-lock-released")) {
             val source = Files.createTempDirectory("planning-release-source-").toFile()
             val data = Files.createTempDirectory("planning-release-data-").toFile()
             val project = CodingProject("owner", "Source", source.path, 1)
@@ -39,7 +39,7 @@ class GitPlanningWorkspaceTest {
             port.release(project)
             port.release(project)
             val next = GitPlanningWorkspace(data)
-            assertTrue(next.acquire(alias), "Confirmed release frees both OS locks: $boundary")
+            assertTrue(next.acquire(alias), "A confirmed release frees the checkout for another process: $boundary")
             next.release(alias)
             assertFalse(File(source, ".git").exists(), "Ownership does not initialize the source repository")
         }
@@ -58,7 +58,11 @@ class GitPlanningWorkspaceTest {
         assertFailsWith<IllegalArgumentException> { port.release(sourceOwner.copy(path = execution.path)) }
         assertFalse(port.acquire(sourceOwner.copy(id = "source-alias")))
         port.release(sourceOwner)
-        assertFalse(another.acquire(sourceOwner), "The active execution still owns the storage lease")
+        // Незанятый путь доступен и параллельному экземпляру: чужое удержание другой папки
+        // больше не блокирует весь профиль, пока активна хоть одна блокировка процесса.
+        assertTrue(another.acquire(sourceOwner), "A released path is free for a parallel instance")
+        another.release(sourceOwner)
+        assertFalse(another.acquire(executionOwner), "The same canonical path stays exclusive across processes")
         assertFalse(port.acquire(executionOwner.copy(id = "execution-alias")), "Releasing source retains the execution writer")
         port.release(executionOwner)
         assertTrue(another.acquire(sourceOwner))
@@ -193,6 +197,23 @@ class GitPlanningWorkspaceTest {
         val first = GitPlanningWorkspace(data); val second = GitPlanningWorkspace(data)
         assertTrue(first.acquire(project)); assertFalse(second.acquire(project))
         first.release(project); assertTrue(second.acquire(project)); second.release(project)
+    }
+
+    /** Параллельный экземпляр приложения с тем же профилем работает по своим путям;
+     * эксклюзивность остаётся только у конкретной канонической папки. */
+    @Test fun parallelInstanceAcquiresIndependentPathsButNotTheSamePath() = runTest {
+        val a = Files.createTempDirectory("planning-parallel-a-").toFile()
+        val b = Files.createTempDirectory("planning-parallel-b-").toFile()
+        val data = Files.createTempDirectory("planning-parallel-store-").toFile()
+        val first = GitPlanningWorkspace(data); val second = GitPlanningWorkspace(data)
+        val ownerA = CodingProject("first", "A", a.path, 1)
+        val ownerB = ownerA.copy(id = "second", path = b.path)
+        assertTrue(first.acquire(ownerA))
+        assertTrue(second.acquire(ownerB), "Another instance works on its own paths")
+        assertFalse(second.acquire(ownerA), "The same canonical path stays exclusive across processes")
+        assertFalse(first.acquire(ownerB), "The same canonical path stays exclusive across processes")
+        first.release(ownerA); second.release(ownerB)
+        assertTrue(second.acquire(ownerA)); second.release(ownerA)
     }
 
     @Test fun restartAfterPartialTransferCompletesWithoutReapplyingChangedFiles() = runTest {

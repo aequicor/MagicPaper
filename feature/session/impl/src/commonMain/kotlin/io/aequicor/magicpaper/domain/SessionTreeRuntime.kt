@@ -107,7 +107,21 @@ class SessionTreeRuntime(
             } finally { if (registered) lock.withLock { if (handles[session.id] === handle) handles.remove(session.id) } }
         } }
     }
-    suspend fun projectForExecution(project: CodingProject, session: CodingSession): CodingProject = lock.withLock {
+    /** Занятая папка — ещё не доказательство живого исполнителя: удержание без рабочего места
+     * снимается сверкой движка, и только доказанно занятая папка отклоняет запуск. */
+    suspend fun projectForExecution(project: CodingProject, session: CodingSession): CodingProject = try {
+        executionProjectFor(project, session)
+    } catch (busy: RootLeaseBusy) {
+        // Освобождение чужих и своих устаревших удержаний нельзя выполнять под замком рабочей области.
+        releaseUnownedRootLeases()
+        releaseRetainedRootLeases(session.id)
+        try { executionProjectFor(project, session) }
+        catch (still: RootLeaseBusy) { throw IllegalArgumentException("Рабочая копия ${still.path} уже используется другой сессией", still) }
+    }
+
+    private class RootLeaseBusy(val path: String) : IllegalStateException()
+
+    private suspend fun executionProjectFor(project: CodingProject, session: CodingSession): CodingProject = lock.withLock {
         val handle = handles[session.id] ?: error("Рабочая область не запущена")
         require(handle.generation == session.runtimeGeneration) { "Рабочая область другого поколения" }
         val node = session.organismId?.let { organisms.store.get(it).sessions[session.id] }
@@ -116,7 +130,7 @@ class SessionTreeRuntime(
             // A generation owns its lease; the workspace port excludes all other writers to this path.
             val owner = project.copy(id = "root-${session.id}-${session.runtimeGeneration}")
             withContext(NonCancellable) {
-                require(planningWorkspace.acquire(owner)) { "Рабочая копия ${project.path} уже используется другой сессией" }
+                if (!planningWorkspace.acquire(owner)) throw RootLeaseBusy(project.path)
                 handle.directRootLease = RootLease(session.id, session.runtimeGeneration, owner)
             }
         }
@@ -238,6 +252,10 @@ class SessionTreeRuntime(
                 handle.generation = current.runtimeGeneration
                 currentCoroutineContext()[RunCapture]?.let { it.generation = current.runtimeGeneration; it.entered = true }
             }
+            // Повторный запуск повторяет и освобождение своего удержания: неудачное восстановление
+            // оставляет узел FAILED, и без повтора его устаревшее удержание блокировало бы папку
+            // бесконечно — и эту сессию, и соседние. Возврат к удержанию возможен только через сверку движка.
+            releaseRetainedRootLeases(session.id)
             suspend fun execute(): T {
                 val node = current.organismId?.let { organisms.store.get(it).sessions[current.id] }
                 if (node?.kind == SessionKind.SESSION && node.mode == CodingInteractionMode.CODE && current.stageId == null) {

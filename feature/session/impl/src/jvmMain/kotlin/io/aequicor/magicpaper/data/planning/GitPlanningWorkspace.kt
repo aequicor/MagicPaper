@@ -35,35 +35,22 @@ class GitPlanningWorkspace(
     override suspend fun verificationSnapshot(path: String): String = io.aequicor.magicpaper.data.planning.verificationSnapshot(path)
     private data class ProjectLock(val path: String, val resources: Pair<RandomAccessFile, FileLock>)
     private val locks = mutableMapOf<String, ProjectLock>()
-    private var storeOwner: Pair<RandomAccessFile, FileLock>? = null
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private fun root(project: CodingProject) = File(dataRoot, hash(File(project.path).canonicalPath.toByteArray()).take(24))
+
+    /** Exclusivity belongs to one canonical checkout: its `owner.lock` file also excludes other
+     * application processes on the same path, while unrelated paths — including those of a
+     * parallel application instance sharing this profile — stay usable. */
     override suspend fun acquire(project: CodingProject): Boolean = withContext(Dispatchers.IO) {
         synchronized(locks) {
             val path = File(project.path).canonicalPath
             if (project.id in locks || locks.values.any { it.path == path }) return@synchronized false
-            // A failed close after releasing the storage lock leaves an invalid handle;
-            // close the stale file so a fresh acquisition can proceed.
-            if (storeOwner?.second?.isValid == false) {
-                try { storeOwner?.first?.close() } catch (_: Exception) {}
-                storeOwner = null
-            }
-            if (storeOwner == null) {
-                dataRoot.mkdirs()
-                val ownerFile = RandomAccessFile(File(dataRoot, "storage-owner.lock"), "rw")
-                val ownerLock = try { ownerFile.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
-                if (ownerLock == null) { ownerFile.close(); return@synchronized false }
-                storeOwner = ownerFile to ownerLock
-            }
             val dir = root(project).apply { mkdirs() }
             // Writer identity may change between generations; exclusivity belongs to the canonical checkout.
             val file = RandomAccessFile(File(dir, "owner.lock"), "rw")
             val lock = try { file.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
-            if (lock == null) {
-                file.close()
-                if (locks.isEmpty()) releaseStoreOwner()
-                false
-            } else { locks[project.id] = ProjectLock(path, file to lock); true }
+            if (lock == null) { file.close(); false }
+            else { locks[project.id] = ProjectLock(path, file to lock); true }
         }
     }
     override suspend fun release(project: CodingProject) = withContext(Dispatchers.IO) {
@@ -71,19 +58,12 @@ class GitPlanningWorkspace(
             val owned = locks[project.id]
             if (owned != null) {
                 require(owned.path == File(project.path).canonicalPath) { "Рабочая папка не совпадает с владельцем блокировки" }
+                // Keep both identity and resources on any failure; retrying skips already released locks.
                 releaseResources(owned.resources, "project-lock")
+                locks.remove(project.id)
             }
-            if (locks.size == if (owned == null) 0 else 1) releaseStoreOwner()
-            // Keep both identity and resources on any failure, including a storage close
-            // after the project lock was released. Retrying skips already released locks.
-            if (owned != null) locks.remove(project.id)
         }
         Unit
-    }
-
-    private fun releaseStoreOwner() {
-        storeOwner?.let { releaseResources(it, "store-lock") }
-        storeOwner = null
     }
 
     private fun releaseResources(resources: Pair<RandomAccessFile, FileLock>, boundary: String) {

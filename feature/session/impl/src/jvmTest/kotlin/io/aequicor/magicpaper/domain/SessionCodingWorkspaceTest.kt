@@ -270,6 +270,56 @@ class SessionCodingWorkspaceTest {
         assertFalse(f.tree.releaseUnownedRootLeases(), "Освобождённое удержание не возвращается")
     } }
 
+    @Test fun failedRootRestoreRetriesItsOwnStaleLeaseReleaseInsteadOfLooping() = runTest { withContext(Dispatchers.Default) {
+        val source = repository()
+        // Три сбоя освобождения: сверка при восстановлении, повтор при запуске и повтор захвата —
+        // этого достаточно, чтобы восстановление отклонилось, а папка осталась удержанной прошлым поколением.
+        var releaseFaults = 3
+        val port = workspace { if (it == "project-lock-releasing" && releaseFaults-- > 0) error("injected release failure") }
+        val f = Fixture(source, port)
+        var confirmed = false
+        val native = Native { _, _ -> emit(CodingEvent.FinalText("Answer")); emit(CodingEvent.Finished) }
+        native.reconciliation = { check(confirmed) { "native stop uncertain" } }
+        f.initialize(native)
+        val project = f.f.project.copy(path = source.path)
+        suspend fun node() = f.f.store.get(f.f.root.organismId!!).sessions.getValue("root")
+        // Первый прогон завершён без подтверждения остановки: папка удержана, состояние UNKNOWN.
+        f.tree.runtime!!.run(project, f.f.root, "Work", null).collect()
+        assertEquals(SessionObservedState.UNKNOWN, node().observed)
+        confirmed = true
+        // Восстановление отклоняется занятой папкой — узел становится FAILED, а удержание остаётся:
+        // без повтора освобождения каждый «Продолжить» повторял бы тот же отказ.
+        assertFailsWith<IllegalArgumentException> { f.tree.runtime!!.run(project, f.f.root, "Continue", null).collect() }
+        assertEquals(SessionObservedState.FAILED, node().observed)
+        assertFalse(port.acquire(project.copy(id = "stuck-checker")), "Устаревшее удержание всё ещё занимает папку")
+        // Повторное восстановление обязано повторить освобождение и довести прогон до конца.
+        withTimeout(20_000) { f.tree.runtime!!.run(project, f.f.root, "Continue again", null).collect() }
+        assertEquals(SessionObservedState.COMPLETED, node().observed)
+        val checker = project.copy(id = "after-recovery")
+        assertTrue(port.acquire(checker)); port.release(checker)
+    } }
+
+    @Test fun newRootSessionReclaimsStaleLeaseOfAGoneSessionInsteadOfFailing() = runTest { withContext(Dispatchers.Default) {
+        val source = repository(); val port = workspace(); val f = Fixture(source, port)
+        var confirmed = false
+        val native = Native { _, _ -> emit(CodingEvent.FinalText("Answer")); emit(CodingEvent.Finished) }
+        native.reconciliation = { check(confirmed) { "native stop uncertain" } }
+        f.initialize(native)
+        val project = f.f.project.copy(path = source.path)
+        f.tree.runtime!!.run(project, f.f.root, "Work", null).collect()
+        assertEquals(SessionObservedState.UNKNOWN, f.f.store.get(f.f.root.organismId!!).sessions.getValue("root").observed)
+        confirmed = true
+        val other = f.f.root.copy(id = "other-root", organismId = null, runtimeGeneration = 0)
+        f.f.projects.saveSession(other)
+        // Сессия-владелец удержания больше не работает: соседний запуск снимает его сверкой движка,
+        // а не отказывается навсегда «занятой папкой».
+        withTimeout(20_000) { f.tree.runtime!!.run(project, other, "Other work", null).collect() }
+        assertEquals(SessionObservedState.COMPLETED,
+            f.f.store.organisms.value.values.single { "other-root" in it.sessions }.sessions.getValue("other-root").observed)
+        val checker = project.copy(id = "after-reclaim")
+        assertTrue(port.acquire(checker)); port.release(checker)
+    } }
+
     private fun workspace(checkpoint: (String) -> Unit = {}) = GitPlanningWorkspace(Files.createTempDirectory("session-workspace-").toFile(), checkpoint)
     private fun repository(): File = Files.createTempDirectory("session-source-").toFile().also { source ->
         git(source, "init")
