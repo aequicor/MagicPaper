@@ -16,6 +16,7 @@ data class ToolExecutionContext(
     /** Temporary verification/merge runtimes borrow history ownership, never lifecycle authority. */
     val auxiliaryExecution: Boolean = false,
     val taskWorktreeId: String? = null,
+    val mediaCapabilities: Set<MediaKind> = emptySet(),
 ) {
     companion object {
         fun worker(session: CodingSession) = ToolExecutionContext(session.projectId, session.id, session.id,
@@ -41,7 +42,8 @@ data class ToolDefinition(
         (id != "stage.handoff" || context.mode == CodingInteractionMode.CODE) &&
         (id != "task.handoff" || (context.taskWorktreeId != null && context.mode == CodingInteractionMode.CODE && context.stageId == null)) &&
         (!native || !mutating || (context.mode == CodingInteractionMode.CODE && context.role in setOf(ToolRole.WORKER, ToolRole.CHAT))) &&
-        (id != "research_check" || context.mode == CodingInteractionMode.RESEARCH)
+        (id != "research_check" || context.mode == CodingInteractionMode.RESEARCH) &&
+        (id !in setOf("image.generate", "video.generate") || context.mode != CodingInteractionMode.PLANNING)
     /** A temporary verifier may read its owner's history in an application-granted CODE mode. */
     fun allowsAuthorityMode(context: ToolExecutionContext, ownerMode: CodingInteractionMode): Boolean =
         context.mode == ownerMode || (context.auxiliaryExecution && context.role == ToolRole.CHAT &&

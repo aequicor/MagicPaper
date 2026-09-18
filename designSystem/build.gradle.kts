@@ -45,6 +45,7 @@ kotlin {
         }
         commonTest.dependencies { implementation(libs.kotlin.test) }
         jvmMain.dependencies {
+            implementation(libs.compose.media.player)
             compileOnly(libs.jbr.api)
             implementation(libs.oshi.core)
         }
@@ -60,4 +61,8 @@ compose {
         packageOfResClass = "io.aequicor.magicpaper.designsystem.resources"
         generateResClass = always
     }
+}
+
+tasks.withType<Test>().configureEach {
+    systemProperty("magicpaper.media.native", providers.gradleProperty("magicpaper.media.native").getOrElse("false"))
 }

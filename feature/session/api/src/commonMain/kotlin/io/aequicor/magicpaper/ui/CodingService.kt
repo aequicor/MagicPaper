@@ -8,6 +8,8 @@ data class SessionCreationStatus(val busy: Boolean = false, val error: String? =
 
 interface CodingService {
     val state: StateFlow<CodingState>
+    val mediaGeneration: MediaGenerationService? get() = null
+    fun setMediaToolEnabled(sessionId: String, kind: MediaKind, enabled: Boolean)
     val computerPermissions: ComputerPermissions? get() = null
     val sessionCreationStatus: StateFlow<Map<String, SessionCreationStatus>>
     fun sessionCreationDraft(projectId: String): DraftSession<CodingEngine>?

@@ -31,6 +31,8 @@ fun ModelsSettings(vm: DefaultSettingsComponent, state: SettingsState) {
     PaperScrollColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         PaperAction(onClick = vm::closeModelsSettings) { PaperText("‹ Настройки") }
         PaperText("Модели", style = paperTextStyle(PaperTextRole.TITLE))
+        MediaSettings(vm, state)
+        PaperDivider(Modifier.padding(vertical = 8.dp))
         Spacer(Modifier.height(4.dp))
         PaperText("По умолчанию", style = paperTextStyle(PaperTextRole.TITLE))
         PaperText("Операции приложения, настройка и планирование.", style = paperTextStyle(PaperTextRole.BODY), color = LocalPaperColors.current.secondaryText)

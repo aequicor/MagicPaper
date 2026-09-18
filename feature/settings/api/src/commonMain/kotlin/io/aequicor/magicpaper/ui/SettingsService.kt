@@ -27,6 +27,11 @@ interface SettingsService {
     fun fetchModels(draft: LlmProfile)
     fun refreshProfileParameters(profileId: String)
     fun testConnection(draft: LlmProfile)
+    fun saveMediaSelection(kind: MediaKind, selection: MediaModelSelection?, verify: Boolean = false)
+    suspend fun readMediaAsset(asset: MediaAsset): ByteArray
+    suspend fun mediaAssetPath(asset: MediaAsset): String?
+    /** Recover the existing probe only; this must never submit a replacement generation. */
+    suspend fun recoverMediaResult(mediaId: String): GeneratedMedia?
     fun exportProfile()
     fun importProfile()
     fun wipeAll()

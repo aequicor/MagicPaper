@@ -18,8 +18,8 @@ class ToolEnabledCodingRuntime(private val delegate: CodingRuntime, private val 
         ownedRun(project, session, prompt, profile, attachments, planning = false)
 
     override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>): Flow<CodingEvent> = flow {
-        val context = ToolExecutionContext("chat-${session.id}", session.id, session.id,
-            session.pendingRun?.runId ?: io.aequicor.magicpaper.util.Id.new(), ToolRole.CHAT, CodingInteractionMode.RESEARCH)
+        val context = host.prepareMediaContext(ToolExecutionContext("chat-${session.id}", session.id, session.id,
+            session.pendingRun?.runId ?: io.aequicor.magicpaper.util.Id.new(), ToolRole.CHAT, CodingInteractionMode.RESEARCH), session.mediaTools)
         val request = researchRequest(session.messages.lastOrNull { it.role == ChatRole.USER }?.text ?: prompt)
         delegate.runChat(session, prompt, profile, attachments)
             .withTools(host.researchChatSession(context, allowSearch = !request.sourceTask)).collect { emit(it) }
@@ -48,8 +48,8 @@ class ToolEnabledCodingRuntime(private val delegate: CodingRuntime, private val 
     private fun ownedRun(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>, planning: Boolean): Flow<CodingEvent> = flow {
         var ended = false
         suspend fun execute(current: CodingSession, existingTools: ToolSession? = null) {
-            val tools = existingTools ?: host.session(host.prepareWorker(current.forPendingRun()).copy(organismId = current.organismId,
-                runtimeGeneration = current.runtimeGeneration, planningRulesSnapshot = current.planningRulesSnapshot))
+            val tools = existingTools ?: host.session(host.prepareMediaContext(host.prepareWorker(current.forPendingRun()).copy(organismId = current.organismId,
+                runtimeGeneration = current.runtimeGeneration, planningRulesSnapshot = current.planningRulesSnapshot), current.mediaTools))
             val context = tools.context
             val incoming = if (context.auxiliaryExecution) emptyList() else tree?.incoming(current).orEmpty()
             var failed = false

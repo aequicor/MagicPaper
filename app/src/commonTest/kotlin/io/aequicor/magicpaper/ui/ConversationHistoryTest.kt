@@ -161,6 +161,48 @@ class ConversationHistoryTest {
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
+    @Test fun forkingQuestionPreservesNotebookMediaPolicyAndIndependentAssetReference() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture(); f.seed()
+        val shared = ResearchResource("shared", "Shared", "https://example.com/shared")
+        val excluded = "https://example.com/excluded"
+        val root = ChatSession("root", "Research", 1, 1, resources = listOf(shared),
+            excludedResourceUrls = setOf(excluded), researchResourcesInitialized = true,
+            selectedQuestionId = "question", mediaTools = SessionMediaTools(images = false, videos = false))
+        val asset = MediaAsset("a".repeat(64), "image/png", 100, 640, 480)
+        val media = GeneratedMedia("original-media", MediaKind.IMAGE, MediaPhase.READY, asset = asset)
+        val question = ChatSession("question", "Question", 1, 2, researchParentId = root.id,
+            nativeSessionId = "old-native", disabledResourceKeys = setOf(shared.key),
+            messages = listOf(ChatMessage("answer", ChatRole.AGENT, "Before\n\nAfter", 2, content = listOf(
+                TranscriptBlock.Markdown("before", "Before"), TranscriptBlock.Media(media.id, media),
+                TranscriptBlock.Markdown("after", "After")))))
+        f.chats.save(root); f.chats.save(question)
+        val runtime = Runtime()
+        val service = DefaultChatService(runtime, f.chats, f.settings, f.profiles, null, workerDispatcher = Dispatchers.Main)
+        try {
+            service.start(); service.activate(question.id)
+            val forkId = service.forkSession(question.id, "answer").getOrThrow()
+            val fork = assertNotNull(f.chats.session(forkId))
+            assertEquals(root.mediaTools, fork.mediaTools)
+            assertEquals(root.resources, fork.resources)
+            assertEquals(root.excludedResourceUrls, fork.excludedResourceUrls)
+            assertEquals(question.disabledResourceKeys, fork.disabledResourceKeys)
+            assertNull(fork.researchParentId); assertNull(fork.selectedQuestionId)
+            assertNull(fork.pendingRun); assertTrue(fork.queuedPrompts.isEmpty())
+            assertEquals("", fork.nativeSessionId)
+            val blocks = fork.messages.single().content
+            assertEquals(listOf("Before", "After"), blocks.filterIsInstance<TranscriptBlock.Markdown>().map { it.text })
+            val copiedMedia = (blocks[1] as TranscriptBlock.Media).media
+            assertNotEquals(media.id, copiedMedia.id)
+            assertEquals(asset, copiedMedia.asset)
+            service.deleteSession(root.id); advanceUntilIdle()
+            assertNull(f.chats.session(question.id))
+            assertEquals(fork, f.chats.session(forkId))
+            assertEquals(listOf(asset), assertNotNull(f.chats.session(forkId)).generatedMediaAssets())
+            assertTrue(runtime.chats.isEmpty())
+        } finally { service.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun finishingChatDuringForkDoesNotStrandAcceptedQueue() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture(); f.seed()

@@ -72,6 +72,8 @@ import io.aequicor.magicpaper.logging.AppLog
 fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     // Клавиатуру уже учитывает корневой windowInsetsPadding(WindowInsets.safeDrawing) —
     // ime входит в safeDrawing, поэтому отдельный imePadding здесь не нужен.
+    val mediaConnections = vm.mediaGeneration?.state?.collectAsState()?.value.orEmpty()
+    val mediaOwner = state.notebook ?: state.current
     val usage = vm.usage?.state?.collectAsState()?.value
     val profile = ProfileResolver.resolve(state.current, state.settings, state.availableLlmProfiles)
     val draft = state.current?.id?.let { state.drafts[it] }
@@ -86,6 +88,11 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
                 onPause = vm::pause, onResume = { vm.resume("", emptyList()) }, footer = {
                     Composer(
                         draftSession = vm.composerDraft,
+                        mediaOptions = mediaOwner?.let { owner -> {
+                            SessionMediaToolOptions(owner.mediaTools, mediaConnections,
+                                onChange = { kind, allowed -> vm.setMediaToolEnabled(owner.id, kind, allowed) },
+                                onSettings = vm::openModelsSettings)
+                        } },
                         enabled = true,
                         resolvedProfile = profile,
                         contextUsage = context,
@@ -127,10 +134,11 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     footer: @Composable () -> Unit = {},
 ) {
     val liveSteps = draft?.steps ?: session?.pendingActivity.orEmpty()
+    val liveContent = mergeTranscriptContent(session?.pendingContent.orEmpty(), liveSteps.transcriptContent()).researchContent(streaming = true)
     val pendingId = session?.pendingRun?.responseId?.ifBlank { null } ?: CHAT_WORKING_STATUS_KEY
     val liveMessage = if (busy || session?.pendingRun != null) ChatMessage(pendingId, ChatRole.AGENT,
         researchReply(liveSteps.filter { it.kind == CodingStepKind.ANSWER }.joinToString("\n\n") { it.title }, streaming = true).text,
-        session?.updatedAt ?: 0, researchActivity = liveSteps.researchActivity()) else null
+        session?.updatedAt ?: 0, researchActivity = liveSteps.researchActivity(), content = liveContent) else null
     val savedMessages = remember(session?.messages) {
         session?.messages.orEmpty().map { message ->
             val reply = message.researchReply()
@@ -153,16 +161,23 @@ internal fun MessagesList(session: ChatSession?, busy: Boolean, modifier: Modifi
     // lazy list composes only visible fragments, including for book-length answers.
     val messageParts = buildMap<String, PaperInlineMessageParts> {
         messages.forEach { message ->
-            androidx.compose.runtime.key(message.id) {
-                rememberPaperInlineMessageParts(message.text, message.role != ChatRole.USER)?.let { put(message.id, it) }
+            message.readingBlocks().filterIsInstance<TranscriptBlock.Markdown>().forEach { block ->
+                val key = readingBlockKey(message, block.id)
+                androidx.compose.runtime.key(key) {
+                    rememberPaperInlineMessageParts(block.text, message.role != ChatRole.USER)?.let { put(key, it) }
+                }
             }
         }
     }
     val fragments = remember(messages, messageParts) {
         messages.flatMap { message ->
-            val parts = messageParts[message.id]
-            if (parts == null || parts.size == 0) listOf(ChatMessageFragment(message))
-            else (0 until parts.size).map { ChatMessageFragment(message, parts, it) }
+            val blocks = message.readingBlocks()
+            blocks.flatMapIndexed { blockIndex, block ->
+                val parts = messageParts[readingBlockKey(message, block.id)]
+                val indexes = if (parts == null || parts.size == 0) listOf(0) else (0 until parts.size).toList()
+                indexes.map { index -> ChatMessageFragment(message, parts, index, block.id,
+                    (block as? TranscriptBlock.Media)?.media, blockIndex == 0, blockIndex == blocks.lastIndex) }
+            }
         }
     }
     val density = LocalDensity.current
@@ -231,11 +246,16 @@ private fun EmptyHint() {
 
 private const val CHAT_WORKING_STATUS_KEY = "chat-working-status"
 
-private data class ChatMessageFragment(val message: ChatMessage, val parts: PaperInlineMessageParts? = null, val index: Int = 0) {
-    val key: String get() = if (index == 0) message.id else "${message.id}:text:$index"
-    val first: Boolean get() = index == 0
-    val last: Boolean get() = parts == null || index == parts.size - 1
-    val contentType = Triple(message.role, parts?.contentType(index), first to last)
+private fun ChatMessage.readingBlocks(): List<TranscriptBlock> = content.ifEmpty { listOf(TranscriptBlock.Markdown(id, text)) }
+private fun readingBlockKey(message: ChatMessage, blockId: String): String =
+    if (blockId == message.id) message.id else "${message.id}:block:$blockId"
+
+private data class ChatMessageFragment(val message: ChatMessage, val parts: PaperInlineMessageParts? = null, val index: Int = 0,
+    val blockId: String = message.id, val media: GeneratedMedia? = null, val firstBlock: Boolean = true, val lastBlock: Boolean = true) {
+    val key: String get() = readingBlockKey(message, blockId).let { if (index == 0) it else "$it:text:$index" }
+    val first: Boolean get() = firstBlock && index == 0
+    val last: Boolean get() = lastBlock && (parts == null || index == parts.size - 1)
+    val contentType = Triple(message.role, if (media != null) "media" else parts?.contentType(index), first to last)
 }
 
 @Composable
@@ -260,7 +280,9 @@ private fun MessageBubble(message: ChatMessage,
                         ResearchActivity(message.researchActivity, working, paused, failed, onPause, onResume,
                             answering = message.text.isNotBlank())
                     }
-                    if (fragment.parts != null) {
+                    if (fragment.media != null) {
+                        io.aequicor.magicpaper.ui.components.GeneratedMediaView(fragment.media, live = working)
+                    } else if (fragment.parts != null) {
                         fragment.parts.Content(fragment.index)
                     } else if (message.text.isNotEmpty()) PaperText("Подготавливаю сообщение…", role = PaperTextRole.LABEL)
                     if (!isUser && fragment.last && message.sources.isNotEmpty()) {
@@ -323,6 +345,7 @@ internal fun Composer(
     onClarify: (String, List<Attachment>) -> Unit = onSend,
     contextUsage: ContextUsageSnapshot? = null,
     contextCompacting: Boolean = false,
+    mediaOptions: (@Composable () -> Unit)? = null,
     resolvedProfile: LlmProfile? = ProfileResolver.resolve(session, AppSettings(activeLlmProfileId = activeProfileId), profiles),
 ) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -337,6 +360,7 @@ internal fun Composer(
     draft.error.value?.let { PaperText("Не удалось сохранить черновик", color = LocalPaperColors.current.error) }
     ResearchComposer(
         state = draft, enabled = enabled, busy = busy, paused = paused,
+        mediaOptions = mediaOptions,
         profile = resolvedProfile,
         contextUsage = contextUsage, contextCompacting = contextCompacting,
         placeholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",

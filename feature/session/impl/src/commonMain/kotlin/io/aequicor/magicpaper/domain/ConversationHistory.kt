@@ -35,7 +35,7 @@ internal fun CodingSession.fork(id: String = Id.new()): CodingSession = CodingSe
     planningMode = planningMode, researchMode = researchMode, needsHistorySeed = true,
     role = if (planningMode) CodingSessionRole.ORCHESTRATOR else CodingSessionRole.CHAT,
     searchProvider = searchProvider, featureFlags = featureFlags, worktreeEnabled = worktreeEnabled,
-    nameManuallySet = true,
+    nameManuallySet = true, mediaTools = mediaTools,
 )
 
 internal fun CodingMessage.forFork(forkSessionId: String): CodingMessage {
@@ -45,5 +45,15 @@ internal fun CodingMessage.forFork(forkSessionId: String): CodingMessage {
         timelineId = newTimeline ?: timelineId)
     return copy(id = newId, timelineId = newTimeline, planning = null, deliveryId = null, pendingDelivery = false,
         route = null, inputStatus = null, handoff = null, scheduledRuleId = null, contextPacket = null,
-        images = images.map { it.remap() }, steps = steps.map { step -> step.copy(images = step.images.map { it.remap() }) })
+        images = images.map { it.remap() }, steps = steps.map { step -> step.copy(images = step.images.map { it.remap() },
+            media = step.media?.let { it.interrupted().copy(id = "$newId:media:${it.id}") }) })
+}
+
+internal fun ChatMessage.forFork(): ChatMessage {
+    val newId = Id.new()
+    fun GeneratedMedia.remap() = interrupted().copy(id = "$newId:media:$id")
+    return copy(id = newId, content = content.map { block -> when (block) {
+        is TranscriptBlock.Markdown -> block.copy(id = "$newId:text:${block.id}")
+        is TranscriptBlock.Media -> block.media.remap().let { TranscriptBlock.Media(it.id, it) }
+    } }, researchActivity = researchActivity.map { it.copy(media = it.media?.remap()) })
 }

@@ -63,3 +63,22 @@ internal fun UnifiedStickySessionFeedPreview() = PaperTheme {
             { _, _ -> }, {}, {}, {}, state = rememberLazyListState(initialFirstVisibleItemIndex = 10))
     }
 }
+
+internal fun sidebarOrderedStickyPreviewGroups(): List<UnifiedSidebarGroup> {
+    val statuses = listOf(CodingSessionStatus.WORKING, CodingSessionStatus.IDLE,
+        CodingSessionStatus.WAITING, CodingSessionStatus.UNREAD, CodingSessionStatus.CONFIRMATION)
+    val titles = listOf("Текущая работа", "Выбранная сессия", "Ожидает ответа", "Новый результат", "Нужно подтверждение")
+    return listOf(UnifiedSidebarGroup("ordered", "p", "MagicPaper", statuses.mapIndexed { i, status ->
+        UnifiedSidebarItem("ordered-$i", titles[i], 1, true, projectId = "p", codingStatus = status)
+    } + List(30) { UnifiedSidebarItem("ordinary-$it", "Сессия $it", 1, true, projectId = "p") }))
+}
+
+@Preview(name = "Sticky order at four-row limit", group = "Session list", widthDp = 320, heightDp = 520)
+@Preview(name = "Sticky order narrow large text", group = "Session list", widthDp = 240, heightDp = 720, fontScale = 2f)
+@Composable
+internal fun UnifiedOrderedStickySessionFeedPreview() = PaperTheme {
+    PaperSurface(Modifier.fillMaxSize()) {
+        UnifiedSessionFeed(remember { sidebarOrderedStickyPreviewGroups() }, "ordered-1", true,
+            emptySet(), {}, { _, _ -> }, {}, {}, {}, state = rememberLazyListState(initialFirstVisibleItemIndex = 9))
+    }
+}

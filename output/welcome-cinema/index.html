@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#161421">
+  <meta name="description" content="Ваша история начинается с чистого листа. Кинематографичное знакомство с MagicPaper.">
+  <title>MagicPaper — Ваша история начинается здесь</title>
+  <link rel="preload" href="assets/display.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="assets/clouds.png" as="image">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="spark" viewBox="0 0 32 32"><path d="M16 1l3.1 11.9L31 16l-11.9 3.1L16 31l-3.1-11.9L1 16l11.9-3.1Z" fill="currentColor"/><path d="m5 5 6 6m10 10 6 6M27 5l-6 6M11 21l-6 6" stroke="currentColor" stroke-width=".6"/></symbol>
+    <symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+    <symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="moon" viewBox="0 0 24 24"><path d="M19 15A8 8 0 0 1 9 5a8 8 0 1 0 10 10Z"/></symbol>
+    <symbol id="sound" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4Zm12-1q6 4 0 8m3-11q9 7 0 14"/></symbol>
+    <symbol id="local" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+    <symbol id="cloud" viewBox="0 0 24 24"><path d="M6 18a4 4 0 0 1-1-8 7 7 0 0 1 13-2 5 5 0 0 1 0 10Z"/></symbol>
+    <symbol id="search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></symbol>
+    <symbol id="book" viewBox="0 0 24 24"><path d="M12 6C8 3 4 4 2 5v14c3-2 7-1 10 1 3-2 7-3 10-1V5c-2-1-6-2-10 1Zm0 0v14"/></symbol>
+    <symbol id="note" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5Zm10 0v5h4M8 12h8m-8 4h6"/></symbol>
+    <symbol id="time" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M9 2h6m-3 3V2m0 6v5l3 2"/></symbol>
+    <symbol id="calc" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M8 6h8M8 11h2m4 0h2m-8 4h2m4 0h2m-8 4h2m4 0h2"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#main">К содержимому</a>
+  <div class="atmosphere" aria-hidden="true"><div class="cloudscape"></div><div class="vignette"></div></div>
+  <canvas id="dust" aria-hidden="true"></canvas>
+  <header class="site-header">
+    <button class="brand" id="home" aria-label="MagicPaper — к началу"><svg class="brand-star"><use href="#spark"/></svg><span>MagicPaper</span></button>
+    <nav class="chapters" aria-label="Главы знакомства">
+      <button data-go="0" aria-current="step"><span class="chapter-number">✦</span><span>Пролог</span></button><i></i>
+      <button data-go="1"><span class="chapter-number">I</span><span>Модель</span></button><i></i>
+      <button data-go="2"><span class="chapter-number">II</span><span>Поиск</span></button><i></i>
+      <button data-go="3"><span class="chapter-number">III</span><span>Плагины</span></button>
+    </nav>
+    <button class="quiet header-skip" id="skip">Настроить позже <span aria-hidden="true">↗</span></button>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="view hero" id="intro" aria-labelledby="intro-title">
+      <div class="hero-content">
+        <p class="eyebrow hero-eyebrow"><span></span> У каждой идеи есть начало <span></span></p>
+        <h1 id="intro-title" tabindex="-1">MagicPaper</h1>
+        <div class="ornament" aria-hidden="true"><span></span><svg><use href="#spark"/></svg><span></span></div>
+        <h2>Ваша история<br class="mobile-break"> начинается здесь</h2>
+        <p class="hero-description">Чистый лист. Ваши идеи. Немного магии.<br>Познакомьтесь с помощником, который умеет больше.</p>
+        <button class="primary hero-start" id="start"><span>Открыть первую главу</span><svg class="icon"><use href="#arrow"/></svg></button>
+        <p class="hero-note">Три простых шага <span>·</span> В вашем темпе</p>
+      </div>
+      <div class="hero-footer"><span class="edition">ИНТЕРАКТИВНОЕ ЗНАКОМСТВО <b>—</b> 01</span><span class="scroll-note"><svg><use href="#spark"/></svg> Большое начинается с чистого листа</span><span class="edition right">ВАША ПЕРВАЯ ГЛАВА</span></div>
+    </section>
+
+    <section class="view journey" id="journey" hidden aria-labelledby="chapter-title">
+      <aside class="book-scene" aria-label="Ожившая книга">
+        <img src="assets/book.png" alt="Раскрытая книга, над которой в лунном свете парят золотистые страницы" width="1024" height="1536">
+        <div class="book-shade"></div>
+        <div class="book-caption"><span class="eyebrow" id="scene-chapter">ГЛАВА ПЕРВАЯ</span><h2 id="scene-title">У каждой истории<br>есть свой голос.</h2><p id="scene-copy">Найдите того, кто поможет<br>вашим идеям обрести форму.</p></div>
+        <div class="book-bottom"><svg><use href="#spark"/></svg><span>Из мысли — в возможность</span></div>
+      </aside>
+      <div class="paper-panel">
+        <div class="panel-top"><span class="small-brand">ПЕРВЫЕ СТРАНИЦЫ</span><span class="demo-label">Учебный режим</span></div>
+        <div class="chapter-progress" aria-label="Прогресс"><span id="chapter-count">01 / 03</span><div><b id="progress-line"></b></div><svg><use href="#spark"/></svg></div>
+        <div class="chapter-body">
+          <p class="eyebrow paper-eyebrow" id="chapter-kicker">ГЛАВА I · МОДЕЛЬ</p>
+          <h1 id="chapter-title" tabindex="-1">Источник магии</h1>
+          <p class="chapter-description" id="chapter-description">Любой разговор начинается с собеседника.<br>Выберите, кто будет думать вместе с вами.</p>
+
+          <div id="model-chapter" class="chapter-content">
+            <fieldset class="choice-list"><legend class="sr-only">Источник модели</legend>
+              <label class="choice"><input type="radio" name="model" value="chatgpt" checked><span class="choice-icon"><svg><use href="#spark"/></svg></span><span class="choice-copy"><strong>ChatGPT <em>Знакомое начало</em></strong><small>Подключение через ваш аккаунт</small></span><span class="radio-mark"></span></label>
+              <label class="choice"><input type="radio" name="model" value="local"><span class="choice-icon"><svg class="icon"><use href="#local"/></svg></span><span class="choice-copy"><strong>Локальная модель</strong><small>Ollama или LM Studio на вашем компьютере</small></span><span class="radio-mark"></span></label>
+              <label class="choice"><input type="radio" name="model" value="api"><span class="choice-icon"><svg class="icon"><use href="#cloud"/></svg></span><span class="choice-copy"><strong>Облачный API</strong><small>Провайдер и модель по вашему выбору</small></span><span class="radio-mark"></span></label>
+            </fieldset>
+            <div class="context-note"><svg class="icon"><use href="#book"/></svg><p id="model-note">В приложении вы войдёте в ChatGPT. Для этого варианта API-ключ не нужен.</p></div>
+          </div>
+
+          <div id="search-chapter" class="chapter-content" hidden>
+            <fieldset class="choice-list"><legend class="sr-only">Поиск в интернете</legend>
+              <label class="choice"><input type="radio" name="search" value="auto" checked><span class="choice-icon"><svg class="icon"><use href="#search"/></svg></span><span class="choice-copy"><strong>Автоматический <em>Для начала</em></strong><small>Доступные источники подбираются автоматически</small></span><span class="radio-mark"></span></label>
+              <label class="choice"><input type="radio" name="search" value="wikipedia"><span class="choice-icon letter-icon">W</span><span class="choice-copy"><strong>Wikipedia</strong><small>Энциклопедические знания без API-ключа</small></span><span class="radio-mark"></span></label>
+              <label class="choice"><input type="radio" name="search" value="later"><span class="choice-icon"><svg class="icon"><use href="#moon"/></svg></span><span class="choice-copy"><strong>Решу позже</strong><small>Вернитесь к поиску в настройках приложения</small></span><span class="radio-mark"></span></label>
+            </fieldset>
+            <div class="context-note"><svg class="icon"><use href="#book"/></svg><p id="search-note">Автопоиск использует настроенные Google и Querit, затем Wikipedia. Дополнительные источники можно подключить позже.</p></div>
+          </div>
+
+          <div id="plugins-chapter" class="chapter-content" hidden>
+            <fieldset class="choice-list"><legend class="sr-only">Ваши плагины</legend>
+              <label class="choice plugin"><input type="checkbox" name="plugin" value="notes" checked><span class="choice-icon"><svg class="icon"><use href="#note"/></svg></span><span class="choice-copy"><strong>Заметки</strong><small>Сохраняйте важные мысли рядом с чатом</small></span><span class="switch-mark"><svg class="icon"><use href="#check"/></svg></span></label>
+              <label class="choice plugin"><input type="checkbox" name="plugin" value="focus" checked><span class="choice-icon"><svg class="icon"><use href="#time"/></svg></span><span class="choice-copy"><strong>Фокус</strong><small>25 минут для того, что действительно важно</small></span><span class="switch-mark"><svg class="icon"><use href="#check"/></svg></span></label>
+              <label class="choice plugin"><input type="checkbox" name="plugin" value="calc"><span class="choice-icon"><svg class="icon"><use href="#calc"/></svg></span><span class="choice-copy"><strong>Счёты</strong><small>Быстрые вычисления, не прерывая мысль</small></span><span class="switch-mark"><svg class="icon"><use href="#check"/></svg></span></label>
+            </fieldset>
+            <div class="context-note"><svg class="icon"><use href="#book"/></svg><p>Оставьте то, что нужно именно вам. В приложении плагины можно включать и выключать в любой момент.</p></div>
+          </div>
+        </div>
+        <footer class="panel-footer"><button class="back" id="back"><svg class="icon"><use href="#arrow"/></svg>Назад</button><button class="primary" id="next"><span>Следующая глава</span><svg class="icon"><use href="#arrow"/></svg></button></footer>
+      </div>
+    </section>
+
+    <section class="view finale" id="finale" hidden aria-labelledby="final-title">
+      <div class="final-content"><svg class="final-star"><use href="#spark"/></svg><p class="eyebrow">А ТЕПЕРЬ — ВАША ИСТОРИЯ</p><h1 id="final-title" tabindex="-1">Магия начинается<br>с вашей идеи.</h1><p class="final-description" id="final-description">Вы познакомились с MagicPaper.<br>Вот ваш стартовый набор.</p><div class="summary" id="summary"></div><p class="final-note">Это учебная страница. Подключите модель и примените<br class="desktop-break"> выбранные настройки в приложении MagicPaper.</p><button class="primary" id="example-button"><span>Попробовать первый вопрос</span><svg class="icon"><use href="#arrow"/></svg></button><button class="quiet restart" id="restart">Вернуться к настройке</button></div>
+    </section>
+
+    <section class="view practice" id="practice" hidden aria-labelledby="practice-title"><div class="practice-paper"><p class="eyebrow paper-eyebrow">ВАШ ПЕРВЫЙ ВОПРОС</p><h1 id="practice-title" tabindex="-1">Начните с любопытства.</h1><p>Выберите вопрос и посмотрите, как может выглядеть ответ.</p><div class="sample-questions"><button data-example="plan">Помоги спланировать день</button><button data-example="idea">Как превратить идею в проект?</button><button data-example="learn">Объясни сложное простыми словами</button></div><div class="sample-answer" id="sample-answer" aria-live="polite"><svg><use href="#spark"/></svg><p>Один вопрос — начало новой страницы.</p></div><p class="sample-disclaimer">Учебные примеры · заранее подготовленные ответы</p><button class="back" id="practice-back"><svg class="icon"><use href="#arrow"/></svg>К вашему стартовому набору</button></div></section>
+  </main>
+
+  <div class="experience-controls"><button id="motion" class="experience-toggle" aria-pressed="true" title="Включить или выключить анимацию"><span class="motion-glyph" aria-hidden="true">◌</span><span id="motion-label">Анимация</span></button><span class="control-divider"></span><button id="sound-toggle" class="experience-toggle" aria-pressed="false" title="Включить или выключить атмосферный звук"><svg class="icon"><use href="#sound"/></svg><span id="sound-label">Звук выключен</span></button></div>
+  <div id="notice" role="status" hidden></div>
+  <noscript><div class="noscript">Для интерактивного знакомства включите JavaScript в браузере.</div></noscript>
+</body>
+</html>

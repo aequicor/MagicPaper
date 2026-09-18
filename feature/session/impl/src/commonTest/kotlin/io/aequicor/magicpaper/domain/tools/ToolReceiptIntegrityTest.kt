@@ -157,6 +157,32 @@ class ToolReceiptIntegrityTest {
         assertEquals(1, effects)
     }
 
+    @Test fun mediaSettledBeforeAwaiterCancellationCannotBeDowngradedOrQuarantined() = runTest {
+        for (terminal in listOf(MediaPhase.READY, MediaPhase.FAILED)) {
+            val receipts = MemoryToolReceiptStore()
+            var quarantines = 0
+            val host = ToolHost(receipts).apply { unknownOutcome = { _, _ -> quarantines++ } }
+            val key = "p/s/request/media"
+            val ctx = context.copy(mediaCapabilities = setOf(MediaKind.IMAGE))
+            val session = host.session(ctx, mapOf("image.generate" to { _, operation, _ ->
+                host.reconcileMediaCompletion(MediaGenerationOwner("s", "request", key, "p"), operation,
+                    GeneratedMedia(key, MediaKind.IMAGE, terminal, message = "Confirmed"))
+                throw CancellationException("Awaiter stopped")
+            }))
+            val phases = mutableListOf<ToolPhase>()
+            session.events.observe { phases += it.phase }
+            assertFailsWith<CancellationException> {
+                session.call("media", "image.generate", buildJsonObject { put("prompt", "Image") })
+            }
+            val expected = if (terminal == MediaPhase.READY) ToolPhase.SUCCEEDED else ToolPhase.FAILED
+            val saved = assertNotNull(receipts.get(key))
+            assertEquals(expected, saved.phase)
+            assertEquals(expected, phases.last())
+            assertEquals(0, quarantines)
+            assertFailsWith<IllegalArgumentException> { receipts.save(saved.copy(phase = ToolPhase.UNKNOWN)) }
+        }
+    }
+
     @Test fun staleGenerationResultCannotPublishSuccess() = runTest {
         val store = MemoryToolReceiptStore()
         var generation = 4L
@@ -230,6 +256,21 @@ class ToolReceiptIntegrityTest {
         assertEquals(ToolPhase.UNKNOWN, reports.single().phase)
         val signal = buildJsonObject { put("sessionId", "s"); put("diagnostic", "Uncertain send") }
         assertEquals(JsonPrimitive("recorded"), session.call("signal", "immunity.signal", signal))
+    }
+
+    @Test fun confirmedExternalFailureDoesNotBlockAnotherExplicitAttempt() = runTest {
+        class ProviderFailure : IllegalStateException("Генерация отклонена"), ConfirmedToolFailure
+        val store = MemoryToolReceiptStore()
+        var attempts = 0
+        val session = tools(store) { _, _, _ ->
+            attempts++
+            if (attempts == 1) throw ProviderFailure()
+            JsonPrimitive("asset")
+        }
+        assertFailsWith<ProviderFailure> { session.call("failed", "effect", empty) }
+        assertEquals(ToolPhase.FAILED, store.get("p/s/request/failed")!!.phase)
+        assertEquals(JsonPrimitive("asset"), session.call("retry", "effect", empty))
+        assertEquals(2, attempts)
     }
 
     @Test fun receiptStoreRejectsIdentityChangesAndSuccessRegression() = runTest {

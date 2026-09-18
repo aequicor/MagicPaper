@@ -27,12 +27,14 @@ oshi = "6.10.0"
 jbr-api = "1.9.0"
 playwright = "1.62.0"
 html-validator = "26.9.16"
+compose-media-player = "0.11.4"
 # Переносимые бинарники поиска для нативных инструментов pi: find работает через fd,
 # grep — через rg (см. :feature:session:impl task bundleCodingSearchTools).
 coding-fd = "10.5.0"
 coding-ripgrep = "15.2.0"
 
 [libraries]
+compose-media-player = { module = "io.github.kdroidfilter:composemediaplayer", version.ref = "compose-media-player" }
 decompose = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }
 decompose-compose = { module = "com.arkivanov.decompose:extensions-compose", version.ref = "decompose" }
 essenty-lifecycle = { module = "com.arkivanov.essenty:lifecycle", version.ref = "essenty" }

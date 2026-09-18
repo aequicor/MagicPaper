@@ -1271,7 +1271,8 @@
       "PaperChatTranscript",
       "PaperMarkdown",
       "PaperAttachmentRow",
-      "PaperResearchFollowUps"
+      "PaperResearchFollowUps",
+      "PaperGeneratedMedia"
     ],
     "stage": "6",
     "kind": "surface"
@@ -2004,7 +2005,8 @@
     "targets": [
       "PaperPanel",
       "PaperStatus",
-      "PaperMarkdown"
+      "PaperMarkdown",
+      "PaperGeneratedMedia"
     ],
     "stage": "6",
     "kind": "surface"
@@ -3511,6 +3513,216 @@
       "PaperTheme",
       "PaperResearchPane",
       "PaperResearchSourceTabs"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/GeneratedMediaView.kt",
+    "symbol": "GeneratedMediaProvider",
+    "annotationLine": 19,
+    "targets": [
+      "PaperGeneratedMedia"
+    ],
+    "stage": "6",
+    "kind": "composition-helper"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/GeneratedMediaView.kt",
+    "symbol": "GeneratedMediaView",
+    "annotationLine": 28,
+    "targets": [
+      "PaperGeneratedMedia"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionMediaToolOptions.kt",
+    "symbol": "SessionMediaToolOptions",
+    "annotationLine": 1,
+    "targets": [
+      "PaperMenuToggleInfo",
+      "PaperText",
+      "PaperRichMenuAction"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionMediaToolOptionsPreviews.kt",
+    "symbol": "SessionMediaToolOptionsPreview",
+    "annotationLine": 1,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperMenuToggleInfo"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/session/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SessionMediaToolOptionsPreviews.kt",
+    "symbol": "DisabledSessionMediaToolOptionsPreview",
+    "annotationLine": 1,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperMenuToggleInfo"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettings.kt",
+    "symbol": "MediaSettings",
+    "annotationLine": 21,
+    "targets": [
+      "PaperText",
+      "PaperPanel",
+      "PaperInput",
+      "PaperChoice",
+      "PaperButton",
+      "PaperGeneratedMedia"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettings.kt",
+    "symbol": "MediaConnectionPreview",
+    "annotationLine": 49,
+    "targets": [
+      "PaperGeneratedMedia"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsForm.kt",
+    "symbol": "MediaSettingsForm",
+    "annotationLine": 14,
+    "targets": [
+      "PaperPanel",
+      "PaperText",
+      "PaperInput",
+      "PaperChoice",
+      "PaperButton"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsPreviewContent",
+    "annotationLine": 50,
+    "targets": [
+      "PaperText",
+      "PaperPanel",
+      "PaperInput",
+      "PaperChoice",
+      "PaperButton",
+      "PaperGeneratedMedia",
+      "PaperSurface"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsPreviewResult",
+    "annotationLine": 75,
+    "targets": [
+      "PaperGeneratedMedia"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsDefaultPreview",
+    "annotationLine": 93,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel",
+      "PaperInput",
+      "PaperChoice",
+      "PaperButton"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsCheckedPreview",
+    "annotationLine": 96,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel",
+      "PaperGeneratedMedia"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsCheckingPreview",
+    "annotationLine": 99,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel",
+      "PaperGeneratedMedia"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsErrorPreview",
+    "annotationLine": 102,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel",
+      "PaperText",
+      "PaperButton"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsUnsupportedPreview",
+    "annotationLine": 105,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel",
+      "PaperInput",
+      "PaperButton"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt",
+    "symbol": "MediaSettingsEmptyPreview",
+    "annotationLine": 108,
+    "targets": [
+      "PaperTheme",
+      "PaperPanel",
+      "PaperText",
+      "PaperButton"
+    ],
+    "stage": "5",
+    "kind": "surface"
+  },
+  {
+    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSessionFeedPreviews.kt",
+    "symbol": "UnifiedOrderedStickySessionFeedPreview",
+    "annotationLine": 78,
+    "targets": [
+      "PaperSessionRow",
+      "PaperStickyTree",
+      "PaperTheme"
     ],
     "stage": "6",
     "kind": "surface"

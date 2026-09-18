@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.tools
 
 import io.aequicor.magicpaper.domain.CodingInteractionMode
+import io.aequicor.magicpaper.domain.MediaKind
 import io.aequicor.magicpaper.domain.tools.*
 import kotlinx.serialization.json.*
 import kotlin.test.*
@@ -9,6 +10,32 @@ import java.net.URI
 import kotlinx.coroutines.runBlocking
 
 class AgentToolBridgeTest {
+    @Test fun generatedAssetsReachBothAgentSurfacesAsReusablePathsWithoutUntrustedImageBlocks() = runBlocking {
+        val path = "/tmp/immutable-media/asset.png"
+        val result = buildJsonObject {
+            put("path", path)
+            putJsonObject("media") { put("id", "asset"); put("kind", "IMAGE"); put("phase", "READY") }
+            putJsonObject("image") { put("type", "image"); put("data", "untrusted-inline-data"); put("mimeType", "image/png") }
+        }
+        val host = ToolHost(MemoryToolReceiptStore())
+        for (mode in listOf(CodingInteractionMode.CODE, CodingInteractionMode.RESEARCH)) {
+            val tools = host.session(ToolExecutionContext("p", "s", "s", "r-$mode", ToolRole.CHAT, mode,
+                mediaCapabilities = setOf(MediaKind.IMAGE)), overrides = mapOf("image.generate" to { _, _, _ -> result }))
+            assertTrue("magicpaper_image_generate" in PiAgentToolExtension.source(tools))
+            AgentToolBridge(tools).use { bridge ->
+                assertTrue("magicpaper_image_generate" in bridge.list())
+                val response = bridge.call(JsonPrimitive(2), "magicpaper_image_generate", buildJsonObject { put("prompt", "A diagram") })
+                assertEquals(JsonPrimitive(false), response["isError"])
+                val content = response["content"]!!.jsonArray
+                assertEquals(1, content.size)
+                assertEquals(JsonPrimitive("text"), content.single().jsonObject["type"])
+                val decoded = Json.parseToJsonElement(content.single().jsonObject["text"]!!.jsonPrimitive.content).jsonObject
+                assertEquals(JsonPrimitive(path), decoded["path"])
+                assertEquals(result, decoded)
+            }
+        }
+    }
+
     @Test fun resumedWorkerCanHandOffWhenTransportRequestNumbersRestart() = runBlocking {
         val store = MemoryToolReceiptStore()
         val host = ToolHost(store)

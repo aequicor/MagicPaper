@@ -87,6 +87,7 @@ class DefaultCodingService(
     private val removePluginDrafts: suspend (projectId: String, planIds: Set<String>?) -> Unit = { _, _ -> },
     private val archiveClock: () -> Long = Id::now,
     private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
+    override val mediaGeneration: MediaGenerationService? = null,
 ) : CodingService {
     private val _state = MutableStateFlow(CodingState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -94,6 +95,20 @@ class DefaultCodingService(
         _state.update { it.copy(notice = "Не удалось выполнить действие с сессией. Проверьте её состояние и повторите попытку.") }
     })
     override val state: StateFlow<CodingState> = _state.asStateFlow()
+    override fun setMediaToolEnabled(sessionId: String, kind: MediaKind, enabled: Boolean) {
+        val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        scope.launch {
+            try {
+                updateStoredCodingSession(selected.session) { it.copy(mediaTools = it.mediaTools.withEnabled(kind, enabled)) }
+                AppLog.info("coding", "media.policy.changed", mapOf("sessionId" to sessionId,
+                    "kind" to kind.name, "enabled" to enabled.toString()))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "media.policy.failed", failure, mapOf("sessionId" to sessionId))
+                _state.update { it.copy(notice = "Не удалось сохранить параметры медиа. Повторите попытку.") }
+            }
+        }
+    }
     val sessionTitles = if (codingProjects != null && gateway != null)
         SessionTitleService(codingProjects, profileRepo, settingsRepo, gateway, scope) else null
     val unreadTracker = UnreadTracker(store, json, workerDispatcher) { error ->
@@ -119,6 +134,7 @@ class DefaultCodingService(
             }
         } }
         planningChat?.organisms?.beforeDeleteSession = { projectId, sessionId ->
+            mediaGeneration?.deleteSession(sessionId)
             withContext(Dispatchers.Main.immediate) {
                 requestPins?.remove(PinConversation(sessionId, projectId))
                 sessionTitles?.forget(sessionId)
@@ -1193,7 +1209,7 @@ class DefaultCodingService(
                 else {
                     failures.firstOrNull()?.let { throw it }
                     sessions.forEach { codingRuntime?.reconcile(it.id) }
-                    sessions.forEach { repo.deleteSession(projectId, it.id) }
+                    sessions.forEach { mediaGeneration?.deleteSession(it.id); repo.deleteSession(projectId, it.id) }
                 }
                 sessions.forEach { requestPins?.remove(PinConversation(it.id, projectId)); sessionTitles?.forget(it.id) }
                 removeSessionDrafts(sessions.map { it.id }.toSet())
@@ -1272,7 +1288,7 @@ class DefaultCodingService(
                 else {
                     failures.firstOrNull()?.let { throw it }
                     ids.forEach { codingRuntime?.reconcile(it) }
-                    ids.forEach { repo.deleteSession(projectId, it) }
+                    ids.forEach { mediaGeneration?.deleteSession(it); repo.deleteSession(projectId, it) }
                 }
                 ids.forEach { requestPins?.remove(PinConversation(it, projectId)); sessionTitles?.forget(it); unreadTracker.forget(it) }
                 removeSessionDrafts(ids)
@@ -1604,7 +1620,8 @@ class DefaultCodingService(
     override suspend fun forkSession(sessionId: String, throughMessageId: String?): Result<String> = changeHistory(sessionId, "fork") { ui, repo ->
         val fork = ui.session.fork()
         val messages = ui.messages.through(throughMessageId) { it.id }
-            .filterNot { it.systemContext || it.systemNotice }.map { it.forFork(fork.id) }
+            .filterNot { it.systemContext || it.systemNotice }
+            .map { it.withGeneratedMedia(mediaGeneration?.operations?.value.orEmpty()).forFork(fork.id) }
         // Publish the new session only after its complete independent log exists.
         repo.saveMessages(fork.projectId, fork.id, messages)
         repo.saveSession(fork)

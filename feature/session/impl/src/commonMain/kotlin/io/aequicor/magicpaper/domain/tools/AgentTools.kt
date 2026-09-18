@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.domain.tools
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.awaitClose
@@ -22,11 +23,12 @@ import kotlin.coroutines.CoroutineContext
     val summary: String, val result: String = "",
     val title: String? = null,
     val sources: List<SearchHit> = emptyList(),
+    val media: GeneratedMedia? = null,
 ) {
     fun codingEvent(): CodingEvent = when (phase) {
-        ToolPhase.STARTED -> CodingEvent.ToolStarted(toolId, summary, callId, category == ToolCategory.EXEC, category = category, title = title)
-        ToolPhase.PROGRESS, ToolPhase.WAITING -> CodingEvent.ToolProgress(toolId, callId, result, phase)
-        else -> CodingEvent.ToolFinished(toolId, phase != ToolPhase.SUCCEEDED, callId, result, phase, title = title, sources = sources)
+        ToolPhase.STARTED -> CodingEvent.ToolStarted(toolId, summary, callId, category == ToolCategory.EXEC, category = category, title = title, media = media)
+        ToolPhase.PROGRESS, ToolPhase.WAITING -> CodingEvent.ToolProgress(toolId, callId, result, phase, media = media)
+        else -> CodingEvent.ToolFinished(toolId, phase != ToolPhase.SUCCEEDED, callId, result, phase, title = title, sources = sources, media = media)
     }
 }
 
@@ -45,6 +47,8 @@ class ToolEventHub(private val knownSecrets: () -> Set<String> = { emptySet() })
         val secrets = knownSecrets()
         val safe = event.copy(summary = PlanningDiagnostics.redact(event.summary, secrets), result = PlanningDiagnostics.redact(event.result, secrets),
             title = event.title?.let { PlanningDiagnostics.redact(it, secrets) },
+            media = event.media?.let { it.copy(caption = PlanningDiagnostics.redact(it.caption, secrets),
+                message = PlanningDiagnostics.redact(it.message, secrets)) },
             sources = event.sources.map { source -> source.copy(title = PlanningDiagnostics.redact(source.title, secrets),
                 url = PlanningDiagnostics.redact(source.url, secrets), snippet = PlanningDiagnostics.redact(source.snippet, secrets)) })
         observers.value.forEach { observer ->
@@ -140,6 +144,7 @@ class ToolExecutor(
     private val authorizeTool: suspend (ToolExecutionContext, ToolDefinition) -> Unit = { _, _ -> },
     private val authorizeCommand: suspend (ToolExecutionContext, ToolDefinition, JsonObject) -> Unit = { _, _, _ -> },
     private val authorizeReceipt: suspend (ToolExecutionContext, ToolDefinition) -> Unit = authorizeTool,
+    private val mediaReceiptLock: Mutex = Mutex(),
 ) {
     private val locks = Mutex()
     private val calls = mutableMapOf<String, Mutex>()
@@ -186,12 +191,19 @@ class ToolExecutor(
             @Suppress("UNCHECKED_CAST")
             val command = runCatching { registry.command(name) as ToolCommand<Any?, Any?> }.getOrNull()
             val definition = command?.definition ?: ToolDefinition(name, name, JsonObject(emptyMap()))
+            var media: GeneratedMedia? = when (definition.id) {
+                "image.generate" -> MediaKind.IMAGE
+                "video.generate" -> MediaKind.VIDEO
+                else -> null
+            }?.let { kind -> GeneratedMedia(key, kind, caption = (arguments["caption"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                width = (arguments["width"] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 } ?: if (kind == MediaKind.VIDEO) 1280 else 1024,
+                height = (arguments["height"] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 } ?: if (kind == MediaKind.VIDEO) 720 else 1024) }
             fun event(phase: ToolPhase, result: String = "") = ToolEvent(context.projectId, context.ownerSessionId,
                 context.requestId, key, definition.id, definition.category, phase,
                 toolArgumentPreview(definition.id, redactToolJson(arguments, knownSecrets()).jsonObject),
                 PlanningDiagnostics.redact(result, knownSecrets()).let {
                     if (it.length <= 64_000) it else it.take(64_000) + "\n… Вывод сокращён; полный результат сохранён: $key"
-                })
+                }, media = media)
             val startedAt = Id.now()
             suspend fun report(event: ToolEvent, cause: Throwable? = null) {
                 ToolCallDiagnostics.log(context, event, native = false,
@@ -261,6 +273,9 @@ class ToolExecutor(
                         checkScope(context)
                         receipts.save(receipt.copy(phase = ToolPhase.SUCCEEDED, result = recovered, error = "", updatedAt = Id.now()))
                     }
+                    if (media != null) (recovered as? JsonObject)?.get("media")?.let {
+                        media = Json.decodeFromJsonElement<GeneratedMedia>(it).copy(id = key)
+                    }
                     report(event(ToolPhase.SUCCEEDED, recovered.toString()))
                     session.completed(key, definition.id, intent.arguments, recovered)
                     return@withLock recovered
@@ -273,12 +288,20 @@ class ToolExecutor(
                 authorizeTool(context, definition)
                 authorizeCommand(context, definition, arguments)
                 executing = true
-                val result = withContext(session + UsageOwner(UsageScope("coding:${context.ownerSessionId}",
+                val progress = MediaToolProgress(key) { update ->
+                    checkScope(context)
+                    media = update.copy(id = key)
+                    report(event(ToolPhase.PROGRESS))
+                }
+                val result = withContext(session + progress + UsageOwner(UsageScope("coding:${context.ownerSessionId}",
                     context.parentSessionId?.let { "coding:$it" }, context.projectId, context.planId))) {
                     command.encode(command.execute(context, intent.operationId, args))
                 }.let { redactToolJson(it, knownSecrets()) }
                 // A late response must not publish current-session success after its authority expires.
                 checkScope(context)
+                if (media != null) (result as? JsonObject)?.get("media")?.let {
+                    media = Json.decodeFromJsonElement<GeneratedMedia>(it).copy(id = key)
+                }
                 withContext(NonCancellable) { receipts.save(intent.copy(phase = ToolPhase.SUCCEEDED, result = result, updatedAt = Id.now())) }
                 claimed = null
                 session.completed(key, definition.id, intent.arguments, result)
@@ -286,24 +309,61 @@ class ToolExecutor(
                 result
             } catch (error: Exception) {
                 // Cancellation of an awaiter is not proof that an external effect was cancelled.
-                val phase = failurePhase ?: if (error is RejectedToolCall) ToolPhase.FAILED
+                var phase = failurePhase ?: if (error is RejectedToolCall || error is ConfirmedToolFailure) ToolPhase.FAILED
                     else if (executing && definition.mutating) ToolPhase.UNKNOWN
                     else if (error is CancellationException) ToolPhase.CANCELLED else ToolPhase.FAILED
                 val message = PlanningDiagnostics.redact(error.message ?: "Ошибка инструмента", knownSecrets())
+                media = media?.copy(phase = when (phase) {
+                    ToolPhase.CANCELLED -> MediaPhase.CANCELLED
+                    ToolPhase.UNKNOWN -> MediaPhase.UNKNOWN
+                    else -> MediaPhase.FAILED
+                }, message = if (phase == ToolPhase.UNKNOWN) "Исход генерации проверяется. Повторная генерация не запущена."
+                    else "Не удалось создать медиа. Проверьте подключение и повторите попытку.")
                 withContext(NonCancellable) {
-                    if (claimed == null) runCatching {
-                        // Rejections are real invocations too. Claim-only preserves any earlier identity/result.
-                        receipts.claim(ToolReceipt(key, definition.id, arguments,
-                            phase = if (!executing && phase == ToolPhase.UNKNOWN) ToolPhase.FAILED else phase, operationId = Id.uuid(),
-                            error = message, recordedAt = Id.now(), updatedAt = Id.now(), runtimeGeneration = context.runtimeGeneration,
-                            mutating = definition.mutating).forPersistence(knownSecrets()))
+                    var displayedResult = message
+                    suspend fun cleanup(event: String, action: suspend () -> Unit) {
+                        try { action() }
+                        catch (failure: Exception) {
+                            AppLog.error("tools", event, fields = mapOf("callId" to key,
+                                "failure" to failure::class.simpleName.orEmpty()))
+                        }
                     }
-                    claimed?.let { intent ->
-                        val updated = intent.copy(phase = phase, error = message, updatedAt = Id.now())
-                        runCatching { receipts.save(updated) }
-                        if (phase == ToolPhase.UNKNOWN && intent.mutating) runCatching { unknownOutcome(context, updated) }
+                    suspend fun persistFailure() {
+                        // Application-owned media may finish while this awaiter is being cancelled.
+                        // The host reconciler uses this same short lock, so quarantine sees the saved outcome.
+                        val intent = claimed
+                        var settled: ToolReceipt? = null
+                        if (media != null && intent != null) cleanup("outcome.read.failed") {
+                            settled = receipts.get(key)?.takeIf {
+                                it.phase in setOf(ToolPhase.SUCCEEDED, ToolPhase.FAILED) && it.operationId == intent.operationId &&
+                                    it.runtimeGeneration == context.runtimeGeneration && it.toolId == definition.id
+                            }
+                        }
+                        settled?.let { terminal ->
+                            phase = terminal.phase
+                            displayedResult = if (phase == ToolPhase.SUCCEEDED) terminal.result.toString() else terminal.error
+                            if (phase == ToolPhase.SUCCEEDED) cleanup("media.result.decode.failed") {
+                                (terminal.result as? JsonObject)?.get("media")?.let {
+                                    media = Json.decodeFromJsonElement<GeneratedMedia>(it)
+                                }
+                            } else media = media?.copy(phase = MediaPhase.FAILED, message = terminal.error)
+                            return
+                        }
+                        if (intent == null) cleanup("outcome.claim.failed") {
+                            // Rejections are real invocations too. Claim-only preserves any earlier identity/result.
+                            receipts.claim(ToolReceipt(key, definition.id, arguments,
+                                phase = if (!executing && phase == ToolPhase.UNKNOWN) ToolPhase.FAILED else phase, operationId = Id.uuid(),
+                                error = message, recordedAt = Id.now(), updatedAt = Id.now(), runtimeGeneration = context.runtimeGeneration,
+                                mutating = definition.mutating).forPersistence(knownSecrets()))
+                        } else {
+                            val updated = intent.copy(phase = phase, error = message, updatedAt = Id.now())
+                            cleanup("outcome.save.failed") { receipts.save(updated) }
+                            if (phase == ToolPhase.UNKNOWN && intent.mutating)
+                                cleanup("outcome.quarantine.failed") { unknownOutcome(context, updated) }
+                        }
                     }
-                    runCatching { report(event(phase, message), error) }
+                    if (media != null) mediaReceiptLock.withLock { persistFailure() } else persistFailure()
+                    cleanup("outcome.publish.failed") { report(event(phase, displayedResult), error.takeUnless { phase == ToolPhase.SUCCEEDED }) }
                 }
                 if (message != error.message) throw when (error) {
                     is CancellationException -> CancellationException(message)
@@ -317,6 +377,11 @@ class ToolExecutor(
 }
 
 data class CompletedToolCall(val id: String, val tool: String, val arguments: JsonObject, val result: JsonElement)
+
+/** The executor supplies identity and diagnostics for progress from a trusted media command. */
+internal class MediaToolProgress(val callId: String, val publish: suspend (GeneratedMedia) -> Unit) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<MediaToolProgress>
+}
 
 class ToolSession(val context: ToolExecutionContext, val registry: ToolRegistry, val executor: ToolExecutor,
     knownSecrets: () -> Set<String> = { emptySet() },

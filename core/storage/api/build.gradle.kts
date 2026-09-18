@@ -3,6 +3,7 @@ plugins { id("magicpaper.kmp-library") }
 kotlin {
     sourceSets {
         commonMain.dependencies {
+            api(project(":core:model"))
             api(project(":core:logging"))
             api(libs.kotlinx.coroutinesCore)
             api(libs.kotlinx.serializationJson)

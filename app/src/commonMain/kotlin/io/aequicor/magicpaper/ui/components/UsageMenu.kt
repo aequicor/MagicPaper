@@ -75,6 +75,16 @@ private fun UsageSummary(records: List<UsageRecord>, detailed: Boolean = true) {
         if (models.any { it.tokens.reasoning != null }) UsageLine("Из ответов: рассуждения", usageMetric(models) { it.reasoning })
         if (models.any { it.tokens.cachedOutput != null }) UsageLine("Из ответов: кешированные", usageMetric(models) { it.cachedOutput })
     } else UsageLine("Запросы", usageNumber(records.sumOf { it.requests }))
+    val images = records.filter { it.kind == UsageKind.IMAGE }
+    if (images.isNotEmpty()) {
+        val counts = images.mapNotNull { it.generatedImages }
+        UsageLine("Создано изображений", if (counts.isEmpty()) "Нет данных" else usageNumber(counts.sum()) + if (counts.size < images.size) " (частично)" else "")
+    }
+    val videos = records.filter { it.kind == UsageKind.VIDEO }
+    if (videos.isNotEmpty()) {
+        val seconds = videos.mapNotNull { it.generatedVideoSeconds }
+        UsageLine("Создано видео, секунд", if (seconds.isEmpty()) "Нет данных" else seconds.sum().toString().removeSuffix(".0") + if (seconds.size < videos.size) " (частично)" else "")
+    }
     if (models.isNotEmpty()) UsageLine("Всего токенов", usageMetric(models) { it.totalTokens })
     val costs = records.mapNotNull { it.cost }
     if (costs.isEmpty()) UsageLine("Стоимость", "Нет данных") else costs.groupBy { it.currency }.forEach { (currency, values) ->

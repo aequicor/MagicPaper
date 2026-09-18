@@ -22,74 +22,70 @@ public data class PaperStickyTreeEntry(
     val ancestors: List<String> = emptyList(),
     val header: Boolean = false,
     /** Keep this header after leaving its branch, e.g. the selected session.
-     * Retained headers reserve space before the current branch, within the four-row limit. */
+     * Retained headers keep their list order and a slot within the four-row limit. */
     val retainAfterBranch: Boolean = false,
 )
 
-internal data class PaperTreeVisibleEntry(val index: Int, val offset: Int)
+internal data class PaperTreeVisibleEntry(val key: String, val offset: Int)
 internal data class PaperTreePin(val key: String, val offset: Int)
 
-private fun List<String>.visiblePinLevels(limit: Int): List<String> = when {
-    limit <= 0 -> emptyList()
-    size <= limit -> this
-    else -> listOf(first()) + takeLast(limit - 1)
+internal class PaperTreeIndex(entries: List<PaperStickyTreeEntry>) {
+    val byKey = entries.associateBy { it.key }
+    val positions = entries.withIndex().associate { it.value.key to it.index }
+    val retained = entries.filter { it.header && it.retainAfterBranch }.map { it.key }.toSet()
+}
+
+private fun List<String>.visiblePinLevels(limit: Int, retained: Set<String> = emptySet()): List<String> {
+    if (limit <= 0) return emptyList()
+    if (size <= limit) return this
+    val reserved = (listOf(first()) + filter { it in retained }).distinct().take(limit)
+    val chosen = reserved + filterNot { it in reserved }.takeLast(limit - reserved.size)
+    return filter { it in chosen }
 }
 
 internal fun paperTreePins(
     entries: List<PaperStickyTreeEntry>,
     visible: List<PaperTreeVisibleEntry>,
     heights: Map<String, Int>,
-    retained: List<IndexedValue<PaperStickyTreeEntry>> = entries.withIndex()
-        .filter { it.value.header && it.value.retainAfterBranch },
+    index: PaperTreeIndex = PaperTreeIndex(entries),
 ): List<PaperTreePin> {
-    // Retained rows are independent of project boundaries. In particular, a
-    // selected chat has no descendants, so ordinary tree ancestry cannot pin it.
-    if (retained.isEmpty()) return paperBranchPins(entries, visible, heights)
-    val retainedKeys = retained.map { it.value.key }.toSet()
-    val first = visible.firstOrNull { it.index in entries.indices } ?: return emptyList()
-    var top = 0
-    val retainedPins = retained.filter { indexed ->
-        indexed.index < first.index || visible.any {
-            it.index == indexed.index && it.offset < indexed.value.ancestors.sumOf { key -> heights[key] ?: 0 }
+    // Layout can still describe the previous model during collapse/filter/reorder.
+    // Never interpret an old item index as a different entry in the new model.
+    val byKey = index.byKey
+    val rows = visible.filter { it.key in byKey }
+    val first = rows.firstOrNull() ?: return emptyList()
+    val firstEntry = byKey.getValue(first.key)
+    val firstIndex = index.positions.getValue(first.key)
+    val preferred = index.retained
+    fun headers(keys: List<String>) = keys.filter { byKey[it]?.header == true }
+    val retained = preferred.filter { key ->
+        index.positions.getValue(key) < firstIndex || rows.any { row ->
+            row.key == key && row.offset < headers(byKey.getValue(key).ancestors)
+                .visiblePinLevels(3, preferred).sumOf { heights[it] ?: 0 }
         }
-    }.takeLast(3).map { indexed ->
-        PaperTreePin(indexed.value.key, top).also { top += heights[indexed.value.key] ?: 0 }
+    }.toSet()
+    var branch = headers(firstEntry.ancestors) + listOfNotNull(first.key.takeIf { firstEntry.header })
+    fun orderedPins(path: List<String>): List<String> {
+        val keys = path.toSet() + retained
+        return keys.sortedBy { index.positions.getValue(it) }
+            .visiblePinLevels(4, preferred + path.take(1))
     }
-    val branchVisible = visible.filter { entries.getOrNull(it.index)?.key !in retainedKeys }
-        .map { it.copy(offset = it.offset - top) }
-    return retainedPins + paperBranchPins(entries, branchVisible, heights, retainedKeys, 4 - retainedPins.size)
-        .map { it.copy(offset = it.offset + top) }
-}
-
-private fun paperBranchPins(
-    entries: List<PaperStickyTreeEntry>,
-    visible: List<PaperTreeVisibleEntry>,
-    heights: Map<String, Int>,
-    retainedKeys: Set<String> = emptySet(),
-    limit: Int = 4,
-): List<PaperTreePin> {
-    val first = visible.firstOrNull { it.index in entries.indices } ?: return emptyList()
-    val firstEntry = entries[first.index]
-    val activePeerHeader = if (firstEntry.header) firstEntry.key else entries
-        .subList(0, first.index)
-        .asReversed()
-        .firstOrNull { firstEntry.ancestors.isNotEmpty() && it.header &&
-            it.key !in retainedKeys && it.ancestors == firstEntry.ancestors }
-        ?.key
-    val candidates = (firstEntry.ancestors + listOfNotNull(activePeerHeader))
-        .filterNot { it in retainedKeys }.visiblePinLevels(limit).toMutableList()
-    // Include a descendant header as it reaches the bottom of the pinned stack.
-    for (row in visible) {
-        val entry = entries.getOrNull(row.index) ?: continue
-        if (entry.header && entry.key !in retainedKeys && candidates.size < limit &&
-            entry.ancestors.filterNot { it in retainedKeys } == candidates &&
-            row.offset <= candidates.sumOf { heights[it] ?: 0 }
-        ) candidates += entry.key
+    // Resolve each incoming header's slot from its complete ancestry, even when
+    // the four-row cap hides intermediate levels, before its natural row disappears.
+    for (row in rows) {
+        val entry = byKey.getValue(row.key)
+        if (!entry.header || entry.key in branch) continue
+        val next = headers(entry.ancestors) + entry.key
+        val shown = orderedPins(next)
+        val slot = shown.takeWhile { it != entry.key }.sumOf { heights[it] ?: 0 }
+        if (entry.key in shown && row.offset <= slot) branch = next
     }
+    val candidates = orderedPins(branch)
+    val branchBottom = candidates.sumOf { heights[it] ?: 0 }
     var top = 0
     return candidates.mapIndexedNotNull { level, key ->
         val height = heights[key] ?: 0
-        val natural = visible.firstOrNull { entries.getOrNull(it.index)?.key == key }?.offset
+        val natural = rows.firstOrNull { it.key == key }?.offset
         val stackTop = top
         top += height
         if (natural != null && natural >= stackTop) return@mapIndexedNotNull null
@@ -98,14 +94,17 @@ private fun paperBranchPins(
         var offset = stackTop
         for (ancestorLevel in 0..level) {
             val ancestor = candidates[ancestorLevel]
-            val boundary = visible.firstOrNull { row ->
-                val entry = entries.getOrNull(row.index)
-                entry != null && row.index > first.index && entry.key != ancestor &&
-                    entry.key !in candidates.take(ancestorLevel) && ancestor !in entry.ancestors
+            if (ancestor in preferred) continue
+            val boundary = rows.drop(1).firstOrNull { row ->
+                val entry = byKey.getValue(row.key)
+                index.positions.getValue(entry.key) > index.positions.getValue(ancestor) &&
+                    ancestor !in entry.ancestors
             }?.offset ?: continue
-            val branchBottom = candidates.sumOf { heights[it] ?: 0 }
             offset = minOf(offset, stackTop + boundary - branchBottom)
         }
+        // A retained selection follows its ancestors upwards at their boundary,
+        // then stays visible. It never jumps ahead of its project within a branch.
+        if (key in preferred) offset = offset.coerceAtLeast(0)
         PaperTreePin(key, offset)
     }
 }
@@ -127,10 +126,9 @@ public fun PaperStickyTree(
 ) {
     val heights = remember { mutableStateMapOf<String, Int>() }
     val pins by remember(entries, state) {
-        // Selection metadata only changes with the model, not with each scroll pixel.
-        val retained = entries.withIndex().filter { it.value.header && it.value.retainAfterBranch }
+        val index = PaperTreeIndex(entries)
         derivedStateOf {
-            paperTreePins(entries, state.layoutInfo.visibleItemsInfo.map { PaperTreeVisibleEntry(it.index, it.offset) }, heights, retained)
+            paperTreePins(entries, state.layoutInfo.visibleItemsInfo.map { PaperTreeVisibleEntry(it.key as String, it.offset) }, heights, index)
         }
     }
     LaunchedEffect(entries) { heights.keys.retainAll(entries.filter { it.header }.map { it.key }.toSet()) }

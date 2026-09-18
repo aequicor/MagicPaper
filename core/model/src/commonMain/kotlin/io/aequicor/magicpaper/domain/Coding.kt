@@ -99,6 +99,7 @@ data class CodingSession(
     val statusChangedAt: Long = 0,
     /** Start of continuous readiness; null in older records until first observation. */
     val archiveReadySince: Long? = null,
+    val mediaTools: SessionMediaTools = SessionMediaTools(),
 )
 
 @Serializable
@@ -216,10 +217,10 @@ data class CodingDraft(
 }
 
 /** Собирает события протокола в хронологическую ленту, черновик и итоговое сообщение. */
-class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
+class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null, initialSequence: Int = 0) {
     /** Shared with every image of this response, including its input message. */
     val timelineId = imageInvocation?.responseTimelineId ?: Id.new()
-    private var sequence = 0
+    private var sequence = initialSequence
     private fun nextStepId(): String = "$timelineId:${sequence++}"
     private var textId = nextStepId()
     private var thinkingId = nextStepId()
@@ -316,6 +317,7 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
                     toolPhase = ToolPhase.STARTED,
                     id = if (existing >= 0) steps[existing].id else nextStepId(),
                     images = if (existing >= 0) steps[existing].images else emptyList(),
+                    media = (if (existing >= 0) steps[existing].media else null).mergeMedia(event.media),
                 )
                 if (existing >= 0) steps[existing] = step else steps += step
             }
@@ -325,7 +327,8 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
                         (event.callId.isBlank() || it.callId == event.callId)
                 }
                 if (index >= 0 && steps[index].running) {
-                    steps[index] = steps[index].copy(result = event.resultPreview.ifBlank { steps[index].result }, toolPhase = event.phase ?: ToolPhase.PROGRESS)
+                    steps[index] = steps[index].copy(result = event.resultPreview.ifBlank { steps[index].result }, toolPhase = event.phase ?: ToolPhase.PROGRESS,
+                        media = steps[index].media.mergeMedia(event.media))
                 }
             }
             is CodingEvent.ToolFinished -> {
@@ -342,6 +345,7 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
                         ok = !event.isError,
                         result = event.resultPreview,
                         images = mergeImages(steps[index].images, resultImages(event)),
+                        media = steps[index].media.mergeMedia(event.media)?.let { if (event.media == null) it.interrupted() else it },
                         toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                     )
                 } else if (event.isError || event.title != null) {
@@ -352,6 +356,7 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
                         callId = event.callId,
                         result = event.resultPreview,
                         images = resultImages(event),
+                        media = event.media,
                         ok = !event.isError,
                         toolPhase = event.phase ?: if (event.isError) ToolPhase.FAILED else ToolPhase.SUCCEEDED,
                         id = nextStepId(),
@@ -507,7 +512,8 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null) {
     private fun MutableList<CodingStep>.replaceAllToolsInterrupted() {
         indices.forEach { index -> val step = this[index]
             if (step.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC) && step.running)
-                this[index] = step.copy(running = false, ok = false, toolPhase = ToolPhase.CANCELLED)
+                this[index] = step.copy(running = false, ok = false, toolPhase = ToolPhase.CANCELLED,
+                    media = step.media?.interrupted())
         }
     }
 
@@ -588,6 +594,7 @@ sealed interface CodingEvent {
         val isExec: Boolean = false,
         val category: ToolCategory? = null,
         val title: String? = null,
+        val media: GeneratedMedia? = null,
     ) : CodingEvent
 
     /**
@@ -604,6 +611,7 @@ sealed interface CodingEvent {
         val images: List<CodingImageArtifact> = emptyList(),
         /** References actually reported by a search/browsing adapter. */
         val sources: List<SearchHit> = emptyList(),
+        val media: GeneratedMedia? = null,
     ) : CodingEvent
 
     /**
@@ -615,6 +623,7 @@ sealed interface CodingEvent {
         val callId: String = "",
         val resultPreview: String = "",
         val phase: ToolPhase? = null,
+        val media: GeneratedMedia? = null,
     ) : CodingEvent
 
     /**
@@ -691,6 +700,7 @@ data class CodingStep(
     val system: String = "",
     /** References this individual search operation newly returned; empty in old logs. */
     val sources: List<SearchHit> = emptyList(),
+    val media: GeneratedMedia? = null,
 )
 
 /** Роли в журнале проекта. */

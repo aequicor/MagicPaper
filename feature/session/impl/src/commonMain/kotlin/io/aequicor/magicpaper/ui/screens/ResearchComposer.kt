@@ -23,7 +23,8 @@ internal fun ResearchComposer(state: CodingComposerDraft, enabled: Boolean, busy
     onSend: (String, List<Attachment>) -> Unit, onPause: () -> Unit,
     onResume: (String, List<Attachment>) -> Unit, onClarify: (String, List<Attachment>) -> Unit,
     onPickAttachments: (Int, (List<Attachment>) -> Unit) -> Unit,
-    onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean) {
+    onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean,
+    mediaOptions: (@Composable () -> Unit)? = null) {
     var text by state.text
     var attachments by state.attachments
     var editor by remember(state) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
@@ -66,6 +67,7 @@ internal fun ResearchComposer(state: CodingComposerDraft, enabled: Boolean, busy
         }, options = {
             PaperComposerOptionsPanel(menu, { menu = false; optionsFocus.requestFocus() },
                 maxHeight = (maxHeight * .4f).coerceIn(80.dp, 240.dp)) {
+                mediaOptions?.let { it(); PaperDivider() }
                 PaperText("Движок", Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText)
                 if (onEngineChange != null) {
