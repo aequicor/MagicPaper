@@ -76,6 +76,21 @@ class CodingSystemPromptsTest {
         assertFalse("HEAD..feature/current" in updated)
     }
 
+    @Test fun pendingTransferConflictIsResolvedOnTheWorkingBranchInPlace() {
+        val task = TaskWorktree("task", "/source", "feature/current", "base", "/pool/session", "codex/task",
+            behindCommits = 2, refreshNote = "Перенос остановлен конфликтом: разреши его в файлах рабочей копии",
+            pendingTransfer = true)
+        val session = CodingSession("session", "project", "Task", 1, taskWorktree = task,
+            pendingRun = CodingRunCheckpoint("input", "Task", responseId = "response", runId = task.taskId, worktreeEnabled = true))
+        for (engine in CodingEngine.entries) {
+            val prompt = codingSystemPrompt(engine, false, "", session = session)
+            assertTrue("остаётся на рабочей ветке" in prompt, prompt)
+            assertTrue("git rebase --continue" in prompt, prompt)
+            assertTrue("(2 новых коммитов)" in prompt, prompt)
+            assertFalse("не сливай и не переноси сам" in prompt, "перенос уже начат и доводится агентом в рабочей копии")
+        }
+    }
+
     @Test fun ordinarySessionDoesNotInheritPlannerMethodologyFromLifecycleAdoption() {
         val rules = PlanningRulesSettings().edited("Create milestones and wait for plan approval").snapshot()
         val ordinary = CodingSession("root", "project", "New session", 1,

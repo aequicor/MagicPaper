@@ -25,6 +25,11 @@ class PlanningQuestionWizardTest {
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
     }
     private fun ImageComposeScene.node(tag: String) = nodes().first { it.config.getOrNull(SemanticsProperties.TestTag) == tag }
+    /** Тег стоит на внешнем контейнере поля (порт прокрутки), а действия редактирования — на внутреннем узле редактора. */
+    private fun ImageComposeScene.editor(tag: String): SemanticsNode {
+        fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+        return walk(node(tag)).first { it.config.getOrNull(SemanticsActions.SetText) != null }
+    }
     private var frame = 0L
     private fun ImageComposeScene.draw() { repeat(5) { render(++frame * 16_000_000L).close() } }
     private fun ImageComposeScene.click(tag: String) {
@@ -69,7 +74,7 @@ class PlanningQuestionWizardTest {
                 assertEquals(listOf("pdf"), draft.answers.first().selected)
                 scene.click("questionnaire.option.docx")
                 assertEquals(listOf("edit", "export"), draft.answers.first { it.questionId == "features" }.selected)
-                scene.node("questionnaire.custom").config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Ещё комментарий")); scene.draw()
+                scene.editor("questionnaire.custom").config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Ещё комментарий")); scene.draw()
                 scene.click("questionnaire.next"); scene.click("questionnaire.skip")
                 assertTrue(draft.reviewing); assertNull(submitted)
                 scene.snapshot("review-$width")
@@ -136,10 +141,10 @@ class PlanningQuestionWizardTest {
             MagicPaperTheme { UserInteractionDock(request, draft, { draft = it }, { submitted = it }) }
         }.use { scene ->
             scene.draw()
-            val field = scene.node("questionnaire.custom")
-            field.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Короткий отчёт"))
+            val editor = scene.editor("questionnaire.custom")
+            editor.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("Короткий отчёт"))
             scene.draw()
-            scene.node("questionnaire.custom").config[SemanticsActions.RequestFocus].action!!.invoke()
+            editor.config[SemanticsActions.RequestFocus].action!!.invoke()
             scene.draw()
             assertTrue(scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyDown)))
             scene.sendKeyEvent(KeyEvent(Key.Enter, KeyEventType.KeyUp))

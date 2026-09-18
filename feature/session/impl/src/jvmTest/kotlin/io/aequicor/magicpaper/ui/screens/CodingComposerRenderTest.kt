@@ -18,6 +18,8 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.designsystem.PaperTextRole
+import io.aequicor.magicpaper.designsystem.paperTextStyle
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
@@ -259,7 +261,9 @@ class CodingComposerRenderTest {
                 var bounds = Rect.Zero
                 var resumed = 0
                 var sent = 0
-                ImageComposeScene(width, 120) {
+                // На узкой ширине аксессуары переносятся под поле ввода: сцена должна вмещать обе строки,
+                // иначе центр кнопки оказывается за пределами кадра и клик не доходит до неё.
+                ImageComposeScene(width, 200) {
                     MagicPaperTheme { Surface {
                         Box(Modifier.onGloballyPositioned { bounds = it.boundsInRoot() }) {
                             CodingComposer(enabled = true, busy = false, onSend = { _, _ -> sent++ },
@@ -360,8 +364,11 @@ class CodingComposerRenderTest {
                             false, true, { _, _ -> }, {}, { _, _ -> }, modelChip = {
                                 val profile = LlmProfile("model", "GPT-5.6-Terra", modelId = "gpt-5.6-terra")
                                 val measurer = rememberTextMeasurer()
-                                val nameWidth = measurer.measure(profile.modelName(profile.selectionKey), MaterialTheme.typography.labelMedium).size.width
-                                val effortWidth = measurer.measure(profile.effortLabel(ModelDefaults.capability(profile)), MaterialTheme.typography.labelSmall).size.width
+                                // Чип рендерит обе строки системным sans-serif стилем CHROME: меряется именно он,
+                                // а не Material-типографика, чей брендовый шрифт на части платформ шире.
+                                val chrome = paperTextStyle(PaperTextRole.CHROME)
+                                val nameWidth = measurer.measure(profile.modelName(profile.selectionKey), chrome).size.width
+                                val effortWidth = measurer.measure(profile.effortLabel(ModelDefaults.capability(profile)), chrome).size.width
                                 expectedWidth = maxOf(nameWidth, effortWidth) + with(LocalDensity.current) { 16.dp.toPx() }
                                 CodingModelChip(profile, false,
                                     { opened = true }, Modifier.onGloballyPositioned { bounds = it.boundsInRoot() })

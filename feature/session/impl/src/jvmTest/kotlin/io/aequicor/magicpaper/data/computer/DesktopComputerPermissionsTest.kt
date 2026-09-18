@@ -69,9 +69,12 @@ class DesktopComputerPermissionsTest {
     }
 
     @Test fun actualBundleOrDevelopmentExecutableIsUsedNotInventedApplicationPath() {
-        assertEquals(PermissionTarget("Magic Paper.app", "/Applications/Magic Paper.app"),
+        // Разделители путей нормализует хостовая файловая система: ожидание строится тем же Path API,
+        // а проверяется сам обход до бандла, а не конкретные слэши.
+        assertEquals(PermissionTarget("Magic Paper.app", Path.of("/Applications/Magic Paper.app").toString()),
             permissionHostTarget(Path.of("/Applications/Magic Paper.app/Contents/MacOS/MagicPaper")))
-        assertEquals(PermissionTarget("Java / запуск из IDE", "/opt/jdk/bin/java"), permissionHostTarget(Path.of("/opt/jdk/bin/java")))
+        assertEquals(PermissionTarget("Java / запуск из IDE", Path.of("/opt/jdk/bin/java").toString()),
+            permissionHostTarget(Path.of("/opt/jdk/bin/java")))
         assertTrue(permissionSettingsUri(ComputerPermission.SCREEN_RECORDING).endsWith("?Privacy_ScreenCapture"))
     }
 }

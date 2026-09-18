@@ -26,6 +26,8 @@ class CodexCodingPermissionsTest {
         for (cache in listOf(home, home.parent, home.root)) {
             assertEquals(listOf(project.toString()), CodexCodingPermissions(project, home, cache.toString()).writableRoots)
         }
+        // Проверка символической ссылки требует права на её создание; списочные проверки выше прошли на любой платформе.
+        io.aequicor.magicpaper.test.assumeSymbolicLinksAvailable()
         Files.createSymbolicLink(home.resolve(".gradle"), home)
         assertEquals(listOf(project.toString()), CodexCodingPermissions(project, home, null).writableRoots)
     }

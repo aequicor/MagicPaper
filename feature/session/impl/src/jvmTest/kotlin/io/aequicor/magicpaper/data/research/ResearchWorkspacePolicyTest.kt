@@ -55,7 +55,9 @@ class ResearchWorkspacePolicyTest {
         val root = Paths.get("/project")
         val args = LinuxResearchSandbox.arguments(ResearchWorkspacePolicy(root, listOf(root.resolve("build")), listOf(root.resolve(".git")), emptyList()), root)
         assertContains(args, "--ro-bind"); assertContains(args, "--unshare-pid"); assertContains(args, "--disable-userns")
-        assertTrue(args.windowed(3).contains(listOf("--bind", "/project/build", "/project/build")))
-        assertFalse(args.windowed(3).contains(listOf("--bind", "/project", "/project")))
+        // Пути аргументов пишутся тем же Path API, что и политика: жёсткие POSIX-строки зависят от хостовой ФС.
+        val build = root.resolve("build").toString()
+        assertTrue(args.windowed(3).contains(listOf("--bind", build, build)))
+        assertFalse(args.windowed(3).contains(listOf("--bind", root.toString(), root.toString())))
     }
 }

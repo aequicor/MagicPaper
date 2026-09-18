@@ -18,6 +18,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.SecureDirectoryStream
+import kotlin.io.path.invariantSeparatorsPathString
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -46,7 +48,13 @@ class DesktopUiSkillIntegrationTest {
                 )
                 val unrelatedBefore = repository.snapshot()
 
-                val prepared = SkillPackageImporter(repository, host).prepareDirectory(packageDirectory)
+                val importer = SkillPackageImporter(repository, host)
+                // Импорт каталога закрыт на ФС без SecureDirectoryStream (Windows JDK). Там тот же
+                // пакет собирается в записи с перегенерацией манифеста из фактических байтов: чекаут
+                // Windows меняет концы строк, а хэши в манифесте записаны для LF-байтов.
+                val prepared = if (secureDirectoryImportSupported()) importer.prepareDirectory(packageDirectory)
+                else importer.prepare(localDirectoryEntries(packageDirectory),
+                    SkillObservedSource(SkillImportKind.LOCAL_DIRECTORY, packageDirectory.toAbsolutePath().normalize().toString()))
                 assertEquals("magicpaper.desktop-ui@1.1.0", prepared.pkg.key)
                 repository.install(prepared)
                 var snapshot = repository.snapshot()
@@ -143,5 +151,35 @@ class DesktopUiSkillIntegrationTest {
             current = current.parent ?: error("MagicPaper project root not found")
         }
         return current
+    }
+
+    /** На macOS чтение каталога идёт через jna-ридер; на остальных платформах — через SecureDirectoryStream. */
+    private fun secureDirectoryImportSupported(): Boolean {
+        if (System.getProperty("os.name").startsWith("Mac")) return true
+        val probe = Files.createTempDirectory("magicpaper-sds-probe")
+        return try {
+            Files.newDirectoryStream(probe.parent).use { it is SecureDirectoryStream<*> }
+        } finally {
+            Files.deleteIfExists(probe)
+        }
+    }
+
+    /** Записи пакета с манифестом, пересчитанным на фактические байты; идентичность сохраняется из чекиненного манифеста. */
+    private fun localDirectoryEntries(directory: Path): List<SkillArchiveEntry> {
+        val manifest = SkillPackageFormat.json.decodeFromString<SkillPackageManifest>(
+            Files.readString(directory.resolve(SkillPackageFormat.MANIFEST)))
+        val payload = Files.walk(directory).use { paths ->
+            paths.filter(Files::isRegularFile)
+                .map { it.toRealPath() }
+                .filter { it != directory.toRealPath().resolve(SkillPackageFormat.MANIFEST) }
+                .sorted().map { path ->
+                    val relative = directory.toRealPath().relativize(path).invariantSeparatorsPathString
+                    SkillArchiveEntry(relative, Files.readAllBytes(path))
+                }.toList()
+        }
+        val updated = manifest.copy(files = payload.map {
+            SkillPackageFile(it.path, SkillPackageValidator.sha256(it.bytes), it.bytes.size.toLong()) })
+        return payload + SkillArchiveEntry(SkillPackageFormat.MANIFEST,
+            SkillPackageFormat.json.encodeToString(updated).encodeToByteArray())
     }
 }

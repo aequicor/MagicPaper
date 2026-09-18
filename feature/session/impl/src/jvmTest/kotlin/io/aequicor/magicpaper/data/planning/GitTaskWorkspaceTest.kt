@@ -264,7 +264,7 @@ class GitTaskWorkspaceTest {
         assertEquals(task.baseCommit, git(File(task.path), "rev-parse", "HEAD"))
     } }
 
-    @Test fun preRunUpdateRollsBackAConflictAndLeavesItToDelivery() = runTest { fixture {
+    @Test fun preRunUpdateLeavesTheConflictOnTheWorkingBranch() = runTest { fixture {
         val task = open()
         File(task.path).resolve("base.txt").writeText("agent\n")
         git(File(task.path), "commit", "-am", "agent")
@@ -272,13 +272,68 @@ class GitTaskWorkspaceTest {
         source.resolve("base.txt").writeText("user\n")
         git(source, "commit", "-am", "user")
         val declined = port.refresh(task)
-        assertFalse(declined.updated)
+        assertTrue(declined.pendingTransfer, declined.note)
         assertEquals(1, declined.behind)
+        assertEquals(git(source, "rev-parse", "HEAD"), declined.targetCommit)
         assertNotNull(declined.note)
-        assertEquals(before, git(File(task.path), "rev-parse", "HEAD"))
-        assertEquals("agent\n", File(task.path).resolve("base.txt").readText())
-        // Копия не осталась в состоянии переноса: её можно снова сохранить и доставить обычным путём.
-        assertEquals(before, port.capture(task))
+        // Конфликт остаётся в рабочей копии на ветке задачи: перенос не откачен, исходная папка не менялась.
+        val dir = File(task.path)
+        assertEquals(before, git(dir, "rev-parse", "refs/heads/${task.branch}"))
+        assertTrue(git(dir, "status", "--porcelain").isNotEmpty())
+        assertContains(git(dir, "diff", "--name-only", "--diff-filter=U"), "base.txt")
+        // Возобновление до разрешения: перенос всё ещё в копии, заметка доходит до агента без откката.
+        val restarted = port.refresh(task)
+        assertTrue(restarted.pendingTransfer)
+        assertNotNull(restarted.note)
+        // Агент возобновляемого прогона разрешает конфликт на рабочей ветке и завершает перенос.
+        dir.resolve("base.txt").writeText("user\nagent\n")
+        git(dir, "add", "base.txt")
+        git(dir, "-c", "core.editor=true", "rebase", "--continue")
+        assertEquals(declined.targetCommit, git(dir, "rev-parse", "HEAD^"), "ветка задачи перенесена на вершину ветки назначения")
+        assertEquals(git(dir, "rev-parse", "HEAD"), git(dir, "rev-parse", "refs/heads/${task.branch}"))
+        val settled = port.refresh(task.copy(integratedCommit = declined.targetCommit))
+        assertFalse(settled.pendingTransfer)
+        assertEquals(0, settled.behind)
+        assertEquals("user\nagent\n", dir.resolve("base.txt").readText())
+    } }
+
+    @Test fun captureFinishesATransferTheAgentResolvedButLeftUncontinued() = runTest { fixture {
+        val task = open()
+        File(task.path).resolve("base.txt").writeText("agent\n")
+        git(File(task.path), "commit", "-am", "agent")
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "user")
+        val declined = port.refresh(task)
+        assertTrue(declined.pendingTransfer)
+        // Агент разрешил конфликт в индексе, но не продолжил перенос: приёмка доводит его на рабочей ветке.
+        val dir = File(task.path)
+        dir.resolve("base.txt").writeText("user\nagent\n")
+        git(dir, "add", "base.txt")
+        val record = task.copy(integratedCommit = declined.targetCommit)
+        val captured = port.capture(record)
+        assertEquals(git(dir, "rev-parse", "refs/heads/${task.branch}"), captured)
+        assertEquals(declined.targetCommit, git(dir, "rev-parse", "HEAD^"))
+        assertEquals("user\nagent\n", dir.resolve("base.txt").readText())
+        val merged = record.copy(resultCommit = captured, targetCommit = port.target(record))
+            .let { it.copy(mergeCommit = checkNotNull(port.integrate(it))) }
+        port.verify(merged)
+        port.deliver(merged)
+        assertEquals("user\nagent\n", source.resolve("base.txt").readText())
+    } }
+
+    @Test fun unresolvedTransferConflictKeepsCaptureRecoverable() = runTest { fixture {
+        val task = open()
+        File(task.path).resolve("base.txt").writeText("agent\n")
+        git(File(task.path), "commit", "-am", "agent")
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "user")
+        assertTrue(port.refresh(task).pendingTransfer)
+        val failure = assertFailsWith<IllegalArgumentException> { port.capture(task) }
+        assertEquals("Сначала разрешите конфликт объединения", failure.message)
+        // Разрешение на рабочей ветке делает следующий захват успешным.
+        File(task.path).resolve("base.txt").writeText("user\nagent\n")
+        git(File(task.path), "add", "base.txt")
+        assertTrue(port.capture(task).isNotBlank())
     } }
 
     @Test fun targetAdvanceWithoutTaskChangesDoesNotCreateMergeCommit() = runTest { fixture {
@@ -451,6 +506,41 @@ class GitTaskWorkspaceTest {
         val finished = service.complete(project, "session", "request", repair = { error("unexpected") })
         assertEquals(TaskWorktreePhase.COMPLETE, finished.phase)
         assertEquals("kept", source.resolve("result").readText())
+    } }
+
+    @Test fun restartWhileRunningKeepsTheWorktreeAndActualizesItsBranchOnResume() = runTest { fixture {
+        val kv = InMemoryKeyValueStore()
+        val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
+        var repo = JsonCodingProjectRepository(kv, json)
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        var service = TaskWorktreeService(repo, port, GitPlanningWorkspace(File(root, "leases")))
+        val first = service.begin(project, "session", "request")
+        val dir = File(first.path)
+        dir.resolve("agent.txt").writeText("work in progress")
+        git(dir, "add", "."); git(dir, "commit", "-m", "agent progress")
+        // Перезапуск приложения: новое хранилище, новый сервис и новый порт читают сохранённую запись задачи.
+        repo = JsonCodingProjectRepository(kv, json)
+        service = TaskWorktreeService(repo, GitTaskWorkspace(pool), GitPlanningWorkspace(File(root, "leases")))
+        source.resolve("user.txt").writeText("user")
+        git(source, "add", "."); git(source, "commit", "-m", "parallel user")
+        val tip = git(source, "rev-parse", "HEAD")
+        val resumed = service.begin(project, "session", "request")
+        assertEquals(first.path, resumed.path)
+        assertEquals(first.branch, resumed.branch)
+        val record = repo.sessions(project.id).single().taskWorktree!!
+        assertEquals(tip, record.integratedCommit, "возобновлённая копия перенесена на вершину ветки назначения")
+        assertEquals(0, record.behindCommits)
+        assertNull(record.refreshNote)
+        assertFalse(record.pendingTransfer)
+        assertEquals(tip, git(dir, "rev-parse", "HEAD^"), "коммиты задачи переписаны на вершину ветки назначения")
+        assertEquals("user", dir.resolve("user.txt").readText())
+        dir.resolve("agent.txt").writeText("finished")
+        service.handoff(ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE), true, emptyList())
+        val finished = service.complete(project, "session", "request", repair = { error("unexpected repair") })
+        assertEquals(TaskWorktreePhase.COMPLETE, finished.phase)
+        assertEquals("finished", source.resolve("agent.txt").readText())
     } }
 
     companion object {

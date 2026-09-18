@@ -1121,6 +1121,8 @@ internal fun CodingChat(
                     }
                     if (phaseLabel != null) PaperStatus(phaseLabel, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
                     // Отставание от ветки назначения видно, пока агент работает; на время объединения его сменяет метка фазы.
+                    else if (task.pendingTransfer) PaperStatus("Конфликт переноса на ${task.targetBranch}",
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
                     else if (task.behindCommits > 0) PaperStatus("Ветка ${task.targetBranch} ушла вперёд (${task.behindCommits})",
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
                 }

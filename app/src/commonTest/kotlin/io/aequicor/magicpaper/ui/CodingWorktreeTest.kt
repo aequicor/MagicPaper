@@ -118,6 +118,23 @@ class CodingWorktreeTest {
         assertEquals(TaskWorktreePhase.RUNNING, updated.phase)
     } }
 
+    @Test fun resumedTransferConflictStaysOnTheWorkingBranchRecord() = runTest { fixture { service, runtime, port, repo ->
+        runtime.gate = CompletableDeferred()
+        port.refreshResult = TaskWorktreeRefresh(behind = 2, targetCommit = "tip", pendingTransfer = true,
+            note = "Перенос остановлен конфликтом: разреши его в файлах рабочей копии")
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        service.clarifyCodingSession("s", "Clarification"); runCurrent()
+        assertEquals(1, port.refreshes)
+        val conflict = repo.sessions("p").single().taskWorktree!!
+        assertTrue(conflict.pendingTransfer)
+        assertEquals(2, conflict.behindCommits)
+        assertEquals("tip", conflict.integratedCommit, "точка объединения подписывает и незавершённый перенос")
+        assertEquals(TaskWorktreePhase.RUNNING, conflict.phase)
+        runtime.gate!!.complete(Unit); runCurrent()
+        // Успешное слияние очищает признак незавершённого переноса.
+        assertFalse(repo.sessions("p").single().taskWorktree!!.pendingTransfer)
+    } }
+
     @Test fun clarificationKeepsWorkspaceAndNextTaskReusesSlotWithFreshBranch() = runTest { fixture { service, runtime, port, repo ->
         runtime.gate = CompletableDeferred()
         service.sendCodingPromptTo("s", "Task"); runCurrent()
@@ -292,6 +309,53 @@ class CodingWorktreeTest {
                 repo.messages("p", "s").last { it.role == CodingRole.USER }.text)
             assertEquals(1, base.calls.size)
         } finally { service?.close(); graph?.close(); Dispatchers.resetMain() }
+    }
+
+    /** Две задачи одного проекта не вливаются одновременно: очередь даёт второй уже влитую вершину. */
+    @Test fun concurrentCompletionsSerializeTheirMergesPerProject() = runTest {
+        val f = ModelSettingsFixture()
+        val repo = JsonCodingProjectRepository(f.kv, f.json)
+        repo.save(project)
+        suspend fun task(id: String, copy: String) = repo.saveSession(CodingSession(id, "p", "Task $id", 1,
+            pendingRun = CodingRunCheckpoint(id, "Task", responseId = "$id-response", worktreeEnabled = true),
+            taskWorktree = TaskWorktree(id, "/source", "main", "base", copy, "branch-$id",
+                phase = TaskWorktreePhase.READY, handoffGeneration = 1)))
+        task("one", "/copy-1"); task("two", "/copy-2")
+        val log = mutableListOf<String>()
+        val gate = CompletableDeferred<Unit>()
+        var verifications = 0
+        val port = object : TaskWorkspace {
+            var destination = "base"
+            override suspend fun availability(project: CodingProject) = WorktreeAvailability(true)
+            override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String) =
+                TaskWorktree(taskId, project.path, "main", "base", "/isolated", "task-$taskId", label = label)
+            override suspend fun open(record: TaskWorktree, previous: TaskWorktree?) = Unit
+            override suspend fun reconcile(record: TaskWorktree) = Unit
+            override suspend fun capture(record: TaskWorktree) = "result-${record.taskId}".also { log += "capture:${record.taskId}" }
+            override suspend fun target(record: TaskWorktree) = destination.also { log += "target:${record.taskId}:$it" }
+            override suspend fun refresh(record: TaskWorktree) = TaskWorktreeRefresh()
+            override suspend fun integrate(record: TaskWorktree): String? {
+                log += "integrate:${record.taskId}:${record.targetCommit}"
+                return "merged-${record.taskId}"
+            }
+            override suspend fun verify(record: TaskWorktree) { verifications++; log += "verify:${record.taskId}"; if (verifications == 1) gate.await() }
+            override suspend fun deliver(record: TaskWorktree) { destination = "merged-${record.taskId}"; log += "deliver:${record.taskId}" }
+            override suspend fun delivered(record: TaskWorktree) = false
+        }
+        val worktrees = TaskWorktreeService(repo, port, LocalPlanningWorkspace())
+        val first = launch { worktrees.complete(project, "one", "one", planAccepted = true, repair = { error("конфликт не ожидался") }) }
+        val second = launch { worktrees.complete(project, "two", "two", planAccepted = true, repair = { error("конфликт не ожидался") }) }
+        runCurrent()
+        // Захват остаётся локальным для копии, а слияние второй задачи ждёт очереди первой.
+        assertEquals(listOf("capture:one", "target:one:base", "integrate:one:base", "verify:one", "capture:two"), log)
+        gate.complete(Unit)
+        first.join(); second.join()
+        assertEquals(listOf("capture:one", "target:one:base", "integrate:one:base", "verify:one", "capture:two",
+            "deliver:one", "target:two:merged-one", "integrate:two:merged-one", "verify:two", "deliver:two"), log,
+            "вторая задача читает вершину и вливается только после доставки первой")
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").first { it.id == "one" }.taskWorktree?.phase)
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").first { it.id == "two" }.taskWorktree?.phase)
+        assertEquals("merged-one", repo.sessions("p").first { it.id == "two" }.taskWorktree?.targetCommit)
     }
 
     @Test fun applicationGraphBindsHandoffToActualTaskAndWaitsForNativeOwner() = runTest {

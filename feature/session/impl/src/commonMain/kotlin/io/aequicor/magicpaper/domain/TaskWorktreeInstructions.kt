@@ -34,6 +34,15 @@ internal fun CodingSession.taskWorktreeInstructions(): String {
 /** Distance to the destination branch changes what the agent must verify before editing. */
 private fun freshness(task: TaskWorktree): String {
     val note = when {
+        task.pendingTransfer -> """
+            Рабочая копия посреди переноса на ветку назначения ${task.targetBranch}${if (task.behindCommits > 0) " (${task.behindCommits} новых коммитов)" else ""}:
+            перенос остановлен конфликтом, и его решение остаётся на рабочей ветке.
+            Разреши конфликт в файлах рабочей копии (сохрани обе стороны), добавь их в индекс (git add)
+            и продолжи перенос (git rebase --continue), повторяя это для каждого конфликтного шага,
+            пока перенос не завершится. Затем перечитай затронутые файлы: часть работы могла быть
+            сделана в ветке назначения, и не повторяй уже сделанное. Перенос выполняется только
+            в рабочей копии; исходную папку ${task.sourcePath} не изменяй.
+        """
         task.behindCommits > 0 -> """
             В ветке назначения ${task.targetBranch} есть новые коммиты (${task.behindCommits}), которых нет в рабочей копии:
             ${task.refreshNote ?: "обновление отложено"}. Часть работы могла быть сделана там — перед правкой дефекта

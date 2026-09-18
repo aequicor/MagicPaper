@@ -22,6 +22,7 @@ class DesktopLayoutEditorTest {
         } finally { directory.toFile().deleteRecursively() }
     }
     @Test fun symlinkDirectoryCannotWriteOutsideProject() = runBlocking {
+        io.aequicor.magicpaper.test.assumeSymbolicLinksAvailable()
         val root = Files.createTempDirectory("paper-root-"); val outside = Files.createTempDirectory("paper-outside-")
         try {
             Files.createSymbolicLink(root.resolve("design"), outside)

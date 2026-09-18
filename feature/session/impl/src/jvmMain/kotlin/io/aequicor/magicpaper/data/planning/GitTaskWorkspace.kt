@@ -90,7 +90,12 @@ class GitTaskWorkspace(
     override suspend fun capture(record: TaskWorktree): String = withContext(Dispatchers.IO) {
         reconcile(record)
         val dir = managed(record)
-        require(!mergeInProgress(dir) && !rebaseInProgress(dir)) { "Сначала разрешите конфликт объединения" }
+        if (rebaseInProgress(dir)) {
+            // Разрешённый агентом перенос доводится до конца здесь: решение конфликта уже стоит на рабочей ветке.
+            require(unmerged(dir).isBlank()) { "Сначала разрешите конфликт объединения" }
+            continueRebase(dir)
+        }
+        require(!mergeInProgress(dir)) { "Сначала разрешите конфликт объединения" }
         if (git(dir, "status", "--porcelain").isNotBlank()) {
             git(dir, "add", "-A")
             git(dir, "commit", "-m", commitSubject(record), "-m", "MagicPaper task: ${record.taskId}")
@@ -113,23 +118,40 @@ class GitTaskWorkspace(
         if (probe(dir, "rev-parse", "--verify", "--quiet", target).first != 0)
             return@withContext TaskWorktreeRefresh(note = "Ветка назначения ${record.targetBranch} недоступна")
         val tip = git(dir, "rev-parse", target).trim()
-        // Незавершённое объединение уже меняет HEAD: расстояние в этот момент не измеряется.
-        if (mergeInProgress(dir) || rebaseInProgress(dir))
+        // Незавершённый перенос остаётся на рабочей ветке: его конфликт разрешает возобновляемый агент в самой копии.
+        // Подписывается фактическая точка переноса: ветка назначения могла уйти и дальше неё.
+        if (rebaseInProgress(dir))
+            return@withContext TaskWorktreeRefresh(targetCommit = rebaseOntoCommit(dir, tip), pendingTransfer = true,
+                note = "Рабочая копия посреди переноса на ветку назначения ${record.targetBranch}: разреши конфликт в файлах " +
+                    "(сохрани обе стороны), добавь их в индекс (git add) и продолжи перенос (git rebase --continue), " +
+                    "затем продолжай задачу")
+        if (mergeInProgress(dir))
             return@withContext TaskWorktreeRefresh(targetCommit = tip, note = "Сначала завершите объединение с веткой назначения")
         val behind = distance(dir, tip)
         if (behind == 0) return@withContext TaskWorktreeRefresh(behind, tip)
         // Правки агента не принадлежат приложению: копия с несохранёнными изменениями обновится только при слиянии.
         if (git(dir, "status", "--porcelain").isNotBlank())
             return@withContext TaskWorktreeRefresh(behind, tip, note = "В копии есть несохранённые изменения")
-        // До запуска конфликт некому разрешать: неудача откатывается, задача остаётся на прежнем коммите.
+        // До запуска копию ведёт агент возобновляемого прогона: конфликт переноса остаётся на рабочей ветке,
+        // а откатывается только сбой без конфликтных файлов.
         val before = head(dir)
         val (code, output) = if (ancestor(dir, "HEAD", tip)) probe(dir, "merge", "--ff-only", tip) else rebaseOnto(dir, tip)
         if (code != 0 || !ancestor(dir, tip, "HEAD")) {
-            if (rebaseInProgress(dir)) git(dir, "rebase", "--abort")
+            if (rebaseInProgress(dir)) {
+                if (unmerged(dir).isNotBlank()) {
+                    checkpoint("refresh-pending")
+                    AppLog.info("coding.worktree", "task.refresh.conflict", mapOf("entityId" to record.taskId, "result" to behind.toString()))
+                    return@withContext TaskWorktreeRefresh(behind, tip, pendingTransfer = true,
+                        note = "Перенос остановлен конфликтом: разреши его в файлах рабочей копии (сохрани обе стороны), " +
+                            "добавь их в индекс (git add) и продолжи перенос (git rebase --continue), затем продолжай задачу")
+                }
+                // Сбой без конфликтных файлов не содержит решения, которое можно сохранить: откат.
+                git(dir, "rebase", "--abort")
+            }
             check(head(dir) == before) { "Не удалось откатить обновление рабочей копии\n${tail(output)}" }
             AppLog.debug("coding.worktree", "task.refresh.declined", mapOf("entityId" to record.taskId, "result" to code.toString()))
             return@withContext TaskWorktreeRefresh(behind, tip,
-                note = "Изменения ветки назначения конфликтуют с задачей; объединение выполнится при слиянии")
+                note = "Изменения ветки назначения не удалось применить до запуска; объединение выполнится при слиянии")
         }
         checkpoint("refreshed")
         AppLog.info("coding.worktree", "task.refreshed", mapOf("entityId" to record.taskId, "result" to behind.toString()))
@@ -248,6 +270,11 @@ class GitTaskWorkspace(
     }
     private suspend fun mergeInProgress(dir: File) = probe(dir, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").first == 0
     private suspend fun rebaseInProgress(dir: File) = markerPath(dir, "rebase-merge").exists() || markerPath(dir, "rebase-apply").exists()
+    /** Коммит, на который реально переносится незавершённый rebase; без доступной записи — предполагаемая вершина. */
+    private suspend fun rebaseOntoCommit(dir: File, fallback: String): String {
+        val onto = markerPath(dir, "rebase-merge").resolve("onto")
+        return if (onto.isFile) onto.readText().trim().ifBlank { fallback } else fallback
+    }
     private suspend fun unmerged(dir: File) = git(dir, "diff", "--name-only", "--diff-filter=U")
     private suspend fun head(dir: File) = git(dir, "rev-parse", "HEAD").trim()
     /** Commits of the destination branch that the task copy does not contain yet. */

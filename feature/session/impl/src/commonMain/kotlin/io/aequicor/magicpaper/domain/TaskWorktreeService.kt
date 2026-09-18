@@ -5,6 +5,8 @@ import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Durable task ownership is separate from native run ownership. No screen owns Git resources. */
 class TaskWorktreeService(
@@ -44,12 +46,16 @@ class TaskWorktreeService(
             else workspace.reconcile(previous)
             // Опорная точка запуска: рантайм ещё не работает, поэтому копию можно безопасно подтянуть к ветке назначения.
             // PREPARING не обновляется: подготовленная копия обязана остаться на сохранённом базовом коммите.
+            // Конфликт переноса не откатывается: он остаётся на рабочей ветке для агента возобновляемого прогона.
             val refreshed = if (previous.phase in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY))
                 refresh(project, sessionId, previous) else null
             return save(project.id, sessionId, taskId) { current ->
                 val running = if (current.phase == TaskWorktreePhase.PREPARING) current.copy(phase = TaskWorktreePhase.RUNNING) else current
                 if (refreshed == null) running else running.copy(behindCommits = refreshed.behind, refreshNote = refreshed.note,
-                    integratedCommit = if (refreshed.updated) refreshed.targetCommit else running.integratedCommit)
+                    pendingTransfer = refreshed.pendingTransfer,
+                    // Точка объединения подписывается и незавершённым переносом: после разрешения конфликта
+                    // ветка задачи продолжает уже ветку назначения, а не только исходный коммит.
+                    integratedCommit = if (refreshed.updated || refreshed.pendingTransfer) refreshed.targetCommit else running.integratedCommit)
             }
         }
         check(previous == null || previous.phase == TaskWorktreePhase.COMPLETE) { "Сначала завершите предыдущую задачу" }
@@ -139,38 +145,52 @@ class TaskWorktreeService(
             }
         }
         // Another task may advance the destination during checks. Re-merge and recheck its new tip.
+        // Параллельные задачи одного проекта вливаются по очереди: попытка слияния (чтение вершины
+        // назначения, перенос, проверки, доставка) идёт под очередью исходной папки, поэтому соседняя
+        // задача вливается в уже актуальную вершину, а не в устаревшую. Разрешение конфликта очередь
+        // освобождает: ожидание агента и пользователя не блокирует чужие слияния.
+        var repairedAt: String? = null
         while (true) {
             currentCoroutineContext().ensureActive()
             try {
-                val target = workspace.target(record)
-                record = save(project.id, sessionId, taskId) { it.copy(targetCommit = target,
-                    phase = if (it.phase == TaskWorktreePhase.CONFLICT) it.phase else TaskWorktreePhase.MERGING, error = null) }
-                var merged: String? = null
-                if (record.phase != TaskWorktreePhase.CONFLICT || record.handoffGeneration != null || planAccepted)
-                    execution { merged = workspace.integrate(record) }
-                if (merged == null) {
-                    record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.CONFLICT, handoffGeneration = null) }
-                    repair(record)
-                    if (!planAccepted) requireQuiescent(sessionId)
-                    record = checkNotNull(session(project.id, sessionId).taskWorktree)
-                    execution { merged = workspace.integrate(record) }
-                    check(merged != null) { "Конфликт не разрешён. Уточните запрос и продолжите" }
+                val finished = mergeTurn(record.sourcePath) {
+                    val target = workspace.target(record)
+                    record = save(project.id, sessionId, taskId) { it.copy(targetCommit = target,
+                        phase = if (it.phase == TaskWorktreePhase.CONFLICT) it.phase else TaskWorktreePhase.MERGING, error = null) }
+                    var merged: String? = null
+                    if (record.phase != TaskWorktreePhase.CONFLICT || record.handoffGeneration != null || planAccepted)
+                        execution { merged = workspace.integrate(record) }
+                    if (merged == null) {
+                        record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.CONFLICT, handoffGeneration = null) }
+                        // Конфликт на той же вершине, что и прошедший ремонт, — терминальная ошибка;
+                        // новая вершина открывает новый раунд разрешения.
+                        check(repairedAt != record.targetCommit) { "Конфликт не разрешён. Уточните запрос и продолжите" }
+                        return@mergeTurn null
+                    }
+                    record = save(project.id, sessionId, taskId) { it.copy(mergeCommit = checkNotNull(merged),
+                        integratedCommit = it.targetCommit, behindCommits = 0, refreshNote = null, pendingTransfer = false,
+                        phase = TaskWorktreePhase.MERGING) }
+                    execution { workspace.verify(record) }
+                    verifyMerged(record)
+                    record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.DELIVERING) }
+                    leased(project.copy(id = "task-delivery-$sessionId", path = record.sourcePath), sessionId, SOURCE_FOLDER) {
+                        if (!planAccepted) check(session(project.id, sessionId).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
+                        workspace.deliver(record)
+                    }
+                    save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.COMPLETE, error = null) }.also {
+                        AppLog.info("coding.worktree", "task.integrated", mapOf("taskId" to taskId, "sessionId" to sessionId))
+                    }
                 }
-                record = save(project.id, sessionId, taskId) { it.copy(mergeCommit = checkNotNull(merged),
-                    integratedCommit = it.targetCommit, behindCommits = 0, refreshNote = null, phase = TaskWorktreePhase.MERGING) }
-                execution { workspace.verify(record) }
-                verifyMerged(record)
-                record = save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.DELIVERING) }
-                leased(project.copy(id = "task-delivery-$sessionId", path = record.sourcePath), sessionId, SOURCE_FOLDER) {
-                    if (!planAccepted) check(session(project.id, sessionId).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
-                    workspace.deliver(record)
-                }
-                return save(project.id, sessionId, taskId) { it.copy(phase = TaskWorktreePhase.COMPLETE, error = null) }.also {
-                    AppLog.info("coding.worktree", "task.integrated", mapOf("taskId" to taskId, "sessionId" to sessionId))
-                }
-
+                if (finished != null) return finished
+                repair(record)
+                if (!planAccepted) requireQuiescent(sessionId)
+                record = checkNotNull(session(project.id, sessionId).taskWorktree)
+                // Повторная попытка читает свежую вершину: за время ремонта соседняя задача успела влиться.
+                repairedAt = record.targetCommit
             } catch (changed: TaskDestinationChanged) {
                 AppLog.debug("coding.worktree", "merge.destination-advanced", mapOf("taskId" to taskId, "sessionId" to sessionId))
+                // Продвижение назначения открывает новый раунд разрешения конфликтов.
+                repairedAt = null
             }
         }
     }
@@ -204,6 +224,9 @@ class TaskWorktreeService(
     }
 
     private companion object {
+        /** Очереди влития по исходной папке: одна незавершённая попытка слияния на проект. */
+        private val mergeQueues = mutableMapOf<String, Mutex>()
+        private val mergeQueuesLock = Mutex()
         /** Имя ветки и subject коммита ограничивает порт; здесь сырой текст просто не разрастается. */
         const val MAX_TASK_LABEL = 160
         /** Соседняя доставка держит папку секунды; дольше ждёт только пользователь, а не прогон. */
@@ -211,6 +234,11 @@ class TaskWorktreeService(
         const val SOURCE_LEASE_POLL_MILLIS = 250L
         const val SOURCE_FOLDER = "Исходная папка проекта"
         const val TASK_COPY = "Рабочая копия задачи"
+    }
+
+    private suspend fun <T> mergeTurn(path: String, action: suspend () -> T): T {
+        val queue = mergeQueuesLock.withLock { mergeQueues.getOrPut(path.trimEnd('/', '\\')) { Mutex() } }
+        return queue.withLock { action() }
     }
 
     private suspend fun <T> leasedOrNull(owner: CodingProject, action: suspend () -> T): T? {

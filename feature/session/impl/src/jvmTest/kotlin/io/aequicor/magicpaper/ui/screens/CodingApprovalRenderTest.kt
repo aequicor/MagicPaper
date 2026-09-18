@@ -7,7 +7,9 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.domain.*
@@ -17,6 +19,7 @@ import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import java.io.File
 import kotlin.test.*
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 class CodingApprovalRenderTest {
     private val request = CodingApproval("a", "s", "p", "Сборка проекта", CodingApprovalKind.COMMAND,
         "Для загрузки зависимостей нужен доступ к сети. Разрешить сборку проекта?",
@@ -36,23 +39,27 @@ class CodingApprovalRenderTest {
         }.use { scene ->
             var frame = 0L
             fun render() { repeat(12) { scene.render(++frame * 32_000_000L).close(); Thread.sleep(25) } }
-            fun click(x: Float) {
-                val y = height - 36f
-                scene.sendPointerEvent(PointerEventType.Press, Offset(x, y))
-                scene.sendPointerEvent(PointerEventType.Release, Offset(x, y))
+            // Клик идёт в центр найденной по смыслу кнопки: жёсткие координаты зависят от метрик платформенных шрифтов.
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            fun click(label: String) {
+                val center = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+                    .first { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true }
+                    .boundsInRoot.center
+                scene.sendPointerEvent(PointerEventType.Press, center)
+                scene.sendPointerEvent(PointerEventType.Release, center)
                 render()
             }
             render()
             assertTrue(decisions.isEmpty(), "Opening the card never grants permission")
             assertTrue(height in 150..420)
-            click(260f)
+            click("Разрешить один раз")
             assertEquals(listOf(CodingApprovalDecision.ALLOW_ONCE), decisions)
-            click(60f)
+            click("Отклонить")
             assertEquals(1, decisions.size, "Buttons are disabled while sending a decision")
             pending.value = listOf(request.copy(id = "next", details = request.details + "\n" + "Подробности операции\n".repeat(100)))
             render()
             assertTrue(height <= 420, "Long details leave the action buttons visible")
-            click(60f)
+            click("Отклонить")
             assertEquals(listOf(CodingApprovalDecision.ALLOW_ONCE, CodingApprovalDecision.DENY), decisions)
         }
     }

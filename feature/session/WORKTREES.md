@@ -55,7 +55,7 @@ Neither a final engine event nor a saved response proves Git delivery.
 | Saved phase | Next operation / recovery |
 | --- | --- |
 | PREPARING | Create or validate the exact recorded branch and directory |
-| RUNNING / READY | Continue the same task; READY is an authenticated handoff |
+| RUNNING / READY | Continue the same task; READY is an authenticated handoff. A transfer stopped by a conflict stays in the copy for the resumed agent to resolve on the working branch |
 | CAPTURING | Capture remaining changes; reuse existing agent commits |
 | MERGING | Bring the copy onto the recorded destination tip and verify |
 | CONFLICT | Agent repairs the managed copy; questions retain this workspace |
@@ -75,6 +75,20 @@ receipt stays recoverable: the copy keeps a `refs/magicpaper/task-pre-integratio
 interrupted replay without a saved CONFLICT phase is aborted and repeated, and a replay left in
 CONFLICT is continued after the agent stages its resolution. A merge left in progress by an
 older application version is still completed, not discarded.
+
+## Merge turn serialization
+
+Several tasks of one project can finish at once, and the expensive verification between the
+rebase and the fast-forward delivery is exactly the window in which a sibling delivery would
+invalidate the merge. `TaskWorktreeService` therefore queues whole merge turns per source
+folder: reading the destination tip, replaying the task, verification and delivery run as one
+serialized turn, so a waiting task always reads and merges the tip its predecessor just
+delivered instead of a stale one and rebases only once. Conflict resolution releases the turn:
+an agent repair and a user clarification do not block sibling merges, and the repaired task
+re-enters the queue to merge onto the fresh tip. A destination advanced by an out-of-turn
+writer (the user, another application process) is still detected at delivery and re-merges.
+An unresolved conflict on the same tip that a repair already addressed is a terminal error
+instead of another repair round.
 
 ## Shared writer leases
 
@@ -105,10 +119,15 @@ folder owned by another delivery only postpones the update. A PREPARING copy is 
 recorded base commit so replaying preparation stays possible.
 
 The update is declined, never forced: unsaved agent edits are not committed on the agent's
-behalf, an unfinished Git operation is left alone, and a conflict before a run is rolled back
-with `git rebase --abort` because nobody is there to resolve it. A declined update keeps the
-measured distance and its reason in the task record; the remaining integration happens at
-delivery. Delivery never depends on a successful update.
+behalf, and a failure without conflict paths is rolled back with `git rebase --abort`. A
+transfer stopped by a conflict is not rolled back: it stays in the managed copy on the working
+branch, the task record marks it (`pendingTransfer`, with the recorded destination tip as the
+integration point so reconcile accepts the resolved branch), and the resumed agent resolves
+the conflict in place (`git add`, then `git rebase --continue`) before continuing the task.
+Capture finishes a transfer the agent resolved but did not continue, and refuses one with
+unresolved paths. A declined update keeps the measured distance and its reason in the task
+record; the remaining integration happens at delivery. Delivery never depends on a successful
+update.
 
 `behindCommits`, `refreshNote` and `integratedCommit` are reported to the user as a session
 status and to the agent in the worktree instructions, so a resumed run re-reads files instead of
@@ -148,6 +167,11 @@ Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`
 `permanentlyBusySourceFolderKeepsTheSavedResultRecoverable`), `SessionCodingWorkspaceTest`
 (`staleSourceLeaseYieldsOnlyToProvenNativeStop`),
 `CodingSystemPromptsTest.destinationDistanceAndPreRunUpdateReachTheAgent`,
+`CodingSystemPromptsTest.pendingTransferConflictIsResolvedOnTheWorkingBranchInPlace`,
+`GitTaskWorkspaceTest.preRunUpdateLeavesTheConflictOnTheWorkingBranch`,
+`GitTaskWorkspaceTest.captureFinishesATransferTheAgentResolvedButLeftUncontinued`,
+`GitTaskWorkspaceTest.restartWhileRunningKeepsTheWorktreeAndActualizesItsBranchOnResume`,
+`CodingWorktreeTest.concurrentCompletionsSerializeTheirMergesPerProject`,
 `PlanningExecutionServiceTest.worktreePlanDeliversOnlyAfterAcceptanceAndUsesIsolatedSource`,
 `PaperMenuToggleInfoTest` and
 `CodingComposerRenderTest.plusMenuExposesWorktreeAndKeepsInfoAvailableWhileLocked`.

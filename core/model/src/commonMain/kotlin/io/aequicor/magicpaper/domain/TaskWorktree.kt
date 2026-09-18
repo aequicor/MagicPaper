@@ -29,6 +29,9 @@ data class TaskWorktree(
     val behindCommits: Int = 0,
     /** Why the copy was not brought onto the destination tip; null when it is up to date. */
     val refreshNote: String? = null,
+    /** An unfinished transfer onto the destination branch stays in the copy: the conflict
+     * is resolved on the working branch by the resumed agent, never in the source folder. */
+    val pendingTransfer: Boolean = false,
     /** Output survives a crash between native completion and Git delivery. */
     val executionResponse: CodingMessage? = null,
     /**
@@ -43,10 +46,13 @@ data class WorktreeAvailability(val available: Boolean, val reason: String? = nu
 /**
  * Distance to the destination branch plus the outcome of a safe pre-run update.
  * `updated` is false when nothing had to change or when the copy must not be touched yet.
+ * `pendingTransfer` means an unfinished transfer onto the destination branch stays in
+ * the copy: its conflict is resolved on the working branch by the resumed agent.
  */
 data class TaskWorktreeRefresh(
     val behind: Int = 0,
     val targetCommit: String = "",
     val updated: Boolean = false,
     val note: String? = null,
+    val pendingTransfer: Boolean = false,
 )

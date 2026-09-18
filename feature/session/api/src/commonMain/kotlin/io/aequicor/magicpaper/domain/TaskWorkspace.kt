@@ -21,8 +21,10 @@ interface TaskWorkspace {
     suspend fun target(record: TaskWorktree): String
     /**
      * Read-only distance to the destination branch; brings a clean copy onto the destination tip
-     * before a run when that needs no conflict resolution. A declined update is an ordinary
-     * outcome reported in [TaskWorktreeRefresh], never a partially modified copy.
+     * before a run when that needs no conflict resolution. A conflicted update is not rolled
+     * back: it stays in the copy (`pendingTransfer`) so the resumed agent resolves it on the
+     * working branch. Any other declined update is an ordinary outcome reported in
+     * [TaskWorktreeRefresh], never a partially modified copy.
      */
     suspend fun refresh(record: TaskWorktree): TaskWorktreeRefresh
     /**

@@ -47,7 +47,8 @@ class ResearchModeRenderTest {
         }
         fun text(label: String): SemanticsNode = nodes().first { it.config.getOrNull(SemanticsProperties.Text)?.any { t -> t.text == label } == true }
         fun hasText(label: String) = nodes().any { it.config.getOrNull(SemanticsProperties.Text)?.any { t -> t.text.contains(label) } == true }
-        fun menu() { click(nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Инструменты и параметры сессии") == true }) }
+        // Меню режимов открывается переключателем параметров композера (кнопка «+» удалена вместе со своей семантикой).
+        fun menu() { click(nodes().single { it.config.getOrNull(SemanticsProperties.ContentDescription)?.firstOrNull() in setOf("Показать параметры", "Скрыть параметры") }) }
         fun click(node: SemanticsNode) {
             scene.sendPointerEvent(PointerEventType.Press, node.boundsInRoot.center)
             scene.sendPointerEvent(PointerEventType.Release, node.boundsInRoot.center)
