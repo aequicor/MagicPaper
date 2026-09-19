@@ -43,7 +43,7 @@ import kotlinx.coroutines.launch
 
 /** Owns chat execution across component destruction and navigation. */
 class DefaultChatService(
-    private val runtime: CodingRuntime,
+    private val runtime: ChatBackend,
     private val chats: ChatRepository,
     private val settingsRepo: SettingsRepository,
     private val profileRepo: LlmProfileRepository,

@@ -176,7 +176,9 @@ internal fun buildRuntime(
         single<CodingService> { get<DefaultCodingService>() }
         single<SettingsService> { get<DefaultSettingsService>() }
         single<PluginService> { DefaultPluginService(get(), get()) }
-        single { DefaultChatService(if (codingRuntime.supported) get<CodingRuntime>() else get<GatewaySessionRuntime>(), get(), get(), get(), get(),
+        // Desktop keeps the engine's tool loop for chat; platforms without it answer over HTTP.
+        single<ChatBackend> { if (codingRuntime.supported) get<CodingRuntime>() else get<GatewaySessionRuntime>() }
+        single { DefaultChatService(get(), get(), get(), get(), get(),
             layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),

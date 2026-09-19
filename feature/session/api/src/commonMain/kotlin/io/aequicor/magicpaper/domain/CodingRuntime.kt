@@ -8,13 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import io.aequicor.magicpaper.util.Id
 
-interface CodingRuntime {
-    /** Ordinary chat uses the selected session backend in its private workspace. */
-    fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment> = emptyList()): Flow<CodingEvent> =
-        flowOf(CodingEvent.Failed("Движок чата недоступен на этой платформе."), CodingEvent.Finished)
-
-    suspend fun deleteChatSession(session: ChatSession) { abort(session.id); reconcile(session.id) }
-
+interface CodingRuntime : ChatBackend {
     /**
      * Глобальные фича-флаги из [AppSettings.featureFlags].
      * Обновляются приложением при смене настроек; per-session override берётся
@@ -38,8 +32,6 @@ interface CodingRuntime {
     suspend fun status(engine: CodingEngine): RuntimeStatus = status()
     fun ensureReady(engine: CodingEngine): Flow<RuntimeStatus> = ensureReady()
     suspend fun uninstall(engine: CodingEngine) = uninstall()
-    /** Reconcile a prior run before reusing its workspace after application restart. */
-    suspend fun reconcile(sessionId: String) = Unit
     /** Exact terminal engine items only; missing output or a model's report is not completion evidence. */
     suspend fun nativeToolResults(session: CodingSession, callIds: Set<String>): List<CodingEvent.ToolFinished> = emptyList()
     /** Поддерживается ли бэкенд на этой платформе (веб и Android — нет). */
@@ -74,9 +66,6 @@ interface CodingRuntime {
             emit(CodingEvent.Failed("Чтение проекта при планировании недоступно на этой платформе."))
             emit(CodingEvent.Finished)
         }
-
-    /** Прервать прогон конкретной сессии (остановить её процесс агента). */
-    fun abort(sessionId: String)
 
     /** Прервать все прогоны (снятие зависимостей, закрытие). */
     fun abortAll()
