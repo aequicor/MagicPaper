@@ -410,7 +410,8 @@ class OrchestrationService(
                 // Refinement reads the current specification below and validates it again when committing.
                 // Worker telemetry may advance the storage revision after context.get without changing the task.
                 val current = if (args.newPlan) scopedPlan ?: requirePlan() else requirePlan()
-                requireTool(args.revision == null || args.revision <= current.revision) { "Неизвестная версия плана" }
+                val revision = args.revision
+                requireTool(revision == null || revision <= current.revision) { "Неизвестная версия плана" }
                 val target = if (args.newPlan) replacementDraft(context, current, operation) else current
                 val request = if (args.newPlan) args.message + "\n\n" + replacementContext(current) else args.message
                 refine(target.id, operation, request, args.requiresConfirmation)

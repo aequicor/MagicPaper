@@ -14,7 +14,7 @@ Source paths below are relative to `src/commonMain/kotlin/io/aequicor/magicpaper
 | Parent/child runtime ownership and workspace leases | `domain/SessionTreeRuntime.kt` |
 | Atomic organism state, generations and tombstones | `data/coding/SessionOrganismStore.kt` |
 | Tool scopes, receipts and native bridge | `domain/tools/ToolHost.kt`, `ToolEnabledCodingRuntime.kt` |
-| Orchestration catalog and access policy | `../../custom-tools/api` and `../../custom-tools/impl` |
+| Tool vocabulary, access matrix and rejections | `../../tools/api` and `../../tools/impl` |
 | Native Pi/Codex and skill input | JVM `data/coding/DesktopCodingRuntime.kt`, `PiCodingRuntime.kt` |
 | Engine search binaries (fd, rg) | JVM `data/coding/PiCodingRuntime.kt` + Gradle `bundleCodingSearchTools` |
 | Model limits declared by the engine catalog | JVM `data/coding/PiEngineModelLimits.kt` + `core/model` `ModelLimitCatalog.kt` |

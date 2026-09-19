@@ -28,7 +28,7 @@ kotlin {
             implementation(project(":core:ai:api"))
             implementation(libs.koin.core)
             implementation(project(":feature:session:api"))
-            implementation(project(":feature:custom-tools:api"))
+            implementation(project(":feature:tools:api"))
             implementation(project(":feature:settings:api"))
             implementation(project(":feature:docs:api"))
             implementation(project(":feature:plugins:api"))

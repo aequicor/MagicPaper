@@ -12,6 +12,8 @@ platform adapters stay in the implementation's platform source sets.
   entity drafts and background tasks. A route/visit ID is not an entity ID.
 - Keep tests beside their owner. Integration-test dependencies may assemble
   several implementations; do not widen production visibility just for tests.
+- Tool vocabulary, schemas, access matrix and rejection types belong to `tools:api`;
+  execution, receipts and the native bridge stay with the session owner.
 - Plugin SPI belongs to `plugins:api`; Notes/Focus/Calc to `plugins:impl`;
   skills panels to `skills:impl`; planning UI/runtime to `session:impl`.
   Preserve plugin IDs and registration order. ProjectSkills UI and the coding
