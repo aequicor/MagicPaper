@@ -11,6 +11,12 @@ HOSTS = {':desktopApp', ':androidApp', ':webApp'}
 def is_retired_module(name):
     return name == ':shared' or name.startswith(':shared:')
 
+def is_application_module(name):
+    # Same predicate as docs/desktop-ui/verify-design-system.py: the application
+    # graph is :app, the platform hosts and the features. Foundational modules
+    # such as :core:logging are not part of it.
+    return name == ':app' or name in HOSTS or name == ':feature' or name.startswith(':feature:')
+
 def production_build(text):
     # Tests may assemble concrete implementations for integration fixtures.
     for match in reversed(list(re.finditer(r'\w*[Tt]est\.dependencies\s*\{', text))):
@@ -77,7 +83,7 @@ def violations(root):
                 errors.append(f'{name}: only platform applications may depend on :app')
             if name in {':core:model', ':core:logging'} and dependency:
                 errors.append(f'{name}: foundational module must not depend on project {dependency}')
-            if name == ':designSystem' and dependency:
+            if name == ':designSystem' and is_application_module(dependency):
                 errors.append(f'{name}: Paper must remain independent of application modules')
     # Kotlin/JVM top-level facade names can hide API extension functions when an
     # implementation file keeps the same package and basename after extraction.
@@ -153,6 +159,14 @@ if '--self-test' in sys.argv:
         api.write_text('commonTest.dependencies { implementation(project(":shared")) }')
         assert any(':shared is retired' in error for error in violations(root))
         api.write_text('')
+        design = root / 'designSystem/build.gradle.kts'
+        design.parent.mkdir()
+        design.write_text('jvmMain.dependencies { implementation(project(":core:logging")) }')
+        assert not any('Paper must remain independent' in error for error in violations(root)), 'foundational logging is not an application module'
+        for application in (':app', ':desktopApp', ':feature:session:api', ':feature:session:impl'):
+            design.write_text(f'commonMain.dependencies {{ implementation(project("{application}")) }}')
+            assert any('Paper must remain independent' in error for error in violations(root)), application
+        design.write_text('')
         settings = root / 'settings.gradle.kts'
         for declaration in ('include(":shared")', 'include("shared")', 'include(":shared:api")',
                             'project(":shared").projectDir = file("app")'):
