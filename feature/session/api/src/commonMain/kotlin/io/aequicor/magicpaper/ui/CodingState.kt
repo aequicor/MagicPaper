@@ -155,6 +155,8 @@ data class QuarantineRecoveryState(
 
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
+    /** False on a host that cannot run an agent: the shell then offers no coding controls. */
+    val supported: Boolean = true,
     val organisms: Map<String, io.aequicor.magicpaper.domain.SessionOrganism> = emptyMap(),
     val computerSupported: Boolean = false,
     val applicationSupported: Boolean = false,

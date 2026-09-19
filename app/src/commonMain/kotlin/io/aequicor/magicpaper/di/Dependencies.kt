@@ -34,6 +34,7 @@ internal fun buildRuntime(
     planningWorkspace: PlanningWorkspace = LocalPlanningWorkspace(),
     taskWorkspace: TaskWorkspace = UnavailableTaskWorkspace,
     integrationChecks: SessionIntegrationCheckRunner? = null,
+    coding: (CodingFeatureDependencies) -> CodingFeature = { UnavailableCodingFeature },
     platformPlugins: List<MagicPlugin> = emptyList(),
     projectSkills: ProjectSkills? = null,
     packageInstructions: SkillInstructionSource? = null,
@@ -132,52 +133,45 @@ internal fun buildRuntime(
             GatewaySessionRuntime(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(),
                 layoutEditor = layoutEditor, settings = { settings.load() },
                 readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read) }
-        single<CodingProjectRepository> { codingProjectRepository(store, get(), get(), get(), codingRuntime) }
-        single { CodingRuntimeGraph(store, get(), get(), get(), get(), codingRuntime,
-            planningWorkspace, integrationChecks, get(), get(), get(), draftRepository = get(), taskWorkspace = taskWorkspace, sourceAccess = get()).also { graph ->
-                graph.toolHost.mediaGeneration = get()
-                get<DefaultMediaGenerationService>().onTerminal = graph.toolHost::reconcileMediaCompletion
-                graph.toolHost.mediaAllowed = { context, kind ->
-                    if (context.projectId == "chat-${context.ownerSessionId}") {
-                        val chats = get<ChatRepository>()
-                        val session = chats.session(context.ownerSessionId)
-                        val parentId = session?.researchParentId
-                        val owner = if (parentId != null) chats.session(parentId) else session
-                        owner?.mediaTools?.enabled(kind) == true
-                    } else get<CodingProjectRepository>().sessions(context.projectId)
-                        .firstOrNull { it.id == context.ownerSessionId }?.mediaTools?.enabled(kind) == true
-                }
-                graph.toolHost.orchestration = io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(
-                    io.aequicor.magicpaper.domain.tools.OrchestrationActions { context, operation, tool, arguments ->
-                        graph.toolHost.receiver(context, operation, tool, arguments)
-                    })
+        single<CodingFeature> { coding(CodingFeatureDependencies(
+            store = store, json = get(), settings = get(), profiles = get(), usage = get(),
+            gateway = get(), search = get(), dossier = get(), drafts = get(), draftBlobs = get(),
+            media = get(), requestPins = get(), chats = get(),
+            readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read,
+            filePicker = filePicker, projectSkills = projectSkills, applicationScope = applicationScope,
+            onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },
+            removePluginDrafts = { project, plans -> get<PluginService>().removeProjectDrafts(project, plans) },
+            codingRuntime = codingRuntime, dirPicker = dirPicker, planningWorkspace = planningWorkspace,
+            taskWorkspace = taskWorkspace, integrationChecks = integrationChecks)).also { feature ->
+                get<DefaultMediaGenerationService>().onTerminal = feature.onMediaTerminal
+                // The default orchestration checker lives in a sibling implementation module,
+                // which a feature implementation may not depend on; the application binds it.
+                feature.bindOrchestration(io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(feature.orchestrationActions))
             } }
-        single<CodingRuntime> { get<CodingRuntimeGraph>().runtime ?: codingRuntime }
-        single<PlanningRepository> { get<CodingRuntimeGraph>().planningStore }
+        single<CodingProjectRepository> { get<CodingFeature>().projects }
+        single<CodingRuntime> { get<CodingFeature>().runtime }
+        single<PlanningRepository> { get<CodingFeature>().planning }
         single { DefaultRequestPinService(get(), get(), applicationScope, get()) }
         single<RequestPinService> { get<DefaultRequestPinService>() }
         single<PluginRegistry> {
-            val graph = get<CodingRuntimeGraph>()
             PluginRegistry().register(NotesPlugin(get(), applicationScope)).register(FocusPlugin(get(), applicationScope)).register(CalcPlugin(get(), applicationScope))
                 .register(SkillsRepositoryPlugin(get(), get(), get<SkillStore>()))
                 .apply { experiencePlugin?.let { register(it(get(), get())) } }
-                .register(CodingPlanningPlugin(graph.planningStore, graph.planComposer, get(),
-                    graph.planningExecution, graph.runtime ?: codingRuntime, get(), get(), get(),
-                    draftRepository = get(), applicationScope = applicationScope))
+                .apply { get<CodingFeature>().plugins.forEach(::register) }
                 .apply { platformPlugins.forEach(::register) }
         }
         factory<ChatComponent.Factory>(FeatureFactoryQualifiers.chat) { DefaultChatComponentFactory(get(), get(), get()) }
-        factory<CodingComponent.Factory>(FeatureFactoryQualifiers.coding) { DefaultCodingComponentFactory(get(), get(), getOrNull()) }
+        factory<CodingComponent.Factory>(FeatureFactoryQualifiers.coding) { get<CodingFeature>().componentFactory }
         factory<SettingsComponent.Factory>(FeatureFactoryQualifiers.settings) { DefaultSettingsComponentFactory(get(), get(), get(), get(), get()) }
         factory<DocsComponent.Factory>(FeatureFactoryQualifiers.docs) { DefaultDocsComponentFactory(get()) }
         factory<PluginsComponent.Factory>(FeatureFactoryQualifiers.plugins) { DefaultPluginsComponentFactory(get()) }
         factory<SkillsComponent.Factory>(FeatureFactoryQualifiers.skills) { DefaultSkillsComponentFactory(get()) }
         single<ChatService> { get<DefaultChatService>() }
-        single<CodingService> { get<DefaultCodingService>() }
+        single<CodingService> { get<CodingFeature>().service }
         single<SettingsService> { get<DefaultSettingsService>() }
         single<PluginService> { DefaultPluginService(get(), get()) }
         // Desktop keeps the engine's tool loop for chat; platforms without it answer over HTTP.
-        single<ChatBackend> { if (codingRuntime.supported) get<CodingRuntime>() else get<GatewaySessionRuntime>() }
+        single<ChatBackend> { get<CodingFeature>().chatBackend ?: get<GatewaySessionRuntime>() }
         single { DefaultChatService(get(), get(), get(), get(), get(),
             layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
@@ -188,13 +182,6 @@ internal fun buildRuntime(
                 val coding = get<CodingService>().state.value.coding
                 if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }
             }) }
-        single { DefaultCodingService(get(), get(), get(), get(), get(), get(), dirPicker,
-            get(), get<CodingRuntimeGraph>().planningChat, get(), get(),
-            onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },
-            draftRepository = get(), draftBlobs = get(),
-            taskWorktrees = get<CodingRuntimeGraph>().taskWorktrees,
-            mediaGeneration = get(),
-            removePluginDrafts = { project, plans -> get<PluginService>().removeProjectDrafts(project, plans) }) }
         single { DefaultSettingsService(get(), get(), get(), get(), get(), get(),
             skills = get(), planning = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),
             openAiSubscription = openAiSubscription, searchConnectionChecker = get(), usage = get(), draftRepository = get(),
@@ -208,14 +195,13 @@ internal fun buildRuntime(
                 resetting = true
                 get<DefaultSettingsService>().prepareForReset()
                 get<DefaultChatService>().prepareForReset()
-                get<DefaultCodingService>().prepareForReset()
+                get<CodingFeature>().prepareForReset()
                 get<DefaultRequestPinService>().resetForWipe()
                 get<PluginService>().prepareForReset()
-                get<CodingRuntimeGraph>().pauseForReset()
+                get<CodingFeature>().pauseForReset()
                 get<MediaGenerationService>().prepareForReset()
                 openAiSubscription?.logout()
-                get<CodingProjectRepository>().wipe()
-                get<CodingRuntimeGraph>().clearForReset()
+                get<CodingFeature>().clearForReset()
                 persistence.clearOwnedData()
                 mediaStore.clear()
                 store.clear()
@@ -224,7 +210,7 @@ internal fun buildRuntime(
                 if (resetting) {
                     resetting = false
                     try {
-                        get<CodingRuntimeGraph>().resumeAfterReset()
+                        get<CodingFeature>().resumeAfterReset()
                         get<MediaGenerationService>().resumeAfterReset()
                         get<ChatService>().start()
                         get<CodingService>().reload()

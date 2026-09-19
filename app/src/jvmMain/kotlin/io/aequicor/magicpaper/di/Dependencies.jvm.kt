@@ -35,6 +35,8 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
         planningWorkspace = GitPlanningWorkspace(),
         taskWorkspace = io.aequicor.magicpaper.data.planning.GitTaskWorkspace(),
         integrationChecks = ResearchSessionIntegrationChecks(),
+        // Only this host can run an agent, so only this host assembles the coding half.
+        coding = ::codingFeature,
         platformPlugins = listOf(skills.plugin),
         packageInstructions = skills.instructions,
         experiencePlugin = skills::experiencePlugin,

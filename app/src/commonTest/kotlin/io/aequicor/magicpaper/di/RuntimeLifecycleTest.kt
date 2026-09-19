@@ -23,6 +23,21 @@ class RuntimeLifecycleTest {
         override suspend fun import(): String? = null
     }
 
+    @Test fun withoutAPlatformAssemblyEveryCodingBindingResolvesAsUnavailable() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()), bridge, NavigationSessionConfig())
+        try {
+            runtime.start()
+            assertEquals(RuntimeState.Ready, runtime.ready.first { it != RuntimeState.Loading })
+            // A missing binding would surface as a retry card for an action that can never succeed.
+            assertSame(UnavailableCodingService, runtime.koin.get<CodingService>())
+            assertSame(UnsupportedCodingComponentFactory, runtime.koin.get<CodingComponent.Factory>(FeatureFactoryQualifiers.coding))
+            assertSame(UnavailableCodingProjectRepository, runtime.koin.get<CodingProjectRepository>())
+            assertSame(UnavailablePlanningRepository, runtime.koin.get<PlanningRepository>())
+            assertTrue(runtime.koin.get<CodingProjectRepository>().all().isEmpty())
+        } finally { runtime.close(); runtime.awaitClosed(); Dispatchers.resetMain() }
+    }
+
     @Test fun koinOwnersAreSingletonsAndResetKeepsThemUsable() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val store = InMemoryKeyValueStore()
@@ -30,7 +45,7 @@ class RuntimeLifecycleTest {
         var starts = 0
         var closes = 0
         val runtime = buildRuntime(store, persistence, bridge, NavigationSessionConfig(),
-            onPlatformStarted = { starts++ }, onPlatformClosed = { closes++ })
+            coding = ::codingFeature, onPlatformStarted = { starts++ }, onPlatformClosed = { closes++ })
         try {
             runtime.start()
             runtime.start()
@@ -38,7 +53,7 @@ class RuntimeLifecycleTest {
             assertEquals(1, starts)
             val chat = runtime.koin.get<ChatService>()
             assertSame(chat, runtime.koin.get<DefaultChatService>())
-            assertSame(runtime.koin.get<CodingService>(), runtime.koin.get<DefaultCodingService>())
+            assertSame(runtime.koin.get<CodingService>(), runtime.koin.get<CodingFeature>().service)
             val settings = runtime.koin.get<SettingsService>()
             assertSame(settings, runtime.koin.get<DefaultSettingsService>())
             assertIs<DefaultChatComponentFactory>(runtime.koin.get<ChatComponent.Factory>(FeatureFactoryQualifiers.chat))
@@ -47,7 +62,7 @@ class RuntimeLifecycleTest {
             assertIs<DefaultDocsComponentFactory>(runtime.koin.get<DocsComponent.Factory>(FeatureFactoryQualifiers.docs))
             assertIs<DefaultPluginsComponentFactory>(runtime.koin.get<PluginsComponent.Factory>(FeatureFactoryQualifiers.plugins))
             assertIs<DefaultSkillsComponentFactory>(runtime.koin.get<SkillsComponent.Factory>(FeatureFactoryQualifiers.skills))
-            val graph = runtime.koin.get<CodingRuntimeGraph>()
+            val feature = runtime.koin.get<CodingFeature>()
             assertSame(runtime.koin.get<CodingRuntime>(), runtime.koin.get<CodingRuntime>())
             val resetFinished = CompletableDeferred<Unit>()
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
@@ -82,8 +97,8 @@ class RuntimeLifecycleTest {
             assertTrue(persistence.drafts.keys("coding-session-create:").isEmpty())
             assertNull(coding.sessionCreationDraft("creation"))
             assertSame(chat, runtime.koin.get<ChatService>())
-            assertSame(graph, runtime.koin.get<CodingRuntimeGraph>())
-            graph.planningChat?.awaitReady()
+            assertSame(feature, runtime.koin.get<CodingFeature>())
+            (feature.service as DefaultCodingService).planningChat?.awaitReady()
             chat.newSession()
             runCurrent()
             assertEquals(1, runtime.koin.get<ChatRepository>().sessions().size,

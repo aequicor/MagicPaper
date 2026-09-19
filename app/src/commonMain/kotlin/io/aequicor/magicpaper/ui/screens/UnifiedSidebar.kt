@@ -417,6 +417,7 @@ internal fun UnifiedSidebar(
             sourceFilterKey = sourceFilterKey,
             onSourceFilter = { sourceFilterKey = it },
             projects = coding.projects.map { it.id to it.name },
+            codingSupported = coding.supported,
         )
         PaperDivider()
         if (browsing) {
@@ -450,13 +451,15 @@ internal fun UnifiedSidebar(
                 kind = PaperButtonKind.QUIET,
                 leadingIcon = { PaperNoteAddIcon() },
             )
-            Spacer(Modifier.height(2.dp))
-            PaperButton(
-                "📂 Новый проект",
-                vm::addCodingProject,
-                Modifier.fillMaxWidth(),
-                kind = PaperButtonKind.QUIET,
-            )
+            if (coding.supported) {
+                Spacer(Modifier.height(2.dp))
+                PaperButton(
+                    "📂 Новый проект",
+                    vm::addCodingProject,
+                    Modifier.fillMaxWidth(),
+                    kind = PaperButtonKind.QUIET,
+                )
+            }
         }
     }
 }

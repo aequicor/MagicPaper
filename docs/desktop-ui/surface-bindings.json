@@ -3726,5 +3726,25 @@
     ],
     "stage": "6",
     "kind": "surface"
+  },
+  {
+    "path": "feature/session/api/src/commonMain/kotlin/io/aequicor/magicpaper/domain/UnavailableCoding.kt",
+    "symbol": "ComputerUsePanel",
+    "annotationLine": 51,
+    "targets": [
+      "PaperText"
+    ],
+    "stage": "6",
+    "kind": "composition-helper"
+  },
+  {
+    "path": "feature/session/api/src/commonMain/kotlin/io/aequicor/magicpaper/domain/UnavailableCoding.kt",
+    "symbol": "Content",
+    "annotationLine": 63,
+    "targets": [
+      "PaperText"
+    ],
+    "stage": "6",
+    "kind": "surface"
   }
 ]

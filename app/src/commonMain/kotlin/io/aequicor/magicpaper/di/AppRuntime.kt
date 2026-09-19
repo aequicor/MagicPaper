@@ -48,7 +48,7 @@ class MagicPaperRuntime internal constructor(
     private var chatService: ChatService? = null
     private var codingService: CodingService? = null
     private var pluginService: PluginService? = null
-    private var codingGraph: CodingRuntimeGraph? = null
+    private var codingFeature: CodingFeature? = null
     private var mediaService: MediaGenerationService? = null
 
     fun start() {
@@ -61,8 +61,8 @@ class MagicPaperRuntime internal constructor(
                 koin.get<LlmProfileRepository>().load()
                 val media = koin.get<MediaGenerationService>().also { mediaService = it }
                 media.refreshAvailability()
-                // Track graph ownership before dependent constructors can fail.
-                codingGraph = koin.get()
+                // Track assembly ownership before dependent constructors can fail.
+                codingFeature = koin.get()
                 media.recoverPending()
                 val settings = koin.get<SettingsService>().also { settingsService = it }
                 val chat = koin.get<ChatService>().also { chatService = it }
@@ -73,7 +73,7 @@ class MagicPaperRuntime internal constructor(
                 chat.start()
                 // Recover orchestration and child-session projections before coding.start()
                 // consumes durable run checkpoints.
-                codingGraph?.start()
+                codingFeature?.start()
                 coding.start()
                 scope.launch {
                     settings.state.collect { state ->
@@ -120,7 +120,7 @@ class MagicPaperRuntime internal constructor(
                 cleanup("startup") { starting?.cancelAndJoin() }
                 cleanup("chat") { chatService?.close() }
                 cleanup("coding") { codingService?.close() }
-                cleanup("execution") { codingGraph?.close() }
+                cleanup("execution") { codingFeature?.close() }
                 cleanup("media") { mediaService?.close() }
                 cleanup("settings") { settingsService?.close() }
                 cleanup("plugins") { pluginService?.close() }

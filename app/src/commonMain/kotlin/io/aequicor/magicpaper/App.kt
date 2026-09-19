@@ -31,7 +31,7 @@ fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>, compact: Bool
         CompositionLocalProvider(
             LocalChatPresentation provides DefaultChatPresentation,
             LocalModelPresentation provides DefaultModelPresentation,
-            LocalCodingPresentation provides DefaultCodingPresentation,
+            LocalCodingPresentation provides runtime.koin.get<CodingFeature>().presentation,
         ) {
             PaperSurface(Modifier.fillMaxSize(), kind = PaperSurfaceKind.CANVAS) {
                 when (val status = readiness) {

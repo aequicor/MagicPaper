@@ -326,6 +326,8 @@
 | [feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt](../../feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt) | `MediaSettingsUnsupportedPreview:105` | surface | PaperTheme, PaperPanel, PaperInput, PaperButton | 5 |
 | [feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt](../../feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MediaSettingsPreviews.kt) | `MediaSettingsEmptyPreview:108` | surface | PaperTheme, PaperPanel, PaperText, PaperButton | 5 |
 | [app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSessionFeedPreviews.kt](../../app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnifiedSessionFeedPreviews.kt) | `UnifiedOrderedStickySessionFeedPreview:78` | surface | PaperSessionRow, PaperStickyTree, PaperTheme | 6 |
+| [feature/session/api/src/commonMain/kotlin/io/aequicor/magicpaper/domain/UnavailableCoding.kt](../../feature/session/api/src/commonMain/kotlin/io/aequicor/magicpaper/domain/UnavailableCoding.kt) | `ComputerUsePanel:51` | composition-helper | PaperText | 6 |
+| [feature/session/api/src/commonMain/kotlin/io/aequicor/magicpaper/domain/UnavailableCoding.kt](../../feature/session/api/src/commonMain/kotlin/io/aequicor/magicpaper/domain/UnavailableCoding.kt) | `Content:63` | surface | PaperText | 6 |
 
 ## Постоянные ID этапов
 

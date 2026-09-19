@@ -61,6 +61,8 @@ internal fun searchSessions(
     }.sortedByDescending { it.updatedAt }
 }
 
+private val chatStatusFilters = setOf(SidebarStatusFilter.ALL, SidebarStatusFilter.UNREAD)
+
 @Composable
 internal fun SessionBrowserControls(
     query: String,
@@ -75,6 +77,7 @@ internal fun SessionBrowserControls(
     sourceFilterKey: String = "all",
     onSourceFilter: (String) -> Unit = {},
     projects: List<Pair<String, String>> = emptyList(),
+    codingSupported: Boolean = true,
 ) {
     var filterOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -95,7 +98,8 @@ internal fun SessionBrowserControls(
                 PaperMenuHost(filterOpen, { filterOpen = false }, Modifier.widthIn(min = 220.dp)) {
                     PaperText("Статус", role = PaperTextRole.LABEL,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-                    SidebarStatusFilter.entries.forEach { filter ->
+                    // Eight of these describe agent progress; without an agent they can never match.
+                    SidebarStatusFilter.entries.filter { codingSupported || it in chatStatusFilters }.forEach { filter ->
                         PaperRichMenuAction(
                             text = { PaperText(if (statusFilter == filter) "✓ ${filter.label}" else filter.label) },
                             onClick = { onStatusFilter(filter); filterOpen = false },

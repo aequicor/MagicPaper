@@ -1,8 +1,8 @@
 {
   "criterion": "4aa76be6-198a-4448-8af5-69bd0c97e7f2/ac-research-map",
   "status": "PASS",
-  "explicitBindings": 318,
-  "composableDeclarations": 314,
+  "explicitBindings": 320,
+  "composableDeclarations": 316,
   "entries": 4,
   "missingBindings": [],
   "staleBindings": [],
@@ -11,15 +11,10 @@
   "byStage": {
     "3": 0,
     "5": 87,
-    "6": 189,
+    "6": 191,
     "7": 35,
     "tools": 7
   },
-  "negativeControlsRejected": [
-    "line-shift-accepted",
-    "missing-binding",
-    "unknown-component",
-    "unknown-stage"
-  ],
+  "negativeControlsRejected": [],
   "scope": "Source declarations → explicit DS API → valid migration task. Not a runtime UI test or compiler-resolved call graph."
 }
