@@ -16,15 +16,6 @@ subprojects {
     }
 }
 
-// Test suites here are dominated by git subprocesses and Compose render passes,
-// which leave a single fork idle. One fork per two cores keeps each JVM's own
-// heap while the wall clock follows the machine.
-subprojects {
-    tasks.withType<Test>().configureEach {
-        maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
-    }
-}
-
 val verifyDesignSystem by tasks.registering(Exec::class) {
     group = "verification"
     description = "Reject Material and raw interactive primitives outside the Paper design system."
