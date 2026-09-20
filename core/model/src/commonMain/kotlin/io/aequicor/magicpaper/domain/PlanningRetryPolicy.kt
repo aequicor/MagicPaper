@@ -19,7 +19,55 @@ fun StageAttempt.retryAfterUserAction(): StageAttempt = copy(
     error = error?.copy(requiresUser = false),
 )
 
+/**
+ * Whether a failure earns another automatic attempt, and when.
+ *
+ * Only a transient cause earns one — a dropped connection, a provider's 5xx, a rate limit.
+ * Everything else ends at a person: repeating a missing model, an unsafe folder or an
+ * unconfirmed effect is not recovery, it is the same failure at a slower rate.
+ *
+ * The attempt keeps three separate budgets — transport, repair and merge — so a flaky
+ * network cannot spend the worker's chances to fix its own work. Only the transport budget
+ * backs off in time; a repair waits for the scheduler's next pass and a merge conflict is
+ * retried inside the merge itself.
+ */
+sealed interface RetryDecision {
+    /** Another attempt follows on its own. [retries] is the new count, [notBefore] its earliest start. */
+    data class Again(val retries: Int, val notBefore: Long) : RetryDecision
+
+    /** The budget is spent. The count is kept so a person sees what was already tried. */
+    data class Exhausted(val retries: Int) : RetryDecision
+
+    /** Repetition cannot address this cause. The issue already says who is needed. */
+    data object NotTransient : RetryDecision
+}
+
+/**
+ * Records the decision on the issue the scheduler reads: it runs a stage again only while
+ * `requiresUser` is false and `retryAt` has passed.
+ */
+fun RetryDecision.applyTo(issue: PlanningIssue): PlanningIssue = when (this) {
+    is RetryDecision.Again -> issue.copy(retries = retries, retryAt = notBefore)
+    is RetryDecision.Exhausted -> issue.copy(retries = retries, requiresUser = true)
+    RetryDecision.NotTransient -> issue
+}
+
 object PlanningRetryPolicy {
+    /**
+     * The one place that decides whether a failure repeats itself.
+     *
+     * [now] and [jitter] are supplied rather than read, so the decision is reproducible: the
+     * same failure with the same clock always yields the same answer. Jitter spreads the
+     * retries of plans that failed together against the same provider.
+     */
+    fun decide(issue: PlanningIssue, completedRetries: Int, limit: Int?, now: Long, jitter: Long): RetryDecision = when {
+        issue.kind != IssueKind.TRANSIENT -> RetryDecision.NotTransient
+        !canRetry(completedRetries, limit) -> RetryDecision.Exhausted(completedRetries)
+        else -> nextRetry(completedRetries).let {
+            RetryDecision.Again(it, now + delayMillis(it, fromMessage(issue.message), now, jitter))
+        }
+    }
+
     /** Only recognizable local checks can resume without an external-effect acknowledgement. */
     fun localCheck(command: String): Boolean {
         val value = command.trim().lowercase()

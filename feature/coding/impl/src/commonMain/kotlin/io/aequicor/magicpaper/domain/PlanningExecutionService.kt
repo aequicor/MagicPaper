@@ -452,15 +452,11 @@ class PlanningExecutionService(
                     store.update(id) { it.copy(finalAttempt = safeAttempt(failed)) }
                     block(id, failed.error!!)
                 } else if (issue.kind == IssueKind.TRANSIENT && saved != null) {
-                    val count = saved.transportRetries
-                    val exhausted = !canRetry(count)
-                    val next = if (exhausted) count else PlanningRetryPolicy.nextRetry(count)
-                    val waiting = issue.copy(retries = next, requiresUser = exhausted,
-                        retryAt = if (exhausted) 0 else Id.now() + PlanningRetryPolicy.delayMillis(next,
-                            PlanningRetryPolicy.fromMessage(issue.message), Id.now(), Random.nextLong(500)))
-                    store.update(id) { it.copy(transportRetries = next,
+                    val decision = retryDecision(issue, saved.transportRetries)
+                    val waiting = decision.applyTo(issue)
+                    store.update(id) { it.copy(transportRetries = waiting.retries,
                         issue = waiting.copy(message = safeText(waiting.message)), phase = ExecutionPhase.WAITING,
-                        status = if (exhausted) PlanStatus.FAILED else PlanStatus.RUNNING) }
+                        status = if (waiting.requiresUser) PlanStatus.FAILED else PlanStatus.RUNNING) }
                 } else block(id, issue)
             }
             catch (storage: Exception) { errorState.value = "Не удалось сохранить состояние: ${storage.message}" }
@@ -923,17 +919,10 @@ class PlanningExecutionService(
                 attempt = attempt.copy(chatTurns = attempt.chatTurns.dropLast(1) + attempt.chatTurns.last().copy(completedAt = Id.now()))
                 currentAttempt = attempt
                 if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
+                    // The turn is over either way: the attempt drops back to FAILED, from where
+                    // it may run again, and the issue alone says whether anyone will start it.
                     val issue = classify(result.failure ?: "Поток завершился без подтверждённого результата", uncertain = !result.ended)
-                    if (issue.kind == IssueKind.TRANSIENT && canRetry(attempt.transportRetries)) {
-                        val count = PlanningRetryPolicy.nextRetry(attempt.transportRetries)
-                        val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(result.failure.orEmpty()), Id.now(), Random.nextLong(500))
-                        attempt = attempt.copy(phase = AttemptPhase.FAILED, transportRetries = count,
-                            error = issue.copy(retryAt = Id.now() + wait, retries = count))
-                        saveAttempt(id, stageId, attempt)
-                        block(id, attempt.error!!)
-                        return
-                    }
-                    attempt = attempt.copy(phase = AttemptPhase.FAILED, error = issue.copy(requiresUser = true))
+                    attempt = withRetry(attempt.copy(phase = AttemptPhase.FAILED), issue)
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
                 if (chatHooks != null) {
@@ -969,14 +958,11 @@ class PlanningExecutionService(
                 attempt = attempt.copy(acceptanceRecord = acceptance)
                 saveAttempt(id, stageId, attempt)
                 chatHooks?.verified(verificationPlan, stage, attempt, acceptance, judge.modelId)
-                if (verdict.issue != null) {
-                    val issue = if (verdict.issue!!.kind == IssueKind.TRANSIENT && canRetry(attempt.transportRetries)) {
-                        attempt = attempt.copy(transportRetries = PlanningRetryPolicy.nextRetry(attempt.transportRetries))
-                        verdict.issue!!.copy(retries = attempt.transportRetries, retryAt = Id.now() + PlanningRetryPolicy.delayMillis(attempt.transportRetries,
-                            PlanningRetryPolicy.fromMessage(verdict.issue!!.message), Id.now(), Random.nextLong(500)))
-                    } else verdict.issue!!.copy(requiresUser = verdict.issue!!.requiresUser || verdict.issue!!.kind == IssueKind.TRANSIENT)
-                    saveAttempt(id, stageId, attempt.copy(error = issue))
-                    block(id, issue)
+                verdict.issue?.let { unresolved ->
+                    // The phase is left alone: an unreachable verifier does not send the work back.
+                    attempt = withRetry(attempt, unresolved)
+                    saveAttempt(id, stageId, attempt)
+                    block(id, attempt.error!!)
                     return
                 }
                 store.update(id) { p -> p.copy(
@@ -1126,12 +1112,18 @@ class PlanningExecutionService(
         store.planFor(id)?.let { stageId !in chatHooks?.blockedStages(it).orEmpty() } == true
     private suspend fun canRun(id: String) = !closing && store.failure.value == null && store.planFor(id)?.intent == ExecutionIntent.RUN
     private suspend fun canRetry(count: Int): Boolean = PlanningRetryPolicy.canRetry(count, settings.load().agentLimits.retries)
+
+    /** The clock and the randomness enter the retry policy here and nowhere else. */
+    private suspend fun retryDecision(issue: PlanningIssue, completedRetries: Int): RetryDecision =
+        PlanningRetryPolicy.decide(issue, completedRetries, settings.load().agentLimits.retries, Id.now(), Random.nextLong(500))
+
+    /** Spends one transport attempt on [issue] and records the outcome on the attempt. */
     private suspend fun withRetry(attempt: StageAttempt, issue: PlanningIssue): StageAttempt {
-        if (issue.kind != IssueKind.TRANSIENT) return attempt.copy(error = issue)
-        if (!canRetry(attempt.transportRetries)) return attempt.copy(error = issue.copy(retries = attempt.transportRetries, requiresUser = true))
-        val count = PlanningRetryPolicy.nextRetry(attempt.transportRetries)
-        val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(issue.message), Id.now(), Random.nextLong(500))
-        return attempt.copy(transportRetries = count, error = issue.copy(retries = count, retryAt = Id.now() + wait))
+        val decision = retryDecision(issue, attempt.transportRetries)
+        return attempt.copy(
+            transportRetries = (decision as? RetryDecision.Again)?.retries ?: attempt.transportRetries,
+            error = decision.applyTo(issue),
+        )
     }
     /** Flush partial output while waiting. A coding turn may legitimately be silent during reasoning;
      * the chat-request timeout is not an inactivity deadline for the coding runtime.
