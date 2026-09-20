@@ -23,7 +23,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
     val projects = codingProjectRepository(deps.store, deps.json, deps.settings, deps.profiles, deps.codingRuntime)
     val graph = CodingRuntimeGraph(deps.store, deps.json, deps.settings, deps.profiles, projects, deps.codingRuntime,
         deps.planningWorkspace, deps.integrationChecks, deps.usage, deps.gateway, deps.search,
-        draftRepository = deps.drafts, taskWorkspace = deps.taskWorkspace,
+        draftRepository = deps.drafts, events = deps.events, taskWorkspace = deps.taskWorkspace,
         sourceAccess = ResearchSourceAccess(deps.readResearchPage))
     val runtime = graph.runtime ?: deps.codingRuntime
     graph.toolHost.mediaGeneration = deps.media

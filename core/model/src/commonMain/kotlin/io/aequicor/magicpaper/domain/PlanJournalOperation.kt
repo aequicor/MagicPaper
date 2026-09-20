@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.domain
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
 /**
  * What a journal entry records about an operation.
  *
@@ -73,3 +76,28 @@ val PlanJournalEntry.describesStop: Boolean get() = operation.startsWith(STOP_PR
 
 private const val STOP_PREFIX = "stop-"
 
+
+/**
+ * What an operation was about: the stage and the attempt it belonged to.
+ *
+ * The event journal stores a record's detail as an opaque string, because a journal that knew
+ * the words would have to change whenever a feature learned a new one. This is the plan's own
+ * schema for that string — serialized rather than joined, so an identifier can hold any
+ * character without the reader having to guess where one field ends.
+ */
+@Serializable
+data class PlanJournalSubject(val stage: String = "", val attempt: String = "") {
+    companion object {
+        private val json = Json { encodeDefaults = true }
+
+        /** An operation about the plan as a whole carries no subject and encodes to nothing. */
+        fun encode(stageId: String, attemptId: String): String =
+            if (stageId.isBlank() && attemptId.isBlank()) ""
+            else json.encodeToString(serializer(), PlanJournalSubject(stageId, attemptId))
+
+        /** Anything unrecognizable reads as no subject: a record still counts, it just says less. */
+        fun decode(detail: String): PlanJournalSubject =
+            if (detail.isBlank()) PlanJournalSubject()
+            else runCatching { json.decodeFromString(serializer(), detail) }.getOrDefault(PlanJournalSubject())
+    }
+}

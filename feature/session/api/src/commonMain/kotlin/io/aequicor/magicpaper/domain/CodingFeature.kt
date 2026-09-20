@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.data.storage.DraftBlobStore
 import io.aequicor.magicpaper.data.storage.DraftRepository
+import io.aequicor.magicpaper.data.storage.EventJournal
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.domain.tools.CustomOrchestration
 import io.aequicor.magicpaper.domain.tools.OrchestrationActions
@@ -31,6 +32,8 @@ class CodingFeatureDependencies(
     val dossier: DossierResearcher,
     val drafts: DraftRepository,
     val draftBlobs: DraftBlobStore,
+    /** Append-only evidence for planning; the same reset clears it and the plans. */
+    val events: EventJournal,
     val media: MediaGenerationService,
     val requestPins: RequestPinService,
     /** Media policy for a research chat reads the owning conversation, not a project. */

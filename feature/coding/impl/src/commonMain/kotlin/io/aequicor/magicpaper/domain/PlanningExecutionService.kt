@@ -1213,9 +1213,8 @@ class PlanningExecutionService(
         it.targetStageId == stageId && it.state == DeliveryState.QUEUED && it.replyTo != null
     } == true
 
-    private suspend fun journal(id: String, operation: PlanJournalOperation, stageId: String = "", attemptId: String = "") = store.update(id) {
-        it.copy(journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), operation, stageId, attemptId))
-    }
+    private suspend fun journal(id: String, operation: PlanJournalOperation, stageId: String = "", attemptId: String = "") =
+        store.journal(id, operation, stageId, attemptId)
     private suspend fun block(id: String, issue: PlanningIssue) = store.update(id) {
         it.copy(issue = issue.copy(message = safeText(issue.message)), phase = ExecutionPhase.WAITING, status = if (issue.requiresUser) PlanStatus.FAILED else PlanStatus.RUNNING)
     }

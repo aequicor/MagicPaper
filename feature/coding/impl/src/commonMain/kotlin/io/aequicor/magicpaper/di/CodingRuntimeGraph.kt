@@ -6,7 +6,9 @@ import io.aequicor.magicpaper.data.coding.*
 import io.aequicor.magicpaper.data.planning.*
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.data.storage.DraftRepository
+import io.aequicor.magicpaper.data.storage.EventJournal
 import io.aequicor.magicpaper.data.storage.InMemoryDraftRepository
+import io.aequicor.magicpaper.data.storage.InMemoryEventJournal
 import kotlinx.serialization.json.Json
 
 /** Coding's mutually connected runtime collaborators have one application lifetime. */
@@ -23,6 +25,7 @@ class CodingRuntimeGraph(
     private val gateway: LlmGateway,
     private val search: SearchEngine,
     draftRepository: DraftRepository = InMemoryDraftRepository(),
+    events: EventJournal = InMemoryEventJournal(),
     taskWorkspace: TaskWorkspace = UnavailableTaskWorkspace,
     private val sourceAccess: ResearchSourceAccess = ResearchSourceAccess(),
 ) {
@@ -94,7 +97,7 @@ class CodingRuntimeGraph(
         }
     }
     }
-    val planningStore = PlanningStore(JsonPlanningRepository(store, json))
+    val planningStore = PlanningStore(JsonPlanningRepository(store, json), events)
     val acceptanceChecks = io.aequicor.magicpaper.domain.AcceptanceChecks()
     val planComposer = PlanComposer(gateway, json, search,
         io.aequicor.magicpaper.domain.RuntimePlanningGateway(runtime ?: NoopCodingRuntime),

@@ -54,6 +54,7 @@ internal fun buildRuntime(
         single<SecretStore> { persistence.secrets }
         single<DraftRepository> { persistence.drafts }
         single<DraftBlobStore> { persistence.blobs }
+        single<EventJournal> { persistence.events }
         single<MediaStore> { mediaStore }
         single<NavigationSnapshotStore> { persistence.navigation }
         single<CoroutineScope> { applicationScope }
@@ -135,7 +136,7 @@ internal fun buildRuntime(
                 readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read) }
         single<CodingFeature> { coding(CodingFeatureDependencies(
             store = store, json = get(), settings = get(), profiles = get(), usage = get(),
-            gateway = get(), search = get(), dossier = get(), drafts = get(), draftBlobs = get(),
+            gateway = get(), search = get(), dossier = get(), drafts = get(), draftBlobs = get(), events = get(),
             media = get(), requestPins = get(), chats = get(),
             readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read,
             filePicker = filePicker, projectSkills = projectSkills, applicationScope = applicationScope,
