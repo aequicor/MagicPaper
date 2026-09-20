@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.di
 
-import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.coding.NoopProjectDirPicker
 import io.aequicor.magicpaper.data.storage.BrowserFilePicker

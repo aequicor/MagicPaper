@@ -55,7 +55,7 @@ val checkMigrationJvm by tasks.registering {
     description = "Run JVM tests for every application, infrastructure and feature module."
     dependsOn(verifyDesignSystem, verifySurfaceMap, verifyModuleArchitecture)
     dependsOn(subprojects.filter { it.path !in setOf(":androidApp", ":webApp", ":desktopApp") && it.buildFile.isFile }.map { "${it.path}:jvmTest" })
-    dependsOn(":desktopApp:test", ":feature:session:impl:nodeProtocolTest")
+    dependsOn(":desktopApp:test", ":feature:coding:impl:nodeProtocolTest")
 }
 val compileMigrationTargets by tasks.registering {
     group = "verification"

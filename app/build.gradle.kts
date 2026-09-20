@@ -27,6 +27,7 @@ kotlin {
             implementation(project(":core:ai:impl"))
             api(project(":feature:session:api"))
             implementation(project(":feature:session:impl"))
+            implementation(project(":feature:transcript"))
             implementation(project(":feature:tools:api"))
             implementation(project(":feature:tools:impl"))
             api(project(":feature:settings:api"))
@@ -50,6 +51,11 @@ kotlin {
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutinesTest)
+        }
+        jvmMain.dependencies {
+            // Only the desktop host can run an agent. Declared here and nowhere else, so the
+            // Android and browser compilations never see coding at all.
+            implementation(project(":feature:coding:impl"))
         }
         jvmTest.dependencies {
             implementation(libs.koin.test)
