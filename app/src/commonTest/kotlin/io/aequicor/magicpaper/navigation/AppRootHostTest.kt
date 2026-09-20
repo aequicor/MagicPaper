@@ -21,7 +21,7 @@ class AppRootHostTest {
             object : NavigationSnapshotStore {
                 override suspend fun load() = savedSnapshot
                 override suspend fun save(snapshot: String) { savedSnapshot = snapshot }
-            }, clear = {})
+            }, InMemoryEventJournal(), clear = {})
         val events = NavigationEvents()
         val runtime = MagicPaperRuntime(
             navigationSession = NavigationSessionConfig(initialDeepLink = "magicpaper://docs/guide"),

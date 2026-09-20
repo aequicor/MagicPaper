@@ -142,6 +142,8 @@ class PersistenceStores(
     val drafts: DraftRepository,
     val blobs: DraftBlobStore,
     val navigation: NavigationSnapshotStore,
+    /** Append-only evidence of what was done, cleared by the same reset as the state itself. */
+    val events: EventJournal,
     private val clear: suspend () -> Unit,
 ) {
     /** Called after application-owned draft/navigation writers have been flushed and stopped. */
