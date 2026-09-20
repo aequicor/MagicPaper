@@ -92,6 +92,44 @@ Each tool call (read, grep, powershell, find) costs time. Reduce unnecessary cal
 - Preserve unrelated working-tree edits. Review affected files before writing;
   avoid replacing files being changed by another task from an old snapshot.
 
+## Class structure
+
+Contracts live in `api`, behavior in `impl`, and `:app` binds one to the other. An
+interface earns its place at a boundary — platform, external process, network, storage,
+model — and nowhere else: a pure rule or a value type needs none, and adding one only
+widens what a reader must hold in mind.
+
+| Module | Owner contracts |
+| --- | --- |
+| `:core:ai:api` | `LlmGateway`, `ModelDirectory`, `SearchEngine`, `SearchConnectionChecker`, `UsageLedger`, `UsageRepository`, `MediaGenerationGateway`, `DossierResearcher`, `OpenAiSubscriptionService` |
+| `:core:storage:api` | `KeyValueStore`, `SecretStore`, `MediaStore`, `DraftRepository`, `DraftBlobStore`, `NavigationSnapshotStore` |
+| `:core:model` | Serializable values and pure rules. No interfaces, no services. |
+| `:feature:tools:api` | `ToolDefinition` with the mode/authority matrix, `ToolCatalog`, `SessionToolCatalog`, `QuestionnaireContract`, `ToolRejections`, `CustomOrchestration`, `OrchestrationActions` |
+| `:feature:session:api` | Chat: `ChatService`, `ChatComponent`, `ChatRepository`, `ChatBackend`, `ChatPresentation`. Coding: `CodingFeature` with `CodingFeatureDependencies`, `CodingService`, `CodingComponent`, `CodingRuntime`, `CodingProjectRepository`, `PlanningRepository`, `PlanningWorkspace`, `TaskWorkspace`, `MilestoneVerifier`, `CodingPresentation`, plus the `Unavailable*` implementations |
+| `:feature:settings:api` | `SettingsService`, `SettingsComponent`, `SettingsRepository`, `LlmProfileRepository`, `ModelPresentation` |
+| `:feature:plugins:api` | `MagicPlugin`, `PersistentPlugin`, `CodingSessionPanel`, `PluginService`, `PluginsComponent` |
+| `:feature:skills:api` | `SkillRepository`, `SkillLibrary`, `SkillCatalog`, `SkillInstructionRuntime`, `ProjectSkills`, `CodingRunObserver`, `SkillsComponent` |
+| `:feature:docs:api` | `DocRepository`, `DocsComponent` |
+
+Where a new declaration belongs:
+
+- A port to a platform, process, network, store or model → an interface in the owning
+  `api`, its implementation in `impl`, the binding in `:app`.
+- A serializable value or a pure rule → `:core:model`, as a class or function.
+- Session presentation used by both an ordinary chat and a project session →
+  `:feature:transcript`. It is a plain module, not an api/impl pair, because both
+  implementations consume it and a feature implementation may not depend on another one.
+- Anything that needs an agent process, a plan, a worktree or the tool executor →
+  `:feature:coding:impl`. It declares only a jvm target; `:app` consumes it from
+  `jvmMain` alone, so Android and the browser never compile it.
+- State belongs to the service that owns it, never to a composable. A component reads
+  state and dispatches actions; execution, drafts and background work stay in services
+  that outlive the screen.
+
+The target execution architecture — one deterministic state machine and an append-only
+event journal — is described in `docs/STUDIO-ARCHITECTURE.md`. Do not introduce its
+modules piecemeal.
+
 ## Design patterns and code quality
 
 - Base design and implementation on established, time-tested patterns and idiomatic

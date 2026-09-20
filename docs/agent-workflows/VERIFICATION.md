@@ -12,6 +12,9 @@
 | Только AGENTS/навыки/ссылки | Проверка frontmatter навыков, существования локальных ссылок и `git diff --check -- <изменённые файлы>`; сборка приложения не нужна |
 | Поведение одного модуля | `./gradlew :feature:session:impl:jvmTest --tests '*ИмяТеста'` — подставить владельца и реальный класс |
 | Границы или Gradle dependencies | `python3 docs/verify-module-architecture.py --self-test` |
+| Кодинг-сессии, планирование, оркестрация, движки | `./gradlew :feature:coding:impl:jvmTest --tests '*ИмяТеста'`; протокол движков — `:feature:coding:impl:nodeProtocolTest` |
+| Общая презентация сессий (транскрипт, вложения, закрепления) | `./gradlew :feature:session:impl:jvmTest :feature:coding:impl:jvmTest` — у `:feature:transcript` пока нет своих тестов, его код покрывают потребители |
+| Кодинг не должен попасть в Android или браузер | `python3 docs/verify-module-architecture.py --self-test` даёт быстрый ответ; доказательство — `./gradlew compileMigrationTargets` |
 | UI, визуальный или интерактивный компонент | `python3 docs/desktop-ui/verify-design-system.py --self-test`, тесты Paper/consumer; рендер при изменении компоновки |
 | Приёмка Compose-компонента | Именованные `@Preview` и матрица состояний по [Compose preview workflow](../../skills/magicpaper-desktop-ui/references/compose-previews.md); осмотр реального рендера, interactive preview и semantics checks по применимости |
 | Перенос/добавление UI-поверхности | `python3 docs/desktop-ui/verify-map.py --self-test`; обновить явные bindings, а не исключать новую поверхность |

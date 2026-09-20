@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Verify the Gradle API/implementation dependency boundary, including nested modules."""
+"""Verify the Gradle API/implementation dependency boundary, including nested modules.
+
+The desktop-only rule here is advisory and fast: it names the intent and fails locally in
+a readable way. The authoritative check that coding cannot reach Android or the browser is
+`./gradlew compileMigrationTargets`, which actually builds those artifacts.
+"""
 from pathlib import Path
 import re
 import sys
@@ -7,6 +12,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 IGNORED = {'build', '.gradle', '.git', 'node_modules', '.magicpaper', 'build-logic'}
 HOSTS = {':desktopApp', ':androidApp', ':webApp'}
+# Modules that declare only a jvm target. Reaching them from a source set that also
+# compiles for Android, JS or Wasm breaks those artifacts, so the edge is curated here.
+DESKTOP_ONLY = {':feature:coding:impl'}
+JVM_SOURCE_SETS = {'jvmMain', 'jvmTest'}
 
 def is_retired_module(name):
     return name == ':shared' or name.startswith(':shared:')
@@ -26,6 +35,31 @@ def production_build(text):
             end += 1
         text = text[:match.start()] + text[end:]
     return text
+
+def scoped_dependencies(text):
+    """Attribute each project dependency to the Kotlin source set that declares it.
+
+    A dependency outside any `<sourceSet>.dependencies { }` block reaches every target and
+    is reported as 'unscoped'. Blocks do not nest, so a forward brace walk is enough.
+    """
+    scoped, covered = set(), []
+    for match in re.finditer(r'(\w+)\.dependencies\s*\{', text):
+        depth, end = 1, match.end()
+        while depth and end < len(text):
+            depth += (text[end] == '{') - (text[end] == '}')
+            end += 1
+        body = text[match.end():max(match.end(), end - 1)]
+        covered.append((match.start(), end))
+        for dependency in re.findall(r'project\(\s*["\'](:[^"\']+)["\']\s*\)', body):
+            scoped.add((match.group(1), dependency))
+    remainder, previous = '', 0
+    for start, end in covered:
+        remainder += text[previous:start]
+        previous = max(previous, end)
+    remainder += text[previous:]
+    for dependency in re.findall(r'project\(\s*["\'](:[^"\']+)["\']\s*\)', remainder):
+        scoped.add(('unscoped', dependency))
+    return scoped
 
 def local_settings(text):
     # Composite-build substitution refers to the external build's project paths. Its
@@ -85,6 +119,10 @@ def violations(root):
                 errors.append(f'{name}: foundational module must not depend on project {dependency}')
             if name == ':designSystem' and is_application_module(dependency):
                 errors.append(f'{name}: Paper must remain independent of application modules')
+        for source_set, dependency in scoped_dependencies(raw):
+            if dependency in DESKTOP_ONLY and source_set not in JVM_SOURCE_SETS:
+                errors.append(f'{name}: only jvmMain may depend on {dependency}; '
+                              f'{source_set} compiles for Android and the browser')
     # Kotlin/JVM top-level facade names can hide API extension functions when an
     # implementation file keeps the same package and basename after extraction.
     facades = {}
@@ -178,6 +216,30 @@ if '--self-test' in sys.argv:
         retired.parent.mkdir()
         retired.write_text('')
         assert any('retired module directory' in error for error in violations(root))
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / 'feature/coding/impl').mkdir(parents=True)
+        (root / 'feature/coding/impl/build.gradle.kts').write_text('')
+        app = root / 'app/build.gradle.kts'
+        app.parent.mkdir(parents=True)
+        desktop_only = next(iter(DESKTOP_ONLY))
+        for allowed in ('jvmMain', 'jvmTest'):
+            app.write_text(f'kotlin {{ sourceSets {{ {allowed}.dependencies '
+                           f'{{ implementation(project("{desktop_only}")) }} }} }}')
+            assert not violations(root), allowed
+        for blocked in ('commonMain', 'androidMain', 'webMain', 'jsMain', 'wasmJsMain', 'commonTest'):
+            app.write_text(f'kotlin {{ sourceSets {{ {blocked}.dependencies '
+                           f'{{ implementation(project("{desktop_only}")) }} }} }}')
+            assert any('only jvmMain may depend on' in error for error in violations(root)), blocked
+        app.write_text(f'dependencies {{ implementation(project("{desktop_only}")) }}')
+        assert any('only jvmMain may depend on' in error for error in violations(root)), 'unscoped block'
+        # A regex walk must not attribute one block's dependency to its neighbours.
+        app.write_text('kotlin { sourceSets {\n'
+                       '  commonMain.dependencies { implementation(project(":core:model")) }\n'
+                       f'  jvmMain.dependencies {{ implementation(project("{desktop_only}")) }}\n'
+                       '  androidMain.dependencies { implementation(project(":core:platform")) }\n'
+                       '} }')
+        assert not violations(root), 'neighbouring source sets must stay separate'
 if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory
     with TemporaryDirectory() as folder:

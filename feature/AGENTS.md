@@ -13,7 +13,12 @@ platform adapters stay in the implementation's platform source sets.
 - Keep tests beside their owner. Integration-test dependencies may assemble
   several implementations; do not widen production visibility just for tests.
 - Tool vocabulary, schemas, access matrix and rejection types belong to `tools:api`;
-  execution, receipts and the native bridge stay with the session owner.
+  execution, receipts and the native bridge belong to `coding:impl`.
+- `coding:impl` declares only a jvm target and is consumed from `:app`'s `jvmMain`
+  alone. Anything it must share with chat belongs to `session:api` (contracts) or
+  `transcript` (session presentation), never to a dependency on another `impl`.
+- A host that cannot run an agent binds `UnavailableCodingFeature`. Never omit a
+  coding binding: an absent one surfaces as a retry the host can never satisfy.
 - Plugin SPI belongs to `plugins:api`; Notes/Focus/Calc to `plugins:impl`;
   skills panels to `skills:impl`; planning UI/runtime to `session:impl`.
   Preserve plugin IDs and registration order. ProjectSkills UI and the coding
