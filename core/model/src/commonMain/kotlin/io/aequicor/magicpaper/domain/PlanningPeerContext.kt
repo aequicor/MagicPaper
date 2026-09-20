@@ -78,7 +78,7 @@ fun Plan.cancelLegacyPeerCommands(peers: List<Plan>, admittedAttempts: Map<Strin
 private fun Plan.canRestorePeerVerification(stage: Milestone, attempt: StageAttempt, cancelledIds: Set<String>, admitted: SessionLegacyAttempt?): Boolean {
     if (attempt.phase != AttemptPhase.EXECUTING || attempt.turnIndex <= 0 || attempt.awaitingPlanner || attempt.coordinationPending == true ||
         attempt.waitingForUser != null || attempt.waitingForEvent != null || attempt.pendingTool.isNotBlank() || attempt.pendingToolExternal ||
-        attempt.mergePhase != null || attempt.acceptanceRecord != null || attempt.sessionGeneration <= 0) return false
+        attempt.mergeProgress.started || attempt.acceptanceRecord != null || attempt.sessionGeneration <= 0) return false
     val previousTurn = attempt.turnIndex - 1
     if (admitted != SessionLegacyAttempt(id, runId, stage.id, attempt.id, previousTurn, attempt.sessionGeneration)) return false
     val record = coordination.singleOrNull { it.id == "${attempt.id}-turn-$previousTurn" && it.runId == runId &&

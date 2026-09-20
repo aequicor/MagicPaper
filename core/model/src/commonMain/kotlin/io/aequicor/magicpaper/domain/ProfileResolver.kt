@@ -46,7 +46,7 @@ object ProfileResolver {
         // Workers execute the attempt's frozen assignment; their saved session choice
         // can be absent in old sessions or stale after the planner reassigns a stage.
         val attempt = stage?.attempts?.lastOrNull()
-        val assignment = (if (attempt?.mergePhase != null) attempt.mergeAssignment else null)
+        val assignment = (if (attempt?.mergeProgress?.started == true) attempt.mergeAssignment else null)
             ?: attempt?.assignment ?: stage?.assignment
         if (assignment != null) {
             return selection(ModelSelection(assignment.profileId, assignment.modelId, assignment.effort), profiles)

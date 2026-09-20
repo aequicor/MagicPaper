@@ -7,7 +7,7 @@ val PlanningIssue.isPlannerAnswerWait: Boolean
 val Plan.canExtendAfterFinalVerification: Boolean
     get() = phase == ExecutionPhase.WAITING && issue?.kind == IssueKind.VERIFICATION &&
         finalAttempt?.phase == AttemptPhase.VERIFYING && finalAttempt.error?.kind == IssueKind.VERIFICATION &&
-        finalAttempt.pendingTool.isBlank() && !finalAttempt.pendingToolExternal && finalAttempt.mergePhase == null &&
+        finalAttempt.pendingTool.isBlank() && !finalAttempt.pendingToolExternal && !finalAttempt.mergeProgress.started &&
         workspace?.applied != true
 
 data class PlanningBlocker(
@@ -20,7 +20,7 @@ data class PlanningBlocker(
     private val acceptance: AcceptanceRecord? get() = attempt?.acceptanceRecord.takeIf { issue.kind == IssueKind.VERIFICATION }
     val needsWorker: Boolean get() = issue.kind == IssueKind.VERIFICATION && (acceptance == null || acceptance?.canRetryWithWorker == true)
     val canSkipVerification: Boolean get() = issue.kind == IssueKind.VERIFICATION && acceptance?.canSkipByUser == true &&
-        attempt?.phase == AttemptPhase.VERIFYING && attempt.pendingTool.isBlank() && !attempt.pendingToolExternal && attempt.mergePhase == null
+        attempt?.phase == AttemptPhase.VERIFYING && attempt.pendingTool.isBlank() && !attempt.pendingToolExternal && !attempt.mergeProgress.started
     val messageId: String get() = "$planId-blocked-$runId-${stage?.id ?: "plan"}-${attempt?.id.orEmpty()}-${attempt?.sessionGeneration ?: 0}-${attempt?.turnIndex ?: 0}-${attempt?.repairRetries ?: 0}-${issue.hashCode()}"
     val title: String get() = when {
         acceptance?.status == AcceptanceStatus.PARTIAL && stage != null -> "Этап «${stage.title}»: не хватает подтверждений"

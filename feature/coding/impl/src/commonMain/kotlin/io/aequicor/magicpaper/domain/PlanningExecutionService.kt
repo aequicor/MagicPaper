@@ -510,7 +510,7 @@ class PlanningExecutionService(
     private suspend fun repairTaskDelivery(id: String, project: CodingProject, task: TaskWorktree, judge: LlmProfile) {
         val plan = store.planFor(id) ?: error("План удалён")
         var attempt = checkNotNull(plan.finalAttempt)
-        attempt = attempt.copy(mergePath = task.path, mergePhase = AttemptPhase.EXECUTING)
+        attempt = attempt.copy(mergePath = task.path).merging(MergeProgress.Running)
         store.update(id) { it.copy(finalAttempt = attempt, phase = ExecutionPhase.INTEGRATING) }
         val sessionId = "${attempt.sessionId}-delivery"
         var result = StageRunResult()
@@ -535,7 +535,7 @@ class PlanningExecutionService(
         while (canRun(id)) {
             try {
                 val pending = store.planFor(id)!!.finalAttempt
-                if (pending?.mergePhase != null && pending.mergePhase != AttemptPhase.COMPLETE)
+                if (pending?.mergeProgress?.unresolved == true)
                     throw WorkspaceConflict(pending.mergePath, "Продолжение проверки переноса")
                 return workspaces.apply(project, workspace)
             }
@@ -543,14 +543,15 @@ class PlanningExecutionService(
                 val plan = store.planFor(id)!!
                 var attempt = plan.finalAttempt ?: error("Нет итоговой проверки")
                 suspend fun persist() { store.update(id) { it.copy(finalAttempt = safeAttempt(attempt.copy(updatedAt = Id.now())), phase = ExecutionPhase.INTEGRATING) } }
-                if (attempt.mergePhase == null || attempt.mergePhase == AttemptPhase.FAILED) {
+                if (attempt.mergeProgress.needsResolver) {
                     if (!canRetry(attempt.mergeRetries)) {
                         block(id, PlanningIssue(IssueKind.CONFLICT, "Не удалось разрешить конфликт переноса: ${conflict.workingPath}", requiresUser = true)); return null
                     }
                     if (attempt.mergeRetries > 0) delay(PlanningRetryPolicy.delayMillis(attempt.mergeRetries))
                     currentCoroutineContext().ensureActive()
                     attempt = attempt.copy(mergeRetries = PlanningRetryPolicy.nextRetry(attempt.mergeRetries), activity = "Разрешение конфликта переноса",
-                        mergeAssignment = attempt.mergeAssignment ?: attempt.assignment, mergePhase = AttemptPhase.PREPARED, mergePath = conflict.workingPath)
+                        mergeAssignment = attempt.mergeAssignment ?: attempt.assignment, mergePath = conflict.workingPath)
+                        .merging(MergeProgress.Admitted)
                     persist()
                 }
                 val sessionId = "${attempt.sessionId}-delivery"
@@ -558,8 +559,8 @@ class PlanningExecutionService(
                 (attempt.resumption as? StageResumption.UnknownOutcome)?.let { unknown ->
                     block(id, PlanningIssue(IssueKind.UNCERTAIN, "Неизвестен результат команды переноса: ${unknown.tool}", requiresUser = true)); return null
                 }
-                if (attempt.mergePhase != AttemptPhase.VERIFYING) {
-                    attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING); persist()
+                if (attempt.mergeProgress.needsTurn) {
+                    attempt = attempt.merging(MergeProgress.Running); persist()
                     journal(id, PlanJournalOperation.DELIVERY_CONFLICT_INTENT, attemptId = attempt.id)
                     var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
                     try {
@@ -583,8 +584,8 @@ class PlanningExecutionService(
                         attempt = withRetry(attempt, classify(result.failure ?: "Перенос прерван", uncertain = !result.ended))
                         persist(); block(id, attempt.error!!); return null
                     }
-                    attempt = attempt.copy(mergePhase = AttemptPhase.VERIFYING,
-                        mergeVerificationSnapshot = workspaces.verificationSnapshot(conflict.workingPath)); persist()
+                    attempt = attempt.copy(mergeVerificationSnapshot = workspaces.verificationSnapshot(conflict.workingPath))
+                        .merging(MergeProgress.AwaitingVerdict); persist()
                 }
                 val (check, verdict) = reviewAcceptance(plan, Milestone("delivery", "Проверка переноса", description = plan.goal),
                     attempt.copy(verificationSnapshot = attempt.mergeVerificationSnapshot), conflict.workingPath, plan.acceptanceCriteria(), attempt.mergeReport, judge)
@@ -593,7 +594,7 @@ class PlanningExecutionService(
                     attempt = withRetry(attempt, verdict.issue!!); persist(); block(id, attempt.error!!); return null
                 }
                 val valid = verdict.passed && workspaces.finishDeliveryConflict(conflict.workingPath)
-                attempt = attempt.copy(mergePhase = if (valid) AttemptPhase.COMPLETE else AttemptPhase.FAILED)
+                attempt = attempt.merging(if (valid) MergeProgress.Settled else MergeProgress.Rejected)
                 persist()
             }
         }
@@ -993,19 +994,20 @@ class PlanningExecutionService(
                 journal(id, PlanJournalOperation.MERGE_INTENT, stageId, attempt.id)
                 var merged = workspaces.integrate(workspace, attempt)
                 // A resolver may have committed before the crash: ancestry alone is not verification.
-                if (attempt.mergePhase != null && attempt.mergePhase != AttemptPhase.COMPLETE) merged = false
+                if (attempt.mergeProgress.unresolved) merged = false
                 while (!merged && canRun(id)) {
-                    if (attempt.mergePhase == null || attempt.mergePhase == AttemptPhase.FAILED) {
+                    if (attempt.mergeProgress.needsResolver) {
                         if (!canRetry(attempt.mergeRetries)) break
                         if (attempt.mergeRetries > 0) delay(PlanningRetryPolicy.delayMillis(attempt.mergeRetries))
                         currentCoroutineContext().ensureActive()
-                        attempt = attempt.copy(mergeRetries = PlanningRetryPolicy.nextRetry(attempt.mergeRetries), mergePhase = AttemptPhase.PREPARED,
+                        attempt = attempt.copy(mergeRetries = PlanningRetryPolicy.nextRetry(attempt.mergeRetries),
                             mergeAssignment = attempt.mergeAssignment ?: attempt.assignment, mergePath = workspace.integrationPath,
                             activity = "Агент разрешает конфликт объединения")
+                            .merging(MergeProgress.Admitted)
                         saveAttempt(id, stageId, attempt)
                     }
-                    if (attempt.mergePhase != AttemptPhase.VERIFYING) {
-                        attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING)
+                    if (attempt.mergeProgress.needsTurn) {
+                        attempt = attempt.merging(MergeProgress.Running)
                         saveAttempt(id, stageId, attempt)
                         journal(id, PlanJournalOperation.CONFLICT_AGENT_INTENT, stageId, attempt.id)
                         val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
@@ -1030,7 +1032,7 @@ class PlanningExecutionService(
                             attempt = withRetry(attempt, classify(result.failure ?: "Объединение прервано", uncertain = !result.ended))
                             saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return@withLock
                         }
-                        attempt = attempt.copy(mergePhase = AttemptPhase.VERIFYING); saveAttempt(id, stageId, attempt)
+                        attempt = attempt.merging(MergeProgress.AwaitingVerdict); saveAttempt(id, stageId, attempt)
                     }
                     val verdict = verifier.verify(stage, store.planFor(id)!!.goal, attempt.mergeReport, judge)
                     if (verdict.issue != null) {
@@ -1038,7 +1040,7 @@ class PlanningExecutionService(
                         saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return@withLock
                     }
                     merged = verdict.passed && workspaces.finishConflict(workspace, attempt)
-                    attempt = attempt.copy(mergePhase = if (merged) AttemptPhase.COMPLETE else AttemptPhase.FAILED)
+                    attempt = attempt.merging(if (merged) MergeProgress.Settled else MergeProgress.Rejected)
                     saveAttempt(id, stageId, attempt)
                 }
                 if (!merged) {

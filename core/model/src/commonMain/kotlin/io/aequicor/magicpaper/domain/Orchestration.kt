@@ -130,7 +130,7 @@ val Plan.proposalReadyForConfirmation: Boolean
 internal val Milestone.canRevisePausedSpecification: Boolean
     get() = !completed && attempts.lastOrNull()?.let { it.interrupted &&
         it.phase in setOf(AttemptPhase.PREPARED, AttemptPhase.EXECUTING, AttemptPhase.FAILED) &&
-        !it.pendingToolExternal && it.mergePhase == null && !it.awaitingPlanner } == true
+        !it.pendingToolExternal && !it.mergeProgress.started && !it.awaitingPlanner } == true
 
 fun Plan.refinementView(): Plan = copy(milestones = milestones.map { stage ->
     if (stage.canRevisePausedSpecification) stage.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "") else stage
