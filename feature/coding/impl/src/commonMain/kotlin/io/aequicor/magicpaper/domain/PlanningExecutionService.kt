@@ -517,8 +517,7 @@ class PlanningExecutionService(
         attempt = attempt.copy(mergePath = task.path, mergePhase = AttemptPhase.EXECUTING)
         store.update(id) { it.copy(finalAttempt = attempt, phase = ExecutionPhase.INTEGRATING) }
         val sessionId = "${attempt.sessionId}-delivery"
-        var ended = false
-        var failed = false
+        var result = StageRunResult()
         try {
             monitoredRun(project.copy(path = task.path), CodingSession(sessionId, project.id, "Конфликт слияния", Id.now(),
                 piSessionId = attempt.mergeEngineSessionId, engine = attempt.engine ?: plan.engine,
@@ -527,15 +526,12 @@ class PlanningExecutionService(
                 "Разреши конфликт переноса задачи на ветку назначения в этой рабочей папке: сохрани обе стороны и добавь спорные файлы в индекс (git add). " +
                     "Приложение само продолжит перенос и проверки; не выполняй git rebase --continue, --skip или --abort. " +
                     "При неоднозначности задай вопрос через magicpaper_questionnaire. Не изменяй исходную папку. Цель: ${plan.goal}", judge).collect { event ->
-                when (event) {
-                    is CodingEvent.SessionStarted -> { attempt = attempt.copy(mergeEngineSessionId = event.sessionId); store.update(id) { it.copy(finalAttempt = attempt) } }
-                    is CodingEvent.Failed -> failed = true
-                    CodingEvent.Finished -> ended = true
-                    else -> Unit
-                }
+                attempt = attempt.after(event, StageRunTrack.MERGE)
+                result = result.after(event)
+                if (event is CodingEvent.SessionStarted) store.update(id) { it.copy(finalAttempt = attempt) }
             }
         } finally { withContext(NonCancellable) { runtime.reconcile(sessionId) } }
-        check(ended && !failed) { "Конфликт требует продолжения" }
+        check(result.ended && result.failure == null) { "Конфликт требует продолжения" }
     }
 
     private suspend fun applyResult(id: String, project: CodingProject, workspace: PlanWorkspace, judge: LlmProfile): PlanWorkspace? {
@@ -563,13 +559,13 @@ class PlanningExecutionService(
                 }
                 val sessionId = "${attempt.sessionId}-delivery"
                 runtime.reconcile(sessionId)
-                if (attempt.pendingToolExternal && attempt.pendingTool.isNotBlank()) {
-                    block(id, PlanningIssue(IssueKind.UNCERTAIN, "Неизвестен результат команды переноса: ${attempt.pendingTool}", requiresUser = true)); return null
+                (attempt.resumption as? StageResumption.UnknownOutcome)?.let { unknown ->
+                    block(id, PlanningIssue(IssueKind.UNCERTAIN, "Неизвестен результат команды переноса: ${unknown.tool}", requiresUser = true)); return null
                 }
                 if (attempt.mergePhase != AttemptPhase.VERIFYING) {
                     attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING); persist()
                     journal(id, PlanJournalOperation.DELIVERY_CONFLICT_INTENT, attemptId = attempt.id)
-                    var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
+                    var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
                     try {
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                         val activityRecorder = CodingRunRecorder()
@@ -580,23 +576,15 @@ class PlanningExecutionService(
                             (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
                             activityRecorder.apply(event)
                             attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                            when (event) {
-                                is CodingEvent.SessionStarted -> attempt = attempt.copy(mergeEngineSessionId = event.sessionId)
-                                is CodingEvent.Failed -> failure = event.message
-                                is CodingEvent.FinalText -> attempt = attempt.copy(mergeReport = event.text)
-                                is CodingEvent.TextDelta -> attempt = attempt.copy(mergeReport = attempt.mergeReport + event.delta)
-                                is CodingEvent.ToolStarted -> attempt = attempt.copy(pendingTool = event.summary, activity = event.summary,
-                                    pendingToolExternal = event.isExec && !PlanningRetryPolicy.localCheck(event.summary))
-                                is CodingEvent.ToolFinished -> attempt = attempt.copy(pendingTool = "", pendingToolExternal = false)
-                                CodingEvent.Finished -> ended = true
-                                else -> Unit
-                            }
-                            if (boundary(event) || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
-                            if (boundary(event) || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
+                            attempt = attempt.after(event, StageRunTrack.MERGE)
+                            result = result.after(event)
+                            val signal = event.signal
+                            if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                            if (signal.showsProgress || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
                         }
                     } catch (e: CancellationException) { runtime.abort(sessionId); throw e }
-                    if (failure != null || !ended || attempt.mergeReport.isBlank()) {
-                        attempt = withRetry(attempt, classify(failure ?: "Перенос прерван", uncertain = !ended))
+                    if (result.incomplete(attempt.report(StageRunTrack.MERGE))) {
+                        attempt = withRetry(attempt, classify(result.failure ?: "Перенос прерван", uncertain = !result.ended))
                         persist(); block(id, attempt.error!!); return null
                     }
                     attempt = attempt.copy(mergePhase = AttemptPhase.VERIFYING,
@@ -641,14 +629,14 @@ class PlanningExecutionService(
                 return false
             }
             runtime.reconcile(attempt.sessionId)
-            if (attempt.pendingToolExternal && attempt.pendingTool.isNotBlank()) {
+            (attempt.resumption as? StageResumption.UnknownOutcome)?.let { unknown ->
                 block(id, PlanningIssue(IssueKind.UNCERTAIN,
-                    "Нет подтверждения результата команды итоговой проверки: ${attempt.pendingTool}", requiresUser = true))
+                    "Нет подтверждения результата команды итоговой проверки: ${unknown.tool}", requiresUser = true))
                 return false
             }
             attempt = attempt.copy(phase = AttemptPhase.EXECUTING); persist()
             journal(id, PlanJournalOperation.FINAL_VERIFICATION_INTENT, attemptId = attempt.id)
-            var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
+            var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
             val criteria = pendingCriteria.joinToString("\n") { it.description }
             try {
                 val activityHistory = attempt.steps.filter { it.isVisibleActivity }
@@ -661,23 +649,15 @@ class PlanningExecutionService(
                     attempt.assignment.executionProfile(profiles.load())).collect { event ->
                     activityRecorder.apply(event)
                     attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                    when (event) {
-                        is CodingEvent.SessionStarted -> attempt = attempt.copy(engineSessionId = event.sessionId)
-                        is CodingEvent.FinalText -> attempt = attempt.copy(report = event.text)
-                        is CodingEvent.TextDelta -> attempt = attempt.copy(report = attempt.report + event.delta)
-                        is CodingEvent.ToolStarted -> attempt = attempt.copy(activity = event.summary, pendingTool = event.summary,
-                            pendingToolExternal = event.isExec && !PlanningRetryPolicy.localCheck(event.summary))
-                        is CodingEvent.ToolFinished -> attempt = attempt.copy(pendingTool = "", pendingToolExternal = false)
-                        is CodingEvent.Failed -> failure = event.message
-                        CodingEvent.Finished -> ended = true
-                        else -> Unit
-                    }
-                    if (boundary(event) || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
-                    if (boundary(event) || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
+                    attempt = attempt.after(event, StageRunTrack.WORK)
+                    result = result.after(event)
+                    val signal = event.signal
+                    if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                    if (signal.showsProgress || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
                 }
             } catch (e: CancellationException) { runtime.abort(attempt.sessionId); throw e }
-            if (failure != null || !ended || attempt.report.isBlank()) {
-                attempt = withRetry(attempt, classify(failure ?: "Итоговая проверка прервана", uncertain = !ended))
+            if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
+                attempt = withRetry(attempt, classify(result.failure ?: "Итоговая проверка прервана", uncertain = !result.ended))
                 persist(); block(id, attempt.error!!); return false
             }
             attempt = attempt.copy(phase = AttemptPhase.VERIFYING); persist()
@@ -874,8 +854,7 @@ class PlanningExecutionService(
                 attempt = admitted
                 saveAttempt(id, stageId, attempt)
                 currentAttempt = attempt
-                var failure: String? = null
-                var ended = false
+                var result = StageRunResult()
                 var lastSave = 0L
                 var lastDisplay = 0L
                 var outputPendingSave = false
@@ -898,7 +877,8 @@ class PlanningExecutionService(
                 if (!canRunStage(id, stageId)) return
                 monitoredRun(project.copy(path = attempt.path), session, prompt, frozen).collect { event ->
                     val now = outputClock()
-                    if (event is CodingEvent.Notice && event.message.isBlank()) {
+                    val signal = event.signal
+                    if (signal == StageEngineSignal.Silence) {
                         // Silence is a flush opportunity, not new output. Rewriting a large
                         // plan every second also makes the orchestrator reload all histories.
                         if (outputPendingDisplay && now - lastDisplay >= 100) {
@@ -916,39 +896,23 @@ class PlanningExecutionService(
                     }
                     outputPendingSave = true
                     outputPendingDisplay = true
-                    if (!deliveryAcknowledged && (event is CodingEvent.SessionStarted || event is CodingEvent.MessageStarted ||
-                            event is CodingEvent.TextDelta || event is CodingEvent.FinalText)) {
+                    if (!deliveryAcknowledged && event.showsEngineAnswering) {
                         chatHooks?.started(store.planFor(id)!!, stage, attempt)
                         deliveryAcknowledged = true
                     }
                     activityRecorder.apply(event)
-                    attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                    when (event) {
-                        is CodingEvent.SessionStarted -> {
-                            attempt = attempt.copy(engineSessionId = event.sessionId)
-                        }
-                        is CodingEvent.TextDelta -> attempt = attempt.copy(report = attempt.report + event.delta)
-                        is CodingEvent.FinalText -> attempt = attempt.copy(report = event.text)
-                        is CodingEvent.ToolStarted -> {
-                            attempt = attempt.copy(activity = "${event.tool}: ${event.summary}", pendingTool = event.summary,
-                                pendingToolExternal = event.isExec && !PlanningRetryPolicy.localCheck(event.summary))
-                        }
-                        is CodingEvent.ToolFinished -> {
-                            attempt = attempt.copy(activity = "${event.tool}: ${event.resultPreview.take(1500)}", pendingTool = "", pendingToolExternal = false)
-                        }
-                        is CodingEvent.Notice -> if (event.message.isNotBlank()) attempt = attempt.copy(activity = event.message)
-                        is CodingEvent.Failed -> failure = event.message
-                        CodingEvent.Finished -> ended = true
-                        else -> Unit
-                    }
+                    attempt = attempt.after(event, StageRunTrack.WORK)
+                        .copy(steps = activityHistory + activityRecorder.timeline())
+                    result = result.after(event)
                     currentAttempt = attempt
-                    if (boundary(event) || now - lastDisplay >= 100) {
+                    if (signal.showsProgress || now - lastDisplay >= 100) {
                         val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
                         liveState.update { it + (attempt.id to preview) }; lastDisplay = now
                         outputPendingDisplay = false
                     }
-                    if (event is CodingEvent.SessionStarted || event is CodingEvent.ToolStarted ||
-                        event is CodingEvent.ToolFinished || now - lastSave >= 1000) {
+                    // Narrower than the display: only a record recovery will read is worth
+                    // rewriting the whole plan for, out of turn.
+                    if (signal.mustReachDisk || now - lastSave >= 1000) {
                         saveAttempt(id, stageId, attempt)
                         lastSave = now
                         outputPendingSave = false
@@ -958,11 +922,11 @@ class PlanningExecutionService(
                 if (submitted != null && attempt.report.isBlank()) attempt = attempt.copy(report = submitted.reply.text)
                 attempt = attempt.copy(chatTurns = attempt.chatTurns.dropLast(1) + attempt.chatTurns.last().copy(completedAt = Id.now()))
                 currentAttempt = attempt
-                if (failure != null || !ended || attempt.report.isBlank()) {
-                    val issue = classify(failure ?: "Поток завершился без подтверждённого результата", uncertain = !ended)
+                if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
+                    val issue = classify(result.failure ?: "Поток завершился без подтверждённого результата", uncertain = !result.ended)
                     if (issue.kind == IssueKind.TRANSIENT && canRetry(attempt.transportRetries)) {
                         val count = PlanningRetryPolicy.nextRetry(attempt.transportRetries)
-                        val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(failure.orEmpty()), Id.now(), Random.nextLong(500))
+                        val wait = PlanningRetryPolicy.delayMillis(count, PlanningRetryPolicy.fromMessage(result.failure.orEmpty()), Id.now(), Random.nextLong(500))
                         attempt = attempt.copy(phase = AttemptPhase.FAILED, transportRetries = count,
                             error = issue.copy(retryAt = Id.now() + wait, retries = count))
                         saveAttempt(id, stageId, attempt)
@@ -1061,7 +1025,7 @@ class PlanningExecutionService(
                             planId = id, stageId = stageId, parentSessionId = latest.parentSessionId,
                             planningRulesSnapshot = latest.planningRulesSnapshot,
                             pendingRun = CodingRunCheckpoint("${attempt.id}-merge", ""))
-                        var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
+                        var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                         val activityRecorder = CodingRunRecorder()
                         monitoredRun(project.copy(path = workspace.integrationPath), mergeSession,
@@ -1069,22 +1033,14 @@ class PlanningExecutionService(
                             (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
                             activityRecorder.apply(event)
                             attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                            when (event) {
-                                is CodingEvent.SessionStarted -> attempt = attempt.copy(mergeEngineSessionId = event.sessionId)
-                                is CodingEvent.Failed -> failure = event.message
-                                is CodingEvent.TextDelta -> attempt = attempt.copy(mergeReport = attempt.mergeReport + event.delta)
-                                is CodingEvent.FinalText -> attempt = attempt.copy(mergeReport = event.text)
-                                is CodingEvent.ToolStarted -> attempt = attempt.copy(activity = event.summary, pendingTool = event.summary,
-                                    pendingToolExternal = event.isExec && !PlanningRetryPolicy.localCheck(event.summary))
-                                is CodingEvent.ToolFinished -> attempt = attempt.copy(activity = event.resultPreview.take(1500), pendingTool = "", pendingToolExternal = false)
-                                CodingEvent.Finished -> ended = true
-                                else -> Unit
-                            }
-                            if (boundary(event) || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
-                            if (boundary(event) || Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
+                            attempt = attempt.after(event, StageRunTrack.MERGE)
+                            result = result.after(event)
+                            val signal = event.signal
+                            if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                            if (signal.showsProgress || Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
                         }
-                        if (failure != null || !ended || attempt.mergeReport.isBlank()) {
-                            attempt = withRetry(attempt, classify(failure ?: "Объединение прервано", uncertain = !ended))
+                        if (result.incomplete(attempt.report(StageRunTrack.MERGE))) {
+                            attempt = withRetry(attempt, classify(result.failure ?: "Объединение прервано", uncertain = !result.ended))
                             saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return@withLock
                         }
                         attempt = attempt.copy(mergePhase = AttemptPhase.VERIFYING); saveAttempt(id, stageId, attempt)
@@ -1271,7 +1227,6 @@ class PlanningExecutionService(
         it.copy(issue = issue.copy(message = safeText(issue.message)), phase = ExecutionPhase.WAITING, status = if (issue.requiresUser) PlanStatus.FAILED else PlanStatus.RUNNING)
     }
     private fun safeText(text: String) = PlanningDiagnostics.redact(text, secrets.value)
-    private fun boundary(event: CodingEvent) = event !is CodingEvent.TextDelta && !(event is CodingEvent.Notice && event.message.isBlank())
     private fun publish(attempt: StageAttempt) {
         val safe = safeAttempt(attempt)
         liveState.update { state ->
