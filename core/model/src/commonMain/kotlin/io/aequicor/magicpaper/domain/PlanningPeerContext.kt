@@ -76,7 +76,7 @@ fun Plan.cancelLegacyPeerCommands(peers: List<Plan>, admittedAttempts: Map<Strin
 /** Restore the application's durable VERIFY decision only when the synthetic continuation was never admitted.
  * Native ownership, quarantine, errors and generation remain intact for the normal recovery proof. */
 private fun Plan.canRestorePeerVerification(stage: Milestone, attempt: StageAttempt, cancelledIds: Set<String>, admitted: SessionLegacyAttempt?): Boolean {
-    if (attempt.phase != AttemptPhase.EXECUTING || attempt.turnIndex <= 0 || attempt.awaitingPlanner || attempt.coordinationPending == true ||
+    if (attempt.phase != AttemptPhase.EXECUTING || attempt.turnIndex <= 0 || attempt.awaitingPlanner || attempt.coordinationState.certainlyPending ||
         attempt.waitingForUser != null || attempt.waitingForEvent != null || attempt.pendingTool.isNotBlank() || attempt.pendingToolExternal ||
         attempt.mergeProgress.started || attempt.acceptanceRecord != null || attempt.sessionGeneration <= 0) return false
     val previousTurn = attempt.turnIndex - 1

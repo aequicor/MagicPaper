@@ -774,7 +774,7 @@ class OrchestrationService(
             val task = p.milestones.firstOrNull { it.id == rule.targetTaskId } ?: return false
             val attempt = task.attempts.lastOrNull()
             return !rule.timeout && p.intent == ExecutionIntent.RUN && !task.completed && p.finalAttempt == null && p.phase != ExecutionPhase.COMPLETE &&
-                attempt?.error?.requiresUser != true && attempt?.awaitingPlanner != true && attempt?.coordinationPending != true &&
+                attempt?.error?.requiresUser != true && attempt?.awaitingPlanner != true && attempt?.coordinationState?.certainlyPending != true &&
                 attempt?.phase !in setOf(AttemptPhase.VERIFYING, AttemptPhase.INTEGRATING, AttemptPhase.COMPLETE)
         }
         if (eligible(plan)) {

@@ -64,6 +64,7 @@ fun reduce(state: StageState, event: StageEvent): StageTransition   // без Cl
 | Повторять ли сбой | `RetryDecision`, `PlanningRetryPolicy.decide` | четыре написания одного решения; часы и случайность внутри службы |
 | Описывает ли сохранённый план ход в руках | `CheckpointDrift` | цепочка `if` с четырьмя полями тождества и без имени |
 | Где стоит разрешение конфликта | `MergeProgress` | `AttemptPhase?` с чужим смыслом; три вопроса к нему в двух циклах |
+| Должен ли планировщик ответ | `CoordinationState` | `Boolean?`, где `null` читался тремя способами в пяти местах |
 
 ### Журнал событий
 

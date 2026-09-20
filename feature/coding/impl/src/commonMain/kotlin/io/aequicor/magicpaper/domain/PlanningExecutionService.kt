@@ -785,10 +785,7 @@ class PlanningExecutionService(
                 // A completed runtime turn may have been checkpointed before its coordinator finished.
                 // Resume the durable decision, never re-run its file operations just to redeliver a reply.
                 val recorded = plan.coordination.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
-                val pendingCoordination = attempt.coordinationPending ?: (attempt.awaitingPlanner &&
-                    attempt.report.isNotBlank() && attempt.waitingForUser == null &&
-                    (attempt.turnIndex == 0 || attempt.chatTurns.size > attempt.turnIndex))
-                if ((recorded != null || pendingCoordination) && chatHooks != null) {
+                if ((recorded != null || attempt.coordinationOwed) && chatHooks != null) {
                     attempt = attempt.handedToPlanner()
                     saveAttempt(id, stageId, attempt)
                     val resumed = chatHooks!!.finished(plan, stage, attempt)
@@ -842,7 +839,7 @@ class PlanningExecutionService(
                     Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
                     ${verificationGuidance()}
                 """.trimIndent() + "\n" + extraInstructions
-                attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false, coordinationPending = false,
+                attempt = attempt.coordinationSettled().copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt,
                     chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now(), prompt = prompt))
                 saveAttempt(id, stageId, attempt)
                 journal(id, PlanJournalOperation.AGENT_INTENT, stageId, attempt.id)
@@ -936,8 +933,9 @@ class PlanningExecutionService(
                 if (decision != null) {
                     // The decision is applied in two steps because VERIFY leaves the phase alone
                     // and falls through to verification; only the other actions restart execution.
-                    attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1,
-                        awaitingPlanner = decision.action == StageTurnAction.WAIT, coordinationPending = false)
+                    // Every branch below settles the coordination: VERIFY keeps the turn here, and
+                    // the others hand it straight to `awaiting`, which sets the same pair again.
+                    attempt = attempt.coordinationSettled().copy(report = decision.report, turnIndex = attempt.turnIndex + 1)
                     if (decision.action != StageTurnAction.VERIFY) {
                         attempt = attempt.awaiting(StageWaiting.of(decision.action, decision.requestId))
                             .copy(phase = AttemptPhase.EXECUTING, error = null)

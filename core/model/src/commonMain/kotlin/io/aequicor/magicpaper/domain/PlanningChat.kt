@@ -147,7 +147,7 @@ private fun Plan.normalizeHandoff(record: CoordinationRecord): CoordinationRecor
     val turn = record.id.substringAfterLast("-turn-", "0").toIntOrNull() ?: record.turnIndex
     val past = runHistory.firstOrNull { run -> run.milestones.any { task -> task.attempts.any { it.id == attemptId } } }
     val attempt = (milestones + past?.milestones.orEmpty()).flatMap { it.attempts }.firstOrNull { it.id == attemptId }
-    val pending = attempt?.let { it.turnIndex == turn && it.awaitingPlanner && it.waitingForUser == null && it.coordinationPending != false } == true
+    val pending = attempt?.let { it.turnIndex == turn && it.awaitingPlanner && it.waitingForUser == null && it.coordinationState.possiblyPending } == true
     val status = if (record.status == HandoffStatus.QUEUED && record.decision != null && !pending) HandoffStatus.RESOLVED else record.status
     return record.copy(runId = past?.runId ?: runId, attemptId = attemptId, sourceSessionId = record.sourceSessionId.ifBlank { attempt?.sessionId.orEmpty() },
         turnIndex = turn, createdAt = record.createdAt.takeIf { it > 0 } ?: attempt?.chatTurns?.getOrNull(turn)?.completedAt?.takeIf { it > 0 } ?: attempt?.startedAt ?: createdAt,

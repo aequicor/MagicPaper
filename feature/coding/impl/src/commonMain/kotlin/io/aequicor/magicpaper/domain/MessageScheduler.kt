@@ -117,7 +117,7 @@ internal fun Plan.checkpointMessageEvents(previous: Plan?, now: Long, generate: 
             attemptId = attempt, turnIndex = turn)
     }
     // The runtime report is a durable handoff even if the app exits before the coordinator hook runs.
-    selectedMilestones.forEach { task -> task.attempts.lastOrNull()?.takeIf { it.coordinationPending == true }?.let { attempt ->
+    selectedMilestones.forEach { task -> task.attempts.lastOrNull()?.takeIf { it.coordinationState.certainlyPending }?.let { attempt ->
         val reply = stageReplyOrNull(attempt.report)
         if (reply != null) emit("handoff:${attempt.id}-turn-${attempt.turnIndex}", when (reply.kind) {
             StageReplyKind.RESULT -> MessageEventKind.RESULT_RETURNED
