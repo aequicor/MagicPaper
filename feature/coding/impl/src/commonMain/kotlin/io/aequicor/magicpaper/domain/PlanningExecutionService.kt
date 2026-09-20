@@ -112,14 +112,14 @@ class PlanningExecutionService(
     }
     suspend fun stop(projectId: String) {
         val plan = store.update(projectId) { it.copy(intent = ExecutionIntent.STOP, stopping = true,
-            journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), operation = "stop-intent")) }
+            journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), operation = PlanJournalOperation.STOP_INTENT)) }
         // A broken transport must not prevent coroutine cancellation of the rest of the subtree.
         val signalErrors = runtimeSessionIds(plan).mapNotNull { sessionId ->
             try { runtime.abort(sessionId); null } catch (e: Exception) { safeText(e.message.orEmpty()) }
         }
         val job = jobsLock.withLock { jobs[plan.id]?.also { it.cancel() } }
         if (signalErrors.isNotEmpty()) store.update(plan.id) { it.copy(journal = it.journal +
-            PlanJournalEntry(Id.new(), Id.now(), operation = "stop-signal-error", detail = signalErrors.joinToString("\n"))) }
+            PlanJournalEntry(Id.new(), Id.now(), operation = PlanJournalOperation.STOP_SIGNAL_ERROR, detail = signalErrors.joinToString("\n"))) }
         if (job == null || job.isCompleted) confirmStop(plan.id)
     }
     suspend fun stopAndJoin(planId: String) {
@@ -228,7 +228,7 @@ class PlanningExecutionService(
                 issue = null, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING, status = PlanStatus.RUNNING,
                 milestones = plan.milestones.map { it.copy(attempts = it.attempts.map(::resume)) },
                 finalAttempt = plan.finalAttempt?.let(::resume),
-                journal = plan.journal + PlanJournalEntry(Id.new(), Id.now(), operation = "user-skip-verification"))
+                journal = plan.journal + PlanJournalEntry(Id.new(), Id.now(), operation = PlanJournalOperation.USER_SKIP_VERIFICATION))
         }
         launchProject(planId)
     }
@@ -338,11 +338,11 @@ class PlanningExecutionService(
             if (plan.issue != null) plan = store.update(id) { it.copy(issue = null, phase = ExecutionPhase.RECOVERING) }
             if (plan.runId.isBlank()) plan = store.update(id) { it.copy(runId = Id.new()) }
             if (plan.workspace == null) {
-                journal(id, "prepare-intent")
+                journal(id, PlanJournalOperation.PREPARE_INTENT)
                 val workspace = workspaces.prepare(project, plan.runId)
                 plan = store.update(id) { it.copy(workspace = workspace, issue = null,
                     journal = if (workspace.git) it.journal else it.journal + PlanJournalEntry(Id.new(), Id.now(),
-                        operation = "git-unavailable", detail = "Git недоступен: изменения выполняются без отдельных веток и коммитов. Репозиторий не создан.")) }
+                        operation = PlanJournalOperation.GIT_UNAVAILABLE, detail = "Git недоступен: изменения выполняются без отдельных веток и коммитов. Репозиторий не создан.")) }
             }
             chatHooks?.prepareSessions(plan)
             val workspace = plan.workspace!!
@@ -422,7 +422,7 @@ class PlanningExecutionService(
                     return
                 }
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
-                journal(id, "apply-intent")
+                journal(id, PlanJournalOperation.APPLY_INTENT)
                 val task = taskWorktrees?.session(project.id, plan.parentSessionId)?.taskWorktree?.takeIf { initial.worktreeEnabled == true && it.taskId == plan.runId }
                 val delivering = task?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT, TaskWorktreePhase.DELIVERING, TaskWorktreePhase.COMPLETE)
                 val applied = if (delivering) workspace.copy(applied = true) else applyResult(id, project, workspace, judge) ?: return
@@ -439,7 +439,7 @@ class PlanningExecutionService(
                         it.finalAttempt?.acceptanceRecord?.criteria == it.acceptanceCriteria()) { "Приёмка или намерение запуска изменились" }
                     it.copy(workspace = applied, phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE, issue = null)
                 }
-                journal(id, "apply-complete")
+                journal(id, PlanJournalOperation.APPLY_COMPLETE)
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -491,7 +491,7 @@ class PlanningExecutionService(
             val stopped = store.update(id) { latest ->
                 if (latest.intent != ExecutionIntent.STOP || !latest.stopping) latest else latest.copy(
                     stopping = false, status = PlanStatus.STOPPED,
-                    journal = latest.journal + PlanJournalEntry(Id.new(), Id.now(), operation = "stop-confirmed"))
+                    journal = latest.journal + PlanJournalEntry(Id.new(), Id.now(), operation = PlanJournalOperation.STOP_CONFIRMED))
             }
             if (stopped.intent == ExecutionIntent.STOP && !stopped.stopping) stoppedCheckpoint(stopped)
         } catch (e: Exception) {
@@ -568,7 +568,7 @@ class PlanningExecutionService(
                 }
                 if (attempt.mergePhase != AttemptPhase.VERIFYING) {
                     attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING); persist()
-                    journal(id, "delivery-conflict-intent", attemptId = attempt.id)
+                    journal(id, PlanJournalOperation.DELIVERY_CONFLICT_INTENT, attemptId = attempt.id)
                     var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
                     try {
                         val activityHistory = attempt.steps.filter { it.isVisibleActivity }
@@ -647,7 +647,7 @@ class PlanningExecutionService(
                 return false
             }
             attempt = attempt.copy(phase = AttemptPhase.EXECUTING); persist()
-            journal(id, "final-verification-intent", attemptId = attempt.id)
+            journal(id, PlanJournalOperation.FINAL_VERIFICATION_INTENT, attemptId = attempt.id)
             var failure: String? = null; var ended = false; var lastSave = 0L; var lastDisplay = 0L
             val criteria = pendingCriteria.joinToString("\n") { it.description }
             try {
@@ -772,7 +772,7 @@ class PlanningExecutionService(
             currentAttempt = attempt
             if (stage.attempts.isEmpty()) saveAttempt(id, stageId, attempt)
             if (attempt.path.isBlank()) {
-                journal(id, "stage-workspace-intent", stageId, attempt.id)
+                journal(id, PlanJournalOperation.STAGE_WORKSPACE_INTENT, stageId, attempt.id)
                 attempt = integration.withLock { workspaces.stage(project, workspace, attempt) }
                 saveAttempt(id, stageId, attempt)
             }
@@ -863,7 +863,7 @@ class PlanningExecutionService(
                 attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt, awaitingPlanner = false, coordinationPending = false,
                     chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now(), prompt = prompt))
                 saveAttempt(id, stageId, attempt)
-                journal(id, "agent-intent", stageId, attempt.id)
+                journal(id, PlanJournalOperation.AGENT_INTENT, stageId, attempt.id)
                 val admitted = prepareAttempt(store.planFor(id)!!, stageId, attempt)
                 require(admitted.id == attempt.id && admitted.sessionId == attempt.sessionId && admitted.turnIndex == attempt.turnIndex &&
                     admitted.path == attempt.path && admitted.assignment == attempt.assignment) { "Допуск изменил идентичность задания" }
@@ -1027,14 +1027,14 @@ class PlanningExecutionService(
                     attempt = attempt.copy(error = PlanningIssue(IssueKind.VERIFICATION, verdict.note, requiresUser = true))
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
-                journal(id, "capture-intent", stageId, attempt.id)
+                journal(id, PlanJournalOperation.CAPTURE_INTENT, stageId, attempt.id)
                 attempt = attempt.copy(resultCommit = workspaces.capture(attempt.copy(report = stage.title + "\n" + attempt.report)), phase = AttemptPhase.INTEGRATING)
                 saveAttempt(id, stageId, attempt)
             }
             if (attempt.phase == AttemptPhase.INTEGRATING) integration.withLock {
                 val latest = store.planFor(id) ?: return@withLock
                 if (latest.issue != null || latest.intent == ExecutionIntent.STOP || closing || store.failure.value != null) return@withLock
-                journal(id, "merge-intent", stageId, attempt.id)
+                journal(id, PlanJournalOperation.MERGE_INTENT, stageId, attempt.id)
                 var merged = workspaces.integrate(workspace, attempt)
                 // A resolver may have committed before the crash: ancestry alone is not verification.
                 if (attempt.mergePhase != null && attempt.mergePhase != AttemptPhase.COMPLETE) merged = false
@@ -1051,7 +1051,7 @@ class PlanningExecutionService(
                     if (attempt.mergePhase != AttemptPhase.VERIFYING) {
                         attempt = attempt.copy(mergePhase = AttemptPhase.EXECUTING)
                         saveAttempt(id, stageId, attempt)
-                        journal(id, "conflict-agent-intent", stageId, attempt.id)
+                        journal(id, PlanJournalOperation.CONFLICT_AGENT_INTENT, stageId, attempt.id)
                         val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
                             planId = id, stageId = stageId, parentSessionId = latest.parentSessionId,
                             planningRulesSnapshot = latest.planningRulesSnapshot,
@@ -1099,7 +1099,7 @@ class PlanningExecutionService(
                 }
                 attempt = attempt.copy(phase = AttemptPhase.COMPLETE, error = null)
                 saveAttempt(id, stageId, attempt)
-                journal(id, "stage-complete", stageId, attempt.id)
+                journal(id, PlanJournalOperation.STAGE_COMPLETE, stageId, attempt.id)
             }
         } catch (e: CancellationException) {
             currentAttempt?.let { snapshot ->
@@ -1249,7 +1249,7 @@ class PlanningExecutionService(
                 store.update(plan.id) { latest ->
                     val event = "$marker-session-projection"
                     if (latest.journal.any { it.id == event }) latest else latest.copy(journal = latest.journal +
-                        PlanJournalEntry(event, Id.now(), stageId, attempt.id, "session-projection-pending", safeText(error.message.orEmpty())))
+                        PlanJournalEntry(event, Id.now(), stageId, attempt.id, PlanJournalOperation.SESSION_PROJECTION_PENDING.wire, safeText(error.message.orEmpty())))
                 }
             }
         }
@@ -1259,8 +1259,8 @@ class PlanningExecutionService(
         it.targetStageId == stageId && it.state == DeliveryState.QUEUED && it.replyTo != null
     } == true
 
-    private suspend fun journal(id: String, operation: String, stageId: String = "", attemptId: String = "") = store.update(id) {
-        it.copy(journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), stageId, attemptId, operation))
+    private suspend fun journal(id: String, operation: PlanJournalOperation, stageId: String = "", attemptId: String = "") = store.update(id) {
+        it.copy(journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), operation, stageId, attemptId))
     }
     private suspend fun block(id: String, issue: PlanningIssue) = store.update(id) {
         it.copy(issue = issue.copy(message = safeText(issue.message)), phase = ExecutionPhase.WAITING, status = if (issue.requiresUser) PlanStatus.FAILED else PlanStatus.RUNNING)

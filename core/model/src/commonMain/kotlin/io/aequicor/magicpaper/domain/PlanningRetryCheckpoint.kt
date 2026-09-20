@@ -12,7 +12,7 @@ fun Plan.requireRetryCheckpoint(expected: Plan) {
     require(id == expected.id && projectId == expected.projectId && parentSessionId == expected.parentSessionId &&
         runId == expected.runId && intent == expected.intent && stopping == expected.stopping &&
         confirmedRevision == expected.confirmedRevision && unchangedAttempts && sameFinal &&
-        journal.filter { it.operation.startsWith("stop-") } == expected.journal.filter { it.operation.startsWith("stop-") }) {
+        journal.filter { it.describesStop } == expected.journal.filter { it.describesStop }) {
         "Состояние запуска изменилось; ответьте на актуальный запрос восстановления"
     }
 }

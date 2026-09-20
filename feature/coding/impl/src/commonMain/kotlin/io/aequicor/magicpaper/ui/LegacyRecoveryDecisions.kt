@@ -18,7 +18,7 @@ internal fun legacyRecoveryDecisionAliases(ui: CodingUi, plans: List<Plan>, dism
         val parent = ui.sessions.singleOrNull { it.session.id == plan.parentSessionId && it.session.projectId == plan.projectId } ?: continue
         if (parent.running || parent.session.archived || plan.blockingIssues(parent.messages) != blockers) continue
         val decision = parent.messages.singleOrNull { it.id == "$legacyId-left" && it.role == CodingRole.USER } ?: continue
-        if (decision.createdAt <= plan.updatedAt || plan.journal.none { it.operation == "stop-confirmed" && it.at > 0 }) continue
+        if (decision.createdAt <= plan.updatedAt || plan.journal.none { it.records(PlanJournalOperation.STOP_CONFIRMED) && it.at > 0 }) continue
         if (parent.messages.any { it.id != decision.id && (it.createdAt <= 0 || it.createdAt >= decision.createdAt) }) continue
         val attempts = plan.milestones.flatMap { it.attempts } + listOfNotNull(plan.finalAttempt) + plan.finalAttemptHistory
         if (attempts.any { it.startedAt <= 0 || it.updatedAt <= 0 }) continue

@@ -45,7 +45,7 @@ fun List<PlanningBlocker>.recoveryActionLabel(): String = when {
 /** Older versions skipped only missing findings, then could block the same user decision on STALE.
  * Recover that explicit whole-stage decision, without restarting stopped plans or waiving new criteria. */
 fun Plan.restoreSkippedVerification(): Plan {
-    if (intent != ExecutionIntent.RUN || acceptanceWaivers.isEmpty() || journal.none { it.operation == "user-skip-verification" }) return this
+    if (intent != ExecutionIntent.RUN || acceptanceWaivers.isEmpty() || journal.none { it.records(PlanJournalOperation.USER_SKIP_VERIFICATION) }) return this
     val blockers = blockingIssues(emptyList())
     if (blockers.isEmpty() || blockers.any { !it.canSkipVerification }) return this
     val restored = mutableListOf<AcceptanceWaiver>()
