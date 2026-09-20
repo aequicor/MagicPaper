@@ -781,16 +781,21 @@ class PlanningExecutionService(
             workspaces.reconcile(attempt)
             runtime.reconcile(attempt.sessionId)
             runtime.reconcile("${attempt.sessionId}-merge")
-            if (attempt.pendingToolExternal && attempt.pendingTool.isNotBlank()) {
-                block(id, PlanningIssue(IssueKind.UNCERTAIN, "Нет подтверждения результата команды: ${attempt.pendingTool}. Проверьте её последствия перед повтором.", requiresUser = true))
-                return
+            when (val resumption = attempt.resumption) {
+                is StageResumption.UnknownOutcome -> {
+                    block(id, PlanningIssue(IssueKind.UNCERTAIN, "Нет подтверждения результата команды: ${resumption.tool}. Проверьте её последствия перед повтором.", requiresUser = true))
+                    return
+                }
+                is StageResumption.Interrupted -> {
+                    attempt = attempt.copy(interrupted = false)
+                    saveAttempt(id, stageId, attempt)
+                    currentAttempt = attempt
+                }
+                is StageResumption.Runnable, is StageResumption.Settled -> Unit
             }
-            if (attempt.interrupted) {
-                attempt = attempt.copy(interrupted = false)
-                saveAttempt(id, stageId, attempt)
-                currentAttempt = attempt
-            }
-            while (attempt.phase in listOf(AttemptPhase.PREPARED, AttemptPhase.EXECUTING, AttemptPhase.FAILED)) {
+            // The loop reads the phase alone: an external command that becomes unconfirmed mid-run
+            // is handled where it is observed, not by silently dropping out of the turn here.
+            while (attempt.mayRun) {
                 if (!canRunStage(id, stageId)) return
                 val plan = store.planFor(id)!!
                 val savedReview = attempt.acceptanceRecord
