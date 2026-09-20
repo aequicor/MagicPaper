@@ -38,6 +38,9 @@ enum class PlanJournalOperation(val wire: String, val kind: JournalEntryKind) {
     FINAL_VERIFICATION_INTENT("final-verification-intent", JournalEntryKind.INTENT),
     APPLY_INTENT("apply-intent", JournalEntryKind.INTENT),
 
+    INTENT_OUTCOME("intent-outcome", JournalEntryKind.OUTCOME),
+    INTENT_RECONCILED("intent-reconciled", JournalEntryKind.OUTCOME),
+    STRATEGY_SELECTED("strategy-selected", JournalEntryKind.NOTICE),
     STAGE_COMPLETE("stage-complete", JournalEntryKind.OUTCOME),
     APPLY_COMPLETE("apply-complete", JournalEntryKind.OUTCOME),
 
@@ -99,5 +102,34 @@ data class PlanJournalSubject(val stage: String = "", val attempt: String = "") 
         fun decode(detail: String): PlanJournalSubject =
             if (detail.isBlank()) PlanJournalSubject()
             else runCatching { json.decodeFromString(serializer(), detail) }.getOrDefault(PlanJournalSubject())
+    }
+}
+
+/** Completion of the local effect, not proof that every external command succeeded.
+ * INTERRUPTED preserves uncertainty; it never authorizes replay of an external effect.
+ */
+@Serializable
+enum class PlanIntentStatus { COMPLETED, REJECTED, INTERRUPTED }
+
+/** Sequence identity distinguishes repeated turns and nested effects in the same attempt. */
+@Serializable
+data class PlanIntentOutcome(val intentSeq: Long, val status: PlanIntentStatus, val strategySeq: Long? = null) {
+    fun encode(): String = Json.encodeToString(serializer(), this)
+
+    companion object {
+        // Unlike optional display metadata, invalid outcome evidence must fail closed.
+        fun decode(detail: String): PlanIntentOutcome = Json.decodeFromString(serializer(), detail)
+    }
+}
+
+/** Recovery records evidence, never invents whether the interrupted effect succeeded. */
+@Serializable
+enum class PlanRecoveryAuthority { NATIVE_RECEIPT, USER }
+
+@Serializable
+data class PlanIntentReconciliation(val intentSeq: Long, val authority: PlanRecoveryAuthority) {
+    fun encode(): String = Json.encodeToString(serializer(), this)
+    companion object {
+        fun decode(detail: String): PlanIntentReconciliation = Json.decodeFromString(serializer(), detail)
     }
 }

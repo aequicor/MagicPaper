@@ -13,6 +13,27 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CodingComponentNavigationTest {
+    @Test fun displayObservationsContinueAfterScreenDestructionAndClearWhenOwnerClears() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val lifecycle = LifecycleRegistry()
+        var service: DefaultCodingService? = null
+        try {
+            val fixture = ModelSettingsFixture()
+            val coding = fixture.prepareCoding(activate = false).also { service = it }
+            val component = DefaultCodingComponentFactory(coding, NoopFilePicker)
+                .create(DefaultComponentContext(lifecycle), CodingInput()) {}
+            lifecycle.resume(); runCurrent()
+            lifecycle.destroy(); runCurrent()
+            val usage = ContextUsageSnapshot("coding:background", "model", used = 123, limit = 1000, updatedAt = 1)
+            fixture.usage.context(usage); runCurrent()
+            assertEquals(usage, coding.state.value.coding.usageContexts[usage.conversationId])
+            assertEquals(usage, component.state.value.coding.usageContexts[usage.conversationId])
+            fixture.usage.clear(); runCurrent()
+            assertTrue(coding.state.value.coding.usageContexts.isEmpty())
+            assertTrue(fixture.calls.isEmpty())
+        } finally { lifecycle.destroy(); service?.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun sessionLinkMustBelongToItsProjectAndMissingProjectClearsSelection() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var service: DefaultCodingService? = null

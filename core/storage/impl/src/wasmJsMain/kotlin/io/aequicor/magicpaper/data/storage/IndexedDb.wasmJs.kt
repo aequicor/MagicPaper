@@ -42,11 +42,11 @@ internal actual suspend fun indexedDbOperation(database: String, store: String, 
             return;
         }
         if (!globalThis.indexedDB) { finish(null, "Unavailable"); return; }
-        const open = globalThis.indexedDB.open(database, 2);
+        const open = globalThis.indexedDB.open(database, 3);
         open.onblocked = () => finish(null, "Unavailable");
         open.onerror = () => finish(null, (open.error && open.error.name) || "Unavailable");
         open.onupgradeneeded = () => {
-            for (const name of ["secrets", "drafts", "draft-blobs", "navigation", "view-states"]) {
+            for (const name of ["secrets", "drafts", "draft-blobs", "navigation", "view-states", "events"]) {
                 if (!open.result.objectStoreNames.contains(name)) open.result.createObjectStore(name);
             }
         };

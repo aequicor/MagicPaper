@@ -335,26 +335,59 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
     private val mutex = Mutex()
     private val json = Json { encodeDefaults = true }
 
-    override suspend fun append(stream: String, operation: String, at: Long, detail: String): JournalRecord {
-        require(stream.isNotBlank()) { "Записи журнала принадлежат потоку" }
-        return mutex.withLock { backend.withDraftLock {
-            val seq = reserve()
-            val record = JournalRecord(seq, at, stream, operation, detail)
-            try { backend.write(StorageArea.EVENTS, key(seq), json.encodeToString(StoredEvent.serializer(), record.stored()).encodeToByteArray()) }
-            catch (failure: CancellationException) { throw failure }
-            catch (failure: StorageException) { throw failure }
-            catch (failure: Exception) { throw StorageException("append journal record", StorageException.Kind.WRITE, failure) }
-            record
-        } }
+    private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock(block) }
+
+    override suspend fun append(stream: String, operation: String, at: Long, detail: String): JournalRecord = locked {
+        appendLocked(stream, operation, at, detail)
     }
 
-    override suspend fun read(stream: String): List<JournalRecord> = mutex.withLock { backend.withDraftLock {
-        records().filter { it.stream == stream }
-    } }
+    override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? = locked {
+        if (snapshotLocked(expected.stream).revision != expected) null
+        else appendLocked(expected.stream, operation, at, detail)
+    }
 
-    override suspend fun drop(stream: String) { mutex.withLock { backend.withDraftLock {
+    private suspend fun appendLocked(stream: String, operation: String, at: Long, detail: String): JournalRecord {
+        require(stream.isNotBlank()) { "Записи журнала принадлежат потоку" }
+        val seq = reserve()
+        val record = JournalRecord(seq, at, stream, operation, detail)
+        try { backend.write(StorageArea.EVENTS, key(seq), json.encodeToString(StoredEvent.serializer(), record.stored()).encodeToByteArray()) }
+        catch (failure: CancellationException) { throw failure }
+        catch (failure: StorageException) { throw failure }
+        catch (failure: Exception) { throw StorageException("append journal record", StorageException.Kind.WRITE, failure) }
+        return record
+    }
+
+    override suspend fun snapshot(stream: String): JournalSnapshot = locked { snapshotLocked(stream) }
+
+    private suspend fun snapshotLocked(stream: String): JournalSnapshot {
+        val dropped = droppedThrough(stream)
+        val visible = records().filter { it.stream == stream && it.seq > dropped }
+        return JournalSnapshot(JournalRevision(stream, maxOf(visible.lastOrNull()?.seq ?: 0, dropped), readResetEpoch(backend)), visible)
+    }
+
+    override suspend fun read(stream: String): List<JournalRecord> = snapshot(stream).records
+
+    override suspend fun streams(): List<String> = locked {
+        records().groupBy { it.stream }.filter { (stream, records) ->
+            val dropped = droppedThrough(stream)
+            records.any { it.seq > dropped }
+        }.keys.sorted()
+    }
+
+    override suspend fun drop(stream: String) { locked { dropLocked(stream) } }
+
+    override suspend fun drop(expected: JournalRevision): Boolean = locked {
+        if (snapshotLocked(expected.stream).revision != expected) false else { dropLocked(expected.stream); true }
+    }
+
+    private suspend fun dropLocked(stream: String) {
+        require(stream.isNotBlank())
+        // Commit revocation before cleanup. A crash or failed delete cannot expose a partial old
+        // stream as current history, and a writer holding the old revision cannot resurrect it.
+        val dropped = reserve()
+        backend.write(StorageArea.EVENTS, dropKey(stream), dropped.toString().encodeToByteArray())
         var firstFailure: Exception? = null
-        records().filter { it.stream == stream }.forEach {
+        records().filter { it.stream == stream && it.seq <= dropped }.forEach {
             try { backend.delete(StorageArea.EVENTS, key(it.seq)) }
             catch (failure: CancellationException) { throw failure }
             catch (failure: Exception) {
@@ -362,13 +395,20 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
             }
         }
         firstFailure?.let { throw StorageException("drop journal stream", StorageException.Kind.CLEANUP, it, committed = true) }
-    } } }
+    }
+
+    private suspend fun droppedThrough(stream: String): Long {
+        val raw = backend.read(StorageArea.EVENTS, dropKey(stream))?.decodeToString() ?: return 0
+        return raw.toLongOrNull()?.takeIf { it > 0 }
+            ?: throw StorageException("read journal deletion fence", StorageException.Kind.CORRUPT)
+    }
 
     /** Commits the next number before its record exists, so no number is ever handed out twice. */
     private suspend fun reserve(): Long {
         val stored = backend.read(StorageArea.EVENTS, CURSOR_KEY)?.decodeToString()
         val current = if (stored == null) recover() else stored.toLongOrNull()?.takeIf { it >= 0 }
             ?: throw StorageException("read journal cursor", StorageException.Kind.CORRUPT)
+        if (current == Long.MAX_VALUE) throw StorageException("reserve journal sequence", StorageException.Kind.WRITE)
         val next = current + 1
         backend.write(StorageArea.EVENTS, CURSOR_KEY, next.toString().encodeToByteArray())
         return next
@@ -378,11 +418,12 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
      * A cursor lost while records remain would restart the sequence over them. Recovering it
      * from the records themselves costs one scan, and only on a journal that has no cursor.
      */
-    private suspend fun recover(): Long = records().maxOfOrNull { it.seq } ?: 0
+    private suspend fun recover(): Long = maxOf(records().maxOfOrNull { it.seq } ?: 0,
+        backend.values(StorageArea.EVENTS).mapNotNull { it.decodeToString().toLongOrNull() }.maxOrNull() ?: 0)
 
     private suspend fun records(): List<JournalRecord> = backend.values(StorageArea.EVENTS)
         .mapNotNull { bytes ->
-            // The cursor shares the area and is not a record; anything else that fails to parse
+            // Cursor/deletion fences share the area and are not records; anything else that fails to parse
             // is a corrupt journal, which must not silently read as a shorter history.
             val raw = bytes.decodeToString()
             if (raw.toLongOrNull() != null) null else decode(raw)
@@ -404,6 +445,8 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
 
     private companion object {
         const val CURSOR_KEY = "seq"
+        // Hex preserves arbitrary opaque stream IDs without filesystem separators or key collisions.
+        fun dropKey(stream: String) = "d" + stream.encodeToByteArray().joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
         const val EVENT_FORMAT = "magicpaper-journal"
         /** Padded so the backend's own key order matches the sequence, for eyes and for tools. */
         fun key(seq: Long) = "e" + seq.toString().padStart(18, '0')

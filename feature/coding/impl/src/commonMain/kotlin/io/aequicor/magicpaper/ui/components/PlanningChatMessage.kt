@@ -8,16 +8,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.ui.CodingPlanningState
 import io.aequicor.magicpaper.plugins.builtin.StageDetailsDialog
 import io.aequicor.magicpaper.designsystem.*
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun PlanningChatMessage(message: CodingMessage, session: CodingSession, history: List<CodingMessage>, service: PlanningChatService, onOpenSession: (String) -> Unit) {
+@Composable internal fun PlanningChatMessage(message: CodingMessage, session: CodingSession, history: List<CodingMessage>, service: PlanningChatService, snapshot: CodingPlanningState, onOpenSession: (String) -> Unit) {
     val openQuestionnaire = LocalOpenQuestionnaire.current
     val block = message.planning ?: return
-    val plans by service.store.plans.collectAsState()
-    val live by service.execution.live.collectAsState()
-    val drafts by service.drafts.collectAsState()
+    val plans = snapshot.plans
+    val live = snapshot.liveAttempts
+    val drafts = snapshot.drafts
     val source = plans.firstOrNull { it.id == block.planId } ?: return
     if (block.questions.isNotEmpty()) {
         val answered = block.requestStatus == UserRequestStatus.ANSWERED || history.any { it.planning?.replyTo == message.id && it.planning?.closesRequest == true }
@@ -53,7 +54,7 @@ import io.aequicor.magicpaper.designsystem.*
         }
         if (plan.proposal != null) {
             PaperDivider()
-            val state by service.states.collectAsState()
+            val state = snapshot.states
             PlanningProposalDetails(plan, state[plan.parentSessionId]?.openQuestions(plan.id).orEmpty().isNotEmpty()) {
                 openQuestionnaire(InteractionKind.CONFIRM_PLAN, plan.id)
             }

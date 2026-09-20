@@ -94,8 +94,6 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -180,7 +178,6 @@ import io.aequicor.magicpaper.ui.components.isVisibleInChat
 import io.aequicor.magicpaper.ui.components.codingDraftRow
 import io.aequicor.magicpaper.ui.components.LocalPaperHideSystemSteps
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.domain.LlmProfile
 import io.aequicor.magicpaper.domain.ProviderType
@@ -191,7 +188,8 @@ import io.aequicor.magicpaper.ui.CodingSessionMode
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.DefaultCodingComponent
-import io.aequicor.magicpaper.ui.withStageChat
+import io.aequicor.magicpaper.ui.projectPlanningTranscript
+import io.aequicor.magicpaper.ui.CodingPlanningState
 import io.aequicor.magicpaper.ui.components.PaperChatMarkdown
 import io.aequicor.magicpaper.ui.components.PaperChatPlainText
 import io.aequicor.magicpaper.ui.components.CodingInputImages
@@ -319,26 +317,18 @@ private fun SessionArea(
     defaultEngine: CodingEngine,
     globalFeatureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
 ) {
-    val mediaConnections = vm.mediaGeneration?.state?.collectAsState()?.value.orEmpty()
+    val mediaConnections = ui.mediaConnections
     val sessionInfo = active.session
     // Переключатель источника/модели/усилия активной сессии.
     var switcherOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
         val service = vm.planningChat
-        val scope = rememberCoroutineScope()
-        val serviceDrafts = service?.drafts?.collectAsState()?.value.orEmpty()
-        val latestServiceDrafts = androidx.compose.runtime.rememberUpdatedState(serviceDrafts)
-        val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
-        val live = service?.execution?.live?.collectAsState()?.value.orEmpty()
-        val workerPlan = plans.firstOrNull { it.id == sessionInfo.planId } ?: active.plan
-        val parentMessages = ui.sessions.firstOrNull { it.session.id == sessionInfo.parentSessionId }?.messages.orEmpty()
-        val stageChat = active.withStageChat(workerPlan, live, parentMessages)
-        val draft = serviceDrafts[sessionInfo.id] ?: stageChat.draft
-        val effective = stageChat.copy(draft = draft.copy(awaitingApproval = active.draft.awaitingApproval),
-            running = stageChat.running || draft.active)
-        val pins = vm.requestPins?.groups?.collectAsState()?.value.orEmpty()
+        val latestServiceDrafts = androidx.compose.runtime.rememberUpdatedState(ui.planning.drafts)
+        val workerPlan = ui.planning.plans.firstOrNull { it.id == sessionInfo.planId } ?: active.plan
+        val effective = projectPlanningTranscript(active, ui)
+        val pins = ui.requestPins
         ui.organisms[sessionInfo.organismId]?.takeIf { it.immunityId == sessionInfo.id }?.let { organism ->
-            val actions by vm.immunityActions.collectAsState()
+            val actions = ui.immunityActions
             io.aequicor.magicpaper.ui.components.ImmunityInterventions(organism,
                 busyProposalIds = organism.interventions.filter { "${organism.id}:${it.id}" in actions }.map { it.id }.toSet(),
                 onApprove = { proposal, action, confirmed -> vm.approveImmunityIntervention(organism.id, proposal.id, action, confirmed) },
@@ -347,7 +337,7 @@ private fun SessionArea(
         // Блокировка карантином: триггеры над диалогом и в строке статуса открывают один диалог.
         val quarantineOrganism = ui.organisms[sessionInfo.organismId]?.takeIf { organism ->
             organism.deletedAt == null && organism.pendingQuarantines(sessionInfo.id).isNotEmpty() }
-        val quarantineRecoveryState by vm.quarantineRecovery.collectAsState()
+        val quarantineRecoveryState = ui.quarantineRecovery
         var quarantineOpen by rememberSaveable(sessionInfo.id) { mutableStateOf(false) }
         val quarantineReveal = quarantineRecoveryState.reveal[sessionInfo.id]
         LaunchedEffect(quarantineReveal) { if (quarantineReveal != null) quarantineOpen = true }
@@ -377,13 +367,13 @@ private fun SessionArea(
                 onForkSession = { id -> vm.forkSession(sessionInfo.id, id) },
                 onResultRead = { vm.markSessionRead(sessionInfo.id, it) },
                 onManualVerification = { responseId, checked -> vm.setSessionManuallyVerified(sessionInfo.id, responseId, checked) },
-                contextUsage = vm.usage.state.collectAsState().value.contexts["coding:${sessionInfo.id}"]?.takeIf { it.model == vm.codingProfileOf(sessionInfo, workerPlan)?.modelId }
+                contextUsage = ui.usageContexts["coding:${sessionInfo.id}"]?.takeIf { it.model == vm.codingProfileOf(sessionInfo, workerPlan)?.modelId }
                     ?: io.aequicor.magicpaper.domain.ContextUsageSnapshot("coding:${sessionInfo.id}", vm.codingProfileOf(sessionInfo, workerPlan)?.modelId.orEmpty()),
                 pins = pins[PinConversation(sessionInfo.id, sessionInfo.projectId)].orEmpty(),
                 approvals = ui.approvals.filter { it.projectId == project.id },
                 onApproval = vm::respondCodingApproval,
                 interactions = ui.interactions.filter { it.affects(active.session) },
-                questionnaireDrafts = vm.questionnaireDrafts.collectAsState().value,
+                questionnaireDrafts = ui.questionnaireDrafts,
                 onQuestionnaireDraft = vm::updateQuestionnaireDraft,
                 onQuestionnaireSubmit = vm::submitQuestionnaire,
                 onOpenQuestionnaire = vm::openQuestionnaire,
@@ -391,6 +381,7 @@ private fun SessionArea(
                 onStopApproval = vm::abortCodingSession,
                 busy = effective.running,
                 planningService = service,
+                planningState = ui.planning,
                 planningQuestionsSession = ui.sessions.firstOrNull { it.session.id == sessionInfo.parentSessionId } ?: effective,
                 onOpenSession = vm::selectCodingSession,
                 engineReady = true,
@@ -418,7 +409,7 @@ private fun SessionArea(
                 } else null,
                 modeSwitchEnabled = !effective.running && effective.interactions.isEmpty() && !effective.awaitingUser,
                 onSearchProvider = if (service != null && sessionInfo.planningMode && sessionInfo.stageId == null) {
-                    { provider -> scope.launch { service.configure(sessionInfo, search = provider) } }
+                    { provider -> vm.selectCodingSearchProvider(sessionInfo.id, provider) }
                 } else null,
                 modelChip = {
                     CodingModelChip(
@@ -923,6 +914,7 @@ internal fun CodingChat(
     modelChip: (@Composable () -> Unit)? = null,
     mediaOptions: (@Composable () -> Unit)? = null,
     planningService: PlanningChatService? = null,
+    planningState: CodingPlanningState = CodingPlanningState(),
     planningQuestionsSession: CodingSessionUi = session,
     onOpenSession: (String) -> Unit = {},
     onResultRead: (String) -> Unit = {},
@@ -1063,7 +1055,7 @@ internal fun CodingChat(
                     val isDraft = message.id == draftRow?.message?.id
                     val rowStatus = status.takeIf { busy && statusMessageId != null &&
                         (message.id == statusMessageId || row.planCard?.id == statusMessageId) }
-                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, onOpenSession, rowStatus,
+                    SavedCodingHistoryItem(item, scroll, session.session, messages, planningService, planningState, onOpenSession, rowStatus,
                         pinNumber = pinNumbers[message.id], onShowPins = { browserMessageId = message.id },
                         live = isDraft && draft.active && (item.last || item.step?.kind in listOf(CodingStepKind.TOOL, CodingStepKind.EXEC)),
                         continued = isDraft && busy, fragment = fragment,
@@ -1101,7 +1093,7 @@ internal fun CodingChat(
                 .padding(top = laneTop)
                 .onSizeChanged { systemHeaderHeight = with(density) { it.height.toDp() } }) {
                 if (showOrchestrationStatus)
-                    OrchestrationStatus(session, planningService, onOpenSession, Modifier, scrolled = false)
+                    OrchestrationStatus(session, planningService, onOpenSession, planningState, Modifier, scrolled = false)
                 else if (interactions.isEmpty()) session.blockingReason?.let { reason ->
                     PaperStatusPanel(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1209,6 +1201,7 @@ private fun SavedCodingHistoryItem(
     session: CodingSession,
     messages: List<CodingMessage>,
     planningService: PlanningChatService?,
+    planningState: CodingPlanningState,
     onOpenSession: (String) -> Unit,
     status: (@Composable () -> Unit)?,
     pinNumber: Int?,
@@ -1256,11 +1249,11 @@ private fun SavedCodingHistoryItem(
                 forceWidth = fragment.parts != null,
                 showFooter = item.last && fragment.last,
                 pinNumber = pinNumber, onShowPins = onShowPins,
-                header = { OrchestrationMessageRoute(message, planningService, onOpenSession) }) {
+                header = { OrchestrationMessageRoute(message, planningState, onOpenSession) }) {
                 status?.invoke()
                 if (planningService != null && message.planning != null) {
                     Spacer(Modifier.height(6.dp))
-                    PlanningChatMessage(message, session, messages, planningService, onOpenSession)
+                    PlanningChatMessage(message, session, messages, planningService, planningState, onOpenSession)
                 }
                 row.planCard?.let { card ->
                     Spacer(Modifier.height(12.dp))
@@ -1269,11 +1262,11 @@ private fun SavedCodingHistoryItem(
                     PaperChatMarkdown(card.text)
                     if (planningService != null) {
                         Spacer(Modifier.height(6.dp))
-                        PlanningChatMessage(card, session, messages, planningService, onOpenSession)
+                        PlanningChatMessage(card, session, messages, planningService, planningState, onOpenSession)
                     }
                     actions?.invoke(card)
                 }
-                OrchestrationMessageInputStatus(message, session.id, planningService)
+                OrchestrationMessageInputStatus(message, session.id, planningService, planningState)
                 if (message.pendingDelivery) PaperText("Ожидает передачи после текущего хода", style = LocalPaperTypography.current.label)
                 actions?.invoke(message)
             }

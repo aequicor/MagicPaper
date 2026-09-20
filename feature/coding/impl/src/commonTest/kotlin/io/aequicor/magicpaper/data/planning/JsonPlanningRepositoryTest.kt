@@ -111,7 +111,7 @@ class JsonPlanningRepositoryTest {
         assertFailsWith<IllegalArgumentException> { repo.plans() }
     }
 
-    @Test fun lostWriteFreezesCommandsUntilDurableStateIsRecovered() = runTest {
+    @Test fun failedCheckpointFreezesCommandsWithoutRollingBackAcceptedJournalState() = runTest {
         var unavailable = false
         val failing = object : io.aequicor.magicpaper.domain.PlanningRepository by repo {
             override suspend fun save(plan: Plan) {
@@ -122,11 +122,13 @@ class JsonPlanningRepositoryTest {
         val observed = PlanningStore(failing)
         observed.save(plan("p1"))
         unavailable = true
-        assertFailsWith<PlanningPersistenceException> { observed.update("p1") { it.copy(goal = "must not appear") } }
-        assertEquals("цель p1", observed.plans.value.single().goal)
+        assertFailsWith<PlanningPersistenceException> { observed.update("p1") { it.copy(goal = "accepted in journal") } }
+        assertEquals("accepted in journal", observed.plans.value.single().goal)
+        assertEquals("цель p1", repo.planFor("p1")!!.goal)
         unavailable = false
         assertFailsWith<PlanningPersistenceException> { observed.update("p1") { it.copy(goal = "too soon") } }
         observed.recover()
+        assertEquals("accepted in journal", repo.planFor("p1")!!.goal)
         observed.update("p1") { it.copy(goal = "recovered") }
         assertEquals("recovered", observed.plans.value.single().goal)
         assertNull(observed.failure.value)

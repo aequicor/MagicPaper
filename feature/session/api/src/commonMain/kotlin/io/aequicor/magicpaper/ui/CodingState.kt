@@ -153,6 +153,17 @@ data class QuarantineRecoveryState(
     val reveal: Map<String, Long> = emptyMap(),
 )
 
+/** Planning display data published together with session status by the application service. */
+data class CodingPlanningState(
+    val states: Map<String, OrchestrationState> = emptyMap(),
+    val plans: List<Plan> = emptyList(),
+    val drafts: Map<String, CodingDraft> = emptyMap(),
+    val liveAttempts: Map<String, StageAttempt> = emptyMap(),
+    val sessions: List<CodingSession> = emptyList(),
+    val persistenceErrors: Map<String, String> = emptyMap(),
+    val unsavedInputs: Map<String, List<OrchestrationInput>> = emptyMap(),
+)
+
 /** Состояние раздела «Проекты и код»: проект ↔ несколько кодинг-сессий. */
 data class CodingUi(
     /** False on a host that cannot run an agent: the shell then offers no coding controls. */
@@ -176,6 +187,13 @@ data class CodingUi(
     val preparingEngines: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
     /** Активная вкладка проекта: диалог с агентом или панель плагина. */
     val sessionMode: CodingSessionMode = CodingSessionMode.DIALOG,
+    val planning: CodingPlanningState = CodingPlanningState(),
+    val usageContexts: Map<String, ContextUsageSnapshot> = emptyMap(),
+    val requestPins: Map<PinConversation, List<RequestPinGroup>> = emptyMap(),
+    val mediaConnections: Map<MediaKind, MediaConnectionStatus> = emptyMap(),
+    val immunityActions: Set<String> = emptySet(),
+    val quarantineRecovery: QuarantineRecoveryState = QuarantineRecoveryState(),
+    val questionnaireDrafts: Map<String, QuestionnaireDraft> = emptyMap(),
 ) {
     val currentSession: CodingSessionUi?
         get() = sessions.firstOrNull { it.session.id == currentSessionId } ?: sessions.firstOrNull()

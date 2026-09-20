@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.domain.tools.*
+import io.aequicor.magicpaper.domain.planning.*
 import io.aequicor.magicpaper.data.planning.PlanningStore
 import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.data.storage.DraftRepository
@@ -237,7 +238,7 @@ class OrchestrationService(
             "plan.refine", "plan.recalculate" -> {
                 val saved = store.planFor("plan-$operation")?.takeIf { it.replacesPlanId == plan.id } ?: plan
                 if (saved.pendingRequest.isBlank() && saved.dialogue.any { it.id == "$operation-reply" }) {
-                    if (saved.replacesPlanId == plan.id) updateState(saved.parentSessionId, saved.projectId) { it.copy(activePlanId = saved.id) }
+                    if (saved.replacesPlanId == plan.id) updateState(saved.parentSessionId, saved.projectId, OrchestrationEvent.PlanSelected(saved.id))
                     refinementResult(saved, operation)
                 } else null
             }
@@ -276,7 +277,7 @@ class OrchestrationService(
         val id = "plan-$operation"
         store.planFor(id)?.let { saved ->
             requireTool(saved.replacesPlanId == previous.id && saved.parentSessionId == context.ownerSessionId) { "Идентификатор нового плана уже занят" }
-            updateState(previous.parentSessionId, previous.projectId) { it.copy(activePlanId = saved.id) }
+            updateState(previous.parentSessionId, previous.projectId, OrchestrationEvent.PlanSelected(saved.id))
             return saved
         }
         // Stop is durable before a draft becomes current. No Git operations or worker starts are involved.
@@ -289,7 +290,7 @@ class OrchestrationService(
             tree = listOf(DecisionNode("$id-root", previous.goal, DecisionKind.GOAL)),
             createdAt = clock(), updatedAt = clock(), wizardStep = PlanningStep.CLARIFY)
         store.save(draft)
-        updateState(previous.parentSessionId, previous.projectId) { it.copy(activePlanId = draft.id) }
+        updateState(previous.parentSessionId, previous.projectId, OrchestrationEvent.PlanSelected(draft.id))
         return draft
     }
 
@@ -454,8 +455,8 @@ class OrchestrationService(
                 val args = json.decodeFromJsonElement<ToolStagePause>(arguments)
                 requireTool(args.stageIds.isNotEmpty() && args.stageIds.all { id -> current.selectedMilestones.any { it.id == id } }) { "Неизвестный этап" }
                 val key = context.sourceInput?.id ?: context.requestId
-                val saved = updateState(context.ownerSessionId, context.projectId) { old -> old.copy(workPauses = old.workPauses +
-                    (key to OrchestrationPause(current.id, (old.workPauses[key]?.stageIds.orEmpty() + args.stageIds).distinct()))) }
+                val saved = updateState(context.ownerSessionId, context.projectId,
+                    OrchestrationEvent.WorkPaused(key, OrchestrationPause(current.id, args.stageIds), mergeStages = true))
                 execution.interruptStages(current.id, saved.pausedStages(current) - setOfNotNull(context.stageId))
                 success("Затронутые этапы приостановлены: ${args.reason}")
             }
@@ -501,13 +502,11 @@ class OrchestrationService(
                 requireTool(reply.kind != StageReplyKind.WAIT || (reply.waitFor != null && reply.resumeMessage.isNotBlank())) { "Для ожидания нужны условие и сообщение продолжения" }
                 reply.waitFor?.validate(current, state(current.parentSessionId, current.projectId).questions.map { it.id }.toSet())
                 val id = "${context.attemptId}-turn-${context.turnIndex}"
-                store.update(current.id) { latest ->
-                    val existing = latest.coordination.firstOrNull { it.id == id }
-                    requireTool(existing == null || existing.reply == reply) { "Результат этого хода уже передан" }
-                    if (existing != null) latest else latest.copy(coordination = latest.coordination + CoordinationRecord(id,
+                try {
+                    updatePlan(current.id) { CoordinationEvent.HandoffSubmitted(CoordinationRecord(id,
                         context.stageId!!, reply, runId = current.runId, attemptId = context.attemptId!!,
-                        sourceSessionId = context.sessionId, turnIndex = context.turnIndex, createdAt = clock(), toolCallId = operation))
-                }
+                        sourceSessionId = context.sessionId, turnIndex = context.turnIndex, createdAt = clock(), toolCallId = operation)) }
+                } catch (e: HandoffConflict) { throw ToolArgumentRejection(e.message!!) }
                 success("Передача управления сохранена. Завершите ответ; результат проверит приложение")
             }
             else -> error("Инструмент не подключён: $tool")
@@ -671,7 +670,7 @@ class OrchestrationService(
             coordinatingPlans.forEach { execution.stop(it) }
             val plan = store.plans().firstOrNull { it.parentSessionId == sessionId && it.pendingRequest.isNotBlank() } ?: return@launch
             append(plan.projectId, sessionId, CodingMessage("${plan.requestId}-cancelled", CodingRole.AGENT, "Запрос планирования остановлен. Сохранённый план не изменён.", createdAt = Id.now()))
-            store.update(plan.id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null) }
+            updatePlan(plan.id, PlanRevisionEvent.RequestCleared(plan.requestId))
             _drafts.update { it - sessionId }
         }
     }
@@ -695,11 +694,13 @@ class OrchestrationService(
                 toolProfiles()
                 refreshSessions()
                 migrate()
+                // Legacy migration can create the session that owns an existing journal stream.
+                execution.recoverJournalQuarantines()
                 organisms?.recover()
                 refreshSessions()
                 _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }.forEach { session ->
                     try {
-                        val saved = updateState(session.id, session.projectId) { it }
+                        val saved = updateState(session.id, session.projectId, OrchestrationEvent.Restore)
                         saved.inputs.forEach { syncInputMessage(session, it.id) }
                         replaySessionCommands(session)
                         drainInputs(session)
@@ -732,26 +733,17 @@ class OrchestrationService(
             }
         } }
     }
-    private fun inputMayRun(input: OrchestrationInput): Boolean = input.scheduledRuleId == null ||
-        store.plans.value.any { it.id == input.sourcePlanId && it.runId == input.sourceRunId && it.intent == ExecutionIntent.RUN }
-
     private suspend fun publishQuestionEvents(saved: OrchestrationState) {
         store.plans.value.filter { it.parentSessionId == saved.sessionId }.forEach { p ->
             val events = saved.messageEvents.filter { it.planId == p.id }
             val questions = saved.questions.filter { it.planId == p.id && it.status != UserRequestStatus.CANCELLED }.map { it.id }.toSet()
-            if (p.scheduleQuestionIds != questions || events.any { event -> p.messageEvents.none { it.id == event.id } }) store.update(p.id) { latest ->
-                latest.copy(messageEvents = (latest.messageEvents + events).distinctBy { it.id }, scheduleQuestionIds = questions)
-            }
+            if (p.scheduleQuestionIds != questions || events.any { event -> p.messageEvents.none { it.id == event.id } }) updatePlan(p.id, CoordinationEvent.QuestionsObserved(events, questions))
         }
     }
     private suspend fun synchronizeQuestionEvents() {
         _states.value.values.toList().forEach { saved ->
             try {
-                val next = updateState(saved.sessionId, saved.projectId) { current -> current.copy(inputs = current.inputs.map { input ->
-                    val plan = store.plans.value.firstOrNull { it.id == input.sourcePlanId }
-                    if (input.scheduledRuleId != null && input.status in setOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING) &&
-                        (plan == null || plan.runId != input.sourceRunId)) input.copy(status = OrchestrationInputStatus.CANCELLED, error = "Запуск изменился до обработки сообщения") else input
-                }) }
+                val next = updateState(saved.sessionId, saved.projectId) { OrchestrationEvent.ScheduledRunsObserved(store.plans.value) }
                 next.inputs.filter { it.scheduledRuleId != null && it.status == OrchestrationInputStatus.CANCELLED }.forEach { input ->
                     val message = projects.messages(saved.projectId, saved.sessionId).firstOrNull { it.id == input.id }
                     if (message != null && message.inputStatus != input.status) append(saved.projectId, saved.sessionId, message.copy(inputStatus = input.status))
@@ -770,22 +762,9 @@ class OrchestrationService(
         // Reconcile the durable inbox before choosing a fallback recipient after a crash.
         plan.deliveries.firstOrNull { it.id == rule.deliveryId }?.let { publishDelivery(plan, it); return true }
         if (state(parent.id, plan.projectId).inputs.any { it.id == rule.deliveryId }) { drainInputs(parent); return true }
-        fun eligible(p: Plan): Boolean {
-            val task = p.milestones.firstOrNull { it.id == rule.targetTaskId } ?: return false
-            val attempt = task.attempts.lastOrNull()
-            return !rule.timeout && p.intent == ExecutionIntent.RUN && !task.completed && p.finalAttempt == null && p.phase != ExecutionPhase.COMPLETE &&
-                attempt?.error?.requiresUser != true && attempt?.awaitingPlanner != true && attempt?.coordinationState?.certainlyPending != true &&
-                attempt?.phase !in setOf(AttemptPhase.VERIFYING, AttemptPhase.INTEGRATING, AttemptPhase.COMPLETE)
-        }
-        if (eligible(plan)) {
+        if (plan.canDeliverScheduled(rule)) {
             require(projects.sessions(plan.projectId).none { it.id == rule.targetSessionId && it.archived }) { "Сессия адресата архивирована" }
-            val queued = store.update(plan.id) { p ->
-                if (!eligible(p) || p.deliveries.any { it.id == rule.deliveryId }) p else p.copy(
-                    deliveries = p.deliveries + PlanDelivery(rule.deliveryId, parent.id, rule.targetTaskId!!, rule.payload, sourceRunId = rule.runId),
-                    milestones = p.milestones.map { t -> if (t.id != rule.targetTaskId) t else t.copy(attempts = t.attempts.map {
-                        it.copy(waitingForEvent = null)
-                    }) })
-            }
+            val queued = updatePlan(plan.id, CoordinationEvent.ScheduledDeliveryRequested(rule, parent.id))
             queued.deliveries.firstOrNull { it.id == rule.deliveryId }?.let {
                 publishDelivery(queued, it)
                 return true
@@ -795,9 +774,7 @@ class OrchestrationService(
         if (latest.intent != ExecutionIntent.RUN) return false
         val text = rule.payload + if (rule.targetTaskId != null && !rule.timeout) "\nПрямая доставка исполнителю сейчас невозможна. Определи следующий шаг без автоматического создания доработки." else ""
         val input = OrchestrationInput(rule.deliveryId, text, rule.firedAt ?: clock(), scheduledRuleId = rule.id, sourcePlanId = plan.id, sourceRunId = rule.runId)
-        updateState(parent.id, plan.projectId) { old ->
-            if (old.inputs.any { it.id == input.id }) old else old.copy(inputs = old.inputs + input)
-        }
+        updateState(parent.id, plan.projectId, OrchestrationEvent.InputEnqueued(input))
         val saved = state(parent.id, plan.projectId).inputs.first { it.id == input.id }
         append(plan.projectId, parent.id, CodingMessage(input.id, CodingRole.AGENT, input.text, createdAt = input.createdAt,
             inputStatus = saved.status, scheduledRuleId = rule.id))
@@ -811,9 +788,7 @@ class OrchestrationService(
     }
 
     private suspend fun updateHandoff(planId: String, id: String, status: HandoffStatus, text: String) {
-        val p = store.update(planId) { old -> old.copy(coordination = old.coordination.map {
-            if (it.id == id) it.copy(status = status, nextStep = text) else it
-        }) }
+        val p = updatePlan(planId, CoordinationEvent.HandoffStatusRecorded(id, status, text))
         p.coordination.firstOrNull { it.id == id }?.let { publishHandoff(p, it) }
     }
 
@@ -926,16 +901,30 @@ class OrchestrationService(
     } catch (e: CancellationException) { throw e }
     catch (e: Exception) { persistenceFailure(sessionId, projectId, e) }
 
-    private suspend fun updateState(sessionId: String, projectId: String, onCommitted: suspend () -> Unit = {},
-        change: (OrchestrationState) -> OrchestrationState): OrchestrationState = stateLock.withLock {
+    /** Reducers own the mutation vocabulary; the store retains locking, revision and CAS authority. */
+    private suspend fun updatePlan(id: String, vararg events: PlanEvent): Plan = store.update(id) { current ->
+        events.fold(current) { plan, event -> reduce(plan, event) }
+    }
+    private suspend fun updatePlan(id: String, event: () -> PlanEvent): Plan = store.update(id) { reduce(it, event()) }
+
+    private suspend fun updateState(sessionId: String, projectId: String, event: OrchestrationEvent,
+        onCommitted: suspend () -> Unit = {}): OrchestrationState =
+        transitionState(sessionId, projectId, onCommitted) { event }.state
+
+    private suspend fun updateState(sessionId: String, projectId: String, event: () -> OrchestrationEvent): OrchestrationState =
+        transitionState(sessionId, projectId, event = event).state
+
+    /** Read environment snapshots under the same lock as the transition and its durable commit. */
+    private suspend fun transitionState(sessionId: String, projectId: String, onCommitted: suspend () -> Unit = {},
+        event: () -> OrchestrationEvent): OrchestrationTransition = stateLock.withLock {
         val old = state(sessionId, projectId)
-        var next = change(old)
-        next.questions.filter { it.status == UserRequestStatus.ANSWERED && it.answeredRunId != null }.forEach { q ->
-            val key = "question:${q.id}:${q.answerInputId}"
-            if (next.messageEvents.none { it.sourceKey == key }) next = next.copy(messageEvents = next.messageEvents + MessageEvent(
-                uniqueSchedulingId(next.messageEvents.map { it.id }.toSet()), key, q.planId, q.answeredRunId!!,
-                MessageEventKind.QUESTION_ANSWERED, q.answeredAt ?: clock(), q.partialMessages.values.joinToString("\n"), questionId = q.id))
+        val transition = reduce(old, event())
+        var next = transition.state
+        val usedIds = next.messageEvents.map { it.id }.toMutableSet()
+        val answerEvents = next.pendingAnswerEvents(clock()).map { draft ->
+            draft.copy(id = uniqueSchedulingId(usedIds).also { usedIds += it })
         }
+        if (answerEvents.isNotEmpty()) next = reduce(next, OrchestrationEvent.AnswerEventsRecorded(answerEvents)).state
         if (next != old) try {
             projects.saveOrchestration(next)
             _persistenceErrors.update { it - sessionId }
@@ -945,7 +934,7 @@ class OrchestrationService(
         publishQuestionEvents(next)
         _states.update { it + (sessionId to next) }
         if (next != old) changed()
-        next
+        transition.copy(state = next)
     }
 
     fun recoverOrchestration(sessionId: String) = launch { recoverOrchestrationNow(sessionId) }
@@ -954,7 +943,7 @@ class OrchestrationService(
         stateLock.withLock {
             val stored = state(session.id, session.projectId)
             val pending = _unsavedInputs.value[session.id].orEmpty()
-            val saved = stored.copy(inputs = (stored.inputs + pending).distinctBy { it.id })
+            val saved = reduce(stored, OrchestrationEvent.UnsavedInputsRecovered(pending)).state
             try { projects.saveOrchestration(saved) } catch (e: Exception) { persistenceFailure(session.id, session.projectId, e) }
             _states.update { it + (session.id to saved) }
             _persistenceErrors.update { it - session.id }
@@ -1032,14 +1021,7 @@ class OrchestrationService(
             }
             refreshSessions()
             try {
-                updateState(session.id, session.projectId, onCommitted = onAccepted) { old ->
-                    val previousInput = old.inputs.firstOrNull { it.id == input.id }
-                    if (previousInput == null) old.copy(inputs = old.inputs + input)
-                    else {
-                        require(previousInput.matchesSubmission(input))
-                        old
-                    }
-                }
+                updateState(session.id, session.projectId, OrchestrationEvent.InputSubmitted(input), onCommitted = onAccepted)
             } catch (_: OrchestrationPersistenceException) {
                 _unsavedInputs.update { it + (session.id to (it[session.id].orEmpty() + input)) }
                 changed()
@@ -1049,16 +1031,6 @@ class OrchestrationService(
             refreshSessions()
             drainInputs(session)
         }
-    }
-
-    private fun OrchestrationInput.matchesSubmission(other: OrchestrationInput): Boolean {
-        if (answers != other.answers || replyTo != other.replyTo || resumeAfter != other.resumeAfter) return false
-        if (sourceSessionId != null || sourceText != null) {
-            return sourceSessionId != null && sourceText != null &&
-                sourceSessionId == other.sourceSessionId && sourceText == other.sourceText
-        }
-        // Pre-metadata receipts can only be acknowledged when the original presentation still matches.
-        return text == other.text && (other.sourceSessionId == null) == (other.sourceText == null)
     }
 
     /** Typed host actions for the questionnaire; no model interpretation of confirmations. */
@@ -1075,9 +1047,7 @@ class OrchestrationService(
                 require(question.questions == request.questions) { "Вопрос изменился" }
                 val input = OrchestrationInput("questionnaire-${question.id}", interactionAnswerText(question.questions, answers), clock(),
                     answers = answers, replyTo = question.id, sourcePlanId = question.planId)
-                updateState(session.id, session.projectId) { old ->
-                    if (old.inputs.any { it.id == input.id }) old else old.copy(inputs = old.inputs + input)
-                }
+                updateState(session.id, session.projectId, OrchestrationEvent.InputEnqueued(input))
                 syncInputMessage(session, input.id)
                 drainInputs(session)
             }
@@ -1086,7 +1056,7 @@ class OrchestrationService(
                 if ("yes" in answer.selected) confirmNow(plan.id, request.sourceId.ifBlank { null }, request.revision)
                 else {
                     if (plan.proposal != null) {
-                        store.update(plan.id) { it.copy(proposal = null) }
+                        updatePlan(plan.id, PlanRevisionEvent.ProposalDeclined(plan.revision, plan.proposal!!.id))
                     }
                     append(session.projectId, session.id, CodingMessage(request.id + "-declined", CodingRole.USER,
                         "Запуск предложения отклонён. План сохранён без запуска.", createdAt = clock()))
@@ -1124,11 +1094,7 @@ class OrchestrationService(
                     it.status in setOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED) }
                     ?: error("Сообщение больше не требует восстановления")
                 if ("leave" !in answer.selected && !answer.skipped) {
-                    updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-                        if (it.id == input.id) it.copy(status = OrchestrationInputStatus.QUEUED, error = "",
-                            text = it.text + if (answer.text.isBlank()) "" else "\n\nУточнение пользователя: ${answer.text}",
-                            decision = if (answer.text.isBlank()) it.decision else null) else it
-                    }) }
+                    updateState(session.id, session.projectId, OrchestrationEvent.InputRetried(input.id, answer.text))
                     syncInputMessage(session, input.id)
                     drainInputs(session)
                 }
@@ -1142,19 +1108,13 @@ class OrchestrationService(
     /** Withdrawal is terminal: Continue and recovery must never submit this input again. */
     fun cancelQueuedInput(sessionId: String, inputId: String) = launch {
         val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return@launch
-        updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-            if (it.id == inputId && it.status == OrchestrationInputStatus.QUEUED && it.scheduledRuleId == null)
-                it.copy(status = OrchestrationInputStatus.WITHDRAWN, error = "") else it
-        }) }
+        updateState(session.id, session.projectId, OrchestrationEvent.InputWithdrawn(inputId))
         syncInputMessage(session, inputId)
     }
 
     fun retryInput(sessionId: String, inputId: String) = launch {
         val session = _sessions.value.firstOrNull { it.id == sessionId } ?: return@launch
-        updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-            if (it.id == inputId && it.status in listOf(OrchestrationInputStatus.FAILED, OrchestrationInputStatus.CANCELLED))
-                it.copy(status = OrchestrationInputStatus.QUEUED, error = "") else it
-        }) }
+        updateState(session.id, session.projectId, OrchestrationEvent.InputRetried(inputId))
         syncInputMessage(session, inputId)
         drainInputs(session)
     }
@@ -1165,14 +1125,8 @@ class OrchestrationService(
             try {
                 while (true) {
                     // Claim under the same lock as withdrawal, before reading or sending the text.
-                    var claimed: OrchestrationInput? = null
-                    updateState(session.id, session.projectId) { old ->
-                        claimed = old.inputs.firstOrNull {
-                            it.status in listOf(OrchestrationInputStatus.QUEUED, OrchestrationInputStatus.PROCESSING) && inputMayRun(it)
-                        }?.let { it.copy(status = OrchestrationInputStatus.PROCESSING, error = "", attempt = it.attempt + 1) }
-                        old.copy(inputs = old.inputs.map { if (it.id == claimed?.id) claimed!! else it })
-                    }
-                    val input = claimed ?: break
+                    val claim = transitionState(session.id, session.projectId) { OrchestrationEvent.InputClaimRequested(store.plans.value) }
+                    val input = claim.claimedInput ?: break
                     syncInputMessage(session, input.id)
                     try {
                         processInput(session, input)
@@ -1205,13 +1159,11 @@ class OrchestrationService(
 
     private suspend fun drainInputsIfQueued(session: CodingSession) {
         if (session.id in _persistenceErrors.value) return
-        if (state(session.id, session.projectId).inputs.any { it.status == OrchestrationInputStatus.QUEUED && inputMayRun(it) }) drainInputs(session)
+        if (state(session.id, session.projectId).hasQueuedInput(store.plans.value)) drainInputs(session)
     }
 
     private suspend fun setInputStatus(session: CodingSession, id: String, status: OrchestrationInputStatus, error: String = "") {
-        updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-            if (it.id == id) it.copy(status = status, error = error) else it
-        }) }
+        updateState(session.id, session.projectId, OrchestrationEvent.InputStatusRecorded(id, status, error))
         syncInputMessage(session, id)
     }
 
@@ -1264,7 +1216,7 @@ class OrchestrationService(
         append(session.projectId, session.id, CodingMessage(input.id, if (input.scheduledRuleId == null) CodingRole.USER else CodingRole.AGENT, input.text,
             createdAt = input.createdAt, inputStatus = OrchestrationInputStatus.PROCESSING, scheduledRuleId = input.scheduledRuleId,
             planning = PlanningChatBlock(current.id, closesRequest = false)))
-        updateState(session.id, session.projectId) { it.copy(activePlanId = current.id) }
+        updateState(session.id, session.projectId, OrchestrationEvent.PlanSelected(current.id))
         // The result and its effects have already been committed before a crash.
         if (current.dialogue.any { it.id == "${input.id}-reply" }) return
         val savedDecisionProblem = input.decision?.takeIf { it.intent == UserTurnIntent.SCHEDULE }?.let {
@@ -1274,13 +1226,10 @@ class OrchestrationService(
             input.replyTo != null && (input.answers.isNotEmpty() || state(session.id, session.projectId).questions
                 .any { it.id == input.replyTo && it.refinementRequest == null }) -> UserTurnDecision(UserTurnIntent.ANSWER, replyTo = input.replyTo)
             else -> interpretInput(session, current, input, savedDecisionProblem)
-        }.also { saved -> updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-            if (it.id == input.id) it.copy(decision = saved) else it
-        }) } }
+        }.also { saved -> updateState(session.id, session.projectId, OrchestrationEvent.InputDecisionRecorded(input.id, saved)) }
         val pauseIds = (decision.pauseStageIds + state(session.id, session.projectId).workPauses[input.id]?.stageIds.orEmpty() + if (decision.intent == UserTurnIntent.INSTRUCT) listOf(decision.stageId) else emptyList()).distinct()
         if (pauseIds.isNotEmpty() && !decision.toolsApplied) {
-            val saved = updateState(session.id, session.projectId) { old -> old.copy(workPauses = old.workPauses +
-                (input.id to OrchestrationPause(current.id, pauseIds))) }
+            val saved = updateState(session.id, session.projectId, OrchestrationEvent.WorkPaused(input.id, OrchestrationPause(current.id, pauseIds)))
             execution.interruptStages(current.id, saved.pausedStages(current))
             append(session.projectId, session.id, CodingMessage("${input.id}-pause", CodingRole.AGENT,
                 "Приостановлены затронутые этапы: " + current.selectedMilestones.filter { it.id in saved.pausedStages(current) }
@@ -1312,10 +1261,10 @@ class OrchestrationService(
             UserTurnIntent.CLARIFY -> askToRefine(session, current, input, decision.copy(pauseStageIds = pauseIds))
             UserTurnIntent.DISCUSS -> {
                 val message = decision.reply.ifBlank { "Уточните, что вы хотите узнать." }
-                val saved = store.update(current.id) { it.copy(dialogue = it.dialogue +
-                    PlanningMessage(input.id, "user", input.text) + PlanningMessage("${input.id}-reply", "assistant", message,
+                val saved = updatePlan(current.id) { PlanRevisionEvent.DialogueAppended(listOf(
+                    PlanningMessage(input.id, "user", input.text), PlanningMessage("${input.id}-reply", "assistant", message,
                         activity = _drafts.value[session.id]?.steps.orEmpty().filter { it.kind != CodingStepKind.ANSWER }.map { it.copy(running = false) },
-                        questions = decision.questions, questionStageIds = decision.pauseStageIds)) }
+                        questions = decision.questions, questionStageIds = decision.pauseStageIds))) }
                 // Publish while the draft still supplies the visible fragment identities.
                 publish(saved)
             }
@@ -1339,9 +1288,7 @@ class OrchestrationService(
                     decision.reply.ifBlank { "Команда выполнена." }, createdAt = Id.now()))
             }
         }
-        updateState(session.id, session.projectId) { old ->
-            old.finishWorkPause(store.plans.value.first { it.id == current.id }, input.id)
-        }
+        updateState(session.id, session.projectId) { OrchestrationEvent.WorkPauseFinished(store.plans.value.first { it.id == current.id }, input.id) }
         val appliedMutation = decision.toolsApplied && toolHost?.receipts
             ?.forRequest("${session.projectId}/${session.id}/${input.id}").orEmpty()
             .any { it.phase == ToolPhase.SUCCEEDED && !it.native && ToolCatalog.definitions.any { definition -> definition.id == it.toolId && definition.mutating } }
@@ -1484,41 +1431,20 @@ class OrchestrationService(
         val questions = decision.questions.ifEmpty { listOf(PlanningQuestion("refine-plan", "Нужно ли доработать план с учётом этого уточнения?",
             QuestionKind.SINGLE, listOf(QuestionOption("yes", "Да, доработать план"), QuestionOption("no", "Нет, оставить план")),
             allowCustomInput = false, canSkip = false)) }
-        updateState(session.id, session.projectId) { old ->
-            if (old.questions.any { it.id == id }) old else old.copy(questions = old.questions +
-                OrchestrationQuestion(id, plan.id, text, questions, session.id, scopeLabel = "Уточнение плана",
-                    refinementRequest = if (needsDetails) null else input.text, forDiscussion = needsDetails, pauseStageIds = decision.pauseStageIds, requirementContext = input.text))
-        }
-        val saved = store.update(plan.id) { old -> old.copy(dialogue = old.dialogue +
-            PlanningMessage(input.id, "user", input.text) + PlanningMessage(id, "assistant", text, questions = questions)) }
+        updateState(session.id, session.projectId, OrchestrationEvent.QuestionRegistered(
+            OrchestrationQuestion(id, plan.id, text, questions, session.id, scopeLabel = "Уточнение плана",
+                refinementRequest = if (needsDetails) null else input.text, forDiscussion = needsDetails,
+                pauseStageIds = decision.pauseStageIds, requirementContext = input.text)))
+        val saved = updatePlan(plan.id, PlanRevisionEvent.DialogueAppended(listOf(
+            PlanningMessage(input.id, "user", input.text), PlanningMessage(id, "assistant", text, questions = questions))))
         publish(saved)
     }
 
     private suspend fun answerQuestion(session: CodingSession, plan: Plan, input: OrchestrationInput, decision: UserTurnDecision) {
-        val id = decision.replyTo ?: error("Не указан вопрос, на который дан ответ")
-        val question = state(session.id, session.projectId).questions.firstOrNull { it.id == id && it.planId == plan.id }
-            ?: error("Запрос ответа не найден")
-        if (question.status != UserRequestStatus.OPEN && question.answerInputId != input.id) return
-        val combined = (question.partialAnswers + input.answers).associateBy { it.questionId }.values.toList()
-        require(input.answers.all { a -> question.questions.any { it.id == a.questionId } }) { "Неизвестный вопрос" }
-        question.questions.forEach { q -> combined.firstOrNull { it.questionId == q.id }?.let { a ->
-            require(a.selected.all { selected -> q.options.any { it.id == selected && it.enabled } }) { "Неизвестный вариант" }
-            require(!a.skipped || q.canSkip && a.selected.isEmpty() && a.text.isBlank()) { "Этот вопрос нельзя пропустить" }
-            require(q.allowCustomInput || a.text.isBlank()) { "Для этого вопроса выберите вариант" }
-            require(q.kind != QuestionKind.SINGLE || a.selected.distinct().size <= 1) { "Выберите один вариант" }
-        } }
-        val complete = decision.completeAnswer && (input.answers.isEmpty() || question.questions.all { q ->
-            combined.any { it.questionId == q.id && it.isComplete(q) }
-        })
-        val refinePlan = if (question.refinementRequest == null) null else combined.singleOrNull()?.let {
-            when (it.selected.singleOrNull()) { "yes" -> true; "no" -> false; else -> null }
-        } ?: decision.refinePlan
-        require(question.refinementRequest == null || !complete || refinePlan != null) { "Укажите, нужно ли доработать план" }
-        updateState(session.id, session.projectId) { old -> old.copy(questions = old.questions.map {
-            if (it.id == id) it.copy(partialAnswers = combined, partialMessages = it.partialMessages + (input.id to input.text), status = if (complete) UserRequestStatus.ANSWERED else UserRequestStatus.OPEN, resolutionPending = complete,
-                answerInputId = if (complete) input.id else null, answeredAt = if (complete) clock() else null,
-                answeredRunId = if (complete) plan.runId else null) else it
-        }) }
+        val transition = transitionState(session.id, session.projectId) { OrchestrationEvent.QuestionAnswered(plan, input, decision, clock()) }
+        val answer = transition.answer ?: return
+        val (question, combined, complete, refinePlan) = answer
+        val id = question.id
         append(session.projectId, session.id, CodingMessage(input.id, if (input.scheduledRuleId == null) CodingRole.USER else CodingRole.AGENT, input.text, createdAt = input.createdAt,
             inputStatus = OrchestrationInputStatus.PROCESSING,
             planning = PlanningChatBlock(plan.id, answers = combined, replyTo = id, closesRequest = complete, inputIntent = UserTurnIntent.ANSWER)))
@@ -1532,9 +1458,9 @@ class OrchestrationService(
             if (question.refinementRequest != null) {
                 if (refinePlan == true) refine(plan.id, input.id, question.refinementRequest!!, requireApproval = true)
                 else {
-                    val saved = store.update(plan.id) { old -> old.copy(dialogue = old.dialogue +
-                        PlanningMessage(input.id, "user", input.text) +
-                        PlanningMessage("${input.id}-reply", "assistant", "План оставлен без изменений.")) }
+                    val saved = updatePlan(plan.id, PlanRevisionEvent.DialogueAppended(listOf(
+                        PlanningMessage(input.id, "user", input.text),
+                        PlanningMessage("${input.id}-reply", "assistant", "План оставлен без изменений."))))
                     publish(saved)
                 }
                 return
@@ -1543,9 +1469,7 @@ class OrchestrationService(
             if (question.forDiscussion && !question.pauseStageIds.isNullOrEmpty()) {
                 val followup = OrchestrationInput("${input.id}-requirements", "Уточнялись требования: ${question.requirementContext ?: question.text}\n$answerText\n" +
                     "Детали получены. Определи, достаточно ли передать актуальные требования исполнителю (INSTRUCT), нужен ли REFINE или остались вопросы CLARIFY.", clock())
-                updateState(session.id, session.projectId) { old -> old.copy(
-                    inputs = if (old.inputs.any { it.id == followup.id }) old.inputs else old.inputs + followup,
-                    workPauses = old.workPauses + (followup.id to OrchestrationPause(plan.id, question.pauseStageIds!!))) }
+                updateState(session.id, session.projectId, OrchestrationEvent.RequirementsQueued(followup, OrchestrationPause(plan.id, question.pauseStageIds!!)))
                 return
             }
             if (question.forDiscussion) {
@@ -1555,19 +1479,16 @@ class OrchestrationService(
             if (plan.confirmedRevision == null || question.forPlanning) { refine(plan.id, input.id, answerText); return }
             val targets = question.stageIds.ifEmpty { plan.selectedMilestones.filterNot { it.completed }.map { it.id } }
             targets.forEach { stageId -> enqueue(plan.id, session.id, stageId, answerText, "${input.id}-answer-$stageId", replyTo = id) }
-            store.update(plan.id) { old -> old.copy(issue = old.issue?.takeUnless { it.isPlannerAnswerWait },
-                milestones = old.milestones.map { m -> if (m.id !in targets) m else m.copy(attempts = m.attempts.map { a ->
-                    a.copy(waitingForUser = null, error = a.error?.takeUnless { it.isPlannerAnswerWait })
-                }) }) }
+            updatePlan(plan.id, PlanRevisionEvent.QuestionDelivered(targets))
             if (plan.intent == ExecutionIntent.RUN) execution.start(plan.id)
         }
         deliverAnswer()
-        updateState(session.id, session.projectId) { old -> old.copy(
-            questions = old.questions.map { if (it.id == id) it.copy(resolutionPending = false) else it },
-            workPauses = store.plans.value.firstOrNull { it.id == plan.id }?.proposal?.let { proposal ->
-                old.workPauses + (input.id to OrchestrationPause(plan.id,
-                    question.pauseStageIds ?: question.stageIds.ifEmpty { plan.selectedMilestones.map { it.id } }, proposal.id))
-            } ?: old.workPauses) }
+        updateState(session.id, session.projectId) {
+            val pause = store.plans.value.firstOrNull { it.id == plan.id }?.proposal?.let { proposal ->
+                OrchestrationPause(plan.id, question.pauseStageIds ?: question.stageIds.ifEmpty { plan.selectedMilestones.map { it.id } }, proposal.id)
+            }
+            OrchestrationEvent.QuestionResolved(id, input.id, pause)
+        }
     }
 
     override suspend fun blockedStages(plan: Plan): Set<String> =
@@ -1590,9 +1511,7 @@ class OrchestrationService(
         lock.withLock { refineLocked(id, requestId, text, requireApproval, nodeId) }
     }
     private suspend fun refineLocked(id: String, requestId: String, text: String, requireApproval: Boolean, nodeId: String? = null) {
-        val pending = store.update(id) { it.copy(pendingRequest = text, requestId = requestId,
-            pendingRecalculationNodeId = nodeId ?: if (it.requestId == requestId) it.pendingRecalculationNodeId else null,
-            dialogue = if (it.dialogue.any { m -> m.id == requestId }) it.dialogue else it.dialogue + PlanningMessage(requestId, "user", text)) }
+        val pending = updatePlan(id, PlanRevisionEvent.RequestStarted(requestId, text, nodeId))
         val sessionId = pending.parentSessionId
         val nestedActivityId = currentCoroutineContext()[ToolSession]?.takeIf {
             it.context.role == ToolRole.ORCHESTRATOR && it.context.ownerSessionId == sessionId
@@ -1609,13 +1528,9 @@ class OrchestrationService(
             val session = projects.sessions(pending.projectId).first { it.id == sessionId }
             val choice = session.modelSelection ?: pending.plannerSelection
             val profile = if (choice != null) ProfileResolver.selection(choice, roster) else ProfileResolver.resolve(null as ChatSession?, settings.load(), roster)
-            val continuation = (requireApproval && pending.confirmedRevision != null) || pending.phase == ExecutionPhase.COMPLETE || pending.proposal != null ||
-                (pending.finalAttempt != null && !pending.canExtendAfterFinalVerification)
-            val effective = pending.copy(plannerSelection = choice, searchProvider = session.searchProvider, engine = session.engine ?: pending.engine,
-                tree = pending.proposal?.tree ?: pending.tree, milestones = pending.proposal?.milestones ?: pending.milestones,
-                finalAttempt = if (continuation) null else pending.finalAttempt,
-                finalAttemptHistory = pending.finalAttemptHistory + if (continuation) listOfNotNull(pending.finalAttempt) else emptyList())
-                .let { if (continuation) it.refinementView() else it }
+            val preparation = pending.prepareRefinement(requireApproval, choice, session.searchProvider, session.engine)
+            val continuation = preparation.needsApproval
+            val effective = preparation.plan
             val request = if (continuation) "$text\nПодготовь предложение доработки. Сохрани завершённые этапы и их идентификаторы. Приостановленные незавершённые этапы в переданном представлении доступны для уточнения критериев с теми же ID и зависимостями; их прежняя версия и история сохранятся при подтверждении. Не добавляй этапы только ради исправления формулировок. Запуск потребует подтверждения пользователя." else text
             val result = withContext(workerDispatcher) {
                 val subtree = nodeId ?: pending.pendingRecalculationNodeId
@@ -1624,28 +1539,15 @@ class OrchestrationService(
             }
             val assistant = result.dialogue.last().copy(id = "$requestId-reply",
                 planChanged = result.tree != effective.tree || result.milestones.specification() != effective.milestones.specification(), activity = activity.value.filter { it.kind != CodingStepKind.ANSWER }.map { it.copy(running = false) })
-            val snapshot = PlanVersion(pending.revision, pending.tree, pending.milestones.map { it.copy(attempts = emptyList()) }, Id.now())
-            if (continuation) {
-                store.update(id) { latest ->
-                    require(latest.tree == pending.tree && latest.milestones.specification() == pending.milestones.specification()) {
-                        "План изменился во время подготовки предложения. Повторите запрос."
-                    }
-                    latest.copy(dialogue = pending.dialogue + assistant,
-                        proposal = if (result.tree == effective.tree && result.milestones == effective.milestones && pending.proposal == null) null else
-                            PlanProposal(requestId, latest.runId, latest.tree, latest.milestones,
-                                result.tree, result.milestones, assistant.text))
-                }
-            } else execution.applyProposal(pending, result.copy(dialogue = pending.dialogue + assistant))
-            store.update(id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null, plannerSelection = choice, searchProvider = session.searchProvider,
-                versions = if (result.tree != pending.tree || result.milestones != pending.milestones) it.versions + snapshot else it.versions) }
+            val reviewedAt = Id.now()
+            if (continuation) updatePlan(id, PlanRevisionEvent.ProposalPrepared(pending, effective, result, assistant))
+            else execution.applyProposal(pending, result.copy(dialogue = pending.dialogue + assistant))
+            updatePlan(id, PlanRevisionEvent.RefinementFinished(pending, result, choice, session.searchProvider, reviewedAt))
             val saved = store.planFor(id)!!
             if (continuation && saved.proposal == null) {
                 val source = currentCoroutineContext()[ToolSession]?.context
-                if (source?.role == ToolRole.ORCHESTRATOR) updateState(sessionId, pending.projectId) { old ->
-                    val key = source.sourceInput?.id ?: source.requestId
-                    val pause = old.workPauses[key]
-                    if (pause == null) old else old.copy(workPauses = old.workPauses + (key to pause.copy(requiresUser = true)))
-                }
+                if (source?.role == ToolRole.ORCHESTRATOR) updateState(sessionId, pending.projectId,
+                    OrchestrationEvent.WorkPauseNeedsUser(source.sourceInput?.id ?: source.requestId))
             }
             publish(saved)
             if (saved.confirmedRevision != null && !continuation) {
@@ -1658,11 +1560,8 @@ class OrchestrationService(
             // Preserve its selective pause until a new proposal or an explicit user resume.
             val source = currentCoroutineContext()[ToolSession]?.context
             withContext(NonCancellable) {
-                if (source?.role == ToolRole.ORCHESTRATOR) updateState(sessionId, pending.projectId) { old ->
-                    val key = source.sourceInput?.id ?: source.requestId
-                    val pause = old.workPauses[key]
-                    if (pause == null) old else old.copy(workPauses = old.workPauses + (key to pause.copy(requiresUser = true)))
-                }
+                if (source?.role == ToolRole.ORCHESTRATOR) updateState(sessionId, pending.projectId,
+                    OrchestrationEvent.WorkPauseNeedsUser(source.sourceInput?.id ?: source.requestId))
             }
             // A model/request timeout cancels its child coroutine, not this planning turn.
             // Preserve actual cancellation, but publish timeouts like other request failures.
@@ -1672,7 +1571,7 @@ class OrchestrationService(
                 "Модель не успела завершить планирование за отведённое время. Отправьте сообщение ещё раз или увеличьте время ожидания в настройках модели."
             else planningFailureMessage(e.message?.takeIf { it.isNotBlank() } ?: "Ошибка планирования")
             append(pending.projectId, sessionId, CodingMessage("$requestId-error", CodingRole.AGENT, message, failed = true, createdAt = Id.now(), steps = activity.value.map { it.copy(running = false) } + CodingStep(CodingStepKind.ERROR, message)))
-            store.update(id) { it.copy(pendingRequest = "", requestId = "", pendingRecalculationNodeId = null) }
+            updatePlan(id, PlanRevisionEvent.RequestCleared(requestId))
             throw IllegalStateException(message, e)
         } finally {
             if (nestedActivityId == null) _drafts.update { it - sessionId }
@@ -1702,29 +1601,12 @@ class OrchestrationService(
                 plan.milestones.specification() == proposal.baseMilestones.specification()) { "Основа предложения изменилась. Подготовьте его заново." }
             val extended = plan.reconcileApprovedProposal(proposal)
             require(extended.selectedMilestones.any { !it.completed }) { "В предложении нет новых этапов" }
-            val snapshot = PlanRunSnapshot(plan.runId, plan.tree, plan.milestones, plan.workspace, plan.finalAttempt, Id.now())
-            val completedRun = plan.phase == ExecutionPhase.COMPLETE
             val paused = state(plan.parentSessionId, plan.projectId).workPauses.values
                 .filter { it.planId == plan.id && it.proposalId == proposalId }.flatMap { it.stageIds }.toSet()
             val nextWorktreeMode = projects.sessions(plan.projectId).firstOrNull { it.id == plan.parentSessionId }?.worktreeEnabled ?: true
-            plan = store.update(id) { latest ->
-                require(expectedRevision == null || latest.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
-                require(latest.proposal?.id == proposalId) { "Предложение изменилось" }
-                val reconciled = latest.reconcileApprovedProposal(proposal)
-                reconciled.copy(revision = latest.revision, runHistory = latest.runHistory + snapshot,
-                    // Commit approved requirements with the plan, so recovery cannot release a pause before delivery.
-                    deliveries = (latest.deliveries + paused.map { stageId -> PlanDelivery(
-                        "$proposalId-approved-$stageId", latest.parentSessionId, stageId,
-                        "Подтверждённые уточнения плана:\n${proposal.explanation}",
-                        state = if (latest.milestones.firstOrNull { it.id == stageId }?.completed == true) DeliveryState.ANSWERED else DeliveryState.QUEUED) }).distinctBy { it.id },
-                    proposal = null, runId = if (completedRun) Id.new() else latest.runId,
-                    worktreeEnabled = if (completedRun) nextWorktreeMode else latest.worktreeEnabled,
-                    workspace = if (completedRun) null else latest.workspace,
-                    finalAttemptHistory = latest.finalAttemptHistory + listOfNotNull(latest.finalAttempt),
-                    finalAttempt = null, phase = ExecutionPhase.RECOVERING, intent = ExecutionIntent.RUN,
-                    issue = null, transportRetries = 0, status = PlanStatus.RUNNING, confirmedRevision = latest.revision,
-                    wizardStep = PlanningStep.STATUS)
-            }
+            val openQuestions = state(plan.parentSessionId, plan.projectId).openQuestions(plan.id).isNotEmpty()
+            plan = updatePlan(id) { PlanRevisionEvent.ProposalApproved(proposal, expectedRevision, openQuestions,
+                paused, Id.new(), nextWorktreeMode, Id.now()) }
             // Old sessions remain accessible in the archive and are never resurrected by prepareSessions.
             projects.sessions(plan.projectId).filter { it.planId == plan.id && !it.archived }.forEach { session ->
                 if (plan.milestones.any { it.id == session.stageId && it.completed }) {
@@ -1737,15 +1619,10 @@ class OrchestrationService(
             if (plan.confirmedRevision != null) { prepareSessions(plan); execution.start(id); return@withLock }
             require(plan.wizardStep != PlanningStep.CLARIFY && plan.selectedMilestones.isNotEmpty() && DecisionCompiler.compile(plan).valid &&
                 state(plan.parentSessionId, plan.projectId).openQuestions(plan.id).isEmpty()) { "План ещё не готов" }
-            plan = store.update(id) {
-                require(expectedRevision == null || it.revision == expectedRevision) { "План изменился. Проверьте новую редакцию." }
-                it.copy(confirmedRevision = it.revision, intent = ExecutionIntent.RUN, phase = ExecutionPhase.RECOVERING,
-                status = PlanStatus.RUNNING, runId = it.runId.ifBlank { Id.new() },
-                versions = it.versions + PlanVersion(it.revision, it.tree, it.milestones.map { m -> m.copy(attempts = emptyList()) }, Id.now())) }
+            val openQuestions = state(plan.parentSessionId, plan.projectId).openQuestions(plan.id).isNotEmpty()
+            plan = updatePlan(id) { PlanRevisionEvent.InitialConfirmed(expectedRevision, openQuestions, Id.new(), Id.now()) }
         }
-        updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(workPauses = old.workPauses.filterValues {
-            it.planId != plan.id || it.proposalId != proposalId || proposalId == null
-        }) }
+        updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.ProposalConfirmed(plan.id, proposalId))
         prepareSessions(plan)
         append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-${proposalId ?: "initial"}-confirmed", CodingRole.AGENT,
             "План подтверждён. Оркестратор распределяет задания между исполнителями; зависимые этапы ждут завершения предыдущих.", createdAt = Id.now()))
@@ -1758,11 +1635,7 @@ class OrchestrationService(
             it.status in listOf(OrchestrationInputStatus.CANCELLED, OrchestrationInputStatus.FAILED)
         }
         if (interrupted != null && session.stageId == null) {
-            updateState(session.id, session.projectId) { old -> old.copy(inputs = old.inputs.map {
-                if (it.id == interrupted.id) it.copy(status = OrchestrationInputStatus.QUEUED, error = "", resumeAfter = false,
-                    decision = if (text.isBlank()) it.decision else null,
-                    text = it.text + if (text.isNotBlank()) "\n\nУточнение пользователя: $text" else "") else it
-            }) }
+            updateState(session.id, session.projectId, OrchestrationEvent.InputRetried(interrupted.id, text, clearResumeAfter = true))
             if (text.isNotBlank()) append(session.projectId, session.id, CodingMessage(Id.new(), CodingRole.USER, text, createdAt = Id.now()))
             onAccepted()
             drainInputs(session)
@@ -1780,9 +1653,7 @@ class OrchestrationService(
         val plan = store.planFor(id) ?: return
         require(plan.confirmedRevision != null) { "Сначала подтвердите план" }
         require(plan.parentSessionId !in _persistenceErrors.value) { "Сначала восстановите хранилище оркестратора" }
-        if (plan.proposal == null) updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(workPauses = old.workPauses.filterValues {
-            it.planId != plan.id || !it.requiresUser
-        }) }
+        if (plan.proposal == null) updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.PlanResumed(plan))
         if (plan.canExtendAfterFinalVerification) { control(id, "retry"); return }
         recoverAssignments(plan)
         val current = store.planFor(id) ?: return
@@ -1794,39 +1665,9 @@ class OrchestrationService(
         val plan = cancelObsoletePeerCommands(plan)
         val roster = toolProfiles()
         val sessions = projects.sessions(plan.projectId)
-        val parent = sessions.firstOrNull { it.id == plan.parentSessionId }
-        val selected = parent?.modelSelection?.let { ProfileResolver.selection(it, roster) }
-        val replacement = selected?.takeIf { it.configured && it.supportsCoding }
-        fun recover(assignment: StageAssignment, stage: Milestone? = null): StageAssignment {
-            if (runCatching { assignment.executionProfile(roster) }.isSuccess) return assignment
-            val workerChoice = stage?.let { m -> sessions.firstOrNull { it.planId == plan.id && it.stageId == m.id }?.modelSelection }
-            val workerProfile = workerChoice?.let { ProfileResolver.selection(it, roster) }?.takeIf { it.configured && it.supportsCoding }
-            val candidate = when {
-                workerProfile != null -> assignment.copy(profileId = workerProfile.id, modelId = workerChoice.modelId,
-                    effort = workerChoice.effort, effectiveEffort = EffortSelection.Default, options = null)
-                replacement != null -> assignment.copy(profileId = replacement.id)
-                else -> return assignment
-            }
-            return candidate.takeIf { runCatching { it.executionProfile(roster) }.isSuccess } ?: assignment
-        }
-        val next = plan.copy(plannerSelection = parent?.modelSelection?.takeIf { selected != null } ?: plan.plannerSelection,
-            milestones = plan.milestones.map { stage -> if (stage.completed) stage else stage.copy(
-                assignment = stage.assignment?.let { recover(it, stage) },
-                attempts = stage.attempts.map { attempt -> if (attempt.phase == AttemptPhase.COMPLETE) attempt else attempt.copy(
-                    assignment = recover(attempt.assignment, stage), mergeAssignment = attempt.mergeAssignment?.let { recover(it, stage) }) }) },
-            finalAttempt = plan.finalAttempt?.takeIf { it.phase != AttemptPhase.COMPLETE }?.let { it.copy(
-                assignment = recover(it.assignment), mergeAssignment = it.mergeAssignment?.let(::recover)) } ?: plan.finalAttempt)
+        val next = plan.recoveredAssignments(roster, sessions)
         if (next == plan) return plan
-        val saved = store.update(plan.id) { latest ->
-            // Scheduling has not started yet. Do not overwrite concurrent dialogue or input changes.
-            latest.copy(plannerSelection = next.plannerSelection, milestones = latest.milestones.map { stage ->
-                val recovered = next.milestones.firstOrNull { it.id == stage.id } ?: return@map stage
-                stage.copy(assignment = recovered.assignment, attempts = stage.attempts.map { attempt ->
-                    recovered.attempts.firstOrNull { it.id == attempt.id }?.let { attempt.copy(assignment = it.assignment, mergeAssignment = it.mergeAssignment) } ?: attempt
-                }) }, finalAttempt = latest.finalAttempt?.let { attempt -> next.finalAttempt?.takeIf { it.id == attempt.id }?.let {
-                    attempt.copy(assignment = it.assignment, mergeAssignment = it.mergeAssignment)
-                } ?: attempt })
-        }
+        val saved = updatePlan(plan.id, PlanRevisionEvent.AssignmentsRecovered(plan, next))
         if (next.milestones != plan.milestones || next.finalAttempt != plan.finalAttempt) append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-models-${saved.plannerSelection.hashCode()}-${saved.milestones.map { it.assignment }.hashCode()}",
             CodingRole.AGENT, "Назначения недоступных моделей восстановлены по текущему выбору сессии. Продолжаем сохранённый запуск.", createdAt = Id.now()))
         return saved
@@ -1868,20 +1709,11 @@ class OrchestrationService(
 
     private suspend fun numbered(plan: Plan): Plan {
         if (plan.parentSessionId.isBlank()) return plan
-        val saved = updateState(plan.parentSessionId, plan.projectId) { old ->
-            val numbers = old.stageNumbers.toMutableMap()
-            var next = old.nextStageNumber
-            (plan.milestones + plan.proposal?.milestones.orEmpty()).distinctBy { it.id }.forEach { stage ->
-                val key = "${plan.id}:${stage.id}"
-                if (key !in numbers) { numbers[key] = next; next++ }
-            }
-            old.copy(stageNumbers = numbers, nextStageNumber = next)
-        }
-        fun bind(stages: List<Milestone>) = stages.map { it.copy(displayNumber = saved.stageNumbers["${plan.id}:${it.id}"] ?: it.displayNumber) }
-        val next = plan.copy(milestones = bind(plan.milestones), proposal = plan.proposal?.let { it.copy(milestones = bind(it.milestones)) })
+        val saved = updateState(plan.parentSessionId, plan.projectId,
+            OrchestrationEvent.StageNumbersRequested(plan.id, (plan.milestones + plan.proposal?.milestones.orEmpty()).map { it.id }))
+        val next = plan.bindStageNumbers(saved.stageNumbers)
         if (next == plan) return plan
-        store.update(plan.id) { latest -> latest.copy(milestones = bind(latest.milestones),
-            proposal = latest.proposal?.let { it.copy(milestones = bind(it.milestones)) }) }
+        updatePlan(plan.id, PlanRevisionEvent.StageNumbersBound(saved.stageNumbers))
         return next
     }
 
@@ -1978,9 +1810,7 @@ class OrchestrationService(
             (organisms ?: error("Организмы недоступны")).renameByUser(session, name, operationId)
             val savedName = projects.sessions(session.projectId).firstOrNull { it.id == sessionId }?.name ?: return
             session.planId?.let { planId -> store.planFor(planId)?.let {
-                store.update(planId) { old -> old.copy(milestones = old.milestones.map { stage ->
-                    if (stage.id == session.stageId) stage.copy(displayName = savedName) else stage
-                }) }
+                updatePlan(planId, PlanRevisionEvent.StageRenamed(session.stageId, savedName))
             } }
             refreshSessions()
             return
@@ -2023,9 +1853,7 @@ class OrchestrationService(
     private suspend fun performSessionCommand(plan: Plan, command: SessionCommand, publishNotice: Boolean = true) = sessionLock(command.sessionId).withLock {
         if (plan.id in deletedPlans || plan.parentSessionId in deletedSessions) return@withLock
         requireTool(plan.parentSessionId.isNotBlank()) { "Не задан оркестратор" }
-        val saved = updateState(plan.parentSessionId, plan.projectId) { old ->
-            if (old.sessionCommands.any { it.id == command.id }) old else old.copy(sessionCommands = old.sessionCommands + command)
-        }
+        val saved = updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.SessionCommandRegistered(command))
         val recorded = saved.sessionCommands.first { it.id == command.id }
         requireTool(recorded.copy(applied = false, error = "") == command.copy(applied = false, error = "")) { "Идентификатор команды использован с другими аргументами" }
         if (recorded.applied) return@withLock
@@ -2036,9 +1864,7 @@ class OrchestrationService(
                 "Команда session.manage не выполнена: для управляемой сессии используйте session.control с текущими полномочиями и бюджетом восстановления." else ""
         }
         if (rejection.isNotBlank()) {
-            updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(sessionCommands = old.sessionCommands.map {
-                if (it.id == command.id) it.copy(error = rejection) else it
-            }) }
+            updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.SessionCommandRejected(command.id, rejection))
             // Retain the rejected intent and rebuild its diagnostic history on replay; never mint a fresh generation.
             append(plan.projectId, plan.parentSessionId, CodingMessage("${command.id}-rejected", CodingRole.AGENT,
                 rejection, createdAt = Id.now(), origin = MessageOrigin.TOOL, systemNotice = true))
@@ -2075,19 +1901,15 @@ class OrchestrationService(
                 SessionCommandKind.RENAME -> {
                     requireTool(session != null && command.name.isNotBlank()) { "Добавьте название сессии" }
                     projects.saveSession(session.copy(name = command.name, nameManuallySet = true))
-                    store.update(plan.id) { old -> old.copy(milestones = old.milestones.map {
-                        if (it.id == stage?.id) it.copy(displayName = command.name) else it
-                    }) }
+                    updatePlan(plan.id, PlanRevisionEvent.StageRenamed(stage?.id, command.name))
                 }
             }
         } catch (e: IllegalArgumentException) {
             // Rejected commands must not become delayed actions when the stage later completes.
-            updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(sessionCommands = old.sessionCommands.filterNot { it.id == command.id }) }
+            updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.SessionCommandDiscarded(command.id))
             throw e
         }
-        updateState(plan.parentSessionId, plan.projectId) { old -> old.copy(sessionCommands = old.sessionCommands.map {
-            if (it.id == command.id) it.copy(applied = true) else it
-        }) }
+        updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.SessionCommandApplied(command.id))
         val target = address(plan.projectId, command.sessionId)
         if (publishNotice) append(plan.projectId, plan.parentSessionId, CodingMessage(command.id, CodingRole.AGENT,
             when (command.kind) {
@@ -2106,19 +1928,7 @@ class OrchestrationService(
         if (plan.parentSessionId.isBlank() || plan.confirmedRevision == null) return
         val late = plan.deliveries.firstOrNull { d -> d.state == DeliveryState.QUEUED && plan.milestones.any { it.id == d.targetStageId && it.completed } }
         if (late != null) {
-            val updated = store.update(plan.id) { current ->
-                val delivery = current.deliveries.firstOrNull { it.id == late.id && it.state == DeliveryState.QUEUED } ?: return@update current
-                val completed = current.milestones.firstOrNull { it.id == delivery.targetStageId && it.completed } ?: return@update current
-                val nextId = "${completed.id}-followup-${delivery.id}"
-                val next = completed.copy(id = nextId, title = completed.title, displayNumber = null, continuationOf = completed.id, description = delivery.text,
-                    status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", dependsOn = listOf(completed.id))
-                current.copy(deliveries = current.deliveries.map { if (it.id == delivery.id) it.copy(targetStageId = nextId) else it },
-                    milestones = current.milestones + next, phase = ExecutionPhase.EXECUTING, status = PlanStatus.RUNNING,
-                    finalAttempt = null, finalAttemptHistory = current.finalAttemptHistory + listOfNotNull(current.finalAttempt),
-                    workspace = current.workspace?.copy(applied = false),
-                    tree = current.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + nextId) else it } + DecisionNode(nextId, next.title, DecisionKind.STAGE, stageId = nextId))
-                    .let { if (current.milestones.any { it.isFinalization }) it.withFinalization() else it }
-            }
+            val updated = updatePlan(plan.id) { CoordinationEvent.LateDeliveryObserved(late.id, Id.uuid()) }
             if (updated.deliveries != plan.deliveries) { prepareSessions(updated); return }
         }
         val existing = projects.sessions(plan.projectId)
@@ -2172,31 +1982,8 @@ class OrchestrationService(
             publishDelivery(store.planFor(id)!!, it)
             return deliveryId
         }
-        val updated = store.update(id) { p ->
-            expectedRetryCheckpoint?.let { p.requireRetryCheckpoint(it) }
-            p.deliveries.firstOrNull { it.id == deliveryId }?.let { previous ->
-                require(previous.sourceSessionId == source && previous.text == text && previous.replyTo == replyTo)
-                return@update p
-            }
-            val stage = p.milestones.firstOrNull { it.id == target } ?: error("Этап не найден")
-            val followupId = "$target-followup-$deliveryId"
-            val attempt = stage.attempts.lastOrNull()
-            val complete = stage.completed || (attempt?.error?.requiresUser != true &&
-                attempt?.phase in listOf(AttemptPhase.VERIFYING, AttemptPhase.INTEGRATING, AttemptPhase.COMPLETE))
-            val destination = if (complete) followupId else target
-            val followup = stage.copy(id = followupId, title = stage.title, displayNumber = null, continuationOf = stage.id, description = text,
-                status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", dependsOn = listOf(stage.id))
-            p.copy(deliveries = p.deliveries + PlanDelivery(deliveryId, source, destination, text, replyTo = replyTo), issue = null,
-                phase = if (complete) ExecutionPhase.EXECUTING else p.phase,
-                finalAttempt = if (complete) null else p.finalAttempt,
-                finalAttemptHistory = p.finalAttemptHistory + if (complete) listOfNotNull(p.finalAttempt) else emptyList(),
-                workspace = if (complete && p.sharedWorkspace) p.workspace?.copy(applied = false) else p.workspace,
-                milestones = p.milestones.map { m -> if (m.id != target || complete) m else m.copy(attempts = m.attempts.map {
-                    if (it.error?.kind == IssueKind.VERIFICATION) it.retryAfterUserAction().copy(waitingForEvent = null) else it.copy(error = null, waitingForUser = null, waitingForEvent = null)
-                }) } + if (complete) listOf(followup) else emptyList(),
-                tree = if (complete) p.tree.map { if (it.kind == DecisionKind.GOAL) it.copy(children = it.children + followupId) else it } + DecisionNode(followupId, followup.title, DecisionKind.STAGE, stageId = followupId) else p.tree)
-                .let { if (complete && p.milestones.any { it.isFinalization }) it.withFinalization() else it }
-        }
+        val updated = updatePlan(id) { CoordinationEvent.DeliveryRequested(
+            PlanDelivery(deliveryId, source, target, text, replyTo = replyTo), Id.uuid(), expectedRetryCheckpoint) }
         onCommitted()
         prepareSessions(updated)
         val numbered = store.planFor(id)!!
@@ -2222,9 +2009,7 @@ class OrchestrationService(
     override suspend fun instructions(plan: Plan, stage: Milestone, attempt: StageAttempt): String {
         val plan = cancelObsoletePeerCommands(plan)
         if (plan.parentSessionId.isBlank()) return ""
-        val p = store.update(plan.id) { current -> current.copy(deliveries = current.deliveries.map { d ->
-            if (d.targetStageId == stage.id && d.state in setOf(DeliveryState.QUEUED, DeliveryState.DELIVERED)) d.copy(attemptId = attempt.id, turnIndex = attempt.turnIndex) else d
-        }) }
+        val p = updatePlan(plan.id, CoordinationEvent.InboxPrepared(stage.id, attempt.id, attempt.turnIndex))
         val inbox = p.deliveries.filter { it.targetStageId == stage.id && it.state in setOf(DeliveryState.QUEUED, DeliveryState.DELIVERED) && it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex }
         return """
             Ты исполнитель этапа плана. Другие планы могут работать в этой же папке: сохраняй чужие изменения, перед правкой перечитывай файлы.
@@ -2241,10 +2026,7 @@ class OrchestrationService(
     }
     override suspend fun started(plan: Plan, stage: Milestone, attempt: StageAttempt) {
         if (plan.parentSessionId.isBlank()) return
-        val saved = store.update(plan.id) { old -> old.copy(deliveries = old.deliveries.map {
-            if (it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex && it.state == DeliveryState.QUEUED)
-                it.copy(state = DeliveryState.DELIVERED) else it
-        }) }
+        val saved = updatePlan(plan.id, CoordinationEvent.InboxDelivered(attempt.id, attempt.turnIndex))
         publishStageDispatch(saved, stage, attempt, attempt.turnIndex,
             attempt.prompt.ifBlank { stage.description + "\n\nКритерии: " + stage.acceptance }, clock())
     }
@@ -2292,14 +2074,12 @@ class OrchestrationService(
         if (existing == null) {
             val parsed = stageReplyOrNull(attempt.report)?.takeIf { it.text.isNotBlank() }
                 ?: StageReply(StageReplyKind.BLOCKED, "Некорректный ответ исполнителя. Нужен результат, вопрос или запрос ожидания.")
-            store.update(plan.id) { p -> p.copy(coordination = p.coordination + CoordinationRecord(transferId, stage.id, parsed,
+            updatePlan(plan.id) { CoordinationEvent.HandoffRecorded(CoordinationRecord(transferId, stage.id, parsed,
                 runId = plan.runId, attemptId = attempt.id, sourceSessionId = attempt.sessionId, turnIndex = attempt.turnIndex, createdAt = clock())) }
         }
         val beforeTransfer = store.planFor(plan.id)!!
         if (beforeTransfer.deliveries.any { it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex && it.state == DeliveryState.DELIVERED }) {
-            store.update(plan.id) { p -> p.copy(deliveries = p.deliveries.map {
-                if (it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex && it.state == DeliveryState.DELIVERED) it.copy(state = DeliveryState.ANSWERED) else it
-            }) }
+            updatePlan(plan.id, CoordinationEvent.InboxAnswered(attempt.id, attempt.turnIndex))
         }
         updateHandoff(plan.id, transferId, HandoffStatus.PROCESSING, "Оркестратор обрабатывает обращение")
         val activityId = "${plan.id}-${attempt.id}-turn-${attempt.turnIndex}"
@@ -2352,8 +2132,7 @@ class OrchestrationService(
             val reply = if (parsed.text.isBlank()) StageReply(StageReplyKind.BLOCKED, "Пустой ответ исполнителя. Нужен проверяемый результат или вопрос.") else parsed
             val createdRecord = CoordinationRecord(eventId, stage.id, reply)
             record = createdRecord
-            store.update(plan.id) { p -> p.copy(coordination = p.coordination + createdRecord,
-                deliveries = p.deliveries.map { if (it.attemptId == attempt.id && it.turnIndex == attempt.turnIndex && it.state == DeliveryState.DELIVERED) it.copy(state = DeliveryState.ANSWERED) else it }) }
+            updatePlan(plan.id, CoordinationEvent.HandoffRecorded(createdRecord), CoordinationEvent.InboxAnswered(attempt.id, attempt.turnIndex))
         }
         val reply = record.reply
         publishHandoff(plan, record)
@@ -2400,14 +2179,7 @@ class OrchestrationService(
                 LlmMessage(LlmChatRole.USER, "${schedulingContext(latest)}\nЗапрос ожидания исполнителя: ${json.encodeToString(reply)}\nЦель: ${plan.goal}\nЭтапы:\n$context\nИстория текущей попытки:\n${latest.stageRecords(stage.id, attempt).evidenceText()}\nДругие планы:\n$peers\nОт ${stage.id} для ${reply.targetStageId} (${reply.kind}): ${reply.text}\nФайлы: ${reply.changedFiles}\nВходящие сообщения: ${latest.deliveries.takeLast(12)}")) + recoveryContext, targets, plan, eventId, activityId)
             val savedDecision = decision
             activity = completedCoordinatorActivity(activityId)
-            val updated = store.update(plan.id) { p ->
-                val old = p.coordination.first { it.id == eventId }
-                val replaced = savedResultProblem != null
-                val staleActions = if (replaced) old.decision?.actions.orEmpty().indices.map { "${old.actionOrigin()}-action-$it" }.toSet() else emptySet()
-                p.copy(coordination = p.coordination.map { if (it.id == eventId) it.copy(decision = savedDecision, activity = activity,
-                    actionRevision = it.actionRevision + if (replaced) 1 else 0) else it },
-                    deliveries = p.deliveries.map { if (it.id in staleActions && it.state == DeliveryState.QUEUED) it.copy(state = DeliveryState.CANCELLED) else it })
-            }
+            val updated = updatePlan(plan.id, CoordinationEvent.DecisionRecorded(eventId, savedDecision, activity, replacesResult = savedResultProblem != null))
             record = updated.coordination.first { it.id == eventId }
         }
         if (decision.schedules.isNotEmpty()) legacyTool(plan, eventId, "schedule", "schedule.manage", json.encodeToJsonElement(ToolScheduleManage(decision.schedules)).jsonObject) {
@@ -2432,12 +2204,7 @@ class OrchestrationService(
         val actionOrigin = record.actionOrigin()
         if (!decision.toolsApplied) decision.actions.forEachIndexed { index, action ->
             val latest = store.planFor(plan.id)!!
-            val applied = latest.deliveries.firstOrNull {
-                (it.id.startsWith("$eventId-action-") || it.id.startsWith("$eventId-revision-")) &&
-                    (it.targetStageId == action.stageId || latest.milestones.any { task -> task.id == it.targetStageId && task.continuationOf == action.stageId }) &&
-                    it.text == action.message &&
-                    it.state in setOf(DeliveryState.DELIVERED, DeliveryState.ANSWERED)
-            }
+            val applied = latest.appliedCoordinatorDelivery(eventId, action)
             legacyTool(latest, eventId, "delivery-$actionOrigin-$index", "stage.send", json.encodeToJsonElement(ToolStageSend(action.stageId, action.message)).jsonObject) {
                 enqueue(plan.id, if (action.stageId == stage.id) plan.parentSessionId else attempt.sessionId,
                     action.stageId, action.message, applied?.id ?: "$actionOrigin-action-$index")
@@ -2450,16 +2217,18 @@ class OrchestrationService(
             }
         }
         if (reply.kind == StageReplyKind.RESULT) publishPeerContext(plan, stage.id, record)
-        val waitingRule = store.planFor(plan.id)!!.milestones.first { it.id == stage.id }.attempts.lastOrNull()?.waitingForEvent
-        if (waitingRule != null) return StageTurnDecision(StageTurnAction.WAIT_EVENT, reply.text, waitingRule)
-        if (reply.kind == StageReplyKind.WAIT && decision.actions.none { it.stageId == stage.id }) {
-            askUser(plan, stage, "$eventId-invalid-wait", "Не удалось назначить ожидание: ${decision.reply}")
-            return StageTurnDecision(StageTurnAction.WAIT, reply.text, "$eventId-invalid-wait")
+        when (val continuation = store.planFor(plan.id)!!.coordinatorContinuation(stage.id, record, decision)) {
+            is CoordinatorContinuation.Return -> return continuation.decision
+            is CoordinatorContinuation.Ask -> {
+                askUser(plan, stage, continuation.id, continuation.text)
+                return StageTurnDecision(StageTurnAction.WAIT, continuation.report, continuation.id)
+            }
+            is CoordinatorContinuation.Deliver -> continuation.delivery.let { delivery ->
+                enqueue(plan.id, delivery.sourceSessionId, delivery.targetStageId, delivery.text, delivery.id)
+            }
+            CoordinatorContinuation.InspectInbox -> Unit
         }
-        if (reply.kind != StageReplyKind.RESULT && !decision.toolsApplied && decision.actions.none { it.stageId == stage.id })
-            enqueue(plan.id, plan.parentSessionId, stage.id, decision.reply, "$eventId-followup")
-        val queued = store.planFor(plan.id)!!.deliveries.any { it.targetStageId == stage.id && it.state == DeliveryState.QUEUED }
-        return StageTurnDecision(if (queued) StageTurnAction.CONTINUE else StageTurnAction.VERIFY, reply.text)
+        return store.planFor(plan.id)!!.coordinatedTurn(stage.id, reply.text)
     }
 
     private suspend fun publishPeerContext(source: Plan, stageId: String, record: CoordinationRecord) {
@@ -2490,7 +2259,7 @@ class OrchestrationService(
                     node.observed !in setOf(SessionObservedState.RUNNING, SessionObservedState.WAITING_USER) }?.let { node.id to it }
             }.toMap()
         if (current.cancelLegacyPeerCommands(peers, admitted) == current) return plan
-        val saved = store.update(current.id) { it.cancelLegacyPeerCommands(peers, admitted) }
+        val saved = updatePlan(current.id, PlanRevisionEvent.LegacyPeersObserved(peers, admitted))
         val cancelled = saved.deliveries.filter { it.state == DeliveryState.CANCELLED &&
             current.deliveries.any { old -> old.id == it.id && old.state == DeliveryState.QUEUED } }.map { it.id }.toSet()
         val removed = current.milestones.map { it.id }.toSet() - saved.milestones.map { it.id }.toSet()
@@ -2524,8 +2293,8 @@ class OrchestrationService(
                     "Не объявляй этап принятым: приёмку проводит приложение. Для WAIT назначь ожидание через schedule.manage. " +
                     execution.verificationGuidance() + "\n" + schedulingInstructions()), LlmMessage(LlmChatRole.USER, context.drop(1).joinToString("\n") { it.content }))
             val text = withContext(workerDispatcher) { composer.completeToolTurn(plan, judge, instructions, tools) { coordinatorEvent(activityId, it) } }
-            updateState(plan.parentSessionId, plan.projectId) { saved ->
-                saved.finishWorkPause(store.plans.value.first { it.id == plan.id }, tools.context.requestId)
+            updateState(plan.parentSessionId, plan.projectId) {
+                OrchestrationEvent.WorkPauseFinished(store.plans.value.first { it.id == plan.id }, tools.context.requestId)
             }
             val resolved = tools.results.value["stage.resolve"]?.let { json.decodeFromJsonElement<ToolStageResolve>(it) }
             require(record.reply.kind != StageReplyKind.RESULT || resolved != null) { "Вызовите stage.resolve для текущего результата" }
@@ -2613,10 +2382,8 @@ class OrchestrationService(
             plan.milestones.firstOrNull { it.id == stageId }?.stageLabel() ?: "Этап"
         }
         val message = "Нужен ваш ответ\n$label\n\n$text"
-        updateState(plan.parentSessionId, plan.projectId) { old ->
-            if (old.questions.any { it.id == id }) old else old.copy(questions = old.questions +
-                OrchestrationQuestion(id, plan.id, message, validQuestions, sourceId, stages, label))
-        }
+        updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.QuestionRegistered(
+            OrchestrationQuestion(id, plan.id, message, validQuestions, sourceId, stages, label)))
         append(plan.projectId, plan.parentSessionId, CodingMessage(id, CodingRole.AGENT, message, createdAt = Id.now(),
             steps = if (activity.isEmpty()) emptyList() else activity + CodingStep(CodingStepKind.ANSWER, message),
             planning = PlanningChatBlock(plan.id, questions = validQuestions, sourceStageId = stage.id,
@@ -2646,22 +2413,7 @@ class OrchestrationService(
                 createdAt = plan.updatedAt, planning = PlanningChatBlock(plan.id, questions = m.questions, affectedStageIds = m.questionStageIds)))
         }
         val questionMessages = projects.messages(plan.projectId, plan.parentSessionId)
-        updateState(plan.parentSessionId, plan.projectId) { old ->
-            val imported = questionMessages.filter { it.planning?.questions?.isNotEmpty() == true && it.planning!!.planId == plan.id &&
-                old.questions.none { q -> q.id == it.id } }.map { m ->
-                val block = m.planning!!
-                val stages = block.affectedStageIds.ifEmpty { listOfNotNull(block.sourceStageId) }
-                OrchestrationQuestion(m.id, plan.id, m.text, block.questions, block.sourceSessionId ?: plan.parentSessionId,
-                    stages, block.scopeLabel.ifBlank { if (stages.isEmpty()) "Для всего плана" else stages.joinToString("; ") { stageId -> (plan.milestones + plan.proposal?.milestones.orEmpty()).firstOrNull { it.id == stageId }?.stageLabel() ?: "Этап" } },
-                    status = if (questionMessages.any { it.planning?.replyTo == m.id && it.planning!!.closesRequest }) UserRequestStatus.ANSWERED else block.requestStatus,
-                    forPlanning = plan.dialogue.any { it.id == m.id },
-                    forDiscussion = old.inputs.any { "${it.id}-reply" == m.id && it.decision?.intent == UserTurnIntent.DISCUSS },
-                    pauseStageIds = old.workPauses[m.id.removeSuffix("-reply")]?.stageIds ?: old.inputs.firstOrNull { "${it.id}-reply" == m.id }?.decision?.let {
-                        it.pauseStageIds.takeIf { ids -> ids.isNotEmpty() || it.intent == UserTurnIntent.DISCUSS }
-                    })
-            }
-            if (imported.isEmpty()) old else old.copy(questions = old.questions + imported)
-        }
+        updateState(plan.parentSessionId, plan.projectId, OrchestrationEvent.QuestionsImported(plan, questionMessages))
         projects.sessions(plan.projectId).firstOrNull { it.id == plan.parentSessionId }?.let { syncQuestionMessages(it) }
         if (plan.milestones.isNotEmpty() && existingGraph == null) append(plan.projectId, plan.parentSessionId, CodingMessage("${plan.id}-graph", CodingRole.AGENT,
             "План готов. Проверьте этапы и подтвердите запуск.", createdAt = plan.updatedAt, planning = PlanningChatBlock(plan.id, graph = true)))
@@ -2699,9 +2451,7 @@ class OrchestrationService(
                     val sessionId = "planning-${plan.id}"
                     if (projects.sessions(plan.projectId).none { it.id == sessionId }) projects.saveSession(CodingSession(sessionId, plan.projectId, "План: ${plan.goal.take(40)}", plan.createdAt, planningMode = true, modelSelection = plan.plannerSelection,
                         engine = plan.engine ?: legacyCodingEngine(plan.plannerSelection?.let { ProfileResolver.selection(it, profiles.load()) })))
-                    val linked = store.update(plan.id) { it.copy(parentSessionId = sessionId,
-                        confirmedRevision = if (it.intent != ExecutionIntent.STOP || it.milestones.any { m -> m.attempts.isNotEmpty() }) it.revision else null,
-                        versions = if (it.versions.isEmpty()) listOf(PlanVersion(it.revision, it.tree, it.milestones.map { m -> m.copy(attempts = emptyList()) }, Id.now())) else it.versions) }
+                    val linked = updatePlan(plan.id) { PlanRevisionEvent.LegacyLinked(sessionId, Id.now()) }
                     linked.dialogue.forEach { m -> append(plan.projectId, sessionId, CodingMessage(m.id, if (m.role == "user") CodingRole.USER else CodingRole.AGENT, m.text, createdAt = plan.createdAt, planning = PlanningChatBlock(plan.id, questions = m.questions, affectedStageIds = m.questionStageIds))) }
                     prepareSessions(linked)
                 }
@@ -2711,12 +2461,7 @@ class OrchestrationService(
                     publish(legacy)
                     val open = state(legacy.parentSessionId, legacy.projectId).openQuestions(legacy.id)
                     if (legacy.milestones.any { it.attempts.any { a -> a.error?.isPlannerAnswerWait == true } }) {
-                        store.update(legacy.id) { latest -> latest.copy(
-                            issue = latest.issue?.takeUnless { it.isPlannerAnswerWait && open.isNotEmpty() },
-                            milestones = latest.milestones.map { stage -> stage.copy(attempts = stage.attempts.map { a ->
-                                val request = open.firstOrNull { it.stageIds.isEmpty() || stage.id in it.stageIds }
-                                if (a.error?.isPlannerAnswerWait == true && request != null) a.copy(waitingForUser = request.id, error = null) else a
-                            }) }) }
+                        updatePlan(legacy.id, PlanRevisionEvent.LegacyQuestionsObserved(open))
                     }
                 }
                 val migratedPlan = store.planFor(plan.id) ?: plan
@@ -2725,14 +2470,8 @@ class OrchestrationService(
                     val engine = parent.engine ?: migratedPlan.engine ?: legacyCodingEngine(
                         (parent.modelSelection ?: migratedPlan.plannerSelection)?.let { ProfileResolver.selection(it, profiles.load()) })
                     projects.updateSession(parent.projectId, parent.id) { it.copy(role = CodingSessionRole.ORCHESTRATOR, planningMode = true, researchMode = false, engine = engine) }
-                    if (migratedPlan.engine == null) store.update(migratedPlan.id) { it.copy(engine = engine) }
-                    updateState(parent.id, parent.projectId) { old ->
-                        if (plan.pendingRequest.isBlank()) old
-                        else if (old.inputs.any { it.id == plan.requestId }) old.copy(inputs = old.inputs.map {
-                            if (it.id == plan.requestId && it.status == OrchestrationInputStatus.CANCELLED) it.copy(status = OrchestrationInputStatus.QUEUED) else it
-                        })
-                        else old.copy(inputs = old.inputs + OrchestrationInput(plan.requestId, plan.pendingRequest, plan.updatedAt))
-                    }
+                    if (migratedPlan.engine == null) updatePlan(migratedPlan.id, PlanRevisionEvent.EngineRestored(engine))
+                    updateState(parent.id, parent.projectId, OrchestrationEvent.LegacyRequestImported(plan))
                 }
             } catch (_: OrchestrationPersistenceException) { /* One damaged session must not block the others. */ }
         }

@@ -83,6 +83,9 @@ class OrchestrationRenderTest {
                             sessions = own, currentSessionId = parent.id), {}, {}, {}, {}, {}, {}, {}, Modifier.width(300.dp))
                         Box(Modifier.weight(1f)) {
                             CodingChat(project, ui, false, true, { _, _ -> }, {}, { _, _ -> },
+                                planningState = io.aequicor.magicpaper.ui.CodingPlanningState(
+                                    states = service.states.value, plans = store.plans.value,
+                                    drafts = service.drafts.value, sessions = service.sessions.value),
                                 planningService = service)
                         }
                     } } }
@@ -101,7 +104,7 @@ class OrchestrationRenderTest {
             for ((width, height) in listOf(700 to 480, 430 to 700)) {
                 ImageComposeScene(width, height) {
                     MagicPaperTheme { Surface {
-                        Box(Modifier.padding(16.dp)) { OrchestrationMessageRoute(longRoute, null) {} }
+                        Box(Modifier.padding(16.dp)) { OrchestrationMessageRoute(longRoute, io.aequicor.magicpaper.ui.CodingPlanningState()) {} }
                     } }
                 }.use { scene ->
                     repeat(6) { scene.render(it * 16_000_000L).close(); runCurrent() }

@@ -18,8 +18,6 @@ import io.aequicor.magicpaper.ui.components.FavoriteModelPicker
 import io.aequicor.magicpaper.ui.components.EffortControl
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.util.Id
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.Serializable
 import io.aequicor.magicpaper.data.storage.DraftRepository
@@ -35,8 +33,7 @@ class CodingPlanningPlugin(
 ) : MagicPlugin, CodingSessionPanel, PersistentPlugin {
     private val formDrafts = linkedMapOf<String, PersistentDraftValue<PlanningFormDraft>>()
     private val nodeDrafts = linkedMapOf<String, PersistentDraftValue<PlanningNodeDraft>>()
-    private val removedProjects = mutableStateListOf<String>()
-    private val removedPlans = mutableStateListOf<Pair<String, String>>()
+    private val panel = PlanningPanelController(store, composer, execution, projectsRepo, profileRepo, settingsRepo, applicationScope)
     private fun formDraft(projectId: String?, plan: Plan?): PersistentDraftValue<PlanningFormDraft> {
         val key = "planning:${projectId ?: "unselected"}:${plan?.id ?: "new"}:form"
         return formDrafts.getOrPut(key) { PersistentDraftValue(draftRepository, key, PlanningFormDraft.serializer(), PlanningFormDraft(goal = plan?.goal.orEmpty()), applicationScope) }
@@ -49,13 +46,13 @@ class CodingPlanningPlugin(
     }
     override suspend fun flushDrafts() { (formDrafts.values + nodeDrafts.values).forEach { it.flushDrafts() } }
     override suspend fun prepareForReset() {
+        panel.prepareForReset()
         (formDrafts.values + nodeDrafts.values).forEach { it.prepareForReset() }
         formDrafts.clear(); nodeDrafts.clear()
-        removedProjects.clear(); removedPlans.clear()
     }
+    override fun resumeAfterReset() { panel.resumeAfterReset() }
     override suspend fun removeProjectDrafts(projectId: String, planIds: Set<String>?) {
-        if (planIds == null) removedProjects.add(projectId)
-        else planIds.forEach { removedPlans.add(projectId to it) }
+        panel.remove(projectId, planIds)
         val prefixes = planIds?.map { "planning:$projectId:$it:" } ?: listOf("planning:$projectId:")
         fun matches(key: String) = prefixes.any(key::startsWith)
         val owners = formDrafts.filterKeys(::matches).values + nodeDrafts.filterKeys(::matches).values
@@ -74,26 +71,17 @@ class CodingPlanningPlugin(
 
     @OptIn(ExperimentalLayoutApi::class)
     @Composable private fun Panel(locked: CodingProject?, modifier: Modifier) {
-        val scope = rememberCoroutineScope()
-        val plans by store.plans.collectAsState()
-        val live by execution.live.collectAsState()
-        val dossiers by store.dossiers.collectAsState()
-        val serviceError by execution.error.collectAsState()
-        var projects by remember { mutableStateOf<List<CodingProject>>(emptyList()) }
-        var profiles by remember { mutableStateOf<List<LlmProfile>>(emptyList()) }
-        var settings by remember { mutableStateOf(AppSettings()) }
-        var loaded by remember { mutableStateOf(false) }
+        val display by panel.state.collectAsState()
+        val projects = display.projects
+        val profiles = display.profiles
+        val settings = display.settings
+        val serviceError = display.serviceError
+        val loaded = display.loaded
         var projectId by rememberSaveable { mutableStateOf("") }
         val project = locked ?: projects.firstOrNull { it.id == projectId } ?: projects.firstOrNull()
-        val saved = plans.firstOrNull { it.projectId == project?.id }
-        fun preview(attempt: StageAttempt): StageAttempt {
-            val current = live[attempt.id]
-            return if (current != null && current.updatedAt > attempt.updatedAt)
-                attempt.copy(report = current.report, activity = current.activity, mergeReport = current.mergeReport, steps = current.steps) else attempt
-        }
-        val plan = saved?.copy(milestones = saved.milestones.map { stage -> stage.copy(attempts = stage.attempts.map(::preview)) }, finalAttempt = saved.finalAttempt?.let(::preview))
-        if (project?.id in removedProjects || removedPlans.any { it.first == project?.id && it.second == plan?.id }) {
-            PaperText(if (project?.id in removedProjects) "Проект удалён" else "План удалён")
+        val plan = display.planFor(project?.id)
+        if (project?.id in display.removedProjects || display.removedPlans.any { it.first == project?.id && it.second == plan?.id }) {
+            PaperText(if (project?.id in display.removedProjects) "Проект удалён" else "План удалён")
             return
         }
         val formOwner = formDraft(project?.id, plan)
@@ -111,10 +99,11 @@ class CodingPlanningPlugin(
         }
         val step = (viewedStep ?: plan?.currentPlanningStep ?: PlanningStep.GOAL).let { if (it == PlanningStep.STATUS) PlanningStep.REVIEW else it }
         val running = plan?.currentPlanningStep == PlanningStep.STATUS
-        var notice by remember { mutableStateOf<String?>(null) }
-        var busy by remember { mutableStateOf(false) }
-        var submitting by remember { mutableStateOf(false) }
-        var activity by remember { mutableStateOf<List<CodingStep>>(emptyList()) }
+        val operation = display.operations[project?.id] ?: PlanningPanelOperation()
+        val notice = operation.notice ?: display.loadError
+        val busy = PlanningPanelWork.REFINING in operation.active
+        val submitting = PlanningPanelWork.SUBMITTING in operation.active
+        val activity = operation.activity
         var draftEngine by formOwner.field({ it.engine }) { value -> copy(engine = value) }
         var draftPlanner by formOwner.field({ it.planner }) { value -> copy(planner = value) }
         var draftSearch by formOwner.field({ it.search }) { value -> copy(search = value) }
@@ -122,66 +111,18 @@ class CodingPlanningPlugin(
         var advanced by remember { mutableStateOf(false) }
         val choice = if (plan == null) draftPlanner else plan.plannerSelection
         val planner = if (choice != null) ProfileResolver.selection(choice, profiles) else ProfileResolver.resolve(null as ChatSession?, settings, profiles)
-        fun action(block: suspend () -> Unit) {
-            if (submitting) return
-            submitting = true
-            scope.launch {
-                try { block(); notice = null }
-                catch (e: CancellationException) { throw e }
-                catch (e: Exception) { notice = e.message ?: "Не удалось выполнить действие" }
-                finally { submitting = false }
-            }
-        }
-        LaunchedEffect(Unit) {
-            try { store.plans(); store.dossiers(); projects = projectsRepo?.all().orEmpty(); profiles = profileRepo.load(); settings = settingsRepo.load(); loaded = true }
-            catch (e: Exception) { notice = e.message }
-        }
+        fun action(block: suspend () -> Unit) { project?.id?.let { panel.action(it, block) } }
+        LaunchedEffect(Unit) { panel.load() }
         fun edit(change: (Plan) -> Plan) { val current = plan ?: return; action { execution.edit(current.projectId, current.revision, change) } }
         fun navigate(target: PlanningStep) {
             viewedStep = target
             if (plan != null && !running) action { store.update(plan.projectId) { it.copy(wizardStep = target) } }
         }
-        fun record(event: CodingStep) {
-            val index = if (event.callId.isNotBlank()) activity.indexOfLast { it.kind == event.kind && it.callId == event.callId }
-                else activity.lastIndex.takeIf { event.kind in listOf(CodingStepKind.THINKING, CodingStepKind.SUMMARY) && activity.lastOrNull()?.kind == event.kind } ?: -1
-            activity = if (index < 0) activity + event else activity.mapIndexed { i, old -> if (i == index) event else old }
-        }
         fun doRefine(message: String, nodeId: String? = null, initial: Plan? = null) {
             val current = initial ?: plan ?: return
             if (busy || submitting || message.isBlank()) return
-            val sentVersion = formOwner.draft.state.value.version
-            busy = true; notice = null; viewedStep = PlanningStep.CLARIFY
-            activity = listOf(CodingStep(CodingStepKind.INFO, "Подготовка запроса…"))
-            scope.launch {
-                try {
-                    if (initial != null) {
-                        store.save(initial)
-                        formOwner.draft.clearIfUnchanged(sentVersion)
-                    }
-                    val pending = store.update(current.projectId) { p -> p.copy(wizardStep = PlanningStep.CLARIFY,
-                        dialogue = p.dialogue + PlanningMessage(Id.new(), "user", message)) }
-                    profiles = profileRepo.load(); settings = settingsRepo.load()
-                    val judge = if (pending.plannerSelection != null) ProfileResolver.selection(checkNotNull(pending.plannerSelection), profiles)
-                        else ProfileResolver.resolve(null as ChatSession?, settings, profiles)
-                    val result = if (nodeId == null) composer.refine(pending, message, judge, profiles, dossiers, settings, ::record) { record(CodingStep(CodingStepKind.INFO, it)) }
-                        else composer.recalculate(pending, nodeId, judge, profiles, dossiers, settings, ::record) { record(CodingStep(CodingStepKind.INFO, it)) }
-                    record(CodingStep(CodingStepKind.INFO, "Ответ проверен. Сохранение плана…"))
-                    val next = result.wizardStep ?: PlanningStep.CLARIFY
-                    execution.applyProposal(pending, result.copy(wizardStep = next, dialogue = result.dialogue.mapIndexed { index, message ->
-                        if (index == result.dialogue.lastIndex) message.copy(activity = activity) else message
-                    }))
-                    viewedStep = next
-                    if (formOwner.draft.state.value.version == sentVersion) input = ""
-                    activity = emptyList()
-                } catch (e: CancellationException) { throw e }
-                catch (e: Exception) {
-                    notice = e.message ?: "Не удалось получить ответ. Повторите запрос."
-                    record(CodingStep(CodingStepKind.ERROR, notice!!))
-                    try { store.update(current.projectId) { it.copy(dialogue = it.dialogue + PlanningMessage(Id.new(), "system", notice!!, activity)) }; activity = emptyList() }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { /* Keep the visible activity if persistence failed. */ }
-                } finally { busy = false }
-            }
+            viewedStep = null
+            panel.refine(current, message, nodeId, initial != null, formOwner)
         }
         PaperWizard(modifier.fillMaxWidth()) {
             PaperScrollColumn(Modifier, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -190,7 +131,14 @@ class CodingPlanningPlugin(
                 projects.forEach { p -> PaperChoice(project?.id == p.id, { projectId = p.id }, enabled = !busy && !submitting, label = p.name) }
             }
             if (formState.error != null) PaperText("Не удалось сохранить черновик планирования.", color = LocalPaperColors.current.error)
-            if (!loaded || !formState.loaded) { PaperProgress(Modifier.fillMaxWidth()); notice?.let { PaperText(it, color = LocalPaperColors.current.error) }; return@PaperScrollColumn }
+            if (!loaded || !formState.loaded) {
+                if (display.loadError == null) PaperProgress(Modifier.fillMaxWidth())
+                else {
+                    PaperText(requireNotNull(display.loadError), color = LocalPaperColors.current.error)
+                    PaperButton("Повторить загрузку", onClick = panel::load)
+                }
+                return@PaperScrollColumn
+            }
             if (project == null) { PaperText("Сначала добавьте проект в разделе «Проекты и код»."); return@PaperScrollColumn }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PlanningStep.entries.filter { it != PlanningStep.STATUS }.forEachIndexed { index, target ->
@@ -207,7 +155,8 @@ class CodingPlanningPlugin(
                 PaperPanel(Modifier.fillMaxWidth(), kind = PaperSurfaceKind.ERROR) {
                     Column(Modifier.padding(16.dp)) {
                         PaperText(error, color = LocalPaperColors.current.error)
-                        if (plan != null && !running) PaperButton("Повторить запрос", enabled = !busy && !submitting, kind = PaperButtonKind.QUIET,
+                        if (display.loadError != null) PaperButton("Повторить загрузку", onClick = panel::load)
+                        else if (plan != null && !running) PaperButton("Повторить запрос", enabled = !busy && !submitting, kind = PaperButtonKind.QUIET,
                             onClick = { doRefine(plan.dialogue.lastOrNull { it.role == "user" }?.text ?: INITIAL_PLANNING_MESSAGE) })
                     }
                 }
@@ -584,7 +533,7 @@ private fun milestoneLabel(status: MilestoneStatus) = when (status) {
 }
 
 @Serializable
-private data class PlanningFormDraft(
+internal data class PlanningFormDraft(
     val goal: String = "", val input: String = "", val engine: CodingEngine? = null,
     val planner: ModelSelection? = null, val search: SearchProvider? = null,
 )

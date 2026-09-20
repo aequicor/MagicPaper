@@ -14,6 +14,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
+import io.aequicor.magicpaper.ui.CodingPlanningState
 import io.aequicor.magicpaper.designsystem.LocalPaperColors
 import io.aequicor.magicpaper.designsystem.PaperAction
 import io.aequicor.magicpaper.designsystem.PaperDialog
@@ -28,16 +29,17 @@ import io.aequicor.magicpaper.designsystem.PaperTextRole
 @Composable
 internal fun OrchestrationStatus(
     session: CodingSessionUi, service: OrchestrationService, onOpenSession: (String) -> Unit,
+    snapshot: CodingPlanningState,
     modifier: Modifier = Modifier,
     scrolled: Boolean = false,
 ) {
     val openQuestionnaire = LocalOpenQuestionnaire.current
-    val states by service.states.collectAsState()
-    val plans by service.store.plans.collectAsState()
-    val sessions by service.sessions.collectAsState()
-    val drafts by service.drafts.collectAsState()
-    val persistenceErrors by service.persistenceErrors.collectAsState()
-    val unsavedInputs by service.unsavedInputs.collectAsState()
+    val states = snapshot.states
+    val plans = snapshot.plans
+    val sessions = snapshot.sessions
+    val drafts = snapshot.drafts
+    val persistenceErrors = snapshot.persistenceErrors
+    val unsavedInputs = snapshot.unsavedInputs
     val state = states[session.session.id]
     val plan = plans.firstOrNull { it.id == state?.activePlanId }
         ?: plans.filter { it.parentSessionId == session.session.id }.maxByOrNull { it.updatedAt }
@@ -228,9 +230,9 @@ private fun SessionActions(session: CodingSession, service: OrchestrationService
 }
 
 @Composable
-internal fun OrchestrationMessageRoute(message: CodingMessage, service: OrchestrationService?, onOpen: (String) -> Unit) {
+internal fun OrchestrationMessageRoute(message: CodingMessage, snapshot: CodingPlanningState, onOpen: (String) -> Unit) {
     val route = message.route ?: return
-    val plans = service?.store?.plans?.collectAsState()?.value.orEmpty()
+    val plans = snapshot.plans
     val delivery = plans.flatMap { it.deliveries }.firstOrNull { it.id == route.deliveryId }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -287,10 +289,10 @@ internal fun OrchestrationMessageRoute(message: CodingMessage, service: Orchestr
 }
 
 @Composable
-internal fun OrchestrationMessageInputStatus(message: CodingMessage, sessionId: String, service: OrchestrationService?) {
+internal fun OrchestrationMessageInputStatus(message: CodingMessage, sessionId: String, service: OrchestrationService?, snapshot: CodingPlanningState) {
     if (message.inputStatus == null) return
-    val states = service?.states?.collectAsState()?.value
-    val input = states?.get(sessionId)?.inputs?.firstOrNull { it.id == message.id }
+    val states = snapshot.states
+    val input = states[sessionId]?.inputs?.firstOrNull { it.id == message.id }
     val status = input?.status ?: message.inputStatus ?: return
     Column {
         PaperText(status.inputLabel(), role = PaperTextRole.LABEL)

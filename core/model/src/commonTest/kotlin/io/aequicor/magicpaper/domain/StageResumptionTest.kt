@@ -15,6 +15,13 @@ class StageResumptionTest {
     ) = StageAttempt("a", "s", StageAssignment("profile", "model"), phase = phase,
         interrupted = interrupted, pendingTool = pendingTool, pendingToolExternal = pendingToolExternal)
 
+    @Test fun independentJournalUncertaintyOutranksEveryCheckpointPhase() {
+        AttemptPhase.entries.forEach { phase ->
+            assertIs<StageResumption.UnknownOutcome>(attempt(phase).resumption(journalUnsettled = true))
+            assertEquals(attempt(phase).resumption, attempt(phase).resumption(journalUnsettled = false))
+        }
+    }
+
     @Test fun anUnconfirmedExternalCommandOutranksEverything() {
         // Resuming would repeat an effect whose result nobody knows, so this must win over
         // an interruption and over a phase that would otherwise be runnable.

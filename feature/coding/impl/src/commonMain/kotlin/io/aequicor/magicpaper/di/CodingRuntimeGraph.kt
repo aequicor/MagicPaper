@@ -103,9 +103,12 @@ class CodingRuntimeGraph(
         io.aequicor.magicpaper.domain.RuntimePlanningGateway(runtime ?: NoopCodingRuntime),
         projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks, toolHost = toolHost,
         retryLimit = { settingsRepo.load().agentLimits.retries })
+    val planningJournalRecovery = PlanningJournalRecovery(planningStore, runtime ?: NoopCodingRuntime, codingProjects, organisms)
+    val planStrategyClassifier = PlanStrategyClassifier(planningStore, gateway, profileRepo, settingsRepo)
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, runtime ?: NoopCodingRuntime, codingProjects, profileRepo, settingsRepo,
-        LlmMilestoneVerifier(gateway, json, retryLimit = { settingsRepo.load().agentLimits.retries }), planningWorkspace, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees,
+        LlmMilestoneVerifier(gateway, json, retryLimit = { settingsRepo.load().agentLimits.retries }), planningWorkspace, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees, journalRecovery = planningJournalRecovery,
+        strategyClassifier = planStrategyClassifier,
     )
     val planningChat = codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway,
         toolHost = toolHost, organisms = organisms, sessionTree = sessionTree, draftRepository = draftRepository) }

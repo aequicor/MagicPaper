@@ -44,7 +44,7 @@ class MessageSchedulerRenderTest {
                             ScheduledMessages(p, {}, { forms.schedule(session, p, it) }, { _, _ -> })
                             HorizontalDivider()
                             Text("Сессия исполнителя", style = MaterialTheme.typography.titleMedium)
-                            OrchestrationMessageRoute(message, null) {}
+                            OrchestrationMessageRoute(message, io.aequicor.magicpaper.ui.CodingPlanningState()) {}
                             Text(message.text)
                         }
                     } }

@@ -482,6 +482,25 @@ class DefaultCodingService(
         return id !in codingJobs.value && id !in changingHistory && coding.readyForArchive(item)
     }
     private fun observeRuntime() {
+        // Screens consume one display state; these owners keep observing while no screen exists.
+        scope.launch { usage.state.collect { archive ->
+            _state.update { it.copy(coding = it.coding.copy(usageContexts = archive.contexts)) }
+        } }
+        requestPins?.let { pins -> scope.launch { pins.groups.collect { groups ->
+            _state.update { it.copy(coding = it.coding.copy(requestPins = groups)) }
+        } } }
+        mediaGeneration?.let { media -> scope.launch { media.state.collect { connections ->
+            _state.update { it.copy(coding = it.coding.copy(mediaConnections = connections)) }
+        } } }
+        scope.launch { _immunityActions.collect { actions ->
+            _state.update { it.copy(coding = it.coding.copy(immunityActions = actions)) }
+        } }
+        scope.launch { _quarantineRecovery.collect { recovery ->
+            _state.update { it.copy(coding = it.coding.copy(quarantineRecovery = recovery)) }
+        } }
+        scope.launch { _questionnaireDrafts.collect { drafts ->
+            _state.update { it.copy(coding = it.coding.copy(questionnaireDrafts = drafts)) }
+        } }
         // Status recency belongs to the durable session, not to the Compose lifetime.
         // Initial observation seeds legacy sessions without making them look newly active.
         codingProjects?.let { scope.launch {
@@ -534,8 +553,17 @@ class DefaultCodingService(
             }
         } }
         planningChat?.let { service -> scope.launch {
-            combine(service.states, service.store.plans, service.persistenceErrors, service.drafts) { _, _, _, _ -> Unit }.collect {
-                _state.update { state -> state.copy(coding = state.coding.copy(sessions = state.coding.sessions.map(::withPlanningState))) }
+            val planning = combine(service.states, service.store.plans, service.drafts, service.execution.live) { states, plans, drafts, live ->
+                CodingPlanningState(states, plans, drafts, live)
+            }
+            combine(planning, service.sessions, service.persistenceErrors, service.unsavedInputs, codingJobs) { display, sessions, errors, unsaved, jobs ->
+                PlanningSessionSnapshot(display.copy(sessions = sessions, persistenceErrors = errors, unsavedInputs = unsaved),
+                    jobs.filterValues { it.isActive }.keys)
+            }.collect { snapshot ->
+                _state.update { state ->
+                    val coding = projectCodingPlanning(state.coding, snapshot)
+                    if (coding === state.coding) state else state.copy(coding = coding)
+                }
                 refreshInteractions()
             }
         } }
@@ -579,18 +607,11 @@ class DefaultCodingService(
                             put(session.id, repo.messages(session.projectId, session.id))
                     }
                 }
-                val storedIds = stored.map { it.id }.toSet()
+                val snapshot = planningSessionSnapshot()
                 _state.update { state ->
-                    // Repository reads suspend. Merge into the latest draft rather than
-                    // overwriting output received while the history was being loaded.
-                    val current = state.coding.sessions.associateBy { it.session.id }
-                    // Keep sessions that were just created in-memory but haven't been
-                    // captured by the concurrent storage snapshot (addCodingSession race).
-                    val preserved = current.values.filter { it.session.id !in storedIds && it.session.projectId in storedProjectIds }
-                    val merged = stored.map { session ->
-                        val previous = current[session.id] ?: CodingSessionUi(session)
-                        withUnread(withPlanningState(previous.copy(session = session, messages = histories[session.id] ?: previous.messages)))
-                    } + preserved
+                    // Reads suspend; project onto the latest draft after they finish.
+                    val merged = mergeStoredCodingSessions(state.coding.sessions, stored, storedProjectIds, histories)
+                        .map { withUnread(snapshot?.let { inputs -> projectPlanningSession(it, inputs) } ?: it) }
                     // Skip state mutation when no session reference changed —
                     // prevents unnecessary Compose recomposition.
                     if (merged.size == state.coding.sessions.size &&
@@ -603,11 +624,14 @@ class DefaultCodingService(
         planningChat?.let { service -> scope.launch {
             @OptIn(kotlinx.coroutines.FlowPreview::class)
             combine(service.drafts, service.execution.live) { _, _ -> Unit }.sample(50).collect {
+                // Sampling delays delivery. Use current control state so an older streamed
+                // observation cannot restore a question, plan or draft after it was cleared.
+                val snapshot = planningSessionSnapshot() ?: return@collect
                 // Live activity updates statuses using saved history already in memory.
                 // Only service.changes reloads persisted messages.
                 _state.update { state ->
-                    val updated = state.coding.sessions.map { withUnread(withPlanningState(it)) }
-                    // withPlanningState returns the same reference when nothing changed.
+                    val updated = state.coding.sessions.map { withUnread(projectPlanningSession(it, snapshot)) }
+                    // The projection preserves references when nothing changed.
                     // Skip the copy entirely to avoid triggering Compose recomposition
                     // every 50 ms when no planning state actually changed.
                     if (updated.indices.all { i -> updated[i] === state.coding.sessions[i] }) state
@@ -622,32 +646,14 @@ class DefaultCodingService(
         return if (item.unread == unread) item else item.copy(unread = unread)
     }
 
-    private fun withPlanningState(item: CodingSessionUi): CodingSessionUi {
-        val service = planningChat ?: return item
-        val session = item.session
-        val activePlanId = service.states.value[session.id]?.activePlanId
-        val plan = service.store.plans.value.firstOrNull { it.id == session.planId }
-            ?: service.store.plans.value.firstOrNull { it.id == activePlanId && it.parentSessionId == session.id }
-            ?: service.store.plans.value.filter { it.parentSessionId == session.id }
-                .let { plans -> plans.firstOrNull { it.phase != io.aequicor.magicpaper.domain.ExecutionPhase.COMPLETE } ?: plans.lastOrNull() }
-        val workerRunning = plan?.milestones?.firstOrNull { it.id == session.stageId }?.let {
-            plan.isStageWorking(it)
-        } == true
-        val inputStatus = service.states.value[session.id]?.inputs?.lastOrNull()?.status
-        val failedRequest = inputStatus == io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED
-        val interruptedRequest = inputStatus in
-            listOf(io.aequicor.magicpaper.domain.OrchestrationInputStatus.CANCELLED, io.aequicor.magicpaper.domain.OrchestrationInputStatus.FAILED)
-        val awaitingUser = service.states.value[session.parentSessionId ?: session.id]?.openQuestions(plan?.id).orEmpty().any {
-            session.stageId == null || it.stageIds.isEmpty() || session.stageId in it.stageIds
-        }
-        val draft = service.drafts.value[session.id]
-            ?: if (plan != null || session.planningMode) idleCodingDraft else item.draft
-        val running = workerRunning || service.drafts.value[session.id]?.active == true || codingJobs.value[session.id]?.isActive == true
-        if (item.plan === plan && item.draft === draft && item.interruptedRequest == interruptedRequest && item.failedRequest == failedRequest &&
-            item.awaitingUser == awaitingUser && item.running == running) return item
-        return item.copy(plan = plan, interruptedRequest = interruptedRequest, failedRequest = failedRequest,
-            awaitingUser = awaitingUser, draft = draft, running = running)
+    private fun planningSessionSnapshot(): PlanningSessionSnapshot? = planningChat?.let { service ->
+        PlanningSessionSnapshot(CodingPlanningState(service.states.value, service.store.plans.value, service.drafts.value,
+            service.execution.live.value, service.sessions.value, service.persistenceErrors.value, service.unsavedInputs.value),
+            codingJobs.value.filterValues { it.isActive }.keys)
     }
+
+    private fun withPlanningState(item: CodingSessionUi): CodingSessionUi =
+        planningSessionSnapshot()?.let { projectPlanningSession(item, it) } ?: item
 
     private suspend fun loadCodingSessions(projects: List<CodingProject>): List<CodingSessionUi> {
         val repo = codingProjects ?: return emptyList()
@@ -759,6 +765,20 @@ class DefaultCodingService(
             catch (failure: Exception) {
                 AppLog.error("coding", "session.creation.preference.failed", failure, mapOf("projectId" to projectId))
                 _state.update { it.copy(notice = "Не удалось создать сессию. Повторите попытку.") }
+            }
+        }
+    }
+
+    override fun selectCodingSearchProvider(sessionId: String, provider: SearchProvider) {
+        val planning = planningChat ?: return
+        val session = state.value.coding.sessions.firstOrNull { it.session.id == sessionId }?.session ?: return
+        if (!session.planningMode || session.stageId != null || session.archived) return
+        scope.launch {
+            try { planning.configure(session, search = provider) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                AppLog.error("coding", "search-provider.save.failed", failure, mapOf("sessionId" to sessionId))
+                _state.update { it.copy(notice = "Не удалось сохранить источник поиска. Повторите выбор.") }
             }
         }
     }
@@ -962,7 +982,10 @@ class DefaultCodingService(
                     session = repo.sessions(project.id).firstOrNull { it.id == sessionId }
                     if (session != null) break
                 }
-                val outcome = service.reconcileQuarantine(checkNotNull(session) { "Сессия недоступна" }, confirmed)
+                val target = checkNotNull(session) { "Сессия недоступна" }
+                val journalOutcome = planningChat.execution.reconcileJournalQuarantine(target, confirmed)
+                val outcome = if (journalOutcome != QuarantineRecoveryOutcome.NO_QUARANTINE) journalOutcome
+                    else service.reconcileQuarantine(target, confirmed)
                 when (outcome) {
                     QuarantineRecoveryOutcome.NEEDS_CONFIRMATION -> {
                         AppLog.info("coding", "quarantine.unproven", mapOf("sessionId" to sessionId))
@@ -2052,6 +2075,8 @@ class DefaultCodingService(
         visible.value = false
         codingJobs.value = emptyMap()
         queuedComputerRequests.value = emptyMap()
+        _immunityActions.value = emptySet()
+        _quarantineRecovery.value = QuarantineRecoveryState()
         sessionTitles?.clear()
         interactionDecisions.clear()
         interactionSubmitting.clear()

@@ -180,7 +180,10 @@ class PlanningChatRenderTest {
                 ImageComposeScene(width, 1100) {
                     MagicPaperTheme { Surface(Modifier.fillMaxSize()) {
                         CodingChat(project, CodingSessionUi(session, messages = listOf(message)), false, true, { _, _ -> }, {}, { _, _ -> },
-                            planningService = service, onPlanning = {}, modelChip = { CodingModelChip(LlmProfile("model", "GPT-5.6-Terra", modelId = "gpt-5.6-terra"), false, {}); TextButton({}) { Text("AUTO ▾") } })
+                            planningState = io.aequicor.magicpaper.ui.CodingPlanningState(
+                                    states = service.states.value, plans = store.plans.value,
+                                    drafts = service.drafts.value, sessions = service.sessions.value),
+                                planningService = service, onPlanning = {}, modelChip = { CodingModelChip(LlmProfile("model", "GPT-5.6-Terra", modelId = "gpt-5.6-terra"), false, {}); TextButton({}) { Text("AUTO ▾") } })
                     } }
                 }.use { scene ->
                     repeat(5) { scene.render(it * 16_000_000L).close(); runCurrent() }

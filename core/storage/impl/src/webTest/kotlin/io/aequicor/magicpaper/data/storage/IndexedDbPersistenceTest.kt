@@ -1,9 +1,45 @@
 package io.aequicor.magicpaper.data.storage
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.async
 import kotlin.test.*
 
 class IndexedDbPersistenceTest {
+    @Test fun journalUpgradePreservesVersionTwoData() = runTest {
+        val database = "magicpaper-journal-upgrade-" + storageId()
+        seedLegacyJournalDatabase(database)
+        val backend = IndexedDbDurableByteStore(database)
+        val journal = DurableEventJournal(backend)
+        val empty = journal.snapshot("plan")
+        assertNotNull(journal.append(empty.revision, "created", 1))
+        assertEquals("v2-payload", backend.read(StorageArea.DRAFTS, "legacy")?.decodeToString())
+        assertEquals(listOf("created"), DurableEventJournal(IndexedDbDurableByteStore(database)).read("plan").map { it.operation })
+    }
+
+    @Test fun journalRevisionCoordinatesInstancesAndRejectsDeletedAndResetGenerations() = runTest {
+        val database = "magicpaper-journal-cas-" + storageId()
+        val backend = IndexedDbDurableByteStore(database)
+        val one = DurableEventJournal(backend)
+        val two = DurableEventJournal(IndexedDbDurableByteStore(database))
+        val initial = one.snapshot("plan").revision
+        val a = async { one.append(initial, "first", 1) }
+        val b = async { two.append(initial, "second", 1) }
+        assertEquals(1, listOf(a.await(), b.await()).count { it != null })
+        val saved = one.snapshot("plan")
+        assertEquals(1, saved.records.size)
+        assertEquals(listOf("plan"), two.streams())
+        assertTrue(two.drop(saved.revision))
+        assertNull(one.append(saved.revision, "late", 2))
+        assertTrue(one.read("plan").isEmpty())
+        val deleted = one.snapshot("plan").revision
+        persistenceStores(backend).clearOwnedData()
+        assertNull(two.append(deleted, "after-reset", 3))
+        val fresh = two.snapshot("plan").revision
+        assertNotEquals(deleted.resetEpoch, fresh.resetEpoch)
+        assertNotNull(two.append(fresh, "new-owner", 4))
+        assertEquals(listOf("new-owner"), DurableEventJournal(IndexedDbDurableByteStore(database)).read("plan").map { it.operation })
+    }
+
     @Test fun reopenedTabRestoresSeparatePresentationRecordsAndReleasesOnlyUnsharedState() = runTest {
         val database = "magicpaper-views-" + storageId()
         val backend = IndexedDbDurableByteStore(database)
@@ -60,3 +96,5 @@ class IndexedDbPersistenceTest {
         assertNull(persistenceStores(IndexedDbDurableByteStore(database), "first").navigation.load())
     }
 }
+
+internal expect suspend fun seedLegacyJournalDatabase(database: String)

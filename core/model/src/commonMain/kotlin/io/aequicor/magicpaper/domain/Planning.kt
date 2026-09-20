@@ -126,6 +126,7 @@ data class Plan(
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
     val schemaVersion: Int = 2,
+    /** Logical accepted-state revision; independent of the journal's global sequence number. */
     val revision: Long = 0,
     val tree: List<DecisionNode> = emptyList(),
     val dialogue: List<PlanningMessage> = emptyList(),

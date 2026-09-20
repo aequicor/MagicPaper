@@ -77,7 +77,7 @@ class DurableEventJournalTest {
         journal.drop("plan-1")
         assertTrue(journal.read("plan-1").isEmpty())
         assertContentEquals(listOf(2L), journal.read("plan-2").map { it.seq })
-        assertEquals(3L, journal.record("plan-1", "c").seq, "Номер выбывшей записи не выдаётся заново")
+        assertEquals(4L, journal.record("plan-1", "c").seq, "Удаление тоже резервирует номер для защиты от старых писателей")
     }
 
     @Test fun aResetClearsTheJournalWithTheStateItRecorded() = runTest {
@@ -116,7 +116,7 @@ class DurableEventJournalTest {
             assertContentEquals(listOf(1L, 3L), journal.read("plan-1").map { it.seq }, name)
             journal.drop("plan-2")
             assertTrue(journal.read("plan-2").isEmpty(), name)
-            assertEquals(4L, journal.record("plan-2", "d").seq, "$name: номер выбывшей записи не выдаётся заново")
+            assertEquals(5L, journal.record("plan-2", "d").seq, "$name: номер удаления не выдаётся записи")
             assertFailsWith<IllegalArgumentException>(name) { journal.record("", "e") }
         }
     }

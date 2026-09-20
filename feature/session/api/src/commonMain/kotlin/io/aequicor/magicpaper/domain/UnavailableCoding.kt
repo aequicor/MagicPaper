@@ -88,6 +88,7 @@ object UnavailableCodingService : CodingService {
     override fun refreshCodingEngines() = Unit
     override fun selectDefaultCodingEngine(engine: CodingEngine) = Unit
     override fun selectCodingModel(sessionId: String, selection: ModelSelection, forProject: Boolean) = Unit
+    override fun selectCodingSearchProvider(sessionId: String, provider: SearchProvider) = Unit
     override fun prepareCodingRuntime(engine: CodingEngine) = Unit
     override fun uninstallCodingRuntime(engine: CodingEngine) = Unit
     override fun addCodingProject() = Unit

@@ -901,7 +901,9 @@ class PlanningChatServiceTest {
             CodingMessage("a-turn-0", CodingRole.AGENT, "Какой формат?", createdAt = 20),
             CodingMessage("a-turn-1", CodingRole.AGENT, "PDF готов", createdAt = 40),
         ))
-        f.store.save(plan); runCurrent()
+        // Session preparation may have advanced the plan; install the legacy response on
+        // the current revision while preserving the preparation's other accepted fields.
+        f.store.update(plan.id) { it.copy(confirmedRevision = plan.confirmedRevision, milestones = plan.milestones) }; runCurrent()
         val history = f.projects.messages(project.id, workerId)
         assertEquals(listOf("a-prompt", "a-response", "answer", "a-response-1"), history.map { it.id })
         assertEquals(listOf("Какой формат?", "PDF готов"), history.filter { it.role == CodingRole.AGENT }.map { it.text })

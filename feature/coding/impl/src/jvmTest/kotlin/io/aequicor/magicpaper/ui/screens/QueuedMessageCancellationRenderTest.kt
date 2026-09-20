@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui.screens
 
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -59,7 +60,7 @@ class QueuedMessageCancellationRenderTest {
                 service.send(parent, "Подтверждаете запуск обновлённого плана с контрольной передачей результатов?\nда"); runCurrent()
                 // The durable inbox and its combined UI projection publish independently.
                 service.drafts.first { it[parent.id]?.active == true }
-                // Keep this snapshot unchanged: the receipt must observe the authoritative inbox itself.
+                // Keep history unchanged: the receipt must update from the new display snapshot.
                 val messages = projects.messages(project.id, parent.id).filter { it.inputStatus != null }
                 assertEquals(listOf(OrchestrationInputStatus.PROCESSING, OrchestrationInputStatus.QUEUED), messages.map { it.inputStatus })
                 ImageComposeScene(width, 900) {
@@ -67,7 +68,10 @@ class QueuedMessageCancellationRenderTest {
                         CodingChat(project, CodingSessionUi(parent, messages, draft = service.drafts.value.getValue(parent.id),
                             running = true, plan = store.plans.value.single()),
                             busy = true, engineReady = true, onSend = { _, _ -> }, onAbort = {},
-                            onPickAttachments = { _, _ -> }, planningService = service)
+                            onPickAttachments = { _, _ -> }, planningService = service,
+                            planningState = io.aequicor.magicpaper.ui.CodingPlanningState(
+                                states = service.states.collectAsState().value, plans = store.plans.value,
+                                drafts = service.drafts.value, sessions = service.sessions.value))
                     } }
                 }.use { scene ->
                     var frame = 0L

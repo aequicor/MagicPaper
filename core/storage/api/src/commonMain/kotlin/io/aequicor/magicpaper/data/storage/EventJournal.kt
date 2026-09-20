@@ -1,5 +1,14 @@
 package io.aequicor.magicpaper.data.storage
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/** An opaque concurrency token, bound to one stream and one application reset generation. */
+data class JournalRevision(val stream: String, val seq: Long, val resetEpoch: Long = 0)
+
+/** Records and their concurrency token are read under the same backend lock. */
+data class JournalSnapshot(val revision: JournalRevision, val records: List<JournalRecord>)
+
 /**
  * One recorded fact.
  *
@@ -41,25 +50,65 @@ interface EventJournal {
      */
     suspend fun append(stream: String, operation: String, at: Long, detail: String = ""): JournalRecord
 
+    /** Null means another writer changed/deleted the stream or reset the application; nothing was appended. */
+    suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String = ""): JournalRecord?
+
+    suspend fun snapshot(stream: String): JournalSnapshot
+
+    /** Nonempty streams, including records whose owner checkpoint was never saved. */
+    suspend fun streams(): List<String>
+
     /** Every record of one stream, in the order it was appended. */
     suspend fun read(stream: String): List<JournalRecord>
 
     /** Drops a stream whose owner is gone. The sequence does not rewind. */
     suspend fun drop(stream: String)
+
+    /** Delete only the observed generation. A dropped stream retains an opaque revision fence. */
+    suspend fun drop(expected: JournalRevision): Boolean
 }
 
 /** Test/preview journal; production factories never substitute it for an unavailable backend. */
 class InMemoryEventJournal : EventJournal {
+    private val mutex = Mutex()
     private val records = mutableListOf<JournalRecord>()
+    private val dropped = mutableMapOf<String, Long>()
     private var seq = 0L
 
-    override suspend fun append(stream: String, operation: String, at: Long, detail: String): JournalRecord {
+    override suspend fun append(stream: String, operation: String, at: Long, detail: String): JournalRecord = mutex.withLock {
+        appendLocked(stream, operation, at, detail)
+    }
+
+    override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? = mutex.withLock {
+        if (revision(expected.stream) != expected) null else appendLocked(expected.stream, operation, at, detail)
+    }
+
+    private fun appendLocked(stream: String, operation: String, at: Long, detail: String): JournalRecord {
         require(stream.isNotBlank()) { "Записи журнала принадлежат потоку" }
         seq += 1
         return JournalRecord(seq, at, stream, operation, detail).also { records += it }
     }
 
-    override suspend fun read(stream: String): List<JournalRecord> = records.filter { it.stream == stream }
+    private fun revision(stream: String) = JournalRevision(stream,
+        maxOf(records.lastOrNull { it.stream == stream }?.seq ?: 0, dropped[stream] ?: 0))
 
-    override suspend fun drop(stream: String) { records.removeAll { it.stream == stream } }
+    override suspend fun snapshot(stream: String): JournalSnapshot = mutex.withLock {
+        JournalSnapshot(revision(stream), records.filter { it.stream == stream })
+    }
+
+    override suspend fun streams(): List<String> = mutex.withLock { records.map { it.stream }.distinct().sorted() }
+
+    override suspend fun read(stream: String): List<JournalRecord> = snapshot(stream).records
+
+    override suspend fun drop(stream: String) { mutex.withLock { dropLocked(stream) } }
+
+    override suspend fun drop(expected: JournalRevision): Boolean = mutex.withLock {
+        if (revision(expected.stream) != expected) false else { dropLocked(expected.stream); true }
+    }
+
+    private fun dropLocked(stream: String) {
+        require(stream.isNotBlank())
+        dropped[stream] = ++seq
+        records.removeAll { it.stream == stream }
+    }
 }

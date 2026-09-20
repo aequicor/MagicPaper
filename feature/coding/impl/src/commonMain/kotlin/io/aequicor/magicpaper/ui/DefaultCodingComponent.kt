@@ -12,6 +12,9 @@ import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.ui.screens.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 
 class DefaultCodingComponent(
     context: ComponentContext,
@@ -24,35 +27,32 @@ class DefaultCodingComponent(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val picker = AttachmentSelection(filePicker, scope)
     private var activationJob: Job? = null
-    private val activated = MutableStateFlow(false)
-    private val activationError = MutableStateFlow<String?>(null)
+    private data class Activation(val ready: Boolean = false, val error: String? = null)
+    private data class Display(val content: CodingState, val activation: Activation, val attachmentError: String?)
+    private val activation = MutableStateFlow(Activation())
+    private val display = combine(service.state, activation, picker.error, ::Display)
+        .stateIn(scope, SharingStarted.Eagerly, Display(service.state.value, activation.value, picker.error.value))
     val planningChat get() = service.planningChat
-    val requestPins get() = service.requestPins
-    val usage get() = service.usage
-    val immunityActions get() = service.immunityActions
-    val quarantineRecovery get() = service.quarantineRecovery
-    val questionnaireDrafts get() = service.questionnaireDrafts
     fun composerDraft(id: String) = service.composerDraft(id)
     init {
         context.lifecycle.doOnResume {
             activationJob = scope.launch {
-                activated.value = false
-                activationError.value = null
+                activation.value = Activation()
                 try {
                     service.activate(input.projectId, input.sessionId)
-                    activated.value = true
+                    activation.value = Activation(ready = true)
                 } catch (cancelled: CancellationException) { throw cancelled }
-                catch (failure: Exception) { AppLog.error("coding-screen", "open.failed", failure); activationError.value = "Не удалось открыть сессию." }
+                catch (failure: Exception) { AppLog.error("coding-screen", "open.failed", failure); activation.value = Activation(error = "Не удалось открыть сессию.") }
             }
         }
-        context.lifecycle.doOnPause { activationJob?.cancel(); activated.value = false; service.setVisible(false) }
+        context.lifecycle.doOnPause { activationJob?.cancel(); activation.value = Activation(); service.setVisible(false) }
         context.lifecycle.doOnDestroy { scope.cancel() }
     }
     fun pickAttachments(count: Int, result: (List<Attachment>) -> Unit) = picker.pickAttachments(count, result)
     fun pasteAttachments(count: Int, result: (List<Attachment>) -> Unit) = picker.pasteAttachments(count, result)
     fun openModelsSettings() = onOutput(CodingOutput.Models)
     override fun onAction(action: CodingAction) {
-        if (!activated.value) return
+        if (!activation.value.ready) return
         val id = input.sessionId ?: state.value.coding.currentSessionId
         if (state.value.coding.sessions.none { it.session.id == id && it.session.projectId == input.projectId }) return
         when(action) {
@@ -61,11 +61,11 @@ class DefaultCodingComponent(
         }
     }
     @Composable override fun Content() {
-        val current by state.collectAsState()
-        val ready by activated.collectAsState()
-        val failure by activationError.collectAsState()
-        val error by picker.error.collectAsState()
-        error?.let { PaperText(it) }
+        val screen by display.collectAsState()
+        val current = screen.content
+        val ready = screen.activation.ready
+        val failure = screen.activation.error
+        screen.attachmentError?.let { PaperText(it) }
         when {
             failure != null -> PaperText(requireNotNull(failure))
             !ready -> PaperText("Загрузка…")

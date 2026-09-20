@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.data.planning.PlanningStore
+import io.aequicor.magicpaper.data.planning.withJournaledIntent
+import io.aequicor.magicpaper.domain.planning.*
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +29,8 @@ class PlanningExecutionService(
     private val outputClock: () -> Long = Id::now,
     private val acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
     private val taskWorktrees: TaskWorktreeService? = null,
+    private val journalRecovery: PlanningJournalRecovery = PlanningJournalRecovery(store, runtime, projects),
+    private val strategyClassifier: PlanStrategyClassifier? = null,
 ) {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     val supported: Boolean get() = runtime.supported
@@ -95,6 +99,7 @@ class PlanningExecutionService(
         require(runtime.supported) { "Выполнение доступно в Desktop" }
         val plan = store.planFor(projectId) ?: error("План не найден")
         check(!plan.stopping) { "Дождитесь подтверждения остановки" }
+        if (rejectUnsettledJournal(plan)) return
         if (plan.phase == ExecutionPhase.COMPLETE) return
         if (plan.intent == ExecutionIntent.RUN) { launchProject(plan.id); return }
         val graph = DecisionCompiler.compile(plan)
@@ -111,8 +116,9 @@ class PlanningExecutionService(
         store.update(projectId) { it.copy(intent = ExecutionIntent.PAUSE) }
     }
     suspend fun stop(projectId: String) {
-        val plan = store.update(projectId) { it.copy(intent = ExecutionIntent.STOP, stopping = true,
-            journal = it.journal + PlanJournalEntry(Id.new(), Id.now(), operation = PlanJournalOperation.STOP_INTENT)) }
+        val plan = store.journal(projectId, PlanJournalOperation.STOP_INTENT) {
+            it.copy(intent = ExecutionIntent.STOP, stopping = true)
+        }
         // A broken transport must not prevent coroutine cancellation of the rest of the subtree.
         val signalErrors = runtimeSessionIds(plan).mapNotNull { sessionId ->
             try { runtime.abort(sessionId); null } catch (e: Exception) { safeText(e.message.orEmpty()) }
@@ -142,35 +148,11 @@ class PlanningExecutionService(
         return store.planFor(planId)?.stopping != true
     }
     suspend fun edit(projectId: String, revision: Long, change: (Plan) -> Plan) = store.update(projectId, revision) { old ->
-        validateRevision(old, change(old))
+        validatePlanRevision(old, change(old))
     }
     /** Rebase an LLM proposal over telemetry, never over intervening user edits or started work. */
     suspend fun applyProposal(base: Plan, proposal: Plan) = store.update(base.id) { latest ->
-        require(latest.tree == base.tree && latest.goal == base.goal && latest.priorities == base.priorities && latest.dialogue == base.dialogue) {
-            "Дерево изменилось во время ответа оркестратора; повторите запрос"
-        }
-        fun spec(m: Milestone) = m.copy(status = MilestoneStatus.PENDING, attempts = emptyList(), report = "", checkNote = "", updatedAt = 0)
-        require(latest.milestones.map(::spec) == base.milestones.map(::spec)) { "Этапы изменились во время ответа оркестратора" }
-        val rebased = latest.copy(sharedWorkspace = latest.worktreeEnabled?.not() ?: if (latest.confirmedRevision == null) proposal.sharedWorkspace else latest.sharedWorkspace, tree = proposal.tree, dialogue = proposal.dialogue, wizardStep = proposal.wizardStep, milestones = proposal.milestones.map { proposed ->
-            latest.milestones.firstOrNull { it.id == proposed.id }?.takeIf { it.attempts.isNotEmpty() || it.status != MilestoneStatus.PENDING }?.let { current ->
-                require(spec(current) == spec(proposed)) { "Этап «${current.title}» начался во время планирования" }
-                current
-            } ?: proposed
-        })
-        validateRevision(latest, rebased)
-    }
-    private fun validateRevision(old: Plan, updated: Plan): Plan {
-        DecisionCompiler.validateEdit(old, updated)
-        val previous = old.finalAttempt ?: return updated
-        if (updated.tree == old.tree && updated.milestones == old.milestones) return updated
-        require(old.canExtendAfterFinalVerification) {
-            "Итоговая проверка уже начата. Дождитесь её завершения перед изменением плана."
-        }
-        // Merely changing a label or an inactive branch cannot dismiss a failed check.
-        if (updated.selectedMilestones.all { it.completed }) return updated
-        return updated.copy(finalAttempt = null, finalAttemptHistory = old.finalAttemptHistory + previous,
-            issue = null, phase = ExecutionPhase.RECOVERING,
-            status = if (updated.intent == ExecutionIntent.RUN) PlanStatus.RUNNING else PlanStatus.STOPPED)
+        reduce(latest, PlanRevisionEvent.ProposalApplied(base, proposal))
     }
     /** Explicit retry does not erase counters; the caller fixes configuration or acknowledges uncertainty. */
     suspend fun retry(projectId: String, expectedCheckpoint: Plan? = null, expectedBlockerIds: Set<String>? = null) {
@@ -181,9 +163,10 @@ class PlanningExecutionService(
                 "Причина остановки изменилась; ответьте на актуальный запрос восстановления"
             }
         }
+        check(!before.stopping) { "Дождитесь подтверждения остановки" }
+        if (rejectUnsettledJournal(before)) return
         if (before.phase == ExecutionPhase.COMPLETE) return
         check(before.blockingIssues(emptyList()).none { it.issue.retryBlocked }) { "Повтор запуска не устраняет причину. Обсудите изменение плана с оркестратором." }
-        check(!before.stopping) { "Дождитесь подтверждения остановки" }
         val authorizations = before.selectedMilestones.mapNotNull { stage ->
             stage.attempts.lastOrNull()?.takeIf { it.phase != AttemptPhase.COMPLETE &&
                 (it.error != null || it.interrupted || it.phase == AttemptPhase.FAILED ||
@@ -267,6 +250,13 @@ class PlanningExecutionService(
         if (closing || jobs[id]?.isCompleted == false) return@withLock
         var plan = store.planFor(id)
         check(plan?.stopping != true) { "Дождитесь подтверждения остановки" }
+        if (plan != null) {
+            val pending = store.unsettled(plan.id)
+            if (pending.isNotEmpty()) {
+                quarantineJournal(plan, pending)
+                return@withLock
+            }
+        }
         if (plan != null && plan.planningRulesSnapshot == null) {
             val snapshot = if (plan.runId.isBlank()) settings.load().planningRules.snapshot()
                 else PlanningRulesSettings().snapshot().copy(source = PlanningRulesSource.LEGACY)
@@ -274,8 +264,58 @@ class PlanningExecutionService(
         }
         jobs[id] = scope.launch(UsageOwner(UsageScope(plan?.parentSessionId?.let { "coding:$it" }, projectId = plan?.projectId, planId = id), updatesContext = false)) { executeProject(id) }
     }
+    private suspend fun rejectUnsettledJournal(plan: Plan): Boolean = jobsLock.withLock {
+        // A running effect is expected to have an open intent until its scope exits.
+        if (jobs[plan.id]?.isCompleted == false) return@withLock false
+        val pending = store.unsettled(plan.id)
+        if (pending.isEmpty()) false else {
+            quarantineJournal(plan, pending)
+            true
+        }
+    }
+
+    /** Discover even completed checkpoints before session restoration can admit new work. */
+    suspend fun recoverJournalQuarantines() = jobsLock.withLock {
+        store.plans().forEach { plan ->
+            if (jobs[plan.id]?.isCompleted != false) {
+                val pending = store.unsettled(plan.id)
+                if (pending.isNotEmpty()) quarantineJournal(plan, pending)
+            }
+        }
+    }
+
+    private suspend fun quarantineJournal(plan: Plan, pending: List<io.aequicor.magicpaper.data.storage.JournalRecord>) {
+        journalRecovery.quarantine(plan, pending)
+        // A journal warning must not erase an independent acceptance/configuration blocker.
+        if (plan.issue?.requiresUser == true) return
+        val issue = PlanningJournalRecovery.uncertainty
+        if (plan.issue != issue) store.update(plan.id) {
+            it.copy(issue = issue, phase = if (it.phase == ExecutionPhase.COMPLETE) it.phase else ExecutionPhase.WAITING,
+                status = PlanStatus.FAILED)
+        }
+    }
+
+    /** Host-only recovery; inspecting and confirming outcomes never launches execution. */
+    suspend fun reconcileJournalQuarantine(session: CodingSession, confirmed: Boolean): QuarantineRecoveryOutcome = jobsLock.withLock {
+        val affected = store.plans().filter { it.projectId == session.projectId &&
+            (it.parentSessionId == session.id || it.id == session.planId || it.milestones.any { stage -> stage.attempts.any { attempt -> attempt.sessionId == session.id } }) }
+        check(affected.none { jobs[it.id]?.isCompleted == false }) { "Дождитесь остановки выполнения перед сверкой" }
+        journalRecovery.reconcile(session, confirmed)
+    }
+
     private suspend fun executeProject(id: String) {
+        if (store.failure.value != null) return
+        try {
+            if (strategyClassifier?.beforeRun(id) == false) return
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            errorState.value = "Не удалось проверить возможность повтора. Повторите действие после проверки доступа к данным."
+            if (store.failure.value == null) io.aequicor.magicpaper.logging.AppLog.error("planning.strategy", "admission.failed",
+                fields = mapOf("planId" to id, "causeType" to (failure::class.simpleName ?: "Exception")))
+            return
+        }
         val initialTaskPlan = store.planFor(id) ?: return
+        if (initialTaskPlan.intent != ExecutionIntent.RUN || initialTaskPlan.stopping) return
         val originalProject = projects?.all()?.firstOrNull { it.id == initialTaskPlan.projectId }
         if (initialTaskPlan.worktreeEnabled == true && originalProject != null && initialTaskPlan.workspace == null) {
             val parent = projects?.sessions(originalProject.id)?.firstOrNull { it.id == initialTaskPlan.parentSessionId }
@@ -338,11 +378,13 @@ class PlanningExecutionService(
             if (plan.issue != null) plan = store.update(id) { it.copy(issue = null, phase = ExecutionPhase.RECOVERING) }
             if (plan.runId.isBlank()) plan = store.update(id) { it.copy(runId = Id.new()) }
             if (plan.workspace == null) {
-                journal(id, PlanJournalOperation.PREPARE_INTENT)
-                val workspace = workspaces.prepare(project, plan.runId)
-                plan = store.update(id) { it.copy(workspace = workspace, issue = null,
-                    journal = if (workspace.git) it.journal else it.journal + PlanJournalEntry(Id.new(), Id.now(),
-                        operation = PlanJournalOperation.GIT_UNAVAILABLE, detail = "Git недоступен: изменения выполняются без отдельных веток и коммитов. Репозиторий не создан.")) }
+                store.withJournaledIntent(id, PlanJournalOperation.PREPARE_INTENT) {
+                    val workspace = workspaces.prepare(project, plan.runId)
+                    plan = store.update(id) { it.copy(workspace = workspace, issue = null,
+                        journal = if (workspace.git) it.journal else it.journal + PlanJournalEntry(Id.new(), Id.now(),
+                            operation = PlanJournalOperation.GIT_UNAVAILABLE, detail = "Git недоступен: изменения выполняются без отдельных веток и коммитов. Репозиторий не создан.")) }
+                    complete()
+                }
             }
             chatHooks?.prepareSessions(plan)
             val workspace = plan.workspace!!
@@ -422,24 +464,26 @@ class PlanningExecutionService(
                     return
                 }
                 store.update(id) { it.copy(phase = ExecutionPhase.APPLYING) }
-                journal(id, PlanJournalOperation.APPLY_INTENT)
-                val task = taskWorktrees?.session(project.id, plan.parentSessionId)?.taskWorktree?.takeIf { initial.worktreeEnabled == true && it.taskId == plan.runId }
-                val delivering = task?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT, TaskWorktreePhase.DELIVERING, TaskWorktreePhase.COMPLETE)
-                val applied = if (delivering) workspace.copy(applied = true) else applyResult(id, project, workspace, judge) ?: return
-                if (task != null) {
-                    taskWorktrees!!.complete(checkNotNull(originalProject), plan.parentSessionId, plan.runId,
-                        planAccepted = true, executionLeaseHeld = true,
-                        verifyMerged = { merged -> verifyTaskDelivery(id, merged, judge) },
-                        repair = { conflict -> repairTaskDelivery(id, project, conflict, judge) })
+                store.withJournaledIntent(id, PlanJournalOperation.APPLY_INTENT) {
+                    val task = taskWorktrees?.session(project.id, plan.parentSessionId)?.taskWorktree?.takeIf { initial.worktreeEnabled == true && it.taskId == plan.runId }
+                    val delivering = task?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT, TaskWorktreePhase.DELIVERING, TaskWorktreePhase.COMPLETE)
+                    val applied = if (delivering) workspace.copy(applied = true) else applyResult(id, project, workspace, judge) ?: return
+                    if (task != null) {
+                        taskWorktrees!!.complete(checkNotNull(originalProject), plan.parentSessionId, plan.runId,
+                            planAccepted = true, executionLeaseHeld = true,
+                            verifyMerged = { merged -> verifyTaskDelivery(id, merged, judge) },
+                            repair = { conflict -> repairTaskDelivery(id, project, conflict, judge) })
+                    }
+                    if (!acceptanceStillValid(id, workspace.integrationPath)) return
+                    store.update(id) {
+                        require(it.intent == ExecutionIntent.RUN && it.issue == null &&
+                            it.finalAttempt?.acceptanceRecord?.permitsProgress == true &&
+                            it.finalAttempt?.acceptanceRecord?.criteria == it.acceptanceCriteria()) { "Приёмка или намерение запуска изменились" }
+                        it.copy(workspace = applied, phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE, issue = null)
+                    }
+                    journal(id, PlanJournalOperation.APPLY_COMPLETE)
+                    complete()
                 }
-                if (!acceptanceStillValid(id, workspace.integrationPath)) return
-                store.update(id) {
-                    require(it.intent == ExecutionIntent.RUN && it.issue == null &&
-                        it.finalAttempt?.acceptanceRecord?.permitsProgress == true &&
-                        it.finalAttempt?.acceptanceRecord?.criteria == it.acceptanceCriteria()) { "Приёмка или намерение запуска изменились" }
-                    it.copy(workspace = applied, phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE, issue = null)
-                }
-                journal(id, PlanJournalOperation.APPLY_COMPLETE)
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -484,10 +528,8 @@ class PlanningExecutionService(
         val plan = store.planFor(id)?.takeIf { it.intent == ExecutionIntent.STOP && it.stopping } ?: return
         try {
             runtimeSessionIds(plan).forEach { runtime.reconcile(it) }
-            val stopped = store.update(id) { latest ->
-                if (latest.intent != ExecutionIntent.STOP || !latest.stopping) latest else latest.copy(
-                    stopping = false, status = PlanStatus.STOPPED,
-                    journal = latest.journal + PlanJournalEntry(Id.new(), Id.now(), operation = PlanJournalOperation.STOP_CONFIRMED))
+            val stopped = store.journal(id, PlanJournalOperation.STOP_CONFIRMED) { latest ->
+                latest.copy(stopping = false, status = PlanStatus.STOPPED)
             }
             if (stopped.intent == ExecutionIntent.STOP && !stopped.stopping) stoppedCheckpoint(stopped)
         } catch (e: Exception) {
@@ -561,31 +603,34 @@ class PlanningExecutionService(
                 }
                 if (attempt.mergeProgress.needsTurn) {
                     attempt = attempt.merging(MergeProgress.Running); persist()
-                    journal(id, PlanJournalOperation.DELIVERY_CONFLICT_INTENT, attemptId = attempt.id)
-                    var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
-                    try {
-                        val activityHistory = attempt.steps.filter { it.isVisibleActivity }
-                        val activityRecorder = CodingRunRecorder()
-                        monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
-                            planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
-                            pendingRun = CodingRunCheckpoint("${attempt.id}-delivery", "")),
-                            "Разреши Git merge-конфликт, сохрани пользовательские изменения и результат плана. Цель: ${plan.goal}. Если изменения уже объединены, продолжи проверки. Добавь разрешённые файлы в индекс, выполни подходящие тесты и сообщи фактические результаты. Не изменяй исходную папку вне этой рабочей копии. Предыдущий отчёт: ${attempt.mergeReport}",
-                            (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
-                            activityRecorder.apply(event)
-                            attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                            attempt = attempt.after(event, StageRunTrack.MERGE)
-                            result = result.after(event)
-                            val signal = event.signal
-                            if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
-                            if (signal.showsProgress || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
+                    store.withJournaledIntent(id, PlanJournalOperation.DELIVERY_CONFLICT_INTENT, attemptId = attempt.id) {
+                        var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
+                        try {
+                            val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                            val activityRecorder = CodingRunRecorder()
+                            monitoredRun(project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                                planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
+                                pendingRun = CodingRunCheckpoint("${attempt.id}-delivery", "")),
+                                "Разреши Git merge-конфликт, сохрани пользовательские изменения и результат плана. Цель: ${plan.goal}. Если изменения уже объединены, продолжи проверки. Добавь разрешённые файлы в индекс, выполни подходящие тесты и сообщи фактические результаты. Не изменяй исходную папку вне этой рабочей копии. Предыдущий отчёт: ${attempt.mergeReport}",
+                                (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
+                                activityRecorder.apply(event)
+                                attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
+                                attempt = attempt.after(event, StageRunTrack.MERGE)
+                                result = result.after(event)
+                                val signal = event.signal
+                                if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                                if (signal.showsProgress || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
+                            }
+                        } catch (e: CancellationException) { runtime.abort(sessionId); throw e }
+                        if (result.incomplete(attempt.report(StageRunTrack.MERGE))) {
+                            if (result.ended) reject()
+                            attempt = withRetry(attempt, classify(result.failure ?: "Перенос прерван", uncertain = !result.ended))
+                            persist(); block(id, attempt.error!!); return null
                         }
-                    } catch (e: CancellationException) { runtime.abort(sessionId); throw e }
-                    if (result.incomplete(attempt.report(StageRunTrack.MERGE))) {
-                        attempt = withRetry(attempt, classify(result.failure ?: "Перенос прерван", uncertain = !result.ended))
-                        persist(); block(id, attempt.error!!); return null
+                        attempt = attempt.copy(mergeVerificationSnapshot = workspaces.verificationSnapshot(conflict.workingPath))
+                            .merging(MergeProgress.AwaitingVerdict); persist()
+                        complete()
                     }
-                    attempt = attempt.copy(mergeVerificationSnapshot = workspaces.verificationSnapshot(conflict.workingPath))
-                        .merging(MergeProgress.AwaitingVerdict); persist()
                 }
                 val (check, verdict) = reviewAcceptance(plan, Milestone("delivery", "Проверка переноса", description = plan.goal),
                     attempt.copy(verificationSnapshot = attempt.mergeVerificationSnapshot), conflict.workingPath, plan.acceptanceCriteria(), attempt.mergeReport, judge)
@@ -632,32 +677,35 @@ class PlanningExecutionService(
                 return false
             }
             attempt = attempt.copy(phase = AttemptPhase.EXECUTING); persist()
-            journal(id, PlanJournalOperation.FINAL_VERIFICATION_INTENT, attemptId = attempt.id)
-            var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
-            val criteria = pendingCriteria.joinToString("\n") { it.description }
-            try {
-                val activityHistory = attempt.steps.filter { it.isVisibleActivity }
-                val activityRecorder = CodingRunRecorder()
-                monitoredRun(project.copy(path = workspace.integrationPath),
-                    CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
-                        planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
-                        pendingRun = CodingRunCheckpoint("${attempt.id}-verification", "")),
-                    "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. ${verificationGuidance()} Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
-                    attempt.assignment.executionProfile(profiles.load())).collect { event ->
-                    activityRecorder.apply(event)
-                    attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                    attempt = attempt.after(event, StageRunTrack.WORK)
-                    result = result.after(event)
-                    val signal = event.signal
-                    if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
-                    if (signal.showsProgress || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
+            store.withJournaledIntent(id, PlanJournalOperation.FINAL_VERIFICATION_INTENT, attemptId = attempt.id) {
+                var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
+                val criteria = pendingCriteria.joinToString("\n") { it.description }
+                try {
+                    val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                    val activityRecorder = CodingRunRecorder()
+                    monitoredRun(project.copy(path = workspace.integrationPath),
+                        CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
+                            planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
+                            pendingRun = CodingRunCheckpoint("${attempt.id}-verification", "")),
+                        "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. ${verificationGuidance()} Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
+                        attempt.assignment.executionProfile(profiles.load())).collect { event ->
+                        activityRecorder.apply(event)
+                        attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
+                        attempt = attempt.after(event, StageRunTrack.WORK)
+                        result = result.after(event)
+                        val signal = event.signal
+                        if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                        if (signal.showsProgress || Id.now() - lastSave >= 1000) { persist(); lastSave = Id.now() }
+                    }
+                } catch (e: CancellationException) { runtime.abort(attempt.sessionId); throw e }
+                if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
+                    if (result.ended) reject()
+                    attempt = withRetry(attempt, classify(result.failure ?: "Итоговая проверка прервана", uncertain = !result.ended))
+                    persist(); block(id, attempt.error!!); return false
                 }
-            } catch (e: CancellationException) { runtime.abort(attempt.sessionId); throw e }
-            if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
-                attempt = withRetry(attempt, classify(result.failure ?: "Итоговая проверка прервана", uncertain = !result.ended))
-                persist(); block(id, attempt.error!!); return false
+                attempt = attempt.copy(phase = AttemptPhase.VERIFYING); persist()
+                complete()
             }
-            attempt = attempt.copy(phase = AttemptPhase.VERIFYING); persist()
         }
         workspaces.validateIntegration(workspace)
         plan = store.planFor(id)!!
@@ -741,313 +789,258 @@ class PlanningExecutionService(
             if (!canRunStage(id, stageId)) return
             var stage = store.planFor(id)!!.milestones.first { it.id == stageId }
             var attempt = stage.attempts.lastOrNull() ?: StageAttempt(Id.new(), if (store.planFor(id)!!.parentSessionId.isNotBlank()) "plan-$id-stage-$stageId" else Id.new(), assignment(stage, profiles.load()), startedAt = Id.now())
-            if (attempt.engine == null) {
+            val preparation = reduce(attempt.toState(), StageEvent.InspectPreparation)
+            if (preparation.has(StageEffect.ResolveEngine)) {
                 val saved = projects?.sessions(project.id)?.firstOrNull { it.id == attempt.sessionId }
-                attempt = attempt.copy(engine = saved?.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())))
+                val engine = saved?.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load()))
+                attempt = reduce(attempt.toState(), StageEvent.EngineResolved(engine)).state.applyTo(attempt)
                 saveAttempt(id, stageId, attempt)
             }
             currentAttempt = attempt
             if (stage.attempts.isEmpty()) saveAttempt(id, stageId, attempt)
-            if (attempt.path.isBlank()) {
-                journal(id, PlanJournalOperation.STAGE_WORKSPACE_INTENT, stageId, attempt.id)
-                attempt = integration.withLock { workspaces.stage(project, workspace, attempt) }
-                saveAttempt(id, stageId, attempt)
+            if (preparation.has(StageEffect.PrepareWorkspace)) {
+                store.withJournaledIntent(id, PlanJournalOperation.STAGE_WORKSPACE_INTENT, stageId, attempt.id) {
+                    val prepared = integration.withLock { workspaces.stage(project, workspace, attempt) }
+                    attempt = reduce(attempt.toState(), StageEvent.WorkspacePrepared(prepared)).state.applyTo(attempt)
+                    saveAttempt(id, stageId, attempt)
+                    complete()
+                }
             }
             currentAttempt = attempt
             workspaces.validateExecutionPath(project, attempt.path)
             workspaces.reconcile(attempt)
             runtime.reconcile(attempt.sessionId)
             runtime.reconcile("${attempt.sessionId}-merge")
-            when (val resumption = attempt.resumption) {
-                is StageResumption.UnknownOutcome -> {
-                    block(id, PlanningIssue(IssueKind.UNCERTAIN, "Нет подтверждения результата команды: ${resumption.tool}. Проверьте её последствия перед повтором.", requiresUser = true))
-                    return
-                }
-                is StageResumption.Interrupted -> {
-                    attempt = attempt.copy(interrupted = false)
-                    saveAttempt(id, stageId, attempt)
-                    currentAttempt = attempt
-                }
-                is StageResumption.Runnable, is StageResumption.Settled -> Unit
+            val pending = store.unsettled(id).any { record ->
+                PlanJournalSubject.decode(record.detail).let { it.stage == stageId && it.attempt == attempt.id }
             }
-            // The loop reads the phase alone: an external command that becomes unconfirmed mid-run
-            // is handled where it is observed, not by silently dropping out of the turn here.
-            while (attempt.mayRun) {
+            val resumption = reduce(attempt.toState(), StageEvent.Reconciled(pending))
+            attempt = resumption.state.applyTo(attempt)
+            if (resumption.has(StageEffect.Persist)) saveAttempt(id, stageId, attempt)
+            currentAttempt = attempt
+            resumption.issue?.let { block(id, it) }
+            if (resumption.has(StageEffect.Yield)) return
+            while (reduce(attempt.toState(), StageEvent.Inspect).has(StageEffect.RunWorker)) {
                 if (!canRunStage(id, stageId)) return
                 val plan = store.planFor(id)!!
-                val savedReview = attempt.acceptanceRecord
-                if (attempt.repairRetries > 0 && savedReview != null && !savedReview.permitsProgress &&
-                    savedReview.automaticRepairProblem(null) != null) {
-                    val issue = PlanningIssue(IssueKind.VERIFICATION,
-                        savedReview.automaticRepairProblem(null) + "\n\n" + savedReview.summary(), requiresUser = true, retryBlocked = true)
-                    saveAttempt(id, stageId, attempt.copy(error = issue)); block(id, issue); return
-                }
-                // A completed runtime turn may have been checkpointed before its coordinator finished.
-                // Resume the durable decision, never re-run its file operations just to redeliver a reply.
-                val recorded = plan.coordination.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
-                if ((recorded != null || attempt.coordinationOwed) && chatHooks != null) {
-                    attempt = attempt.handedToPlanner()
+                val recorded = plan.coordination.any { it.id == "${attempt.id}-turn-${attempt.turnIndex}" }
+                val turn = reduce(attempt.toState(), StageEvent.TurnRequested(chatHooks != null, recorded))
+                attempt = turn.state.applyTo(attempt)
+                if (turn.has(StageEffect.Persist)) saveAttempt(id, stageId, attempt)
+                turn.issue?.let { block(id, it) }
+                if (turn.has(StageEffect.Yield)) return
+                if (turn.has(StageEffect.Coordinate)) {
+                    val decision = chatHooks!!.finished(plan, stage, attempt)
+                    val resumed = reduce(attempt.toState(), StageEvent.PlannerDecided(decision, restored = true))
+                    attempt = resumed.state.applyTo(attempt)
                     saveAttempt(id, stageId, attempt)
-                    val resumed = chatHooks!!.finished(plan, stage, attempt)
-                    attempt = attempt.awaiting(StageWaiting.of(resumed.action, resumed.requestId))
-                        .copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
-                            phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
-                            error = null)
-                    saveAttempt(id, stageId, attempt)
-                    if (resumed.action in setOf(StageTurnAction.WAIT, StageTurnAction.WAIT_EVENT)) {
+                    if (resumed.has(StageEffect.AskUser) || resumed.has(StageEffect.WaitForEvent)) {
                         if (!hasQueuedReply(id, stageId)) return
-                        attempt = attempt.replied()
+                        attempt = reduce(attempt.toState(), StageEvent.UserAnswered).state.applyTo(attempt)
                         saveAttempt(id, stageId, attempt)
                     }
-                    if (resumed.action == StageTurnAction.VERIFY) break
+                    if (resumed.has(StageEffect.RunVerifier)) break
                     continue
                 }
                 val frozen = attempt.assignment.executionProfile(profiles.load())
-                val context = DecisionCompiler.compile(plan).dependencies[stageId].orEmpty().joinToString("\n") { dep ->
-                    plan.milestones.first { it.id == dep }.let { "${it.title}: ${it.report}\nПриёмка этапа: ${it.checkNote}" }
-                }
                 val extraInstructions = chatHooks?.instructions(plan, stage, attempt).orEmpty()
                 // Inbox migration can restore a completed turn's VERIFY checkpoint while this
                 // coroutine is suspended. Never overwrite that checkpoint with a fresh native intent.
                 if (!canRunStage(id, stageId)) return
-                when (val drift = CheckpointDrift(plan, attempt, store.planFor(id), stageId)) {
-                    CheckpointDrift.Gone, CheckpointDrift.TakenOver -> return
-                    is CheckpointDrift.Advanced -> {
-                        stage = drift.stage
-                        attempt = drift.attempt
-                        currentAttempt = attempt
-                        // Verification is the one phase this coroutine still owns; it runs just
-                        // below. Any other advance belongs to whoever recorded it.
-                        if (attempt.phase == AttemptPhase.VERIFYING) break
-                        return
-                    }
-                    CheckpointDrift.None -> Unit
-                }
-                val prompt = """
-                    Общая цель: ${plan.goal}
-                    Этап: ${stage.title}
-                    Задача: ${stage.description}
-                    Критерии проверки: ${stage.acceptance.ifBlank { stage.description }}
-                    Подтверждения по каждому критерию:
-                    ${stage.criteria().joinToString("\n") { "${it.id}: ${it.description} (${if (it.required) "обязательно" else "необязательно"}; ${it.environment.label()})" }}
-                    Результаты предшественников: $context
-                    Предыдущая работа и диагностика: ${attempt.report}\n${attempt.error?.message.orEmpty()}
-                    Состояние перед продолжением: ${attempt.activity}
-                    Продолжай с фактического состояния файлов; сначала проверь уже выполненные изменения.
-                    После прерывания проверь последствия незавершённой команды; не повторяй её автоматически.
-                    Работай только в этой рабочей папке. Не выполняй внешних публикаций.
-                    Выполни проверки критериев и в конце укажи команды, результаты и изменённые файлы.
-                    ${verificationGuidance()}
-                """.trimIndent() + "\n" + extraInstructions
-                attempt = attempt.coordinationSettled().copy(phase = AttemptPhase.EXECUTING, error = null, prompt = prompt,
-                    chatTurns = attempt.effectiveChatTurns() + StageChatTurn(attempt.steps.count { it.isVisibleActivity }, Id.now(), prompt = prompt))
-                saveAttempt(id, stageId, attempt)
-                journal(id, PlanJournalOperation.AGENT_INTENT, stageId, attempt.id)
-                val admitted = prepareAttempt(store.planFor(id)!!, stageId, attempt)
-                require(admitted.id == attempt.id && admitted.sessionId == attempt.sessionId && admitted.turnIndex == attempt.turnIndex &&
-                    admitted.path == attempt.path && admitted.assignment == attempt.assignment) { "Допуск изменил идентичность задания" }
-                attempt = admitted
-                saveAttempt(id, stageId, attempt)
+                val drift = CheckpointDrift(plan, attempt, store.planFor(id), stageId)
+                val checkpoint = reduce(attempt.toState(), StageEvent.CheckpointObserved(drift))
+                if (drift is CheckpointDrift.Advanced) stage = drift.stage
+                attempt = checkpoint.state.applyTo(attempt)
                 currentAttempt = attempt
-                var result = StageRunResult()
-                var lastSave = 0L
-                var lastDisplay = 0L
-                var outputPendingSave = false
-                var outputPendingDisplay = false
-                val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
-                    planId = plan.id, stageId = stage.id, parentSessionId = plan.parentSessionId.takeIf { it.isNotBlank() },
-                    role = CodingSessionRole.WORKER,
-                    runtimeGeneration = attempt.sessionGeneration,
-                    planningRulesSnapshot = plan.planningRulesSnapshot,
-                    pendingRun = CodingRunCheckpoint("${attempt.id}-turn-${attempt.turnIndex}", ""))
-                if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
-                val activityHistory = attempt.steps.filter { it.isVisibleActivity }
-                val activityRecorder = CodingRunRecorder()
-                var deliveryAcknowledged = false
-                if (!workspace.git && activityHistory.none { it.title.contains("Git недоступен") }) {
-                    activityRecorder.apply(CodingEvent.Notice("Git недоступен: изменения выполняются без отдельных веток и коммитов. Репозиторий не создан."))
-                    attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
+                if (checkpoint.has(StageEffect.RunVerifier)) break
+                if (checkpoint.has(StageEffect.Yield)) return
+                val prompt = stageWorkerPrompt(plan, stage, attempt, verificationGuidance(), extraInstructions)
+                attempt = reduce(attempt.toState(), StageEvent.WorkerStarting(prompt, Id.now())).state.applyTo(attempt)
+                saveAttempt(id, stageId, attempt)
+                store.withJournaledIntent(id, PlanJournalOperation.AGENT_INTENT, stageId, attempt.id) {
+                    val admitted = prepareAttempt(store.planFor(id)!!, stageId, attempt)
+                    attempt = reduce(attempt.toState(), StageEvent.WorkerAdmitted(admitted)).state.applyTo(attempt)
                     saveAttempt(id, stageId, attempt)
-                }
-                if (!canRunStage(id, stageId)) return
-                monitoredRun(project.copy(path = attempt.path), session, prompt, frozen).collect { event ->
-                    val now = outputClock()
-                    val signal = event.signal
-                    if (signal == StageEngineSignal.Silence) {
-                        // Silence is a flush opportunity, not new output. Rewriting a large
-                        // plan every second also makes the orchestrator reload all histories.
-                        if (outputPendingDisplay && now - lastDisplay >= 100) {
+                    currentAttempt = attempt
+                    var result = StageRunResult()
+                    var lastSave = 0L
+                    var lastDisplay = 0L
+                    var outputPendingSave = false
+                    var outputPendingDisplay = false
+                    val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
+                        planId = plan.id, stageId = stage.id, parentSessionId = plan.parentSessionId.takeIf { it.isNotBlank() },
+                        role = CodingSessionRole.WORKER,
+                        runtimeGeneration = attempt.sessionGeneration,
+                        planningRulesSnapshot = plan.planningRulesSnapshot,
+                        pendingRun = CodingRunCheckpoint("${attempt.id}-turn-${attempt.turnIndex}", ""))
+                    if (plan.parentSessionId.isBlank()) projects?.saveSession(session)
+                    val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                    val activityRecorder = CodingRunRecorder()
+                    var deliveryAcknowledged = false
+                    stageWorkspaceNotice(workspace, attempt)?.let { notice ->
+                        activityRecorder.apply(CodingEvent.Notice(notice))
+                        attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
+                        saveAttempt(id, stageId, attempt)
+                    }
+                    if (!canRunStage(id, stageId)) return
+                    monitoredRun(project.copy(path = attempt.path), session, prompt, frozen).collect { event ->
+                        val now = outputClock()
+                        val signal = event.signal
+                        if (signal == StageEngineSignal.Silence) {
+                            // Silence is a flush opportunity, not new output. Rewriting a large
+                            // plan every second also makes the orchestrator reload all histories.
+                            if (outputPendingDisplay && now - lastDisplay >= 100) {
+                                val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
+                                liveState.update { it + (attempt.id to preview) }
+                                lastDisplay = now
+                                outputPendingDisplay = false
+                            }
+                            if (outputPendingSave && now - lastSave >= 1000) {
+                                saveAttempt(id, stageId, attempt)
+                                lastSave = now
+                                outputPendingSave = false
+                            }
+                            return@collect
+                        }
+                        outputPendingSave = true
+                        outputPendingDisplay = true
+                        if (!deliveryAcknowledged && event.showsEngineAnswering) {
+                            chatHooks?.started(store.planFor(id)!!, stage, attempt)
+                            deliveryAcknowledged = true
+                        }
+                        activityRecorder.apply(event)
+                        attempt = reduce(attempt.toState(), StageEvent.EngineOutput(event, StageRunTrack.WORK,
+                            activityHistory + activityRecorder.timeline())).state.applyTo(attempt)
+                        result = result.after(event)
+                        currentAttempt = attempt
+                        if (signal.showsProgress || now - lastDisplay >= 100) {
                             val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
-                            liveState.update { it + (attempt.id to preview) }
-                            lastDisplay = now
+                            liveState.update { it + (attempt.id to preview) }; lastDisplay = now
                             outputPendingDisplay = false
                         }
-                        if (outputPendingSave && now - lastSave >= 1000) {
+                        // Narrower than the display: only a record recovery will read is worth
+                        // rewriting the whole plan for, out of turn.
+                        if (signal.mustReachDisk || now - lastSave >= 1000) {
                             saveAttempt(id, stageId, attempt)
                             lastSave = now
                             outputPendingSave = false
                         }
-                        return@collect
                     }
-                    outputPendingSave = true
-                    outputPendingDisplay = true
-                    if (!deliveryAcknowledged && event.showsEngineAnswering) {
-                        chatHooks?.started(store.planFor(id)!!, stage, attempt)
-                        deliveryAcknowledged = true
-                    }
-                    activityRecorder.apply(event)
-                    attempt = attempt.after(event, StageRunTrack.WORK)
-                        .copy(steps = activityHistory + activityRecorder.timeline())
-                    result = result.after(event)
+                    val submitted = store.planFor(id)?.coordination?.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" && it.toolCallId != null }
+                    attempt = reduce(attempt.toState(), StageEvent.WorkerTurnEnded(Id.now(), submitted?.reply?.text)).state.applyTo(attempt)
                     currentAttempt = attempt
-                    if (signal.showsProgress || now - lastDisplay >= 100) {
-                        val preview = safeAttempt(attempt.copy(updatedAt = Id.now()))
-                        liveState.update { it + (attempt.id to preview) }; lastDisplay = now
-                        outputPendingDisplay = false
+                    if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
+                        if (result.ended) reject()
+                        // The turn is over either way: the attempt drops back to FAILED, from where
+                        // it may run again, and the issue alone says whether anyone will start it.
+                        val issue = classify(result.failure ?: "Поток завершился без подтверждённого результата", uncertain = !result.ended)
+                        attempt = reduce(attempt.toState(), StageEvent.TransportFailed(issue, retryInputs(), workerFailed = true)).state.applyTo(attempt)
+                        saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                     }
-                    // Narrower than the display: only a record recovery will read is worth
-                    // rewriting the whole plan for, out of turn.
-                    if (signal.mustReachDisk || now - lastSave >= 1000) {
-                        saveAttempt(id, stageId, attempt)
-                        lastSave = now
-                        outputPendingSave = false
-                    }
+                    val accepted = reduce(attempt.toState(), StageEvent.WorkerAccepted(workspaces.verificationSnapshot(attempt.path), chatHooks != null))
+                    attempt = accepted.state.applyTo(attempt)
+                    if (accepted.has(StageEffect.Persist)) saveAttempt(id, stageId, attempt)
+                    complete()
                 }
-                val submitted = store.planFor(id)?.coordination?.firstOrNull { it.id == "${attempt.id}-turn-${attempt.turnIndex}" && it.toolCallId != null }
-                if (submitted != null && attempt.report.isBlank()) attempt = attempt.copy(report = submitted.reply.text)
-                attempt = attempt.copy(chatTurns = attempt.chatTurns.dropLast(1) + attempt.chatTurns.last().copy(completedAt = Id.now()))
-                currentAttempt = attempt
-                if (result.incomplete(attempt.report(StageRunTrack.WORK))) {
-                    // The turn is over either way: the attempt drops back to FAILED, from where
-                    // it may run again, and the issue alone says whether anyone will start it.
-                    val issue = classify(result.failure ?: "Поток завершился без подтверждённого результата", uncertain = !result.ended)
-                    attempt = withRetry(attempt.copy(phase = AttemptPhase.FAILED), issue)
-                    saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
-                }
-                if (chatHooks != null) {
-                    attempt = attempt.handedToPlanner()
-                        .copy(verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
-                    saveAttempt(id, stageId, attempt)
-                } else attempt = attempt.copy(verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
-                val decision = chatHooks?.finished(store.planFor(id)!!, stage, attempt)
-                if (decision != null) {
-                    // The decision is applied in two steps because VERIFY leaves the phase alone
-                    // and falls through to verification; only the other actions restart execution.
-                    // Every branch below settles the coordination: VERIFY keeps the turn here, and
-                    // the others hand it straight to `awaiting`, which sets the same pair again.
-                    attempt = attempt.coordinationSettled().copy(report = decision.report, turnIndex = attempt.turnIndex + 1)
-                    if (decision.action != StageTurnAction.VERIFY) {
-                        attempt = attempt.awaiting(StageWaiting.of(decision.action, decision.requestId))
-                            .copy(phase = AttemptPhase.EXECUTING, error = null)
-                        saveAttempt(id, stageId, attempt)
-                        if (decision.action in setOf(StageTurnAction.WAIT, StageTurnAction.WAIT_EVENT)) {
-                            if (!hasQueuedReply(id, stageId)) return
-                            attempt = attempt.replied()
-                            saveAttempt(id, stageId, attempt)
-                        }
-                        continue
-                    }
-                }
-                attempt = attempt.copy(phase = AttemptPhase.VERIFYING)
+                val decision = reduce(attempt.toState(), StageEvent.PlannerDecided(chatHooks?.finished(store.planFor(id)!!, stage, attempt)))
+                attempt = decision.state.applyTo(attempt)
                 saveAttempt(id, stageId, attempt)
+                if (decision.has(StageEffect.AskUser) || decision.has(StageEffect.WaitForEvent)) {
+                    if (!hasQueuedReply(id, stageId)) return
+                    attempt = reduce(attempt.toState(), StageEvent.UserAnswered).state.applyTo(attempt)
+                    saveAttempt(id, stageId, attempt)
+                }
             }
-            if (attempt.phase == AttemptPhase.VERIFYING) {
+            if (reduce(attempt.toState(), StageEvent.Inspect).has(StageEffect.RunVerifier)) {
                 val verificationPlan = store.planFor(id)!!
                 val (acceptance, verdict) = reviewAcceptance(verificationPlan, stage, attempt, attempt.path,
                     stage.criteria(), verificationPlan.stageVerificationReport(stageId, attempt), judge)
-                attempt = attempt.copy(acceptanceRecord = acceptance)
+                attempt = reduce(attempt.toState(), StageEvent.AcceptanceRecorded(acceptance)).state.applyTo(attempt)
                 saveAttempt(id, stageId, attempt)
                 chatHooks?.verified(verificationPlan, stage, attempt, acceptance, judge.modelId)
-                verdict.issue?.let { unresolved ->
-                    // The phase is left alone: an unreachable verifier does not send the work back.
-                    attempt = withRetry(attempt, unresolved)
+                val verification = reduce(attempt.toState(), StageEvent.VerificationDecided(verdict, retryInputs()))
+                if (verification.has(StageEffect.RecordVerification)) {
+                    store.update(id) { p -> p.copy(
+                        milestones = p.milestones.map { if (it.id == stageId) it.copy(checkNote = safeText(verdict.note)) else it },
+                        coordination = p.coordination.map { record ->
+                            if (record.id == "${attempt.id}-turn-${attempt.turnIndex - 1}")
+                                record.copy(verification = StageVerification(verdict.passed, safeText(verdict.note))) else record
+                        }) }
+                }
+                attempt = verification.state.applyTo(attempt)
+                if (verification.has(StageEffect.Persist)) saveAttempt(id, stageId, attempt)
+                verification.issue?.let { block(id, it) }
+                if (verification.has(StageEffect.Yield)) return
+                store.withJournaledIntent(id, PlanJournalOperation.CAPTURE_INTENT, stageId, attempt.id) {
+                    val commit = workspaces.capture(attempt.copy(report = stage.title + "\n" + attempt.report))
+                    attempt = reduce(attempt.toState(), StageEvent.Captured(commit)).state.applyTo(attempt)
                     saveAttempt(id, stageId, attempt)
-                    block(id, attempt.error!!)
-                    return
+                    complete()
                 }
-                store.update(id) { p -> p.copy(
-                    milestones = p.milestones.map { if (it.id == stageId) it.copy(checkNote = safeText(verdict.note)) else it },
-                    coordination = p.coordination.map { record ->
-                        if (record.id == "${attempt.id}-turn-${attempt.turnIndex - 1}")
-                            record.copy(verification = StageVerification(verdict.passed, safeText(verdict.note))) else record
-                    }) }
-                if (!verdict.passed) {
-                    if (canRetry(attempt.repairRetries)) {
-                        attempt = attempt.copy(phase = AttemptPhase.FAILED, repairRetries = PlanningRetryPolicy.nextRetry(attempt.repairRetries),
-                            error = PlanningIssue(IssueKind.VERIFICATION, verdict.note))
-                        saveAttempt(id, stageId, attempt)
-                        // The scheduler picks the same durable attempt up on its next pass.
-                        return
-                    }
-                    attempt = attempt.copy(error = PlanningIssue(IssueKind.VERIFICATION, verdict.note, requiresUser = true))
-                    saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
-                }
-                journal(id, PlanJournalOperation.CAPTURE_INTENT, stageId, attempt.id)
-                attempt = attempt.copy(resultCommit = workspaces.capture(attempt.copy(report = stage.title + "\n" + attempt.report)), phase = AttemptPhase.INTEGRATING)
-                saveAttempt(id, stageId, attempt)
             }
-            if (attempt.phase == AttemptPhase.INTEGRATING) integration.withLock {
+            if (reduce(attempt.toState(), StageEvent.Inspect).has(StageEffect.RunMerge)) integration.withLock {
                 val latest = store.planFor(id) ?: return@withLock
                 if (latest.issue != null || latest.intent == ExecutionIntent.STOP || closing || store.failure.value != null) return@withLock
-                journal(id, PlanJournalOperation.MERGE_INTENT, stageId, attempt.id)
-                var merged = workspaces.integrate(workspace, attempt)
-                // A resolver may have committed before the crash: ancestry alone is not verification.
-                if (attempt.mergeProgress.unresolved) merged = false
-                while (!merged && canRun(id)) {
-                    if (attempt.mergeProgress.needsResolver) {
-                        if (!canRetry(attempt.mergeRetries)) break
-                        if (attempt.mergeRetries > 0) delay(PlanningRetryPolicy.delayMillis(attempt.mergeRetries))
+                store.withJournaledIntent(id, PlanJournalOperation.MERGE_INTENT, stageId, attempt.id) {
+                    val integrationResult = workspaces.integrate(workspace, attempt)
+                    var merged = reduce(attempt.toState(), StageEvent.MergeStarted(integrationResult)).has(StageEffect.Finish)
+                    while (!merged && canRun(id)) {
+                        val conflict = reduce(attempt.toState(), StageEvent.ConflictRequested(workspace.integrationPath, settings.load().agentLimits.retries))
+                        if (conflict.has(StageEffect.Yield)) break
+                        conflict.effects.filterIsInstance<StageEffect.Delay>().forEach { delay(it.millis) }
                         currentCoroutineContext().ensureActive()
-                        attempt = attempt.copy(mergeRetries = PlanningRetryPolicy.nextRetry(attempt.mergeRetries),
-                            mergeAssignment = attempt.mergeAssignment ?: attempt.assignment, mergePath = workspace.integrationPath,
-                            activity = "Агент разрешает конфликт объединения")
-                            .merging(MergeProgress.Admitted)
-                        saveAttempt(id, stageId, attempt)
-                    }
-                    if (attempt.mergeProgress.needsTurn) {
-                        attempt = attempt.merging(MergeProgress.Running)
-                        saveAttempt(id, stageId, attempt)
-                        journal(id, PlanJournalOperation.CONFLICT_AGENT_INTENT, stageId, attempt.id)
-                        val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
-                            planId = id, stageId = stageId, parentSessionId = latest.parentSessionId,
-                            planningRulesSnapshot = latest.planningRulesSnapshot,
-                            pendingRun = CodingRunCheckpoint("${attempt.id}-merge", ""))
-                        var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
-                        val activityHistory = attempt.steps.filter { it.isVisibleActivity }
-                        val activityRecorder = CodingRunRecorder()
-                        monitoredRun(project.copy(path = workspace.integrationPath), mergeSession,
-                            "Разреши текущий Git merge-конфликт, сохрани результаты обеих ветвей, добавь разрешённые файлы в индекс. Если объединение уже сделано, продолжи проверки. Критерии: ${stage.acceptance.ifBlank { stage.description }}. Предыдущий отчёт: ${attempt.mergeReport}. Отчитайся о фактических проверках.",
-                            (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
-                            activityRecorder.apply(event)
-                            attempt = attempt.copy(steps = activityHistory + activityRecorder.timeline())
-                            attempt = attempt.after(event, StageRunTrack.MERGE)
-                            result = result.after(event)
-                            val signal = event.signal
-                            if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
-                            if (signal.showsProgress || Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
+                        attempt = conflict.state.applyTo(attempt)
+                        if (conflict.has(StageEffect.Persist)) saveAttempt(id, stageId, attempt)
+                        if (conflict.has(StageEffect.RunConflictAgent)) {
+                            attempt = reduce(attempt.toState(), StageEvent.ConflictStarted).state.applyTo(attempt)
+                            saveAttempt(id, stageId, attempt)
+                            store.withJournaledIntent(id, PlanJournalOperation.CONFLICT_AGENT_INTENT, stageId, attempt.id) {
+                                val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                                    planId = id, stageId = stageId, parentSessionId = latest.parentSessionId,
+                                    planningRulesSnapshot = latest.planningRulesSnapshot,
+                                    pendingRun = CodingRunCheckpoint("${attempt.id}-merge", ""))
+                                var result = StageRunResult(); var lastSave = 0L; var lastDisplay = 0L
+                                val activityHistory = attempt.steps.filter { it.isVisibleActivity }
+                                val activityRecorder = CodingRunRecorder()
+                                monitoredRun(project.copy(path = workspace.integrationPath), mergeSession,
+                                    stageMergePrompt(stage, attempt),
+                                    (attempt.mergeAssignment ?: attempt.assignment).executionProfile(profiles.load())).collect { event ->
+                                    activityRecorder.apply(event)
+                                    attempt = reduce(attempt.toState(), StageEvent.EngineOutput(event, StageRunTrack.MERGE,
+                                        activityHistory + activityRecorder.timeline())).state.applyTo(attempt)
+                                    result = result.after(event)
+                                    val signal = event.signal
+                                    if (signal.showsProgress || Id.now() - lastDisplay >= 100) { publish(attempt); lastDisplay = Id.now() }
+                                    if (signal.showsProgress || Id.now() - lastSave >= 1000) { saveAttempt(id, stageId, attempt); lastSave = Id.now() }
+                                }
+                                if (result.incomplete(attempt.report(StageRunTrack.MERGE))) {
+                                    if (result.ended) reject()
+                                    attempt = withRetry(attempt, classify(result.failure ?: "Объединение прервано", uncertain = !result.ended))
+                                    saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return@withLock
+                                }
+                                attempt = reduce(attempt.toState(), StageEvent.ConflictTurnEnded).state.applyTo(attempt); saveAttempt(id, stageId, attempt)
+                                complete()
+                            }
                         }
-                        if (result.incomplete(attempt.report(StageRunTrack.MERGE))) {
-                            attempt = withRetry(attempt, classify(result.failure ?: "Объединение прервано", uncertain = !result.ended))
+                        val verdict = verifier.verify(stage, store.planFor(id)!!.goal, attempt.mergeReport, judge)
+                        if (verdict.issue != null) {
+                            attempt = withRetry(attempt, verdict.issue!!)
                             saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return@withLock
                         }
-                        attempt = attempt.merging(MergeProgress.AwaitingVerdict); saveAttempt(id, stageId, attempt)
+                        merged = verdict.passed && workspaces.finishConflict(workspace, attempt)
+                        attempt = reduce(attempt.toState(), StageEvent.MergeFinished(merged)).state.applyTo(attempt)
+                        saveAttempt(id, stageId, attempt)
                     }
-                    val verdict = verifier.verify(stage, store.planFor(id)!!.goal, attempt.mergeReport, judge)
-                    if (verdict.issue != null) {
-                        attempt = withRetry(attempt, verdict.issue!!)
-                        saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return@withLock
+                    if (!merged) {
+                        reject()
+                        val issue = PlanningIssue(IssueKind.CONFLICT, "Не удалось объединить ${stage.title}; рабочие копии сохранены", requiresUser = true)
+                        saveAttempt(id, stageId, attempt.copy(error = issue)); block(id, issue); return@withLock
                     }
-                    merged = verdict.passed && workspaces.finishConflict(workspace, attempt)
-                    attempt = attempt.merging(if (merged) MergeProgress.Settled else MergeProgress.Rejected)
+                    attempt = reduce(attempt.toState(), StageEvent.Completed).state.applyTo(attempt)
                     saveAttempt(id, stageId, attempt)
+                    journal(id, PlanJournalOperation.STAGE_COMPLETE, stageId, attempt.id)
+                    complete()
                 }
-                if (!merged) {
-                    val issue = PlanningIssue(IssueKind.CONFLICT, "Не удалось объединить ${stage.title}; рабочие копии сохранены", requiresUser = true)
-                    saveAttempt(id, stageId, attempt.copy(error = issue)); block(id, issue); return@withLock
-                }
-                attempt = attempt.copy(phase = AttemptPhase.COMPLETE, error = null)
-                saveAttempt(id, stageId, attempt)
-                journal(id, PlanJournalOperation.STAGE_COMPLETE, stageId, attempt.id)
             }
         } catch (e: CancellationException) {
             currentAttempt?.let { snapshot ->
@@ -1056,24 +1049,10 @@ class PlanningExecutionService(
                     // Keep streamed context and engine identity, without charging a retry.
                     val plan = store.planFor(id)
                     val saved = plan?.milestones?.firstOrNull { it.id == stageId }?.attempts?.lastOrNull()
-                    if (saved?.id == snapshot.id && saved.phase != AttemptPhase.COMPLETE) {
-                        val waiting = stageId in chatHooks?.blockedStages(plan!!).orEmpty()
-                        // Keep the newest phase/acceptance checkpoint, plus unsaved streamed
-                        // output. Do not erase uncertain external effects when pausing a stage.
-                        val latest = if (saved.phase == AttemptPhase.EXECUTING && !saved.awaitingPlanner &&
-                            saved.turnIndex == snapshot.turnIndex && saved.chatTurns == snapshot.chatTurns) saved.copy(
-                                report = snapshot.report, steps = snapshot.steps, engineSessionId = snapshot.engineSessionId,
-                                pendingTool = snapshot.pendingTool, pendingToolExternal = snapshot.pendingToolExternal) else saved
-                        saveAttempt(id, stageId, latest.copy(interrupted = true,
-                            activity = (if (waiting) "Этап приостановлен" else "Выполнение остановлено") +
-                                latest.pendingTool.takeIf { it.isNotBlank() }
-                                    ?.let { ". Прервана команда: $it. Перед продолжением проверь её фактические последствия." }.orEmpty(),
-                            steps = latest.steps.map { step -> if (!step.running) step else step.copy(running = false,
-                                ok = if (step.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC)) false else step.ok,
-                                toolPhase = if (step.kind in setOf(CodingStepKind.TOOL, CodingStepKind.EXEC))
-                                    if (latest.pendingToolExternal) io.aequicor.magicpaper.domain.tools.ToolPhase.UNKNOWN else io.aequicor.magicpaper.domain.tools.ToolPhase.CANCELLED else step.toolPhase,
-                                systemEvent = step.systemEvent?.copy(phase = CompactionPhase.CANCELLED)) },
-                            chatTurns = latest.chatTurns.map { if (it.completedAt == 0L) it.copy(completedAt = Id.now()) else it }))
+                    if (saved != null) {
+                        val waiting = stageId in chatHooks?.blockedStages(plan).orEmpty()
+                        val interruption = reduce(saved.toState(), StageEvent.Interrupted(snapshot, waiting, Id.now()))
+                        if (interruption.has(StageEffect.Persist)) saveAttempt(id, stageId, interruption.state.applyTo(saved))
                     }
                 }
             }
@@ -1119,13 +1098,11 @@ class PlanningExecutionService(
         PlanningRetryPolicy.decide(issue, completedRetries, settings.load().agentLimits.retries, Id.now(), Random.nextLong(500))
 
     /** Spends one transport attempt on [issue] and records the outcome on the attempt. */
-    private suspend fun withRetry(attempt: StageAttempt, issue: PlanningIssue): StageAttempt {
-        val decision = retryDecision(issue, attempt.transportRetries)
-        return attempt.copy(
-            transportRetries = (decision as? RetryDecision.Again)?.retries ?: attempt.transportRetries,
-            error = decision.applyTo(issue),
-        )
-    }
+    private suspend fun withRetry(attempt: StageAttempt, issue: PlanningIssue): StageAttempt =
+        reduce(attempt.toState(), StageEvent.TransportFailed(issue, retryInputs())).state.applyTo(attempt)
+
+    private suspend fun retryInputs() = StageRetryInputs(settings.load().agentLimits.retries, Id.now(), Random.nextLong(500))
+
     /** Flush partial output while waiting. A coding turn may legitimately be silent during reasoning;
      * the chat-request timeout is not an inactivity deadline for the coding runtime.
      * Runtime failures and explicit cancellation remain authoritative. */

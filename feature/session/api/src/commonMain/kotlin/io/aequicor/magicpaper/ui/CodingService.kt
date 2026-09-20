@@ -30,6 +30,7 @@ interface CodingService {
     fun refreshCodingEngines()
     fun selectDefaultCodingEngine(engine: CodingEngine)
     fun selectCodingModel(sessionId: String, selection: ModelSelection, forProject: Boolean = false)
+    fun selectCodingSearchProvider(sessionId: String, provider: SearchProvider)
     fun prepareCodingRuntime(engine: CodingEngine = CodingEngine.PI)
     fun uninstallCodingRuntime(engine: CodingEngine = CodingEngine.PI)
     fun addCodingProject()

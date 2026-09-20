@@ -3,7 +3,7 @@ package io.aequicor.magicpaper.domain
 /**
  * What picking up a saved attempt means, decided before any effect runs.
  *
- * The decision is a pure reading of the attempt: the service that executes it does not get to
+ * The decision is a pure reading of the attempt and journal evidence: its executor cannot
  * reinterpret it. Order matters and is part of the contract — an unconfirmed external command
  * outranks everything, because resuming would repeat an effect whose result nobody knows.
  */
@@ -30,7 +30,11 @@ sealed interface StageResumption {
 }
 
 val StageAttempt.resumption: StageResumption
-    get() = when {
+    get() = resumption(journalUnsettled = false)
+
+/** Journal uncertainty survives a missing or rolled-back attempt checkpoint. */
+fun StageAttempt.resumption(journalUnsettled: Boolean): StageResumption = when {
+        journalUnsettled -> StageResumption.UnknownOutcome("незавершённая операция плана")
         pendingToolExternal && pendingTool.isNotBlank() -> StageResumption.UnknownOutcome(pendingTool)
         interrupted -> StageResumption.Interrupted(phase)
         phase in StageResumption.RUNNABLE_PHASES -> StageResumption.Runnable(phase)

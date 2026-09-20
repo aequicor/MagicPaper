@@ -139,11 +139,15 @@ class SessionOrganismService(
     }
 
     /** Explicit human recovery of a quarantined session. The unknown operation is never repeated here. */
-    suspend fun reconcileQuarantine(session: CodingSession, userConfirmed: Boolean): QuarantineRecoveryOutcome {
+    suspend fun reconcileQuarantine(session: CodingSession, userConfirmed: Boolean,
+        expectedQuarantineOperationIds: Set<String>? = null): QuarantineRecoveryOutcome {
         val organism = ensure(session)
         val saved = store.get(organism.id)
         val node = saved.sessions[session.id] ?: return QuarantineRecoveryOutcome.NO_QUARANTINE
         val quarantines = saved.unresolvedQuarantines(node.id)
+        require(expectedQuarantineOperationIds == null || expectedQuarantineOperationIds == quarantines.map { it.operationId }.toSet()) {
+            "Состояние восстановления изменилось; повторите сверку"
+        }
         if (quarantines.isEmpty()) return QuarantineRecoveryOutcome.NO_QUARANTINE
         require(saved.deletedAt == null && !saved.stoppedByUser && !node.archived && node.id !in saved.historyDeletedIds) {
             "Сессия удалена, архивирована или остановлена пользователем"

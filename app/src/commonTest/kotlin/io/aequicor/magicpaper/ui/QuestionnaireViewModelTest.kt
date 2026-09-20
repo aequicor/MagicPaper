@@ -50,7 +50,7 @@ class QuestionnaireViewModelTest {
             vm.updateQuestionnaireDraft(first.id, draft)
             runtime.questionnaires.value = listOf(second, first); runCurrent()
             assertEquals(listOf(first.id, second.id), vm.state.value.coding.interactions.map { it.id })
-            assertEquals(draft, vm.questionnaireDrafts.value[first.id])
+            assertEquals(draft, vm.state.value.coding.questionnaireDrafts[first.id])
             assertEquals(CodingSessionStatus.WAITING, vm.state.value.coding.currentSession!!.status)
             vm.submitQuestionnaire(first.id, draft.answers); vm.submitQuestionnaire(first.id, draft.answers); runCurrent()
             assertEquals(1, runtime.answers.size)

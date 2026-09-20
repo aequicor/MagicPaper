@@ -33,6 +33,62 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalComposeUiApi::class)
 class PlanningWizardRenderTest {
+    @Test fun failedLoadOffersRetryAndPreservesThePanelOnNarrowWindows() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val kv = InMemoryKeyValueStore()
+            val store = PlanningStore(JsonPlanningRepository(kv, Json))
+            val profiles = JsonLlmProfileRepository(kv, Json)
+            val savedSettings = JsonSettingsRepository(kv, Json)
+            var failLoad = true
+            val settings = object : SettingsRepository by savedSettings {
+                override suspend fun load(): AppSettings {
+                    if (failLoad) error("Private storage details")
+                    return savedSettings.load()
+                }
+            }
+            var modelCalls = 0
+            val gateway = object : LlmGateway {
+                override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+                    modelCalls++; error("Loading must not call a model")
+                }
+            }
+            val search = object : SearchEngine {
+                override val provider = SearchProvider.AUTO
+                override val displayName = "Auto"
+                override fun isConfigured(settings: AppSettings) = true
+                override suspend fun search(query: String, settings: AppSettings, limit: Int): List<SearchHit> = error("No search")
+            }
+            val execution = PlanningExecutionService(store, NoopCodingRuntime, null, profiles, settings,
+                object : MilestoneVerifier {
+                    override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = Verdict(true, "Checked")
+                }, scope = backgroundScope)
+            val plugin = CodingPlanningPlugin(store, textPlanComposer(gateway), DossierResearcher(gateway, search),
+                execution, NoopCodingRuntime, null, profiles, settings, InMemoryDraftRepository(), backgroundScope)
+            val project = CodingProject("project", "Project", "/fixture", 1)
+            ImageComposeScene(390, 700) {
+                MagicPaperTheme { Surface { plugin.SessionPanel(project, Modifier) } }
+            }.use { scene ->
+                var frame = 0L
+                fun render() { repeat(6) { scene.render(++frame * 16_000_000L).close(); runCurrent() } }
+                render()
+                val retry = scene.nodes().single { it.config.getOrNull(SemanticsActions.OnClick) != null && "Повторить загрузку" in it.texts() }
+                assertTrue(retry.boundsInRoot.left >= 0 && retry.boundsInRoot.right <= 390)
+                assertTrue(retry.boundsInRoot.top >= 0 && retry.boundsInRoot.bottom <= 700)
+                assertFalse(scene.nodes().any { node -> node.texts().any { "Private storage" in it } })
+                val output = File("build/reports/planning-wizard").apply { mkdirs() }
+                File(output, "load-error-390.png").writeBytes(scene.render(++frame * 16_000_000L).use {
+                    it.encodeToData()!!.use { data -> data.bytes }
+                })
+                failLoad = false
+                scene.invokeAction("Повторить загрузку"); render()
+                assertFalse(scene.nodes().any { "Повторить загрузку" in it.texts() })
+                assertTrue(scene.nodes().any { "Цель и ожидаемый результат" in it.texts() })
+                assertEquals(0, modelCalls)
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
     private fun ImageComposeScene.nodes(): List<SemanticsNode> {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }

@@ -189,9 +189,9 @@ class PlanningExecutionServiceTest {
         override suspend fun apply(project: CodingProject, workspace: PlanWorkspace): PlanWorkspace { applied++; return workspace.copy(applied = true) }
     }
     private suspend fun TestScope.fixture(runtime: Runtime = Runtime(), workspace: PlanningWorkspace = Workspaces(), verifier: MilestoneVerifier = pass,
-        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3, taskWorkspace: TaskWorkspace? = null): Triple<PlanningStore, PlanningExecutionService, Runtime> {
+        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3, taskWorkspace: TaskWorkspace? = null, events: EventJournal = InMemoryEventJournal(), strategyGateway: LlmGateway? = null): Triple<PlanningStore, PlanningExecutionService, Runtime> {
         val kv = InMemoryKeyValueStore()
-        val store = PlanningStore(JsonPlanningRepository(kv, json))
+        val store = PlanningStore(JsonPlanningRepository(kv, json), events)
         val profiles = JsonLlmProfileRepository(kv, json).also { it.save(profile) }
         val projects = JsonCodingProjectRepository(kv, json).also { it.save(project) }
         if (taskWorkspace != null) projects.saveSession(CodingSession("parent", project.id, "Task", 1, planningMode = true))
@@ -199,10 +199,161 @@ class PlanningExecutionServiceTest {
         val settings = JsonSettingsRepository(kv, json)
         settings.save(AppSettings(agentLimits = OrganismLimits(retries = retryLimit)))
         return Triple(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope,
-            outputClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees), runtime)
+            outputClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees,
+            strategyClassifier = strategyGateway?.let { PlanStrategyClassifier(store, it, profiles, settings) }), runtime)
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
+
+    @Test fun classifierPausePrecedesEveryWorkspaceAndWorkerEffect() = runTest {
+        val events = InMemoryEventJournal()
+        var prepared = 0
+        var classifications = 0
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun prepare(project: CodingProject, runId: String): PlanWorkspace {
+                prepared++
+                return PlanWorkspace("/fake", "/fake")
+            }
+        }
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+                classifications++
+                return """{"cause":"UNKNOWN"}"""
+            }
+        }
+        val (store, service, runtime) = fixture(workspace = workspace, events = events, strategyGateway = gateway)
+        store.save(plan(stage("work")).copy(runId = "run", intent = ExecutionIntent.RUN,
+            issue = PlanningIssue(IssueKind.TRANSIENT, "Network failure", retries = 2)))
+        repeat(2) { store.withJournaledIntent("plan", PlanJournalOperation.AGENT_INTENT, "work", "failed") { reject() } }
+        service.start("plan"); runCurrent()
+        assertEquals(1, classifications)
+        assertEquals(0, prepared)
+        assertTrue(runtime.calls.isEmpty())
+        assertEquals(ExecutionIntent.PAUSE, store.planFor("plan")!!.intent)
+        assertTrue(store.planFor("plan")!!.issue!!.requiresUser)
+        assertEquals(1, events.read("plan").count { it.operation == PlanJournalOperation.STRATEGY_SELECTED.wire })
+        service.shutdown()
+    }
+
+    @Test fun classifiedBackoffRunsThroughExistingAcceptanceAndRecordsTheActualOutcome() = runTest {
+        val events = InMemoryEventJournal()
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>) = """{"cause":"TRANSIENT_TRANSPORT"}"""
+        }
+        val (store, service, runtime) = fixture(events = events, strategyGateway = gateway)
+        store.save(plan(stage("work")).copy(runId = "run", intent = ExecutionIntent.RUN,
+            issue = PlanningIssue(IssueKind.TRANSIENT, "Network failure", retries = 2)))
+        repeat(2) { store.withJournaledIntent("plan", PlanJournalOperation.AGENT_INTENT, "work", "failed") { reject() } }
+        service.start("plan"); advanceTimeBy(1_000); runCurrent()
+        assertTrue(runtime.calls.isNotEmpty())
+        assertEquals(ExecutionPhase.COMPLETE, store.planFor("plan")!!.phase)
+        val records = events.read("plan").map { it.planEvidence() }
+        val selection = records.single { it.operation == PlanJournalOperation.STRATEGY_SELECTED.wire }
+        val result = records.filter { it.operation == PlanJournalOperation.INTENT_OUTCOME.wire }
+            .map { PlanIntentOutcome.decode(it.detail) }.single { it.strategySeq == selection.seq }
+        assertEquals(PlanIntentStatus.COMPLETED, result.status)
+        assertEquals(PlanJournalOperation.AGENT_INTENT.wire, records.single { it.seq == result.intentSeq }.operation)
+        assertTrue(store.unsettled("plan").isEmpty())
+        service.shutdown()
+    }
+
+    @Test fun restoredJournalIntentBlocksExecutionBeforeAnyWorkspaceOrWorkerEffect() = runTest {
+        val events = InMemoryEventJournal()
+        var prepared = 0
+        val workspace = object : PlanningWorkspace by Workspaces() {
+            override suspend fun prepare(project: CodingProject, runId: String): PlanWorkspace {
+                prepared++
+                return PlanWorkspace("/fake", "/fake")
+            }
+        }
+        val (store, service, runtime) = fixture(workspace = workspace, events = events)
+        store.save(plan(stage("work")))
+        val original = events.append("plan", PlanJournalOperation.PREPARE_INTENT.wire, 1)
+        service.start(project.id); advanceTimeBy(60_000); runCurrent()
+        assertEquals(0, prepared)
+        assertTrue(runtime.calls.isEmpty())
+        assertEquals(IssueKind.UNCERTAIN, store.planFor("plan")!!.issue?.kind)
+        assertEquals(listOf(original), store.unsettled("plan"))
+        service.retry(project.id); advanceTimeBy(60_000); runCurrent()
+        assertEquals(0, prepared, "A retry click is not confirmation of an unknown effect")
+        assertTrue(runtime.calls.isEmpty())
+        service.shutdown()
+    }
+
+    @Test fun journalQuarantinePreservesAnIndependentNonRetryableBlocker() = runTest {
+        val events = InMemoryEventJournal()
+        val (store, service, runtime) = fixture(events = events)
+        val original = PlanningIssue(IssueKind.VERIFICATION, "Owner action required", requiresUser = true, retryBlocked = true)
+        store.save(plan(stage("work")).copy(issue = original))
+        events.append("plan", PlanJournalOperation.CAPTURE_INTENT.wire, 1)
+        service.recoverJournalQuarantines()
+        service.start(project.id)
+        assertEquals(original, store.planFor("plan")!!.issue)
+        assertEquals(1, store.unsettled("plan").size)
+        assertTrue(runtime.calls.isEmpty())
+        service.shutdown()
+    }
+
+    @Test fun restoreInspectsEvenCompletedPlansWithoutReexecutingOrDiscardingCompletion() = runTest {
+        val events = InMemoryEventJournal()
+        val (store, service, runtime) = fixture(events = events)
+        store.save(plan(stage("work")).copy(phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE))
+        events.append("plan", PlanJournalOperation.APPLY_INTENT.wire, 1)
+        service.recoverJournalQuarantines()
+        assertEquals(ExecutionPhase.COMPLETE, store.planFor("plan")!!.phase)
+        assertEquals(IssueKind.UNCERTAIN, store.planFor("plan")!!.issue?.kind)
+        assertTrue(runtime.calls.isEmpty())
+        service.shutdown()
+    }
+
+    @Test fun successfulExecutionSettlesEveryEffectWithAnExactOutcome() = runTest {
+        val events = InMemoryEventJournal()
+        val (store, service, _) = fixture(events = events)
+        store.save(plan(stage("work")))
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        assertEquals(ExecutionPhase.COMPLETE, store.planFor("plan")!!.phase)
+        val records = events.read("plan").map { it.planEvidence() }
+        val intents = records.filter { PlanJournalOperation.of(it.operation)?.kind == JournalEntryKind.INTENT }
+        assertEquals(setOf(PlanJournalOperation.PREPARE_INTENT, PlanJournalOperation.STAGE_WORKSPACE_INTENT,
+            PlanJournalOperation.AGENT_INTENT, PlanJournalOperation.CAPTURE_INTENT, PlanJournalOperation.MERGE_INTENT,
+            PlanJournalOperation.FINAL_VERIFICATION_INTENT, PlanJournalOperation.APPLY_INTENT),
+            intents.map { PlanJournalOperation.of(it.operation) }.toSet())
+        val outcomes = records.filter { it.operation == PlanJournalOperation.INTENT_OUTCOME.wire }
+            .map { PlanIntentOutcome.decode(it.detail) }
+        assertEquals(intents.map { it.seq }.toSet(), outcomes.map { it.intentSeq }.toSet())
+        assertEquals(intents.size, outcomes.size)
+        assertTrue(outcomes.all { it.status == PlanIntentStatus.COMPLETED })
+        service.shutdown()
+    }
+
+    @Test fun admissionRejectionSettlesIntentWithoutStartingTheWorker() = runTest {
+        val events = InMemoryEventJournal()
+        val (store, service, runtime) = fixture(events = events)
+        service.prepareAttempt = { _, _, _ -> error("admission denied") }
+        store.save(plan(stage("work")))
+        service.start(project.id); advanceTimeBy(1_000); runCurrent()
+        assertTrue(runtime.calls.isEmpty())
+        val records = events.read("plan").map { it.planEvidence() }
+        val intent = records.single { it.operation == PlanJournalOperation.AGENT_INTENT.wire }
+        assertEquals(PlanIntentStatus.REJECTED, records.filter { it.operation == PlanJournalOperation.INTENT_OUTCOME.wire }
+            .map { PlanIntentOutcome.decode(it.detail) }.single { it.intentSeq == intent.seq }.status)
+        assertNotNull(store.planFor("plan")!!.issue)
+        service.shutdown()
+    }
+
+    @Test fun stopRecordsInterruptedWorkerOutcomeBeforeConfirmingStop() = runTest {
+        val events = InMemoryEventJournal()
+        val (store, service, _) = fixture(Runtime(CompletableDeferred()), events = events)
+        store.save(plan(stage("work")))
+        service.start(project.id); runCurrent()
+        service.stop(project.id); runCurrent()
+        val records = events.read("plan").map { it.planEvidence() }
+        val intent = records.single { it.operation == PlanJournalOperation.AGENT_INTENT.wire }
+        assertEquals(PlanIntentStatus.INTERRUPTED, records.filter { it.operation == PlanJournalOperation.INTENT_OUTCOME.wire }
+            .map { PlanIntentOutcome.decode(it.detail) }.single { it.intentSeq == intent.seq }.status)
+        assertFalse(store.planFor("plan")!!.stopping)
+        service.shutdown()
+    }
 
     @Test fun admittedGenerationIsSavedBeforeNativeRunAndRetainedInCompletionCheckpoint() = runTest {
         val (store, service, runtime) = fixture()
@@ -900,7 +1051,7 @@ class PlanningExecutionServiceTest {
         service.stop(before.id); runCurrent()
     }
 
-    @Test fun retryRejectsNewGlobalIssueOrFinalAttemptEvenWhenRevisionAndStageSnapshotsMatch() = runTest {
+    @Test fun retryRejectsNewGlobalIssueOrFinalAttemptWhileAuthorizationIsPending() = runTest {
         for (changeFinal in listOf(false, true)) {
             val (store, service, runtime) = fixture()
             val issue = PlanningIssue(IssueKind.UNCERTAIN, "Original stopped run", requiresUser = true)
@@ -914,14 +1065,18 @@ class PlanningExecutionServiceTest {
             val changed = if (changeFinal) before.copy(finalAttempt = StageAttempt("new-final", "final-worker", assignment,
                 phase = AttemptPhase.FAILED, pendingTool = "publish", pendingToolExternal = true, error = issue))
                 else before.copy(issue = issue.copy(message = "New unconfirmed external operation"))
+            var accepted: Plan? = null
             service.authorizeRetry = { _, _, _ ->
-                store.save(changed) // A projection can replace the snapshot without incrementing its revision.
+                store.save(changed)
+                accepted = store.planFor(before.id)
+                assertEquals(before.revision + 1, accepted!!.revision)
+                assertEquals(changed, accepted!!.copy(revision = changed.revision, updatedAt = changed.updatedAt))
                 PlanAttemptRetryAuthorization("retry", SessionLegacyAttempt(before.id, before.runId,
                     "a", failed.id, failed.turnIndex, failed.sessionGeneration), 10)
             }
             assertFailsWith<IllegalStateException> { service.retry(before.id) }
             runCurrent()
-            assertEquals(changed, store.planFor(before.id))
+            assertEquals(accepted, store.planFor(before.id))
             assertTrue(runtime.calls.isEmpty())
         }
     }
@@ -1117,13 +1272,13 @@ class PlanningExecutionServiceTest {
     }
 
     @Test fun extensionCannotClearUncertainCommandsOrAnAppliedWorkspace() = runTest {
-        val (store, service) = fixture()
         val rejected = rejectedFinalPlan()
         for (blocked in listOf(
             rejected.copy(finalAttempt = rejected.finalAttempt!!.copy(pendingTool = "deploy", pendingToolExternal = true)),
             rejected.copy(issue = PlanningIssue(IssueKind.UNCERTAIN, "Unknown result", requiresUser = true)),
             rejected.copy(workspace = PlanWorkspace("/fake", "/fake", applied = true)),
         )) {
+            val (store, service) = fixture()
             store.save(blocked)
             val base = store.planFor(project.id)!!
             assertFailsWith<IllegalArgumentException> { service.applyProposal(base, withFollowup(base)) }

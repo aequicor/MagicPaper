@@ -58,9 +58,9 @@ class PlanningProposalRenderTest {
             service.bootstrap(); runCurrent()
             val output = File("build/reports/proposal-status").apply { mkdirs() }
             for (phase in listOf(ExecutionPhase.EXECUTING, ExecutionPhase.COMPLETE)) {
-                val plan = base.copy(proposal = proposal, phase = phase, milestones = listOf(
-                    if (phase == ExecutionPhase.COMPLETE) stage.copy(status = MilestoneStatus.DONE) else stage))
-                store.save(plan); runCurrent()
+                val plan = store.update(base.id) { it.copy(proposal = proposal, phase = phase, milestones = listOf(
+                    if (phase == ExecutionPhase.COMPLETE) stage.copy(status = MilestoneStatus.DONE) else stage)) }
+                runCurrent()
                 val requests = interactionCandidates(CodingUi(sessions = listOf(CodingSessionUi(parent, plan = plan))),
                     listOf(plan), service.states.value, emptyMap())
                 val ui = CodingSessionUi(parent, plan = plan, interactions = requests)
@@ -70,7 +70,10 @@ class PlanningProposalRenderTest {
                             if (width > 700) ProjectsPanel(CodingUi(projects = listOf(project), current = project,
                                 sessions = listOf(ui), interactions = requests, currentSessionId = parent.id), {}, {}, {}, {}, {}, {}, {}, Modifier.width(300.dp))
                             Column(Modifier.weight(1f)) {
-                                OrchestrationStatus(ui, service, {})
+                                OrchestrationStatus(ui, service, {}, io.aequicor.magicpaper.ui.CodingPlanningState(
+                                    states = service.states.value, plans = service.store.plans.value,
+                                    drafts = service.drafts.value, sessions = service.sessions.value,
+                                    persistenceErrors = service.persistenceErrors.value, unsavedInputs = service.unsavedInputs.value))
                                 Text("Ход работы оркестратора", Modifier.padding(16.dp))
                             }
                         } } }

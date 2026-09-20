@@ -112,7 +112,10 @@ class OrchestrationFailureRenderTest {
                 ImageComposeScene(width, 560) {
                     MagicPaperTheme { Surface { Column {
                         var draft by remember { mutableStateOf(QuestionnaireDraft()) }
-                        OrchestrationStatus(CodingSessionUi(parent, plan = plan, interactions = listOf(interaction)), service, {})
+                        OrchestrationStatus(CodingSessionUi(parent, plan = plan, interactions = listOf(interaction)), service, {}, io.aequicor.magicpaper.ui.CodingPlanningState(
+                                    states = service.states.value, plans = service.store.plans.value,
+                                    drafts = service.drafts.value, sessions = service.sessions.value,
+                                    persistenceErrors = service.persistenceErrors.value, unsavedInputs = service.unsavedInputs.value))
                         UserInteractionDock(interaction, draft, { draft = it }, { submissions++ })
                     } } }
                 }.use { scene ->

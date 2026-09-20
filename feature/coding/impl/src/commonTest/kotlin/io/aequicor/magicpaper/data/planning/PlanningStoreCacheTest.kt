@@ -37,7 +37,7 @@ class PlanningStoreCacheTest {
         assertTrue(durable.plans().isEmpty())
     }
 
-    @Test fun uncertainWriteDoesNotPublishUntilExplicitRecoveryReadsTheDurableCheckpoint() = runTest {
+    @Test fun acceptedJournalStateSurvivesCheckpointFailureAndRecoveryRepairsTheCache() = runTest {
         val durable = JsonPlanningRepository(InMemoryKeyValueStore(), Json)
         durable.save(plan("one"))
         var failAfterCommit = true
@@ -49,7 +49,8 @@ class PlanningStoreCacheTest {
         })
         val previous = store.planFor("one")!!
         assertFailsWith<PlanningPersistenceException> { store.update("one") { it.copy(goal = "committed") } }
-        assertSame(previous, store.planFor("one"))
+        assertEquals("committed", store.planFor("one")!!.goal)
+        assertNotNull(store.failure.value)
         assertEquals("committed", durable.planFor("one")!!.goal)
         failAfterCommit = false
         store.recover()
