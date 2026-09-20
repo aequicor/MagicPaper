@@ -807,18 +807,17 @@ class PlanningExecutionService(
                     attempt.report.isNotBlank() && attempt.waitingForUser == null &&
                     (attempt.turnIndex == 0 || attempt.chatTurns.size > attempt.turnIndex))
                 if ((recorded != null || pendingCoordination) && chatHooks != null) {
-                    attempt = attempt.copy(awaitingPlanner = true, coordinationPending = true)
+                    attempt = attempt.handedToPlanner()
                     saveAttempt(id, stageId, attempt)
                     val resumed = chatHooks!!.finished(plan, stage, attempt)
-                    attempt = attempt.copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
-                        awaitingPlanner = resumed.action == StageTurnAction.WAIT, coordinationPending = false,
-                        phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
-                        waitingForEvent = if (resumed.action == StageTurnAction.WAIT_EVENT) resumed.requestId else null,
-                            waitingForUser = if (resumed.action == StageTurnAction.WAIT) resumed.requestId ?: "legacy" else null, error = null)
+                    attempt = attempt.awaiting(StageWaiting.of(resumed.action, resumed.requestId))
+                        .copy(report = resumed.report, turnIndex = attempt.turnIndex + 1,
+                            phase = if (resumed.action == StageTurnAction.VERIFY) AttemptPhase.VERIFYING else AttemptPhase.EXECUTING,
+                            error = null)
                     saveAttempt(id, stageId, attempt)
                     if (resumed.action in setOf(StageTurnAction.WAIT, StageTurnAction.WAIT_EVENT)) {
                         if (!hasQueuedReply(id, stageId)) return
-                        attempt = attempt.copy(error = null, waitingForUser = null, waitingForEvent = null)
+                        attempt = attempt.replied()
                         saveAttempt(id, stageId, attempt)
                     }
                     if (resumed.action == StageTurnAction.VERIFY) break
@@ -969,22 +968,23 @@ class PlanningExecutionService(
                     saveAttempt(id, stageId, attempt); block(id, attempt.error!!); return
                 }
                 if (chatHooks != null) {
-                    attempt = attempt.copy(awaitingPlanner = true, coordinationPending = true,
-                        verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
+                    attempt = attempt.handedToPlanner()
+                        .copy(verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
                     saveAttempt(id, stageId, attempt)
                 } else attempt = attempt.copy(verificationSnapshot = workspaces.verificationSnapshot(attempt.path))
                 val decision = chatHooks?.finished(store.planFor(id)!!, stage, attempt)
                 if (decision != null) {
+                    // The decision is applied in two steps because VERIFY leaves the phase alone
+                    // and falls through to verification; only the other actions restart execution.
                     attempt = attempt.copy(report = decision.report, turnIndex = attempt.turnIndex + 1,
                         awaitingPlanner = decision.action == StageTurnAction.WAIT, coordinationPending = false)
                     if (decision.action != StageTurnAction.VERIFY) {
-                        attempt = attempt.copy(phase = AttemptPhase.EXECUTING, error = null,
-                            waitingForEvent = if (decision.action == StageTurnAction.WAIT_EVENT) decision.requestId else null,
-                            waitingForUser = if (decision.action == StageTurnAction.WAIT) decision.requestId ?: "legacy" else null)
+                        attempt = attempt.awaiting(StageWaiting.of(decision.action, decision.requestId))
+                            .copy(phase = AttemptPhase.EXECUTING, error = null)
                         saveAttempt(id, stageId, attempt)
                         if (decision.action in setOf(StageTurnAction.WAIT, StageTurnAction.WAIT_EVENT)) {
                             if (!hasQueuedReply(id, stageId)) return
-                            attempt = attempt.copy(error = null, waitingForUser = null, waitingForEvent = null)
+                            attempt = attempt.replied()
                             saveAttempt(id, stageId, attempt)
                         }
                         continue
