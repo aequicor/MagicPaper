@@ -812,17 +812,18 @@ class PlanningExecutionService(
                 // Inbox migration can restore a completed turn's VERIFY checkpoint while this
                 // coroutine is suspended. Never overwrite that checkpoint with a fresh native intent.
                 if (!canRunStage(id, stageId)) return
-                val checkpointPlan = store.planFor(id) ?: return
-                val checkpointStage = checkpointPlan.milestones.firstOrNull { it.id == stageId } ?: return
-                val checkpointAttempt = checkpointStage.attempts.lastOrNull() ?: return
-                if (checkpointPlan.runId != plan.runId || checkpointAttempt.id != attempt.id ||
-                    checkpointAttempt.turnIndex != attempt.turnIndex || checkpointAttempt.sessionGeneration != attempt.sessionGeneration) return
-                if (checkpointAttempt.phase != attempt.phase) {
-                    stage = checkpointStage
-                    attempt = checkpointAttempt
-                    currentAttempt = attempt
-                    if (attempt.phase == AttemptPhase.VERIFYING) break
-                    return
+                when (val drift = CheckpointDrift(plan, attempt, store.planFor(id), stageId)) {
+                    CheckpointDrift.Gone, CheckpointDrift.TakenOver -> return
+                    is CheckpointDrift.Advanced -> {
+                        stage = drift.stage
+                        attempt = drift.attempt
+                        currentAttempt = attempt
+                        // Verification is the one phase this coroutine still owns; it runs just
+                        // below. Any other advance belongs to whoever recorded it.
+                        if (attempt.phase == AttemptPhase.VERIFYING) break
+                        return
+                    }
+                    CheckpointDrift.None -> Unit
                 }
                 val prompt = """
                     Общая цель: ${plan.goal}

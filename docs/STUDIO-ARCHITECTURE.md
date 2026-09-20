@@ -62,6 +62,7 @@ fun reduce(state: StageState, event: StageEvent): StageTransition   // без Cl
 | Как возобновить попытку | `StageResumption` | порядок проверок, державшийся на порядке строк |
 | Что значит событие движка | `StageEngineSignal`, `StageAttempt.after`, `StageRunResult` | четыре копии одного `when`, разошедшиеся в мелочах |
 | Повторять ли сбой | `RetryDecision`, `PlanningRetryPolicy.decide` | четыре написания одного решения; часы и случайность внутри службы |
+| Описывает ли сохранённый план ход в руках | `CheckpointDrift` | цепочка `if` с четырьмя полями тождества и без имени |
 
 ### Журнал событий
 
