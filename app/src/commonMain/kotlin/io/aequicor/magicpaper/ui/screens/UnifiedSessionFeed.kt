@@ -56,10 +56,10 @@ internal fun UnifiedSessionFeed(
     viewingCoding: Boolean,
     collapsedGroups: Set<String>,
     onToggleGroup: (UnifiedSidebarGroup) -> Unit,
-    onSelect: (String, Boolean) -> Unit,
+    onSelect: (String, String) -> Unit,
     onArchive: (UnifiedSidebarItem) -> Unit,
     onDelete: (UnifiedSidebarItem) -> Unit,
-    onAddSession: (String) -> Unit,
+    onAddSession: (String, String) -> Unit,
     modifier: Modifier = Modifier,
     state: LazyListState = rememberLazyListState(),
 ) {
@@ -86,7 +86,7 @@ internal fun UnifiedSessionFeed(
                 indicator = { PaperText("▱", role = PaperTextRole.CHROME) },
                 actions = {
                     PaperIconButton(label = "Новая сессия: ${row.group.projectName.orEmpty()}",
-                        onClick = { row.group.projectId?.let(onAddSession) }) { PaperNoteAddIcon() }
+                        onClick = { row.group.projectId?.let { onAddSession(row.group.items.first().sourceId, it) } }) { PaperNoteAddIcon() }
                 },
             )
         } else {
@@ -95,7 +95,7 @@ internal fun UnifiedSessionFeed(
                 selected = item.id == selectedId && item.isCoding == viewingCoding,
                 depth = if (row.group.showsProjectHeader) 1 else 0,
                 subtitle = item.sidebarSubtitle(showProject = false),
-                onClick = { retainViewport(); onSelect(item.id, item.isCoding) },
+                onClick = { retainViewport(); onSelect(item.id, item.sourceId) },
                 keepActionsVisible = menuKey == key,
                 indicator = {
                     if (item.isCoding) ActivityDot(item.codingStatus ?: io.aequicor.magicpaper.domain.CodingSessionStatus.IDLE, size = 10)
@@ -108,7 +108,7 @@ internal fun UnifiedSessionFeed(
                     item.immunity?.let { immunity ->
                         ImmunityDiamondButton(immunity.status, immunity.selected, onClick = {
                             retainViewport()
-                            onSelect(immunity.sessionId, true)
+                            onSelect(immunity.sessionId, item.sourceId)
                         })
                     }
                     PaperTooltip("В архив") {

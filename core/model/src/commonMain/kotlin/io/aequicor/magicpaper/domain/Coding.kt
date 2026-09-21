@@ -118,6 +118,8 @@ data class CodingRunCheckpoint(
     val interactionMode: CodingInteractionMode? = null,
     /** Null keeps already accepted legacy requests on their original execution path. */
     val worktreeEnabled: Boolean? = null,
+    /** A workspace task may span several fresh native requests; it is never the request identity. */
+    val workspaceTaskId: String? = null,
 )
 
 /** A persisted successful reply is authoritative even while checkpoint cleanup is pending. */
@@ -176,18 +178,6 @@ fun aggregateCodingStatus(statuses: Collection<CodingSessionStatus>): CodingSess
         CodingSessionStatus.NEEDS_TESTING -> 7
         CodingSessionStatus.IDLE -> 8
     } } ?: CodingSessionStatus.IDLE
-
-/** Фазы состояния кодинг-рантайма (движка пи-агента). */
-enum class RuntimePhase { UNKNOWN, CHECKING, INSTALLING, READY, ERROR, UNSUPPORTED }
-
-/** Снимок состояния рантайма для UI. */
-data class RuntimeStatus(
-    val phase: RuntimePhase,
-    val detail: String = "",
-    val version: String = "",
-) {
-    val ready: Boolean get() = phase == RuntimePhase.READY
-}
 
 /** Черновик ответа агента во время выполнения (живая лента в UI). */
 data class CodingDraft(

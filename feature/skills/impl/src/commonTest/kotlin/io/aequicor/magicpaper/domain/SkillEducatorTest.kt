@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.domain
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
+import kotlinx.coroutines.CancellationException
 
 class SkillEducatorTest {
 
@@ -31,5 +34,19 @@ class SkillEducatorTest {
         val profile = LlmProfile(id = "p", name = "тест", baseUrl = "http://x/v1", modelId = "m")
         val draft = educator.propose(emptyList(), profile)
         assertTrue(draft.name.isNotBlank())
+    }
+
+    @Test fun providerFailureDoesNotBecomeSuccessfulHeuristicDraft() = runTest {
+        val profile = LlmProfile(id = "p", name = "test", baseUrl = "https://example.invalid", modelId = "m", apiKey = "fixture")
+        assertFailsWith<IllegalStateException> { educator.propose(messages, profile) }
+    }
+
+    @Test fun cancellationReachesTheRequestingOwner() = runTest {
+        val cancelled = CancellationException("controlled")
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = throw cancelled
+        }
+        val profile = LlmProfile(id = "p", name = "test", baseUrl = "https://example.invalid", modelId = "m", apiKey = "fixture")
+        assertSame(cancelled, assertFailsWith<CancellationException> { SkillEducator(gateway).propose(messages, profile) })
     }
 }

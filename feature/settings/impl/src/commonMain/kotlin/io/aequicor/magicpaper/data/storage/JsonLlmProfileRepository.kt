@@ -48,15 +48,15 @@ class JsonLlmProfileRepository(
         return profiles
     }
 
-    override suspend fun save(profile: LlmProfile) = mutex.withLock {
+    suspend fun save(profile: LlmProfile) = mutex.withLock {
         saveUnlocked(loadUnlocked().filterNot { it.id == profile.id } + profile)
     }
 
-    override suspend fun delete(id: String) = mutex.withLock {
+    suspend fun delete(id: String) = mutex.withLock {
         saveUnlocked(loadUnlocked().filterNot { it.id == id })
     }
 
-    override suspend fun replaceAll(profiles: List<LlmProfile>) = mutex.withLock { saveUnlocked(profiles) }
+    suspend fun replaceAll(profiles: List<LlmProfile>) = mutex.withLock { saveUnlocked(profiles) }
 
     private suspend fun saveUnlocked(profiles: List<LlmProfile>) {
         val previous = readRecords()

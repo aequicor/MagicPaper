@@ -1,0 +1,68 @@
+package io.aequicor.magicpaper.di
+
+import io.aequicor.magicpaper.domain.AppSettings
+import io.aequicor.magicpaper.domain.MediaGenerationOwner
+import io.aequicor.magicpaper.domain.MediaKind
+import io.aequicor.magicpaper.ui.SettingsState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+
+/**
+ * An installed feature participates in application lifetime and reset. The common host
+ * owns the order; the feature owns its resources. An absent feature has no registration.
+ * UI routes and media authority use their own, narrower contracts.
+ */
+internal interface RuntimeExtension {
+    val id: String
+    suspend fun start()
+    fun updateConfiguration(state: SettingsState)
+    suspend fun reload()
+    suspend fun clearProfileOverrides(profileId: String)
+    suspend fun prepareForReset()
+    suspend fun pauseForReset()
+    suspend fun clearForReset()
+    suspend fun resumeAfterReset()
+    suspend fun close()
+}
+
+internal class RuntimeExtensions(extensions: List<RuntimeExtension>) {
+    val owners = extensions.toList().also { owners ->
+        require(owners.map { it.id }.distinct().size == owners.size) { "Duplicate runtime owner" }
+    }
+}
+
+/** Resolves media authority only in the scope owned by an installed feature. */
+internal interface MediaOwnerPolicy {
+    fun owns(owner: MediaGenerationOwner): Boolean
+    suspend fun exists(owner: MediaGenerationOwner): Boolean
+    suspend fun allows(owner: MediaGenerationOwner, kind: MediaKind): Boolean
+}
+
+internal class MediaOwnerPolicies(policies: List<MediaOwnerPolicy>) {
+    private val policies = policies.toList()
+    fun resolve(owner: MediaGenerationOwner): MediaOwnerPolicy? {
+        val matches = policies.filter { it.owns(owner) }
+        check(matches.size <= 1) { "Media owner has multiple authorities" }
+        return matches.singleOrNull()
+    }
+}
+
+/** Complete every cleanup participant and retain the first cancellation as control flow. */
+internal suspend fun completeRuntimeCleanup(vararg actions: suspend () -> Unit) {
+    var first: Throwable? = null
+    var cancellation: CancellationException? = null
+    fun failed(failure: Throwable) {
+        if (failure is CancellationException) {
+            if (cancellation == null) cancellation = failure else if (cancellation !== failure) cancellation!!.addSuppressed(failure)
+        } else if (first == null) first = failure else if (first !== failure) first!!.addSuppressed(failure)
+    }
+    withContext(NonCancellable) {
+        actions.forEach { action -> try { action() } catch (failure: Throwable) { failed(failure) } }
+    }
+    try { currentCoroutineContext().ensureActive() } catch (failure: CancellationException) { failed(failure) }
+    cancellation?.let { cancelled -> first?.let(cancelled::addSuppressed); throw cancelled }
+    first?.let { throw it }
+}

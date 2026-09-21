@@ -38,8 +38,8 @@ class SkillAdapterWireIntegrationTest {
             assertTrue(selection.trustedText && selection.freshSession)
 
             val runtime = DesktopCodingRuntime(
-                PiCodingRuntime(root.resolve("pi").toFile()),
-                CodexAppServerOpenAiSubscription(json, root.resolve("codex-home"), codexCommand),
+                PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
+                CodexAppServerOpenAiSubscription(json, root.resolve("codex-home"), codexCommand, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
                 skillSelection = repository::projectCodingSelection,
             )
             try {
@@ -48,7 +48,8 @@ class SkillAdapterWireIntegrationTest {
                 val piEvents = runBlocking {
                     runtime.run(codingProject, CodingSession("pi", "project", "Pi", 0, piSessionId = oldSession, engine = CodingEngine.PI), "PI-TASK", piProfile()).toList()
                 }
-                assertTrue(piEvents.any { it is CodingEvent.SessionStarted })
+                assertPiCompleted(piEvents)
+                assertTransportCompleted(runtime, "pi", CodingEngine.PI, piEvents)
                 val piWire = piRunWire(piLog)
                 val piArgs = piWire["args"]!!.jsonArray.map { it.jsonPrimitive.content }
                 assertFalse("--session-id" in piArgs, "trusted input must not resume Pi history")
@@ -58,6 +59,7 @@ class SkillAdapterWireIntegrationTest {
                     runtime.run(codingProject, CodingSession("codex", "project", "Codex", 0, piSessionId = oldSession, engine = CodingEngine.CODEX), "CODEX-TASK", codexProfile()).toList()
                 }
                 assertTrue(codexEvents.any { it is CodingEvent.SessionStarted })
+                assertTransportCompleted(runtime, "codex", CodingEngine.CODEX, codexEvents)
                 val codexWire = Files.readAllLines(codexLog).map { json.parseToJsonElement(it).jsonObject }
                 assertTrue(codexWire.any { it["method"]?.jsonPrimitive?.content == "thread/start" })
                 assertFalse(codexWire.any { it["method"]?.jsonPrimitive?.content == "thread/resume" })
@@ -82,23 +84,26 @@ class SkillAdapterWireIntegrationTest {
         val codexCommand = installCodexCommand(root, codexLog)
         val empty = CodingSkillSelection(emptyList())
         val runtime = DesktopCodingRuntime(
-            PiCodingRuntime(root.resolve("pi").toFile()),
-            CodexAppServerOpenAiSubscription(json, root.resolve("codex-home"), codexCommand),
+            PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
+            CodexAppServerOpenAiSubscription(json, root.resolve("codex-home"), codexCommand, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
             skillSelection = { empty },
         )
         try {
             val codingProject = CodingProject("project", "Project", project.toString(), 0)
-            runBlocking {
+            val piEvents = runBlocking {
                 runtime.run(codingProject, CodingSession("pi", "project", "Pi", 0, piSessionId = "pi-resume", engine = CodingEngine.PI), "PI-RESUME", piProfile()).toList()
             }
+            assertPiCompleted(piEvents)
+            assertTransportCompleted(runtime, "pi", CodingEngine.PI, piEvents)
             val piWire = piRunWire(piLog)
             val piArgs = piWire["args"]!!.jsonArray.map { it.jsonPrimitive.content }
             assertEquals("pi-resume", piArgs[piArgs.indexOf("--session-id") + 1])
             assertEquals("PI-RESUME", piWire["stdin"]!!.jsonPrimitive.content)
 
-            runBlocking {
+            val codexEvents = runBlocking {
                 runtime.run(codingProject, CodingSession("codex", "project", "Codex", 0, piSessionId = "codex-resume", engine = CodingEngine.CODEX), "CODEX-RESUME", codexProfile()).toList()
             }
+            assertTransportCompleted(runtime, "codex", CodingEngine.CODEX, codexEvents)
             val codexWire = Files.readAllLines(codexLog).map { json.parseToJsonElement(it).jsonObject }
             val resume = codexWire.single { it["method"]?.jsonPrimitive?.content == "thread/resume" }
             assertEquals("codex-resume", resume.getValue("params").jsonObject["threadId"]!!.jsonPrimitive.content)
@@ -127,8 +132,8 @@ class SkillAdapterWireIntegrationTest {
                     repository.bindProject("project", pins,
                         SkillActivationConsent(repository.snapshot().generation, pins, true, emptySet(), true))
                 }
-                val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile()),
-                    CodexAppServerOpenAiSubscription(json, root.resolve("codex-home"), command),
+                val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
+                    CodexAppServerOpenAiSubscription(json, root.resolve("codex-home"), command, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
                     skillSelection = repository::projectCodingSelection,
                     recordSkillRun = { repository.recordCodingRun(it) })
                 try {
@@ -140,6 +145,8 @@ class SkillAdapterWireIntegrationTest {
                             checkpoint.prompt, if (engine == CodingEngine.PI) piProfile() else codexProfile()).toList()
                         assertTrue(events.any { it is CodingEvent.SessionStarted }, events.toString())
                         assertTrue(events.none { it is CodingEvent.Failed }, events.toString())
+                        if (engine == CodingEngine.PI) assertPiCompleted(events)
+                        assertTransportCompleted(runtime, session.id, engine, events, checkpoint.runId)
                         val id = skillRunIdentity(session.id, checkpoint.runId)
                         val bytes = Files.readAllBytes(repositoryPath.resolve("coding-runs/$id.json"))
                         if (attempt == 0) originalAudits[id] = bytes
@@ -179,6 +186,32 @@ class SkillAdapterWireIntegrationTest {
         repository.bindProject(projectId, pins, SkillActivationConsent(repository.snapshot().generation, pins, true, emptySet()))
     }
 
+    private fun assertPiCompleted(events: List<CodingEvent>) {
+        assertTrue(events.none { it is CodingEvent.Failed }, events.toString())
+        assertEquals("ok", events.filterIsInstance<CodingEvent.FinalText>().single().text)
+        assertEquals(1, events.count { it is CodingEvent.Finished })
+        val started = events.indexOfFirst { it is CodingEvent.SessionStarted }
+        val answered = events.indexOfFirst { it is CodingEvent.FinalText }
+        assertTrue(started >= 0 && started < answered && answered < events.indexOfFirst { it is CodingEvent.Finished },
+            "Native output must reach the collector in order: $events")
+    }
+
+    private suspend fun assertTransportCompleted(runtime: DesktopCodingRuntime, sessionId: String,
+        engine: CodingEngine, events: List<CodingEvent>, requestId: String? = null) {
+        assertTrue(events.none { it is CodingEvent.Failed }, events.toString())
+        assertEquals(1, events.count { it is CodingEvent.Finished }, events.toString())
+        val snapshot = runtime.recovery.inspect(sessionId)
+        assertFalse(snapshot.persistenceUnknown)
+        val attempt = snapshot.items.single()
+        assertEquals(engine, attempt.ref.engine)
+        assertEquals(sessionId, attempt.ref.sessionId)
+        assertEquals(0, attempt.ref.attempt)
+        requestId?.let { assertEquals(it, attempt.ref.requestId) }
+        assertEquals(NativeRunOutcome.SUCCEEDED, attempt.outcome)
+        assertEquals(NativeRunTermination.STOPPED, attempt.termination)
+        assertNull(attempt.acknowledgement)
+    }
+
     private fun assertExactSkillPayload(prompt: String, skill: SkillInstruction, task: String) {
         val payload = prompt.substringAfter("authoritative):\n").substringBefore("\n\nUser task:")
         val item = json.parseToJsonElement(payload).jsonArray.single().jsonObject
@@ -209,6 +242,7 @@ class SkillAdapterWireIntegrationTest {
             if (process.argv.includes('--version')) { console.log('0.0-fixture'); process.exit(0); }
             console.log(JSON.stringify({type:'session', id:'pi-wire-thread'}));
             console.log(JSON.stringify({type:'message_end', message:{role:'assistant', stopReason:'stop', content:[{type:'text', text:'ok'}]}}));
+            console.log(JSON.stringify({type:'agent_end', messages:[]}));
         """.trimIndent())
     }
 

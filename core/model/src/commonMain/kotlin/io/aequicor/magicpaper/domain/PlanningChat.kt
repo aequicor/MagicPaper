@@ -25,8 +25,8 @@ fun List<Plan>.resolvePlan(id: String): Plan? = firstOrNull { it.id == id } ?: f
     it.singleOrNull()
 }
 
-enum class StageTurnAction { VERIFY, CONTINUE, WAIT, WAIT_EVENT }
-data class StageTurnDecision(val action: StageTurnAction, val report: String, val requestId: String? = null)
+@Serializable enum class StageTurnAction { VERIFY, CONTINUE, WAIT, WAIT_EVENT }
+@Serializable data class StageTurnDecision(val action: StageTurnAction, val report: String, val requestId: String? = null)
 
 
 @Serializable enum class HandoffStatus { QUEUED, PROCESSING, RESOLVED, FAILED }

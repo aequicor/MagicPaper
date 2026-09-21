@@ -46,9 +46,8 @@ class MagicPaperRuntime internal constructor(
     private var closed = false
     private var settingsService: SettingsService? = null
     private var chatService: ChatService? = null
-    private var codingService: CodingService? = null
     private var pluginService: PluginService? = null
-    private var codingFeature: CodingFeature? = null
+    private var extensions: List<RuntimeExtension> = emptyList()
     private var mediaService: MediaGenerationService? = null
 
     fun start() {
@@ -59,26 +58,24 @@ class MagicPaperRuntime internal constructor(
                 // Migrate and hydrate saved credentials before any runtime can restore work.
                 koin.get<SettingsRepository>().load()
                 koin.get<LlmProfileRepository>().load()
+                koin.get<UsageLedger>().start()
+                koin.get<SkillCommands>().start()
                 val media = koin.get<MediaGenerationService>().also { mediaService = it }
                 media.refreshAvailability()
                 // Track assembly ownership before dependent constructors can fail.
-                codingFeature = koin.get()
+                extensions = koin.get<RuntimeExtensions>().owners
                 media.recoverPending()
                 val settings = koin.get<SettingsService>().also { settingsService = it }
                 val chat = koin.get<ChatService>().also { chatService = it }
-                val coding = koin.get<CodingService>().also { codingService = it }
                 settings.start()
-                // Native skill adapters must exist before restoration can launch a coding run.
+                // Restored sessions need their skill adapters; restoration itself never launches a run.
                 koin.get<PluginService>().also { pluginService = it }.start()
                 chat.start()
-                // Recover orchestration and child-session projections before coding.start()
-                // consumes durable run checkpoints.
-                codingFeature?.start()
-                coding.start()
+                extensions.forEach { it.start() }
                 scope.launch {
                     settings.state.collect { state ->
                         chat.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available, state.openAiSubscription.account?.signedIn == true)
-                        coding.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available, state.openAiSubscription.account?.signedIn == true)
+                        extensions.forEach { it.updateConfiguration(state) }
                     }
                 }
                 onPlatformStarted()
@@ -119,8 +116,7 @@ class MagicPaperRuntime internal constructor(
                 // Teardown owns failures and continues through every already-created owner.
                 cleanup("startup") { starting?.cancelAndJoin() }
                 cleanup("chat") { chatService?.close() }
-                cleanup("coding") { codingService?.close() }
-                cleanup("execution") { codingFeature?.close() }
+                extensions.asReversed().forEach { extension -> cleanup(extension.id) { extension.close() } }
                 cleanup("media") { mediaService?.close() }
                 cleanup("settings") { settingsService?.close() }
                 cleanup("plugins") { pluginService?.close() }

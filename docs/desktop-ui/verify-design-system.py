@@ -7,8 +7,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = re.compile(r'androidx\s*\.\s*compose\s*\.\s*material(?:3)?\b|com\s*\.\s*mikepenz\s*\.\s*markdown\b|androidx\.compose\.ui\.window\.(?:Dialog|Popup)\b|androidx\.compose\.foundation\.(?:clickable|combinedClickable|text\.BasicTextField|selection\.(?:selectable|toggleable))\b')
 APPLICATION_DEPENDENCY = re.compile(
-    r'project\s*\(\s*(?:path\s*=\s*)?["\']:(?:app|desktopApp|androidApp|webApp|feature)(?::[^"\']*)?["\']'
-    r'|\bprojects\.(?:app|desktopApp|androidApp|webApp|feature)\b'
+    r'project\s*\(\s*(?:path\s*=\s*)?["\']:(?:app|desktopApp|androidApp|webApp|feature|magic-common|magic-chat|magic-agent|backend-agents)(?::[^"\']*)?["\']'
+    r'|\bprojects\.(?:app|desktopApp|androidApp|webApp|feature|magicCommon|magicChat|magicAgent|backendAgents)\b'
 )
 
 
@@ -65,7 +65,7 @@ if '--self-test' in sys.argv:
         assert len(violations(root)) == 2, 'nested feature modules must be checked'
         design_system = root / 'designSystem'
         design_system.mkdir()
-        for dependency in ['project(":app")', 'project(path = ":feature:session:api")', 'projects.feature.coding.impl']:
+        for dependency in ['project(":app")', 'project(path = ":feature:session:api")', 'projects.feature.coding.impl', 'project(":magic-common:tools:api")', 'project(":magic-chat:api")', 'project(":magic-agent:runtime:api")', 'project(":backend-agents:api")', 'projects.magicAgent.runtime.api']:
             (design_system / 'build.gradle.kts').write_text(f'implementation({dependency})')
             assert len(violations(root)) == 3, dependency
 if '--self-test' in sys.argv:

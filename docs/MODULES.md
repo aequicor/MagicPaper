@@ -21,35 +21,56 @@ Kotlin-пакеты моделей сохранены при переносе, �
 | `:core:platform` | Выбор файлов, импорт/экспорт профилей, общая работа с вложениями черновиков |
 | `:core:ai:api` / `impl` | Контракты LLM, поиска и учёта использования; HTTP-адаптеры и исследования описаний моделей |
 | `:core:storage:api` / `impl` | Контракты обычного, секретного и долговременного хранения; реализации для платформ |
-| `:feature:session:api` / `impl` | Контракты сессий и кодинга; реализация — чаты, история, очередь, черновики и HTTP-backend |
-| `:feature:transcript` | Общая презентация сессий: транскрипт, композер, действия над историей, вложения, закрепления, медиа |
-| `:feature:coding:impl` | **Только jvm.** Проектные сессии: планирование, оркестрация, организмы, worktree, исполнение инструментов, Pi/Codex, computer use |
-| `:feature:tools:api` / `impl` | Словарь, схемы и типы отказа инструментов, матрица доступа по режиму и полномочиям; исполнение, квитанции и эффекты — у владельца сессий |
+| `:magic-chat:api` / `impl` | Общий чат, история, очередь, черновики и HTTP-backend; нативный API отсутствует |
+| `:magic-common:transcript` | Общая презентация сессий: транскрипт, композер, действия над историей, вложения, закрепления, медиа |
+| `:magic-agent:runtime:api` / `impl` | **Только jvm.** Проектные сессии: планирование, оркестрация, организмы, worktree и подготовка ресурсов для capability-driven backend catalog |
+| `:magic-agent:browser:api` / `impl` | **Только jvm.** Машина браузерного запуска, журнал действий, Playwright/HTML validator и ручное чтение источника через порт чата |
+| `:magic-agent:computer:api` / `impl` | **Только jvm.** Машина доступа, журнал OS-действий, leases и нативные computer/application адаптеры |
+| `:magic-common:media:api` / `impl` | API-машина и журнал генерации медиа, проверка подключения, восстановление существующих provider jobs |
+| `:magic-common:request-pins:api` / `impl` | API-машина и журнал анализа закреплённых запросов обоих типов сессий |
+| `:magic-common:prompts` | Чистая сборка общих системных инструкций, контекста, навыков и read-only режимов; без процессов и состояния |
+| `:magic-common:questionnaire:api` / `impl` | Машина опросников, журнал, восстановление и неизвестный исход доставки |
+| `:magic-common:research` | Общие правила исследования, источники, промпт, follow-ups и ограниченное чтение страниц; без UI и процессов |
+| `:backend-agents:api` / `factory` | JVM-контракты протоколов, объявленные способности и единственная фабрика адаптеров; потребитель — `:magic-agent:runtime:impl` |
+| `:backend-agents:pi` / `codex` | Протоколы, конфигурация, чтение событий и запуск существующих native-процессов; реализации видит только factory |
+| `:magic-common:tools:api` / `impl` | Словарь, схемы, матрица доступа, общий executor и квитанции; API-машина provider tool loop, интерпретатор и журнал входов |
 | `:feature:settings:api` / `impl` | Настройки, подключения моделей и их секреты, редактирование профилей |
 | `:feature:docs:api` / `impl` | Поиск и просмотр встроенной документации |
-| `:feature:plugins:api` / `impl` | SPI/реестр плагинов и общие встроенные плагины |
+| `:feature:plugins:api` / `impl` | `PluginMachine`, SPI/реестр и команды `PluginPreferences`; журнал настроек и встроенные плагины |
 | `:feature:skills:api` / `impl` | Каталог, обучение, установка и локальные/project навыки |
 | `:desktopApp`, `:androidApp`, `:webApp` | Создание платформенного окружения и запуск общей оболочки |
 
-Чат и проектное исполнение находятся в `feature/session`. Чат зависит только от
-`ChatBackend` — четыре метода, которые он действительно вызывает; выбор реализации
-принадлежит `app`. Desktop-чат получает `CodingRuntime`, чей `runChat` адаптирует
-сохранённую историю к тому же `run`, что используют проектные сессии, и даёт модели
-цикл инструментов: генерацию медиа, нативный опросник, чтение вложений движком.
-Платформы без native-процессов получают `GatewaySessionRuntime` поверх HTTP. Эти две
-реализации не взаимозаменяемы: `LlmGateway` дополняет список сообщений и не умеет
-вызывать инструменты. Общий прямой путь станет возможен, когда появится LLM-слой
-с цепочками и вызовом функций на всех платформах.
+Чат находится в `magic-chat`, проектное исполнение — в JVM-only `magic-agent/runtime`.
+Общий `ChatBackend` не называет нативных контрактов. `GatewaySessionRuntime` использует
+`LlmGateway.turn`, общий `ProviderToolLoop` и тот же executor инструментов, что нативные
+сессии. HTTP-адаптеры OpenAI-compatible/OpenRouter, Anthropic и Google сохраняют
+provider continuation между ходами; инструменты поиска, документации, навыков,
+опросников и медиа доступны через общие порты. Подключение desktop-чата пока сохраняет
+нативный путь до завершения отдельного транспорта подписки ChatGPT: молчаливого
+отката к ответу без инструментов нет.
 Пакеты Kotlin, ключи хранилища и ресурсные пути `coding/*` сохранены для совместимости;
 явный workflow макетов остаётся у `LayoutChatAgent`.
 
-`:feature:tools` не владеет историей или процессами. Его `CustomOrchestration` проверяет
+`:magic-common:tools` не владеет историей или процессами. Его `CustomOrchestration` проверяет
 режим и передаёт команды через `OrchestrationActions`, связанный в `app` с владельцем
 дерева сессий. Фильтрация каталога и проверка вызова обе требуют `PLANNING`.
 Отказы инструментов (`ToolArgumentRejection`, `ToolStateRejection`, `requireTool`,
 `checkTool`) тоже принадлежат модулю: это контракт вызова, а не деталь исполнения.
-Исполнитель (`ToolExecutor`, `ToolSession`, `withTools`), квитанции, монтаж (`ToolHost`)
-и мосты к native-процессу остаются у владельца сессий.
+Исполнитель (`ToolExecutor`, `ToolSession`, `withTools`) находится в общем tools;
+мосты к native-процессу остаются у `:magic-agent:runtime:impl`. `ToolHost` удалён:
+общая фабрика собирает executor из неизменяемых портов, нативный `ToolSessionFactory`
+добавляет проверки проектного владельца, `ApplicationToolCommands` маршрутизирует вызовы.
+Общие `MediaToolCommands` и `QuestionnaireToolCommands` владеют своими эффектами,
+`OrganismToolAuthority` проверяет полномочия. `PlanningToolAccess` принадлежит
+`OrchestrationService`; тип квитанции сохранён в прежнем Kotlin-пакете в `core:model`.
+
+`QuestionnaireMachine` и `RequestPinMachine` объявлены в API соответствующих общих
+владельцев. Их impl записывает Intent/Fact до внешнего действия и восстанавливает
+проекцию без повторного исполнения эффектов. Незавершённая попытка имеет неизвестный
+исход, который не снимают повторное открытие или смена подключения. Старые данные
+импортируются один раз; сохранённые идентификаторы и namespace остаются прежними.
+Общий `MediaToolReceiptOwner` подтверждает точную квитанцию завершённой генерации
+независимо от того, какой transport начал её.
 
 ## Отдельный инструмент верстки
 
@@ -61,13 +82,54 @@ Kotlin-пакеты моделей сохранены при переносе, �
 Плагин зависит от публичного Paper API и общего API редактора; обратных
 зависимостей у `:designSystem` нет. [Запуск и проверка](../tools/paper-editor/README.md).
 
-Обычный чат использует `LayoutEditor` из `session:api`. `LayoutChatAgent` владеет
+JVM root добавляет `LayoutChatExtension` через общий порт `ChatResponseExtension`.
+Общий чат не видит `LayoutEditor` или проектный runtime. `LayoutChatAgent` владеет
 генерацией и исправлением по диагностике; JVM-адаптер `DesktopLayoutEditor` — запуском
 внешнего процесса и ограниченными файловыми операциями. `app` передаёт выбранный
-проект и платформенный адаптер. `ChatSession.layoutProjectId` сохраняет привязку
+проект и платформенный адаптер в JVM extension; подготовка захватывает выбор до запуска coroutine. `ChatSession.layoutProjectId` сохраняет привязку
 диалога; восстановление не запускает процессы. Приложение связывается с редактором
 через аргументы процесса и JSON/PNG-файлы, без зависимости на реализацию редактора.
 Desktop-поставка с `-PpaperEditor=true` включает исполняемый инструмент в ресурсы.
+
+## Группы целевой архитектуры
+
+Группа задаётся Gradle identity и платформами. `magic-common` собирается на JVM,
+Android, JS и Wasm и зависит только от общих инфраструктурных модулей. `backend-agents`
+собирается только на JVM, имеет проектные зависимости лишь внутри группы и на
+`core:model`. Реализации движков закрыты factory; в приложение они входят через
+`magic-agent:runtime:impl`. Проверки этих границ и значения эффектов находятся в
+`verify-module-architecture.py --self-test`.
+
+Оболочка получает immutable `AppContributions`; нативные routes, dialogs и sidebar
+projection создаёт только JVM root. `RuntimeExtension` участвует в запуске, настройке,
+сбросе и закрытии установленной функции; на общих платформах список пуст, а нативных
+заглушек нет. `RuntimeStatus` и подготовка движков принадлежат JVM runtime API;
+`CodingEngine` остаётся сохраняемой идентичностью в `core:model`.
+
+Чат использует общий provider loop и свою журналируемую `ChatMachine`. Нативные
+запуски ограждает `NativeLifecycleMachine` из backend API; её закрытая реализация
+доступна только backend factory. Runtime объявляет родительскую `CodingMachine`.
+Дочерние владельцы организма сессий и рабочих копий находятся соответственно в
+`magic-agent:organism:api/impl` и `magic-agent:workspace:api/impl`. Runtime потребляет
+их API; `app` передаёт фабрику организма и экземпляр владельца рабочих копий.
+`TaskWorkspace`, `PlanningWorkspace` и `SessionIntegrationCheckRunner` принадлежат
+workspace API. Восстановление этих журналов не исполняет повторно внешние эффекты.
+Удержание пути возвращает `WorkspaceLease`: освобождение принимает тот же точный
+handle, а не project ID. `LocalPlanningWorkspace` находится в workspace impl;
+Git-адаптер пока остаётся в runtime impl вместе с общей Git-инфраструктурой.
+
+`magic-agent:native-recovery:api` — отдельный JVM-контракт инспекции, остановки и
+точного подтверждения native исхода. Он сохраняет прежний пакет типов, не зависит
+от backend-модулей и используется родительскими владельцами runtime и planning.
+
+`magic-agent:checks:api/impl` владеет допуском команд, точной идентичностью процесса,
+подтверждениями остановки группы и восстановления прав, а также результатами проверок.
+`CommandCheckMachine` общая для политик защищённого проекта и управляемой рабочей копии.
+App создаёт один `CommandChecks`; runtime использует его API через неизменяемые порты.
+Сохранённый неизвестный исход блокирует повтор и сброс; PID сам по себе не является доказательством.
+
+Миграция ещё идёт: интеграционная приёмка новых владельцев, машины планирования и
+оставшиеся владельцы состояния отражены в `TARGET-ARCHITECTURE-WORKFLOW.md`.
 
 ## Направление зависимостей
 
@@ -93,8 +155,8 @@ Desktop-поставка с `-PpaperEditor=true` включает исполня
 `app/src/commonMain/kotlin/io/aequicor/magicpaper/di/FeatureFactoryQualifiers.kt`, используемые и при регистрации, и при
 получении. В Wasm имена вложенных `ChatComponent.Factory` и других `Factory`
 не различаются по enclosing type в ключе Koin. Нельзя заменять эти qualifiers
-непомеченным `get()`. Koin запрещает overrides при загрузке модулей; common
-runtime-тест дополнительно проверяет конкретный тип каждой из шести фабрик.
+непомеченным `get()`. Koin запрещает overrides при загрузке модулей; JVM
+runtime-тест дополнительно проверяет типы фабрик и отсутствие native binding в общем root.
 Koin и его qualifiers не входят в feature API.
 
 ## Gradle conventions
@@ -110,15 +172,14 @@ Compose convention добавляет компилятор и ресурсы Com
 
 ## Платформы и ресурсы
 
-Общие модули сохраняют JVM, Android, JS и Wasm targets. Исключение одно:
-`:feature:coding:impl` объявляет только jvm-цель и подключён единственной строкой в
-`jvmMain`-зависимостях `:app`, поэтому Android и браузер его не компилируют вовсе.
-Недоступные на платформе возможности поставляются через контракт: `:app` получает
-`CodingFeature` от платформы, а хосты без агента связывают `UnavailableCodingFeature`.
-Верификатор архитектуры стережёт эту границу правилом `DESKTOP_ONLY`; настоящее
-доказательство — `compileMigrationTargets`, который собирает сами артефакты.
+Общие модули сохраняют JVM, Android, JS и Wasm targets. Все модули `magic-agent`
+и `backend-agents` объявляют только JVM. `:app` подключает runtime API/impl только
+в `jvmMain`: Android и браузер не компилируют эти символы. Отсутствующая native
+возможность не создаёт `UnavailableCodingFeature` или сервис-заглушку.
+Верификатор архитектуры проверяет source-set boundary; авторитетная проверка
+артефактов — `compileMigrationTargets`.
 
-Ресурсы протоколов движков находятся в `feature/coding/impl/src/jvmMain/resources/coding`.
+Ресурсы протоколов движков находятся в `backend-agents/pi/src/jvmMain/resources/coding`.
 Их classpath-пути `coding/*` сохранены. Node-проверки и локальные интеграционные
 сценарии находятся в соседнем `src/jvmTest/resources/coding`.
 Шрифты и общие визуальные ресурсы принадлежат `designSystem`.
@@ -135,7 +196,7 @@ Compose convention добавляет компилятор и ресурсы Com
 - `./gradlew verifyMigration` — все перечисленные Gradle-проверки и Android host tests.
 
 Реальные движки проверяются отдельно с явными флагами, например
-`./gradlew :feature:session:impl:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
+`./gradlew :magic-chat:impl:jvmTest --tests '*PlanningRuntimeIntegrationTest' -Pmagicpaper.pi.it=true -Pmagicpaper.codex.it=true`.
 Подробности локальных серверов и ресурсов: [движки](ENGINES.md).
 
 JUnit XML сохраняет имена классов и тестов после переноса. Для сравнения с запуском

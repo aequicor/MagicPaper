@@ -1,37 +1,38 @@
 package io.aequicor.magicpaper.domain.planning
 
 import io.aequicor.magicpaper.domain.*
+import kotlinx.serialization.Serializable
 
 /** Closed vocabulary for the durable orchestrator record. IDs and time come from the adapter. */
-sealed interface OrchestrationEvent {
-    data object Restore : OrchestrationEvent
-    data class InputSubmitted(val input: OrchestrationInput) : OrchestrationEvent
-    data class InputEnqueued(val input: OrchestrationInput) : OrchestrationEvent
-    data class UnsavedInputsRecovered(val inputs: List<OrchestrationInput>) : OrchestrationEvent
-    data class ScheduledRunsObserved(val plans: List<Plan>) : OrchestrationEvent
-    data class InputClaimRequested(val plans: List<Plan>) : OrchestrationEvent
-    data class InputWithdrawn(val id: String) : OrchestrationEvent
-    data class InputRetried(val id: String, val clarification: String = "", val clearResumeAfter: Boolean = false) : OrchestrationEvent
-    data class InputStatusRecorded(val id: String, val status: OrchestrationInputStatus, val error: String = "") : OrchestrationEvent
-    data class InputDecisionRecorded(val id: String, val decision: UserTurnDecision) : OrchestrationEvent
-    data class LegacyRequestImported(val plan: Plan) : OrchestrationEvent
-    data class PlanSelected(val id: String) : OrchestrationEvent
-    data class WorkPaused(val id: String, val pause: OrchestrationPause, val mergeStages: Boolean = false) : OrchestrationEvent
-    data class WorkPauseNeedsUser(val id: String) : OrchestrationEvent
-    data class WorkPauseFinished(val plan: Plan, val id: String) : OrchestrationEvent
-    data class ProposalConfirmed(val planId: String, val proposalId: String?) : OrchestrationEvent
-    data class PlanResumed(val plan: Plan) : OrchestrationEvent
-    data class QuestionRegistered(val question: OrchestrationQuestion) : OrchestrationEvent
-    data class QuestionAnswered(val plan: Plan, val input: OrchestrationInput, val decision: UserTurnDecision, val at: Long) : OrchestrationEvent
-    data class QuestionResolved(val id: String, val pauseId: String, val pause: OrchestrationPause?) : OrchestrationEvent
-    data class RequirementsQueued(val input: OrchestrationInput, val pause: OrchestrationPause) : OrchestrationEvent
-    data class QuestionsImported(val plan: Plan, val messages: List<CodingMessage>) : OrchestrationEvent
-    data class AnswerEventsRecorded(val events: List<MessageEvent>) : OrchestrationEvent
-    data class StageNumbersRequested(val planId: String, val stageIds: List<String>) : OrchestrationEvent
-    data class SessionCommandRegistered(val command: SessionCommand) : OrchestrationEvent
-    data class SessionCommandRejected(val id: String, val error: String) : OrchestrationEvent
-    data class SessionCommandApplied(val id: String) : OrchestrationEvent
-    data class SessionCommandDiscarded(val id: String) : OrchestrationEvent
+@Serializable sealed interface OrchestrationEvent {
+    @Serializable data object Restore : OrchestrationEvent
+    @Serializable data class InputSubmitted(val input: OrchestrationInput) : OrchestrationEvent
+    @Serializable data class InputEnqueued(val input: OrchestrationInput) : OrchestrationEvent
+    @Serializable data class UnsavedInputsRecovered(val inputs: List<OrchestrationInput>) : OrchestrationEvent
+    @Serializable data class ScheduledRunsObserved(val plans: List<Plan>) : OrchestrationEvent
+    @Serializable data class InputClaimRequested(val plans: List<Plan>) : OrchestrationEvent
+    @Serializable data class InputWithdrawn(val id: String) : OrchestrationEvent
+    @Serializable data class InputRetried(val id: String, val clarification: String = "", val clearResumeAfter: Boolean = false) : OrchestrationEvent
+    @Serializable data class InputStatusRecorded(val id: String, val status: OrchestrationInputStatus, val error: String = "") : OrchestrationEvent
+    @Serializable data class InputDecisionRecorded(val id: String, val decision: UserTurnDecision) : OrchestrationEvent
+    @Serializable data class LegacyRequestImported(val plan: Plan) : OrchestrationEvent
+    @Serializable data class PlanSelected(val id: String) : OrchestrationEvent
+    @Serializable data class WorkPaused(val id: String, val pause: OrchestrationPause, val mergeStages: Boolean = false) : OrchestrationEvent
+    @Serializable data class WorkPauseNeedsUser(val id: String) : OrchestrationEvent
+    @Serializable data class WorkPauseFinished(val plan: Plan, val id: String) : OrchestrationEvent
+    @Serializable data class ProposalConfirmed(val planId: String, val proposalId: String?) : OrchestrationEvent
+    @Serializable data class PlanResumed(val plan: Plan) : OrchestrationEvent
+    @Serializable data class QuestionRegistered(val question: OrchestrationQuestion) : OrchestrationEvent
+    @Serializable data class QuestionAnswered(val plan: Plan, val input: OrchestrationInput, val decision: UserTurnDecision, val at: Long) : OrchestrationEvent
+    @Serializable data class QuestionResolved(val id: String, val pauseId: String, val pause: OrchestrationPause?) : OrchestrationEvent
+    @Serializable data class RequirementsQueued(val input: OrchestrationInput, val pause: OrchestrationPause) : OrchestrationEvent
+    @Serializable data class QuestionsImported(val plan: Plan, val messages: List<CodingMessage>) : OrchestrationEvent
+    @Serializable data class AnswerEventsRecorded(val events: List<MessageEvent>) : OrchestrationEvent
+    @Serializable data class StageNumbersRequested(val planId: String, val stageIds: List<String>) : OrchestrationEvent
+    @Serializable data class SessionCommandRegistered(val command: SessionCommand) : OrchestrationEvent
+    @Serializable data class SessionCommandRejected(val id: String, val error: String) : OrchestrationEvent
+    @Serializable data class SessionCommandApplied(val id: String) : OrchestrationEvent
+    @Serializable data class SessionCommandDiscarded(val id: String) : OrchestrationEvent
 }
 
 sealed interface OrchestrationEffect {

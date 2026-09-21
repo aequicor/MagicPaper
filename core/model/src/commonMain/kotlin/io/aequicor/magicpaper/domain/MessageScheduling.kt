@@ -195,7 +195,7 @@ fun Plan.advanceScheduledMessages(now: Long): Plan {
         val timeDue = rule.trigger.kind == MessageTriggerKind.AT_TIME && rule.trigger.at!! <= now
         val timeout = rule.trigger.deadline?.let { it <= now && event == null } == true
         if (event != null || timeDue || timeout) {
-            val reason = when { timeout -> "Истёк срок ожидания: ${rule.trigger.describe(this)}"
+            val reason = when { timeout -> "Истёк срок ожидания: ${rule.trigger.describe(this, TimeZone.UTC)}"
                 event != null -> "Событие: ${event.kind.label()}"
                 else -> "Наступило указанное время" }
             rule.copy(status = ScheduledMessageStatus.READY, eventId = event?.id, firedAt = event?.at ?: now, timeout = timeout,
@@ -215,13 +215,12 @@ fun MessageEventKind.label(): String = when (this) {
     MessageEventKind.INTERVENTION_REQUIRED -> "Нужно вмешательство"
     MessageEventKind.QUESTION_ANSWERED -> "Получен полный ответ"
 }
-fun MessageTrigger.describe(plan: Plan): String = when (kind) {
-    MessageTriggerKind.AT_TIME -> "По времени: ${scheduleTime(at!!)}"
+fun MessageTrigger.describe(plan: Plan, zone: TimeZone = TimeZone.currentSystemDefault()): String = when (kind) {
+    MessageTriggerKind.AT_TIME -> "По времени: ${scheduleTime(at!!, zone)}"
     MessageTriggerKind.EVENT -> event!!.label() + taskId?.let { id -> " · ${plan.milestones.firstOrNull { it.id == id }?.stageLabel() ?: id}" }.orEmpty() +
-        questionId?.let { " · вопрос $it" }.orEmpty() + deadline?.let { " · до ${scheduleTime(it)}" }.orEmpty()
+        questionId?.let { " · вопрос $it" }.orEmpty() + deadline?.let { " · до ${scheduleTime(it, zone)}" }.orEmpty()
 }
-fun scheduleTime(at: Long): String {
-    val zone = TimeZone.currentSystemDefault()
+fun scheduleTime(at: Long, zone: TimeZone = TimeZone.currentSystemDefault()): String {
     return "${kotlin.time.Instant.fromEpochMilliseconds(at).toLocalDateTime(zone)} (${zone.id})"
 }
 

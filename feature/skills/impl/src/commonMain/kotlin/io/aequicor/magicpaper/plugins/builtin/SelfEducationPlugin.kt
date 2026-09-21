@@ -25,7 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.data.skills.SkillStore
+import io.aequicor.magicpaper.domain.SkillCommands
+import io.aequicor.magicpaper.domain.SkillCatalogSnapshot
+import io.aequicor.magicpaper.domain.SkillInstallOutcome
+import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.domain.ChatRepository
 import io.aequicor.magicpaper.domain.LlmProfileRepository
 import io.aequicor.magicpaper.domain.ProfileResolver
@@ -37,6 +40,7 @@ import io.aequicor.magicpaper.domain.SkillSource
 import io.aequicor.magicpaper.domain.SettingsRepository
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 /**
  * Плагин «Самообучение»: агент сам создаёт для себя навыки из диалога.
@@ -48,7 +52,7 @@ import kotlinx.coroutines.launch
 class SelfEducationPlugin(
     private val educator: SkillEducator,
     private val installer: SkillInstaller,
-    private val store: SkillStore,
+    private val store: SkillCommands,
     private val chats: ChatRepository,
     private val settingsRepo: SettingsRepository,
     private val profileRepo: LlmProfileRepository,
@@ -61,27 +65,43 @@ class SelfEducationPlugin(
     @Composable
     override fun Content() {
         val scope = rememberCoroutineScope()
-        val skills by store.skills.collectAsState()
+        val saved by store.catalog.collectAsState()
         var draft by remember { mutableStateOf<SkillDraft?>(null) }
+        var draftBasis by remember { mutableStateOf<SkillCatalogSnapshot?>(null) }
         var busy by remember { mutableStateOf(false) }
         var notice by remember { mutableStateOf<String?>(null) }
 
+        fun action(block: suspend () -> Unit) {
+            notice = null
+            scope.launch {
+                try { block() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { notice = "Не удалось изменить библиотеку. Повторите действие." }
+            }
+        }
+
         // Черновик из последней сессии.
         fun propose() {
-            if (busy) return
+            if (busy || !saved.initialized || saved.unknown || saved.resetting) return
+            val expectedCatalog = saved
             busy = true
             notice = null
             scope.launch {
-                val session = chats.sessions().firstOrNull()
-                if (session == null || session.messages.isEmpty()) {
-                    notice = "Сначала поговорите с агентом — навык рождается из диалога."
-                    busy = false
-                    return@launch
-                }
-                val settings = settingsRepo.load()
-                val profile = ProfileResolver.resolve(session, settings, profileRepo.load())
-                draft = educator.propose(session.messages, profile)
-                busy = false
+                try {
+                    val session = chats.sessions().firstOrNull()
+                    if (session == null || session.messages.isEmpty()) {
+                        notice = "Сначала поговорите с агентом — навык рождается из диалога."
+                        return@launch
+                    }
+                    val settings = settingsRepo.load()
+                    val profile = ProfileResolver.resolve(session, settings, profileRepo.load())
+                    draft = educator.propose(session.messages, profile)
+                    draftBasis = expectedCatalog
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    AppLog.error("skills.education", "proposal_failed", mapOf("causeType" to failure::class.simpleName.orEmpty()))
+                    notice = "Не удалось подготовить навык. Повторите запрос."
+                } finally { busy = false }
             }
         }
 
@@ -94,43 +114,50 @@ class SelfEducationPlugin(
                 color = LocalPaperColors.current.secondaryText,
             )
             Spacer(Modifier.height(8.dp))
-            PaperAction(onClick = ::propose, enabled = !busy) {
+            PaperAction(onClick = ::propose, enabled = !busy && saved.initialized && !saved.unknown && !saved.resetting) {
                 PaperText(if (busy) "Обдумываю…" else "Предложить навык из последнего диалога")
             }
-            notice?.let {
+            (saved.failure ?: notice)?.let {
                 PaperText(
                     it,
                     style = LocalPaperTypography.current.body,
                     color = LocalPaperColors.current.action,
                 )
             }
+            if (saved.failure != null || saved.unknown) {
+                PaperAction(onClick = { action { store.reload() } }) { PaperText("Обновить библиотеку") }
+            }
             draft?.let { current ->
                 Spacer(Modifier.height(8.dp))
                 DraftEditor(current, onChange = { draft = it }, onSave = {
-                    scope.launch {
-                        val editable = draft ?: return@launch
-                        when (val outcome = installer.installDraft(editable)) {
-                            is SkillInstaller.Outcome.Installed -> {
+                    val editable = draft
+                    val basis = editable?.let { draftBasis?.installBasis(it.name) }
+                    if (editable != null && basis != null) action {
+                        when (val outcome = installer.installDraft(editable, basis)) {
+                            is SkillInstallOutcome.Installed -> {
                                 notice = "Навык «${editable.name}» сохранён и включён."
-                                draft = null
+                                if (draft == editable) { draft = null; draftBasis = null }
                             }
 
-                            is SkillInstaller.Outcome.Conflict -> notice = outcome.message
+                            is SkillInstallOutcome.Conflict -> notice = outcome.message
                         }
                     }
-                }, onDismiss = { draft = null })
+                }, onDismiss = { draft = null; draftBasis = null })
             }
             Spacer(Modifier.height(12.dp))
             PaperText("Созданные навыки", style = LocalPaperTypography.current.label)
-            val selfMade = skills.filter { it.source == SkillSource.SELF_MADE }
-            if (selfMade.isEmpty()) {
+            val selfMade = saved.items.filter { it.skill.source == SkillSource.SELF_MADE }
+            if (!saved.initialized && !saved.unknown) {
+                PaperText("Загрузка навыков…", style = LocalPaperTypography.current.body)
+            } else if (selfMade.isEmpty() && !saved.unknown) {
                 PaperText(
                     "Пока нет навыков, созданных агентом.",
                     style = LocalPaperTypography.current.body,
                     color = LocalPaperColors.current.secondaryText,
                 )
             }
-            selfMade.forEach { skill ->
+            selfMade.forEach { item ->
+                val skill = item.skill
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -151,11 +178,12 @@ class SelfEducationPlugin(
                     Spacer(Modifier.width(8.dp))
                     PaperToggle(
                         checked = skill.enabled,
+                        enabled = !saved.unknown && !saved.resetting,
                         onCheckedChange = { enabled ->
-                            scope.launch { store.save(skill.copy(enabled = enabled)) }
+                            action { store.setEnabled(item.ref, enabled) }
                         },
                     )
-                    PaperAction(onClick = { scope.launch { store.delete(skill.id) } }) {
+                    PaperAction(onClick = { action { store.delete(item.ref) } }, enabled = !saved.unknown && !saved.resetting) {
                         PaperText("✕")
                     }
                 }

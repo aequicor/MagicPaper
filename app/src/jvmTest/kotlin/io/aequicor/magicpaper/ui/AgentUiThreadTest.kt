@@ -8,7 +8,7 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventType
 import io.aequicor.magicpaper.data.coding.BackgroundCodingProjectRepository
-import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
+import io.aequicor.magicpaper.data.coding.*
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlinx.coroutines.*
@@ -37,19 +37,19 @@ class AgentUiThreadTest {
             val fixture = ModelSettingsFixture()
             val pauseRead = AtomicBoolean(false)
             val base = JsonCodingProjectRepository(fixture.kv, fixture.json)
-            val repository = BackgroundCodingProjectRepository(object : CodingProjectRepository by base {
-                override suspend fun messages(projectId: String, sessionId: String): List<CodingMessage> {
+            val repository = BackgroundCodingProjectRepository(object : CodingCheckpointStore by base {
+                override suspend fun checkpoint(state: CodingMachine.State) {
                     assertFalse(EventQueue.isDispatchThread(), "Repository decoding inherited the UI thread")
                     if (pauseRead.compareAndSet(true, false)) {
                         storageEntered.countDown()
                         check(storageRelease.await(5, TimeUnit.SECONDS))
                     }
-                    return base.messages(projectId, sessionId)
+                    base.checkpoint(state)
                 }
-            }, historyCacheSize = 0) // Exercise actual blocked storage, bypassing the normal history cache.
+            }) // Exercise the actual durable projection before native dispatch.
             val project = CodingProject("p", "Project", "/fake", 0)
             val session = CodingSession("s", "p", "Session", 0, engine = CodingEngine.CODEX)
-            repository.save(project); repository.saveSession(session)
+            base.save(project); base.saveSession(session)
             val runtime = object : CodingRuntime {
                 override val supported = true
                 override val rootPath = "/fake"

@@ -21,6 +21,7 @@ import com.arkivanov.essenty.lifecycle.resume
 import io.aequicor.magicpaper.data.storage.InMemoryDurableByteStore
 import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
 import io.aequicor.magicpaper.data.storage.PersistenceStores
+import io.aequicor.magicpaper.data.storage.DefaultSettingsConfiguration
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import io.aequicor.magicpaper.data.storage.persistenceStores
@@ -29,7 +30,6 @@ import io.aequicor.magicpaper.di.RuntimeState
 import io.aequicor.magicpaper.di.buildRuntime
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.ProfileBridge
-import io.aequicor.magicpaper.domain.SettingsRepository
 import io.aequicor.magicpaper.navigation.AppRoute
 import io.aequicor.magicpaper.navigation.createAppRoot
 import kotlinx.coroutines.Dispatchers
@@ -61,7 +61,7 @@ class AppShellRenderTest {
         val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()),
             bridge, NavigationSessionConfig())
         try {
-            runtime.koin.get<SettingsRepository>().save(AppSettings(onboardingDone = true, paperAnimationEnabled = false))
+            runtime.koin.get<DefaultSettingsConfiguration>().changeSettings(AppSettings(onboardingDone = true, paperAnimationEnabled = false)).getOrThrow()
             runtime.start()
             assertEquals(RuntimeState.Ready, runtime.ready.first { it != RuntimeState.Loading })
             lifecycle.resume()

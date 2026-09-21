@@ -7,7 +7,7 @@ import kotlinx.serialization.json.Json
  * Самообразование: превращает состоявшийся диалог в черновик навыка.
  * Два пути, как у зрелых агентских платформ:
  *  1. подключена модель — модель сама формулирует имя, назначение и инструкцию;
- *  2. модели нет или она ошиблась — эвристический черновик из последнего
+ *  2. модели нет — эвристический черновик из последнего
  *     запроса пользователя (честно помечается «без модели»).
  * Черновик никогда не сохраняется сам: только после подтверждения пользователя.
  */
@@ -20,7 +20,8 @@ class SkillEducator(private val gateway: LlmGateway, private val json: Json = DE
     suspend fun propose(history: List<ChatMessage>, profile: LlmProfile?): SkillDraft {
         val lastUser = history.lastOrNull { it.role == ChatRole.USER }?.text.orEmpty()
         if (profile == null || !profile.configured || history.isEmpty()) return heuristicDraft(lastUser)
-        return runCatching { modelDraft(history, profile) }.getOrElse { heuristicDraft(lastUser) }
+        // The requesting owner reports provider failures and cancellation; neither is a new draft.
+        return modelDraft(history, profile)
     }
 
     private suspend fun modelDraft(history: List<ChatMessage>, profile: LlmProfile): SkillDraft {

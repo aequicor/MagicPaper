@@ -1,13 +1,14 @@
 package io.aequicor.magicpaper.di
 
-import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.docs.EmbeddedDocRepository
+import io.aequicor.magicpaper.data.coding.JsonRuntimeQuestionnaireStore
 import io.aequicor.magicpaper.data.llm.*
 import io.aequicor.magicpaper.data.media.HttpMediaGenerationGateway
 import io.aequicor.magicpaper.data.search.*
 import io.aequicor.magicpaper.data.skills.*
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.navigation.AppRoute
 import io.aequicor.magicpaper.navigation.DialogRoute
 import io.aequicor.magicpaper.plugins.*
@@ -27,26 +28,33 @@ internal fun buildRuntime(
     persistence: PersistenceStores,
     bridge: ProfileBridge,
     navigationSession: NavigationSessionConfig,
-    codingRuntime: CodingRuntime = NoopCodingRuntime,
-    dirPicker: ProjectDirPicker? = null,
     filePicker: FilePicker = NoopFilePicker,
     openAiSubscription: OpenAiSubscriptionService? = null,
-    planningWorkspace: PlanningWorkspace = LocalPlanningWorkspace(),
-    taskWorkspace: TaskWorkspace = UnavailableTaskWorkspace,
-    integrationChecks: SessionIntegrationCheckRunner? = null,
-    coding: (CodingFeatureDependencies) -> CodingFeature = { UnavailableCodingFeature },
     platformPlugins: List<MagicPlugin> = emptyList(),
     projectSkills: ProjectSkills? = null,
     packageInstructions: SkillInstructionSource? = null,
     experiencePlugin: ((LlmGateway, LlmProfileRepository) -> MagicPlugin)? = null,
     onPlatformStarted: () -> Unit = {},
     onPlatformClosed: suspend () -> Unit = {},
-    layoutEditor: LayoutEditor = UnavailableLayoutEditor,
     modelLimits: ModelLimitCatalog? = null,
     researchPageBrowser: ResearchPageBrowser? = null,
     mediaStore: MediaStore = UnavailableMediaStore,
+    questionnaireFactory: RuntimeQuestionnaireFactory = DefaultRuntimeQuestionnaireFactory(persistence.events),
+    settingsContributions: org.koin.core.scope.Scope.() -> SettingsContributions = { SettingsContributions() },
+    appContributions: org.koin.core.scope.Scope.() -> AppContributions = { AppContributions() },
+    runtimeExtensions: org.koin.core.scope.Scope.() -> List<RuntimeExtension> = { emptyList() },
+    mediaOwnerPolicies: org.koin.core.scope.Scope.() -> List<MediaOwnerPolicy> = { emptyList() },
+    featurePlugins: org.koin.core.scope.Scope.() -> List<MagicPlugin> = { emptyList() },
+    responseExtensions: org.koin.core.scope.Scope.() -> List<ChatResponseExtension> = { emptyList() },
+    settingsRuntime: org.koin.core.scope.Scope.() -> SettingsRuntimeParticipant? = { null },
+    platformDefinitions: org.koin.core.module.Module.(CoroutineScope) -> Unit = {},
 ): MagicPaperRuntime = MagicPaperRuntime(navigationSession, onPlatformStarted, onPlatformClosed) { applicationScope ->
     var resetting = false
+    val resetOwners = mutableSetOf<RuntimeExtension>()
+    var resetMedia = false
+    var resetChat = false
+    var resetPlugins = false
+    var resetSkills = false
     module {
         single { appJson }
         single<KeyValueStore> { store }
@@ -55,29 +63,51 @@ internal fun buildRuntime(
         single<DraftRepository> { persistence.drafts }
         single<DraftBlobStore> { persistence.blobs }
         single<EventJournal> { persistence.events }
+        single<RuntimeQuestionnaireFactory> { questionnaireFactory }
+        single<ToolReceiptStore> { StoredToolReceipts(get()) }
+        single<MediaToolReceiptOwner> { DefaultMediaToolReceiptOwner(get(), get<MediaStore>()::localPath) }
+        single<ToolSession.Factory> { DefaultToolSessionFactory() }
+        single<MediaToolCommands.Factory> { DefaultMediaToolCommandsFactory() }
+        single<QuestionnaireToolCommands.Factory> { DefaultQuestionnaireToolCommandsFactory() }
         single<MediaStore> { mediaStore }
         single<NavigationSnapshotStore> { persistence.navigation }
         single<CoroutineScope> { applicationScope }
         single<ProfileBridge> { bridge }
         single<FilePicker> { filePicker }
         single { NavigationEvents() }
-        dirPicker?.let { picker -> single<ProjectDirPicker> { picker } }
         projectSkills?.let { renderer -> single<ProjectSkills> { renderer } }
         openAiSubscription?.let { subscription -> single<OpenAiSubscriptionService> { subscription } }
-        single<SettingsRepository> { JsonSettingsRepository(get(), get(), secrets = get()) }
-        single<LlmProfileRepository> { JsonLlmProfileRepository(get(), get(), secrets = get(), modelLimits = modelLimits) }
-        single<ChatRepository> { JsonChatRepository(get(), get()) }
+        single { DefaultSettingsConfiguration(get(), get(), get(), get(), modelLimits = modelLimits,
+            directory = get(), researcher = get(), runtime = settingsRuntime()) }
+        single<SettingsCommands> { get<DefaultSettingsConfiguration>() }
+        single<SettingsRepository> { val owner = get<DefaultSettingsConfiguration>()
+            object : SettingsRepository { override suspend fun load() = owner.settings() } }
+        single<LlmProfileRepository> { val owner = get<DefaultSettingsConfiguration>()
+            object : LlmProfileRepository { override suspend fun load() = owner.profiles() } }
+        single<ModelDossierRepository> { val owner = get<DefaultSettingsConfiguration>()
+            object : ModelDossierRepository { override suspend fun dossiers() = owner.dossiers() } }
+        single<SettingsContributions> { settingsContributions() }
+        single<AppContributions> { appContributions() }
+        single { RuntimeExtensions(runtimeExtensions()) }
+        single { MediaOwnerPolicies(mediaOwnerPolicies()) }
+        single<ChatCheckpointStore> { JsonChatRepository(get(), get()) }
+        single<ChatPayloadStore> { StoredChatPayloads(get(), get()) }
+        single { ChatJournalStore(get(), get(), get(), get()) }
+        single<ChatRepository> { get<ChatJournalStore>() }
+        single<ChatHistoryCommands> { get<DefaultChatService>() }
         single<RequestPinRepository> { JsonRequestPinRepository(get(), get()) }
-        single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get())) }
+        single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get()), get(), get(), get()) }
         single { appHttpClient() } onClose { it?.close() }
         single<MediaGenerationGateway> { HttpMediaGenerationGateway(get(), get()) }
-        single { DefaultMediaGenerationService(get(), get(), get(), get(), get(), applicationScope,
+        single { DefaultMediaGenerationService(get<SettingsRepository>()::load, get<LlmProfileRepository>()::load,
+            get(), get(), get(), get(), applicationScope,
             ownerExists = { owner ->
                 val projectId = owner.projectId
                 if (projectId == null) get<ChatRepository>().session(owner.sessionId) != null
-                else get<CodingProjectRepository>().sessions(projectId).any { it.id == owner.sessionId }
-            }).also { service ->
-                service.authorizeSubmission = { owner, kind ->
+                else get<MediaOwnerPolicies>().resolve(owner)?.exists(owner) == true
+            },
+            onTerminal = { owner, operation, media -> get<MediaToolReceiptOwner>().reconcileCompletion(owner, operation, media) },
+            authorizeSubmission = { owner, kind ->
                     val projectId = owner.projectId
                     if (projectId == null) {
                         val chats = get<ChatRepository>()
@@ -87,11 +117,9 @@ internal fun buildRuntime(
                         root?.mediaTools?.enabled(kind) == true &&
                             session?.pendingRun?.let { it.runId == owner.requestId && !it.stoppedByUser } == true
                     } else {
-                        val session = get<CodingProjectRepository>().sessions(projectId).firstOrNull { it.id == owner.sessionId }
-                        session?.mediaTools?.enabled(kind) == true && session.runtimeGeneration == owner.runtimeGeneration
+                        get<MediaOwnerPolicies>().resolve(owner)?.allows(owner, kind) == true
                     }
-                }
-            } }
+                }) }
         single<MediaGenerationService> { get<DefaultMediaGenerationService>() }
         single { ResearchSiteIcons(get()) }
         single { io.aequicor.magicpaper.data.ResearchPageReader(get()) }
@@ -122,87 +150,83 @@ internal fun buildRuntime(
         single<SearchConnectionChecker> { HttpSearchConnectionChecker(get(), get(), get()) }
         single<DossierResearcher> { DefaultDossierResearcher(get(), get(), get()) }
         single<DocRepository> { EmbeddedDocRepository() }
-        single { SkillStore(JsonSkillRepository(get(), get())) }
+        single { SkillStore(get(), get(), get()) }
         single<SkillRepository> { get<SkillStore>() }
         single<SkillLibrary> { get<SkillStore>() }
+        single<SkillCommands> { get<SkillStore>() }
         single<SkillCatalog> { EmbeddedSkillCatalog() }
         single { SkillInstaller(get<SkillStore>()) }
         packageInstructions?.let { source ->
             single<SkillInstructionRuntime> { DefaultSkillInstructionRuntime(source, get()) }
         }
+        single<ProviderToolOutputs> { StoredProviderToolOutputs(get()) }
+        single<ProviderToolLoop> { DefaultProviderToolLoop(get(), get(), get()) }
+        single<ChatToolSessions> {
+            val docs = get<DocRepository>()
+            DefaultChatToolSessions(get(), docs::articles, { docs.search(it) }, get<SkillRepository>()::all,
+                get(), get<RuntimeQuestionnaireFactory>().create("application-tools",
+                    JsonRuntimeQuestionnaireStore(get(), "tool-questionnaires")), get(), get(),
+                readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read,
+                allowMedia = { captured, kind ->
+                    val repository = get<ChatRepository>()
+                    val session = repository.session(captured.id)
+                    val root = session?.researchParentId?.let { repository.session(it) } ?: session
+                    root?.mediaTools?.enabled(kind) == true
+                })
+        }
         single { val settings = get<SettingsRepository>()
-            GatewaySessionRuntime(get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(),
-                layoutEditor = layoutEditor, settings = { settings.load() },
+            GatewaySessionRuntime(get(), get(), get(), get(), skillLibrary = get(), packageRuntime = getOrNull(),
+                settings = { settings.load() },
                 readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read) }
-        single<CodingFeature> { coding(CodingFeatureDependencies(
-            store = store, json = get(), settings = get(), profiles = get(), usage = get(),
-            gateway = get(), search = get(), dossier = get(), drafts = get(), draftBlobs = get(), events = get(),
-            media = get(), requestPins = get(), chats = get(),
-            readResearchPage = get<io.aequicor.magicpaper.data.ResearchPageReader>()::read,
-            filePicker = filePicker, projectSkills = projectSkills, applicationScope = applicationScope,
-            onOpenSession = { project, session -> get<NavigationEvents>().navigate(AppRoute.Projects(project, session)) },
-            removePluginDrafts = { project, plans -> get<PluginService>().removeProjectDrafts(project, plans) },
-            codingRuntime = codingRuntime, dirPicker = dirPicker, planningWorkspace = planningWorkspace,
-            taskWorkspace = taskWorkspace, integrationChecks = integrationChecks)).also { feature ->
-                get<DefaultMediaGenerationService>().onTerminal = feature.onMediaTerminal
-                // The default orchestration checker lives in a sibling implementation module,
-                // which a feature implementation may not depend on; the application binds it.
-                feature.bindOrchestration(io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration(feature.orchestrationActions))
-            } }
-        single<CodingProjectRepository> { get<CodingFeature>().projects }
-        single<CodingRuntime> { get<CodingFeature>().runtime }
-        single<PlanningRepository> { get<CodingFeature>().planning }
-        single { DefaultRequestPinService(get(), get(), applicationScope, get()) }
+        single { DefaultRequestPinService(get(), get(), applicationScope, get(), get()) }
         single<RequestPinService> { get<DefaultRequestPinService>() }
         single<PluginRegistry> {
             PluginRegistry().register(NotesPlugin(get(), applicationScope)).register(FocusPlugin(get(), applicationScope)).register(CalcPlugin(get(), applicationScope))
                 .register(SkillsRepositoryPlugin(get(), get(), get<SkillStore>()))
                 .apply { experiencePlugin?.let { register(it(get(), get())) } }
-                .apply { get<CodingFeature>().plugins.forEach(::register) }
+                .apply { featurePlugins().forEach(::register) }
                 .apply { platformPlugins.forEach(::register) }
         }
         factory<ChatComponent.Factory>(FeatureFactoryQualifiers.chat) { DefaultChatComponentFactory(get(), get(), get()) }
-        factory<CodingComponent.Factory>(FeatureFactoryQualifiers.coding) { get<CodingFeature>().componentFactory }
         factory<SettingsComponent.Factory>(FeatureFactoryQualifiers.settings) { DefaultSettingsComponentFactory(get(), get(), get(), get(), get()) }
         factory<DocsComponent.Factory>(FeatureFactoryQualifiers.docs) { DefaultDocsComponentFactory(get()) }
         factory<PluginsComponent.Factory>(FeatureFactoryQualifiers.plugins) { DefaultPluginsComponentFactory(get()) }
         factory<SkillsComponent.Factory>(FeatureFactoryQualifiers.skills) { DefaultSkillsComponentFactory(get()) }
         single<ChatService> { get<DefaultChatService>() }
-        single<CodingService> { get<CodingFeature>().service }
         single<SettingsService> { get<DefaultSettingsService>() }
-        single<PluginService> { DefaultPluginService(get(), get()) }
-        // Desktop keeps the engine's tool loop for chat; platforms without it answer over HTTP.
-        single<ChatBackend> { get<CodingFeature>().chatBackend ?: get<GatewaySessionRuntime>() }
+        single<PluginService> { DefaultPluginService(get(), get(), get(), get()) }
+        single<ChatBackend> { get<GatewaySessionRuntime>() }
         single { DefaultChatService(get(), get(), get(), get(), get(),
-            layoutAgent = LayoutChatAgent(get(), layoutEditor),
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
             researchSearch = get(), usage = get(), sourceAccess = get(), sourceBrowser = researchPageBrowser,
             mediaGeneration = get(),
-            layoutProject = { boundId ->
-                val coding = get<CodingService>().state.value.coding
-                if (boundId == null) coding.current ?: coding.projects.singleOrNull() else coding.projects.firstOrNull { it.id == boundId }
-            }) }
-        single { DefaultSettingsService(get(), get(), get(), get(), get(), get(),
-            skills = get(), planning = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),
+            responseExtensions = responseExtensions()) }
+        single { DefaultSettingsService(get(), get(), get(), get(), get(), chatHistory = get(), pluginPreferences = get<PluginService>(),
+            skills = get(), skillCommands = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),
             openAiSubscription = openAiSubscription, searchConnectionChecker = get(), usage = get(), draftRepository = get(),
             mediaGeneration = get(), mediaStore = get(),
-            applyRuntimeSettings = { get<CodingService>().applySettings(it) },
-            clearCodingOverrides = { get<CodingService>().clearProfileOverrides(it) },
-            onDataChanged = { get<ChatService>().start(); get<CodingService>().reload(); get<PluginService>().start() },
+            clearCodingOverrides = { id -> get<RuntimeExtensions>().owners.forEach { it.clearProfileOverrides(id) } },
+            onDataChanged = { get<ChatService>().start(); get<RuntimeExtensions>().owners.forEach { it.reload() }; get<PluginService>().start() },
             onProfileSaved = { get<NavigationEvents>().back() },
             clearApplicationData = {
                 get<NavigationEvents>().reset()
                 resetting = true
                 get<DefaultSettingsService>().prepareForReset()
+                resetChat = true
                 get<DefaultChatService>().prepareForReset()
-                get<CodingFeature>().prepareForReset()
+                get<RuntimeExtensions>().owners.forEach { resetOwners += it; it.prepareForReset() }
                 get<DefaultRequestPinService>().resetForWipe()
+                resetPlugins = true
                 get<PluginService>().prepareForReset()
-                get<CodingFeature>().pauseForReset()
+                resetSkills = true
+                get<SkillCommands>().prepareForReset()
+                get<RuntimeExtensions>().owners.forEach { it.pauseForReset() }
+                resetMedia = true
                 get<MediaGenerationService>().prepareForReset()
                 openAiSubscription?.logout()
-                get<CodingFeature>().clearForReset()
+                get<RuntimeExtensions>().owners.forEach { it.clearForReset() }
+                get<RuntimeQuestionnaireFactory>().clearForReset()
                 persistence.clearOwnedData()
                 mediaStore.clear()
                 store.clear()
@@ -210,14 +234,19 @@ internal fun buildRuntime(
             finishApplicationReset = {
                 if (resetting) {
                     resetting = false
-                    try {
-                        get<CodingFeature>().resumeAfterReset()
-                        get<MediaGenerationService>().resumeAfterReset()
-                        get<ChatService>().start()
-                        get<CodingService>().reload()
-                        get<PluginService>().start()
-                    } finally { get<NavigationEvents>().resetComplete() }
+                    val resumed = mutableSetOf<RuntimeExtension>()
+                    val actions = buildList<suspend () -> Unit> {
+                        resetOwners.toList().forEach { owner -> add { owner.resumeAfterReset(); resumed += owner; resetOwners -= owner } }
+                        if (resetMedia) add { get<MediaGenerationService>().resumeAfterReset(); resetMedia = false }
+                        if (resetSkills) add { get<SkillCommands>().finishReset(); resetSkills = false }
+                        if (resetChat) add { get<ChatService>().start(); resetChat = false }
+                        get<RuntimeExtensions>().owners.forEach { owner -> add { if (owner in resumed) owner.reload() } }
+                        if (resetPlugins) add { get<PluginService>().start(); resetPlugins = false }
+                        add { get<NavigationEvents>().resetComplete() }
+                    }
+                    completeRuntimeCleanup(*actions.toTypedArray())
                 }
             }) }
+        platformDefinitions(applicationScope)
     }
 }

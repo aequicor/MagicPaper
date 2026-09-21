@@ -10,8 +10,4 @@ import io.aequicor.magicpaper.util.Id
 
 interface SettingsRepository {
     suspend fun load(): AppSettings
-    suspend fun save(settings: AppSettings)
-    suspend fun pluginStates(): List<PluginState>
-    suspend fun savePluginStates(states: List<PluginState>)
-    suspend fun wipe()
 }

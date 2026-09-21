@@ -35,7 +35,14 @@ private fun Plan.legacyPeerCommandBase(delivery: PlanDelivery, peers: List<Plan>
                 }
                 if (matches) return base
             }
-            if (delivery.id == "${source.id}-${other.stageId}-${other.reply.hashCode()}-peer-${base.id}") {
+            // The old suffix hashed an enum object and cannot be recomputed after a JVM restart.
+            // Recognize the saved generator format; exact source, full payload and untouched-leaf
+            // checks below remain mandatory. Never replace the historical delivery identity.
+            val prefix = "${source.id}-${other.stageId}-"
+            val suffix = "-peer-${base.id}"
+            val savedHash = delivery.id.takeIf { it.startsWith(prefix) && it.endsWith(suffix) }
+                ?.removePrefix(prefix)?.removeSuffix(suffix)
+            if (savedHash != null && savedHash.toIntOrNull()?.toString() == savedHash) {
                 val sourceStage = source.milestones.firstOrNull { it.id == other.stageId } ?: continue
                 val info = "План «${source.goal}», этап «${sourceStage.title}»: ${other.reply.text}\nИзменённые файлы: ${other.reply.changedFiles.joinToString()}"
                 if (delivery.text == "Сведения соседнего плана. Перед продолжением перечитай затронутые файлы, не перезаписывай чужие изменения. $info") return base

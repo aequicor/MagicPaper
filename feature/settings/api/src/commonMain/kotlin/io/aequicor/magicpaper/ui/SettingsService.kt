@@ -11,6 +11,8 @@ interface SettingsService {
     fun finishOnboarding(settings: AppSettings, onboardingProfile: LlmProfile? = null)
     fun restartOnboarding()
     fun saveSettings(settings: AppSettings)
+    /** Save only persisted access policy, preserving any unfinished overview form. */
+    fun saveComputerAccess(computer: ComputerAccess, application: ComputerAccess)
     fun saveLlmProfile(profile: LlmProfile)
     fun deleteLlmProfile(id: String)
     fun setLlmProfileEnabled(id: String, enabled: Boolean)

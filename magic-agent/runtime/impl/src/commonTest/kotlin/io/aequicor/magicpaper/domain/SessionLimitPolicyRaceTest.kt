@@ -1,0 +1,135 @@
+package io.aequicor.magicpaper.domain
+
+import io.aequicor.magicpaper.data.coding.*
+
+import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
+import io.aequicor.magicpaper.data.coding.DefaultSessionOrganismStore
+import io.aequicor.magicpaper.data.coding.journalCodingProjects
+import io.aequicor.magicpaper.data.storage.InMemorySecretStore
+import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
+import io.aequicor.magicpaper.data.storage.JsonSettingsRepository
+import io.aequicor.magicpaper.data.storage.KeyValueStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlin.test.*
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class SessionLimitPolicyRaceTest {
+    private class GatedSettings(val backing: JsonSettingsRepository) : SettingsRepository by backing {
+        var pauseNextRead = false
+        var saveFailure: Exception? = null
+        val captured = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        override suspend fun load(): AppSettings {
+            val snapshot = backing.load()
+            if (pauseNextRead) {
+                pauseNextRead = false
+                captured.complete(Unit)
+                release.await()
+            }
+            return snapshot
+        }
+        suspend fun save(settings: AppSettings) {
+            saveFailure?.let { throw it }
+            backing.save(settings)
+        }
+    }
+
+    private class Fixture {
+        val storage = InMemoryKeyValueStore()
+        var propagationFailure: Exception? = null
+        private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
+        val settings = GatedSettings(JsonSettingsRepository(storage, json, secrets = InMemorySecretStore()))
+        val projects = journalCodingProjects(storage, json)
+        val journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal()
+        val store = DefaultSessionOrganismStore(storage, journal) { 1_000 }
+        val service = testOrganismService(object : SessionOrganismStore by store {
+            override suspend fun loadAll(): List<SessionOrganism> {
+                propagationFailure?.let { throw it }
+                return store.loadAll()
+            }
+        }, projects, settings)
+        val initial = AppSettings(agentLimits = OrganismLimits(tokens = 1_000, durationMillis = 3_600_000))
+        val root = CodingSession("root", "project", "Task", 1, engine = CodingEngine.PI, researchMode = true)
+        suspend fun commitAndApply(updated: AppSettings): Result<Unit> {
+            settings.save(updated)
+            return service.applySettingsLimits(updated)
+        }
+        suspend fun initialize(adopt: Boolean = true) {
+            settings.save(initial)
+            projects.createTestProject(CodingProject("project", "Project", "/fixture", 1))
+            projects.createTestSession(root)
+            if (adopt) service.ensure(root)
+        }
+    }
+
+    @Test fun removingLimitsCannotBeOverwrittenByAnOlderSingleOrAllTaskSynchronization() = runTest {
+        for (allTasks in listOf(false, true)) {
+            val f = Fixture(); f.initialize()
+            f.settings.pauseNextRead = true
+            val older = async {
+                if (allTasks) f.service.synchronizeAllLimits() else f.service.synchronizeLimits(f.root.id)
+            }
+            f.settings.captured.await()
+            val removed = f.initial.copy(agentLimits = OrganismLimits())
+            val newer = async { f.commitAndApply(removed) }
+            runCurrent()
+            assertFalse(newer.isCompleted, "Applying the committed policy waits for the older captured read")
+            assertEquals(removed, f.settings.backing.load(), "The settings owner commits independently before runtime application")
+            f.settings.release.complete(Unit)
+            older.await()
+            assertTrue(newer.await().isSuccess)
+            assertEquals(removed, f.settings.backing.load())
+            assertEquals(OrganismLimits(), f.store.get(f.root.id).limits)
+            f.service.synchronizeAllLimits()
+            assertEquals(OrganismLimits(), f.store.get(f.root.id).limits)
+        }
+    }
+
+    @Test fun firstAdoptionCannotRestoreThePolicyCapturedBeforeANewerSave() = runTest {
+        val f = Fixture(); f.initialize(adopt = false)
+        f.settings.pauseNextRead = true
+        val adoption = async { f.service.ensure(f.root) }
+        f.settings.captured.await()
+        val removed = f.initial.copy(agentLimits = OrganismLimits())
+        val save = async { f.commitAndApply(removed) }
+        runCurrent(); assertFalse(save.isCompleted)
+        f.settings.release.complete(Unit)
+        adoption.await(); assertTrue(save.await().isSuccess)
+        assertEquals(OrganismLimits(), f.store.get(f.root.id).limits)
+        assertEquals(removed, f.settings.backing.load())
+    }
+
+    @Test fun missingLegacyProjectionStillAppliesCurrentUserLimitsBeforeAdmission() = runTest {
+        val f = Fixture(); f.initialize(adopt = false)
+        f.store.adopt(f.root.projectId, f.root, emptyList())
+        val adopted = f.service.ensure(f.root)
+        assertEquals(f.initial.agentLimits, adopted.limits)
+        assertEquals(1_000L, adopted.sessions.values.sumOf { it.remainingTokens })
+    }
+
+    @Test fun saveFailureAndPropagationFailureHaveDistinctOutcomesAndCancellationPropagates() = runTest {
+        val f = Fixture(); f.initialize()
+        val removed = f.initial.copy(agentLimits = OrganismLimits())
+        f.settings.saveFailure = IllegalStateException("save failed")
+        assertFailsWith<IllegalStateException> { f.commitAndApply(removed) }
+        assertEquals(f.initial, f.settings.backing.load())
+        assertEquals(f.initial.agentLimits, f.store.get(f.root.id).limits)
+        f.settings.saveFailure = null
+        f.propagationFailure = IllegalStateException("propagation failed")
+        val propagation = f.commitAndApply(removed)
+        assertEquals("propagation failed", propagation.exceptionOrNull()?.message)
+        assertEquals(removed, f.settings.backing.load())
+        assertEquals(f.initial.agentLimits, f.store.get(f.root.id).limits)
+        f.propagationFailure = CancellationException("cancelled")
+        assertFailsWith<CancellationException> { f.commitAndApply(removed) }
+        f.propagationFailure = null
+        assertTrue(f.commitAndApply(removed).isSuccess)
+        assertEquals(OrganismLimits(), f.store.get(f.root.id).limits)
+    }
+}

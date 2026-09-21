@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /** Вердикт проверки достижимости мэилстоуна. */
+@Serializable
 data class Verdict(val passed: Boolean, val note: String, val issue: PlanningIssue? = null)
 data class AcceptanceReview(val findings: List<AcceptanceFinding>, val issue: PlanningIssue? = null)
 

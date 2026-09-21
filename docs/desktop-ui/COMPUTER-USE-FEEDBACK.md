@@ -40,13 +40,13 @@ Wayland по-прежнему не поддерживается. Сам по с�
 
 - `designSystem/build/reports/computer-use/controls-1.0.png` и `controls-1.5.png`.
 - `app/build/reports/app-shell/computer-compact-chat.png` — реальный App с изолированными хранилищами.
-- `feature/session/impl/build/reports/computer-use/native-capture.txt` — macOS: сначала подтверждается перекрывающее пурпурное окно, затем в снимке проверяются синие пиксели внешнего стенда под ним. Рабочий стол не сохраняется.
+- `magic-agent/computer/impl/build/reports/computer-use/native-capture.txt` — macOS: сначала подтверждается перекрывающее пурпурное окно, затем в снимке проверяются синие пиксели внешнего стенда под ним. Рабочий стол не сохраняется.
 
 Нативные проверки не используют пользовательские сессии:
 
 ```sh
 ./gradlew :desktopApp:test --tests '*DesktopComputerWindowTest' -Pmagicpaper.window.native=true
-./gradlew :feature:session:impl:jvmTest --tests '*DesktopCaptureMacIntegrationTest' -Pmagicpaper.application.native=true
+./gradlew :magic-agent:computer:impl:jvmTest --tests '*DesktopCaptureMacIntegrationTest' -Pmagicpaper.application.native=true
 ./gradlew :desktopApp:test --tests '*DesktopComputerWindowTest.realPointer*' -Pmagicpaper.computer.input.native=true
 ```
 
@@ -97,7 +97,7 @@ Paper verifier также прошёл. Всего 22 выполненных т�
   при обычном и увеличенном тексте.
 
 Сценарий не принимает пропущенные нативные тесты за успех. Результат:
-`feature/session/impl/build/reports/computer-use/windows-native.txt` и JUnit-отчёты
+`magic-agent/computer/impl/build/reports/computer-use/windows-native.txt` и JUnit-отчёты
 трёх модулей. Снимки рабочего стола проверяются в памяти и не сохраняются.
 
 Отдельная ручная приёмка установленного Windows-пакета: начать управление из развёрнутого

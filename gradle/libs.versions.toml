@@ -68,6 +68,7 @@ wrappers-browser = { module = "org.jetbrains.kotlin-wrappers:kotlin-browser", ve
 kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.ref = "kotlinx-browser" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
+ktor-utils = { module = "io.ktor:ktor-utils", version.ref = "ktor" }
 ktor-clientCore = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 markdownRenderer-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "multiplatformMarkdownRenderer" }
 markdownRenderer-code = { module = "com.mikepenz:multiplatform-markdown-renderer-code", version.ref = "multiplatformMarkdownRenderer" }

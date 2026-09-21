@@ -49,7 +49,7 @@ class SessionBrowserRenderTest {
                                 searchExpanded = !searchExpanded
                                 if (!searchExpanded) query = ""
                             }, archives, if (chat.archived) 1 else 0, { archives = !archives })
-                            SessionBrowserResults(searchSessions(listOf(chat), emptyList(), emptyList(), query, archives),
+                            SessionBrowserResults(searchSessions(listOf(chat), emptyList(), query, archives),
                                 archives, query.isNotBlank(), selected, false,
                                 { selected = it.id }, { chat = chat.copy(archived = false) }, Modifier.weight(1f))
                         }

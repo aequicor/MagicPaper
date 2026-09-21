@@ -96,10 +96,23 @@ Application-use сейчас требует обе возможности даж
 
 ## Устройство
 
-`ComputerUse` — общий порт и временное состояние UI. `DesktopComputerUse`
-сериализует операции, проверяет владельца и поколение разрешения. `AwtComputerDesktop`
-выполняет захват и ввод через Java Robot; на macOS JNA проверяет разрешения системы.
-JVM-модуль `jdk.httpserver` включён в упакованный desktop runtime.
+JVM-владелец — `:magic-agent:computer:api/impl`. API содержит `ComputerUse`,
+`NativeComputerUse`, описание endpoint и чистую `ComputerMachine`; приложение создаёт
+`DesktopComputerUse(persistence.events)`, runtime зависит только от API. Машина
+проверяет разрешение, владельца запроса, одноразовые ссылки на наблюдение и идентификатор
+вызова. Журнал сохраняет намерение до обращения к ОС: только идентичности, действие,
+хэш аргументов и результат, без ввода, снимков или содержимого окон.
+
+`DesktopComputerUse` сериализует операции и немедленно отзывает доступ даже при медленной
+записи. Потерянное подтверждение записи допускает продолжение только после проверки
+точной прежней истории и новой записи. Неизвестный исход ввода требует нового наблюдения;
+повтор прежнего вызова запрещён. Восстановление не возвращает разрешение и не запускает
+побочные действия. Сбой отключения виден пользователю и блокирует новые разрешения до
+перезапуска. Сброс приложения сначала останавливает writer, затем очищает журнал и создаёт
+новое поколение владельца; старый endpoint не получает доступ нового запроса.
+
+`AwtComputerDesktop` выполняет захват и ввод через Java Robot; на macOS JNA проверяет
+разрешения системы. JVM-модуль `jdk.httpserver` включён в упакованный desktop runtime.
 
 `ApplicationUse` проверяет одноразовый semantic snapshot; `NativeApplicationDesktop`
 владеет отдельным процессом на время разрешения. Нативные AX/UIA ссылки остаются в
@@ -114,7 +127,7 @@ JVM-модуль `jdk.httpserver` включён в упакованный deskt
 не повторяется автоматически. Диагностика содержит operation/session/generation,
 action и тип ошибки, но не содержимое окон или ввод.
 
-Swift helper компилируется `:feature:session:impl:bundleApplicationUse` на macOS
+Swift helper компилируется `:magic-agent:computer:impl:bundleApplicationUse` на macOS
 (Xcode CLI tools нужны машине сборки, не пользователю). Бинарник извлекается в
 стабильный каталог `~/.MagicPaper/coding/native/application-use/<sha256>/`, проверяется
 по bundled bytes и получает права 0700. Разрешения TCC выдаются этому helper/его
@@ -264,7 +277,8 @@ Snapshot живёт 30 секунд, расходуется **до** вызов�
 ## Проверка
 
 ```sh
-./gradlew :feature:session:impl:jvmTest --tests '*ComputerUse*Test' --tests '*ApplicationUseTest' --tests '*NativeApplicationDesktopTest' -Pmagicpaper.codingTools.offline=true --console=plain
+./gradlew :magic-agent:computer:api:jvmTest :magic-agent:computer:api:screenshotContextTest :magic-agent:computer:impl:jvmTest --console=plain
+./gradlew :magic-agent:runtime:impl:jvmTest --tests '*CodingClientComputerUseTest' --tests '*ComputerUsePanelTest' -Pmagicpaper.codingTools.offline=true --console=plain
 ./gradlew :feature:settings:impl:jvmTest --tests '*AutomationSettingsRenderTest' :app:jvmTest --tests '*AutomationPolicyTest' --tests '*ChatInputQueueTest' --tests '*SessionInputQueueTest' -Pmagicpaper.codingTools.offline=true --console=plain
 ```
 
@@ -288,13 +302,13 @@ Codex проверяется при первом подключении и по�
 Для подготовленного интерактивного Mac добавлен отдельный opt-in сценарий:
 
 ```sh
-./gradlew :feature:session:impl:jvmTest --tests '*ApplicationUseMacIntegrationTest' -Pmagicpaper.application.native=true -Pmagicpaper.codingTools.offline=true --console=plain
+./gradlew :magic-agent:computer:impl:jvmTest --tests '*ApplicationUseMacIntegrationTest' -Pmagicpaper.application.native=true -Pmagicpaper.codingTools.offline=true --console=plain
 ```
 
 Он сначала проверяет существующие TCC grants через внутренний `permissions`-запрос
 helper (не инструмент модели). Проверка не запрашивает разрешения. При недостающем
 доступе явно включённый тест падает **до** чтения окон и ввода; при выключенном
-opt-in — skipped. Helper остаётся в `feature/session/impl/build/application-use/native-acceptance/<sha256>/`
+opt-in — skipped. Helper остаётся в `magic-agent/computer/impl/build/application-use/native-acceptance/<sha256>/`
 для стабильной TCC identity. Сам fixture и его данные временные, удаляются после теста.
 Тест не активирует окна: красное целевое окно и синее перекрытие располагаются за
 окнами пользователя. Проверяются AX-действия, Unicode, stale/replay, защищённое поле,

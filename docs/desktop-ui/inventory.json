@@ -1724,7 +1724,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/di/CodingRuntimeGraph.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/di/CodingRuntimeGraph.kt",
       "sha256": "9772e623bdb98df3cfd0404d5690671207c35351f5dd042d16d6a2838b62e3cb",
       "stage": "7",
       "targets": [
@@ -1765,7 +1765,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "sha256": "4dee034bd9287074388430a8e070d40fac2e470c9445f922774e30ac21ed8bc3",
       "stage": "6",
       "targets": [
@@ -1917,7 +1917,7 @@
       ]
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/DefaultCodingComponent.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/DefaultCodingComponent.kt",
       "sha256": "8389fef8a4a74fd9e0aac04c17b5bba89a1ba15a1ffbe92a5c50fb5db130f23a",
       "stage": "6",
       "targets": [
@@ -1964,7 +1964,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/DefaultCodingService.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/DefaultCodingService.kt",
       "sha256": "a445c76b3ac0aa36b460f851899980a667d2a42329e578cf4f0f792de4bfd8fb",
       "stage": "6",
       "targets": [
@@ -2287,7 +2287,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/LegacyRecoveryDecisions.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/LegacyRecoveryDecisions.kt",
       "sha256": "3e8be696524e9a38b90de2131c10c79f8b3cf851b19d581731fda2ddd921afb5",
       "stage": "6",
       "targets": [
@@ -2310,7 +2310,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/StageChatState.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/StageChatState.kt",
       "sha256": "d8ff7f55a682540cf2f11850eb0bdba24af428c0fcaede5fa3c4cb89e6f38dcd",
       "stage": "6",
       "targets": [
@@ -2328,7 +2328,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UserInteractions.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/UserInteractions.kt",
       "sha256": "0a83439ce6276014b9621385b6147dc347d1ddfe350a0de89729e7c256bbc541",
       "stage": "6",
       "targets": [
@@ -2354,7 +2354,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingApprovalDock.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingApprovalDock.kt",
       "sha256": "eba7b750af2c652d222e13e425e658198df717486ccdbbaaa0b195f70630efbf",
       "stage": "6",
       "targets": [
@@ -2379,7 +2379,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingChatRows.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingChatRows.kt",
       "sha256": "14d20e9d5d02d877b5211ff450fac5d0eb39dc74cf0ddf78ad1ad14d82edb259",
       "stage": "6",
       "targets": [
@@ -2424,7 +2424,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingModelSwitcher.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingModelSwitcher.kt",
       "sha256": "bb870606cf2a5ccc18e04e81c71e103ada6cb1942f1f22f93995dcefe1d34beb",
       "stage": "6",
       "targets": [
@@ -2451,7 +2451,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingToolPreview.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/CodingToolPreview.kt",
       "sha256": "3ab0b38a3ed648d9bc0558265b0a8dc3ed70b3299953ad8a14c819e27e0aafa3",
       "stage": "6",
       "targets": [
@@ -2474,7 +2474,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ComputerUsePanel.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ComputerUsePanel.kt",
       "sha256": "7e93ba616dec28b63079fcd723b41a0b5669622b908f1a6d420bcd26f71d05b5",
       "stage": "6",
       "targets": [
@@ -2497,7 +2497,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ContextUsageIndicator.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ContextUsageIndicator.kt",
       "sha256": "71a77eb4a6c399963803e6afb9644bcf1116dd522461dc5895115a313e00ef28",
       "stage": "6",
       "targets": [
@@ -2524,7 +2524,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/DecisionGraph.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/DecisionGraph.kt",
       "sha256": "a7bd7aa8fd2c9658df2cef2349f8248dcf5f18e63f9eb0cdd47f5760fc9f1057",
       "stage": "6",
       "targets": [
@@ -2578,7 +2578,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/DefaultCodingPresentation.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/DefaultCodingPresentation.kt",
       "sha256": "4172e862eebe15d6534e82542cde27e51e95d35cdbe5fc377c3bd9783aeb7c07",
       "stage": "6",
       "targets": [
@@ -2601,7 +2601,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ImmunityInterventions.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ImmunityInterventions.kt",
       "sha256": "333ba3152fc1bec6c2b45215a5f8fdafbceeaf631c698e245fb6a710a9bebde3",
       "stage": "6",
       "targets": [
@@ -2632,7 +2632,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/OrchestrationStatus.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/OrchestrationStatus.kt",
       "sha256": "68391d5c0a83cd94d8e74ab3068dea98d50b96ac9312dacc9bac12e987852c70",
       "stage": "6",
       "targets": [
@@ -2691,7 +2691,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningBlockerDock.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningBlockerDock.kt",
       "sha256": "e38ce565d074f84e782eaa433feebe15ab2651d18c48e4bc924aca5055979a2d",
       "stage": "6",
       "targets": [
@@ -2720,7 +2720,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningBranchLabels.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningBranchLabels.kt",
       "sha256": "c10190be64bdfede42696b0c0c9d9123cac08fc71b7525e9bc8818a83157b5c5",
       "stage": "6",
       "targets": [
@@ -2747,7 +2747,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt",
       "sha256": "069804d30a1345ac331f2568d1cfa846cb4b1530750112acd9f511ee172bc4ea",
       "stage": "6",
       "targets": [
@@ -2776,7 +2776,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningGraphLayout.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningGraphLayout.kt",
       "sha256": "2509bc652976b70371e10de7d36f3104c8c976e7c293fa549f33b61d1435bc84",
       "stage": "6",
       "targets": [
@@ -2822,7 +2822,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningGraphProjection.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningGraphProjection.kt",
       "sha256": "4926d36ec24c66b5035e6b764c4e367a2359b5172794b72f46f1713d34992f74",
       "stage": "6",
       "targets": [
@@ -2852,7 +2852,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningProposal.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningProposal.kt",
       "sha256": "13cc4246c7264c283e4b9d9aa01cba3b8c5b4d2ba0f7b2ebe628c8c30d8c87cb",
       "stage": "6",
       "targets": [
@@ -2883,7 +2883,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningQuestionsDock.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningQuestionsDock.kt",
       "sha256": "6e9899872572417669283a9dbf9f98a7e36388c79fce9f9bb90f39ce86e2bc2a",
       "stage": "6",
       "targets": [
@@ -2920,7 +2920,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/QuestionnaireContext.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/QuestionnaireContext.kt",
       "sha256": "9117fce7997754ca0593f23a4fcb099eda5c8412a794e83e8736a70da7346d2c",
       "stage": "6",
       "targets": [
@@ -2965,7 +2965,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ScheduledMessages.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/ScheduledMessages.kt",
       "sha256": "e3a632f59e8d7b973bd838c47af724eaaa82d44bdc96115dc91b7fbc3f8888e1",
       "stage": "6",
       "targets": [
@@ -2994,7 +2994,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
       "sha256": "95eeeaccc44387ee96fd77f483097cb3791f12e3d1f090e687162d2d6e713d01",
       "stage": "6",
       "targets": [
@@ -3122,7 +3122,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ProjectSessionTasks.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/ProjectSessionTasks.kt",
       "sha256": "ae6de44891ffeb13b8a5377b46b128fa74eea23c0bde28bbfe38bcec89e7e965",
       "stage": "6",
       "targets": [
@@ -3153,7 +3153,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/data/coding/DesktopProjectDirPicker.kt",
+      "path": "magic-agent/runtime/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/data/coding/DesktopProjectDirPicker.kt",
       "sha256": "8ea9483f74cbd0ad1d767c7c7d17711318596cf05a0ae14c2376a4f244d56293",
       "stage": "5",
       "targets": [
@@ -3171,7 +3171,7 @@
       "pluginIds": []
     },
     {
-      "path": "feature/coding/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/di/DesktopCoding.kt",
+      "path": "magic-agent/runtime/impl/src/jvmMain/kotlin/io/aequicor/magicpaper/di/DesktopCoding.kt",
       "sha256": "06a895e16b820655e73626e8a4e6ec1cc26f3c151459887d7bfd54495e50d997",
       "stage": "7",
       "targets": [
@@ -5290,87 +5290,87 @@
       "text": "PaperChatMarkdown(message.text)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/domain/SessionTitles.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/domain/SessionTitles.kt",
       "line": 17,
       "text": "Верни только название — без кавычек, Markdown, точки в конце и слов «запрос», «цель»,"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 15,
       "text": "import io.aequicor.magicpaper.ui.components.PaperChatMarkdown"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 351,
       "text": "PaperChatMarkdown(message.text)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 512,
       "text": "PaperChatMarkdown(message.text)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 521,
       "text": "if (visibleSteps.isEmpty() && attempt.report.isNotBlank()) PaperChatMarkdown(attempt.report)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 528,
       "text": "if (attempt.mergeReport.isNotBlank()) { PaperText(\"Объединение результата\"); PaperChatMarkdown(attempt.mergeReport) }"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 560,
       "text": "PaperChatMarkdown(stage.description.ifBlank { stage.title })"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 561,
       "text": "if (stage.acceptance.isNotBlank()) { PaperText(\"Критерии готовности\", role = PaperTextRole.LABEL); PaperChatMarkdown(stage.acceptance) }"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 574,
       "text": "if (stage.checkNote.isNotBlank()) { PaperText(\"Проверка результата\", role = PaperTextRole.LABEL); PaperChatMarkdown(stage.checkNote) }"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
       "line": 576,
       "text": "PaperChatMarkdown(plan.goal)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningChatMessage.kt",
       "line": 40,
       "text": "if (stage.description.isNotBlank()) PaperChatMarkdown(stage.description)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningProposal.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/PlanningProposal.kt",
       "line": 52,
       "text": "PaperChatMarkdown(proposal.explanation)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
       "line": 186,
       "text": "import io.aequicor.magicpaper.ui.components.PaperChatMarkdown"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
       "line": 1110,
       "text": "PaperChatMarkdown(card.text)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
       "line": 1237,
       "text": "PaperChatMarkdown(text = step.title, streaming = live)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
       "line": 1292,
       "text": "PaperChatMarkdown(step.title, Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 6.dp)"
     },
     {
-      "path": "feature/coding/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
+      "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/CodingScreen.kt",
       "line": 1517,
       "text": "PaperChatMarkdown(thinking, Modifier.fillMaxWidth().heightIn(max = 190.dp),"
     },

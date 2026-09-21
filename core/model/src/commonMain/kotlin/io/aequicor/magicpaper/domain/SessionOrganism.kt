@@ -212,7 +212,7 @@ import kotlinx.serialization.Serializable
 }
 
 /** Constructed by the host from an authenticated run; never decode this from model text. */
-data class SessionAuthority(
+@Serializable data class SessionAuthority(
     val projectId: String, val organismId: String, val sessionId: String,
     val generation: Long, val mode: CodingInteractionMode, val expectedVersion: Long? = null,
 )

@@ -1,9 +1,12 @@
 # Task worktrees
 
-`TaskWorktreeService` owns task workspace state independently of a screen and of
-native runtime generations. `TaskWorkspace` is its platform port. JVM supplies
-`GitTaskWorkspace`; other hosts supply `UnavailableTaskWorkspace`. The application
-graph shares the existing `PlanningWorkspace` writer leases with the task owner.
+`TaskWorktreeMachine` in `:magic-agent:workspace:api` owns task transitions.
+`DefaultTaskWorktreeOwner` in workspace impl journals inputs and executes
+`TaskWorkspace` effects independently of screens and native runtime generations.
+The JVM application supplies `GitTaskWorkspace` and the owner. The runtime's
+`TaskWorktreeService` coordinates parent admission, writer leases and child
+projections through API ports; it cannot overwrite the child's state. These
+modules are absent from Android and browser targets.
 
 The per-session preference defaults to enabled. Effective availability and the
 accepted request's mode are distinct: a missing Git capability disables new task
@@ -12,18 +15,15 @@ Legacy pending requests and plans have a null mode and retain their old behavior
 
 ## Task boundary
 
-`CodingRunCheckpoint.runId` (or `Plan.runId`) is the stable task identity. Native
-restart, clarification, questionnaire answers and Stop/Continue do not create a
-new worktree; each of them is a run start and may bring the existing copy onto the
-current destination tip (see Destination distance). A subsequent completed-task
-request gets a new branch at the current source HEAD. An unfinished task owns
-every further run of its session: a new request or a resume whose checkpoint
-points elsewhere adopts the task identity at run acceptance and becomes the
-task's next step, so a crash that orphaned the original checkpoint cannot wedge
-the session — `begin` would otherwise reject every launch with no way for the
-agent to run or finish the work. Each session has one
-directory slot; only a clean, completed slot whose branch and commit match the
-recorded receipt may be reused.
+`TaskWorktree.taskId` is the stable task identity. `CodingRunCheckpoint.workspaceTaskId`
+binds a fresh native `runId` to that task; old serialized checkpoints keep the
+nullable default. Clarification and an explicitly admitted continuation may reuse
+the copy, but never reuse a native attempt's identity. A new parent generation must
+bind explicitly and invalidates the previous handoff. Unknown child outcomes block
+admission even when the parent has a newer generation. A subsequent completed-task
+request gets a new branch at the current source HEAD. Each session has one directory
+slot; only a clean, completed slot whose branch and commit match the recorded receipt
+may be reused.
 
 Branch and commit names are meaningful and ASCII. The task branch is
 `magicpaper/worktree-<slug>`: a transliterated, ref-safe slug of the task request
@@ -51,23 +51,32 @@ child writers must have stopped, questions must be answered and checks must pass
 Clarification revokes a handoff before capture. After capture starts, new sends
 are queued as another task. Stop retains the current checkpoint and worktree.
 
-The native response is saved in the task record before delivery, so a restart
-can finish Git without asking the model to repeat work or losing its answer.
-Neither a final engine event nor a saved response proves Git delivery.
+The native response is saved in the task record before delivery. Restoring it never
+starts a model or Git operation. Neither a final engine event nor a saved response
+proves Git delivery.
 
 ## Git effects and recovery
 
-| Saved phase | Next operation / recovery |
+| Known phase | Explicitly admitted next operation |
 | --- | --- |
 | PREPARING | Create or validate the exact recorded branch and directory |
 | RUNNING / READY | Continue the same task; READY is an authenticated handoff. A transfer stopped by a conflict stays in the copy for the resumed agent to resolve on the working branch |
 | CAPTURING | Capture remaining changes; reuse existing agent commits |
 | MERGING | Bring the copy onto the recorded destination tip and verify |
 | CONFLICT | Agent repairs the managed copy; questions retain this workspace |
-| DELIVERING | Fast-forward the original branch; reconcile ancestry and a clean checkout after a crash |
+| DELIVERING | Await the exact operation's durable outcome; restore never repeats delivery |
 | COMPLETE | Persist final response and release the slot for the next task |
 
-Persist each phase before its external effect. Store the source branch and commit
+Persist each intent before its external effect. The journal contains opaque input
+envelopes; private payloads retain source paths, responses and arguments. A successful
+port result is saved as an immutable receipt before its terminal fact is appended.
+If the fact is lost, an explicit inspection can recover that exact receipt without
+running Git. A missing receipt leaves the operation UNKNOWN. Git ancestry and a dead
+parent PID alone cannot prove all writers stopped; the real Git port does not turn
+those observations into permission to repeat a command. Legacy active snapshots
+without a journal are likewise UNKNOWN, including RUNNING, MERGING and DELIVERING.
+
+Store the source branch and commit
 at creation, rather than consulting the currently selected UI project at delivery.
 Revalidate the source branch, HEAD, index and working files before fast-forward;
 never stash, force-reset or push. Failed or uncertain workspaces cannot enter the
@@ -75,11 +84,11 @@ pool. Source changes or an advanced destination leave a recoverable checkpoint.
 
 Integration replays the task commits onto the destination tip (`git rebase`) instead of
 merging the tip in, so delivery keeps the destination history linear and a change that is
-already upstream is dropped instead of conflicting. A crash between the replay and the saved
-receipt stays recoverable: the copy keeps a `refs/magicpaper/task-pre-integration-*` ref, an
-interrupted replay without a saved CONFLICT phase is aborted and repeated, and a replay left in
-CONFLICT is continued after the agent stages its resolution. A merge left in progress by an
-older application version is still completed, not discarded.
+already upstream is dropped instead of conflicting. The copy keeps a
+`refs/magicpaper/task-pre-integration-*` ref. A known CONFLICT outcome permits an
+explicit repair attempt after the agent stages its resolution; an interrupted
+integration without a completion receipt remains UNKNOWN and is not aborted or
+repeated during restore. Existing Git state is retained for inspection.
 
 ## Merge turn serialization
 
@@ -150,8 +159,11 @@ their HEAD, index and actual tracked/untracked bytes recursively. An ignored
 submodule status does not hide its changes from verification, and recursion is
 bounded by depth. An untracked nested repository, which Git itself enumerates as
 a single entry, contributes one marker instead of its bytes. Snapshot failures
-retain the merge phase and the saved response; retrying recovery or continuing
-after a restart completes delivery without repeating native execution.
+retain the merge phase and the saved response. A known failed check permits the
+explicit `RetryVerification` transition; delivery still requires a new successful
+verification and acceptance. An interrupted check with an unknown outcome cannot
+use this transition. Failed lease release is retried separately, including after
+delivery reached COMPLETE, without repeating Git.
 
 The existing `GitPlanningWorkspace.apply` remains a file transfer for legacy
 plans. New isolated plans transfer accepted stage output into the task worktree,
@@ -176,8 +188,10 @@ Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`
 `GitTaskWorkspaceTest.preRunUpdateLeavesTheConflictOnTheWorkingBranch`,
 `GitTaskWorkspaceTest.captureFinishesATransferTheAgentResolvedButLeftUncontinued`,
 `GitTaskWorkspaceTest.restartWhileRunningKeepsTheWorktreeAndActualizesItsBranchOnResume`,
-`CodingWorktreeTest.newPromptInSessionWithUnfinishedTaskContinuesThatTask`,
-`CodingWorktreeTest.resumedCrashedSessionWithForeignCheckpointContinuesItsTask`,
+`CodingWorktreeTest.newPromptKeepsLegacyUnknownTaskAndDoesNotLaunchNative`,
+`CodingWorktreeTest.foreignCheckpointCannotAuthorizeLegacyUnknownTask`,
+`CodingWorktreeTest.legacyDeliveryWithoutReceiptDoesNotInferSuccessFromGitState`,
+`CodingWorktreeTest.completedDeliveryRetriesFailedLeaseCleanupWithoutRepeatingGit`,
 `CodingWorktreeTest.concurrentCompletionsSerializeTheirMergesPerProject`,
 `PlanningExecutionServiceTest.worktreePlanDeliversOnlyAfterAcceptanceAndUsesIsolatedSource`,
 `PaperMenuToggleInfoTest` and

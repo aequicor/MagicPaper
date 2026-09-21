@@ -17,7 +17,6 @@ import io.aequicor.magicpaper.navigation.*
 import io.aequicor.magicpaper.ui.*
 import io.aequicor.magicpaper.ui.components.*
 import io.aequicor.magicpaper.ui.screens.UnifiedSidebar
-import io.aequicor.magicpaper.ui.screens.NewCodingSessionDialog
 import io.aequicor.magicpaper.ui.screens.SessionRecencyTracker
 import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.ui.window.*
@@ -31,7 +30,6 @@ fun App(runtime: MagicPaperRuntime, root: RootComponent<AppChild>, compact: Bool
         CompositionLocalProvider(
             LocalChatPresentation provides DefaultChatPresentation,
             LocalModelPresentation provides DefaultModelPresentation,
-            LocalCodingPresentation provides runtime.koin.get<CodingFeature>().presentation,
         ) {
             PaperSurface(Modifier.fillMaxSize(), kind = PaperSurfaceKind.CANVAS) {
                 when (val status = readiness) {
@@ -111,15 +109,14 @@ private fun AppShellContent(
 ) {
     val settings = runtime.koin.get<SettingsService>()
     val chat = runtime.koin.get<ChatService>()
-    val coding = runtime.koin.get<CodingService>()
+    val contributions = runtime.koin.get<AppContributions>()
     val usage = runtime.koin.get<UsageLedger>()
     val config by settings.state.collectAsState()
     val chats by chat.state.collectAsState()
-    val projects by coding.state.collectAsState()
     val navigation by root.navigationState.collectAsState()
     val stack by root.stack.subscribeAsState()
     val slot by root.dialogSlot.subscribeAsState()
-    val sidebarActions = remember(chat, coding) { SidebarActions(chat, coding) }
+    val sidebarActions = remember(chat, contributions) { SidebarActions(chat, contributions.sidebars) }
     val isCoding = navigation.route is AppRoute.Projects
     val isChat = navigation.route is AppRoute.Chat
     val sidebarVisible = if (isChat) chatSidebarVisible else primarySidebarVisible
@@ -127,6 +124,9 @@ private fun AppShellContent(
         is AppRoute.Chat -> route.sessionId
         is AppRoute.Projects -> route.sessionId
         else -> null
+    }
+    val sidebarProjections = contributions.sidebars.map { contribution ->
+        key(contribution.sourceId) { contribution.snapshot(SidebarSelection(selectedId, if (isCoding) "agent" else "chat"), sidebarRecencyTracker) }
     }
     val dialogLifecycle = remember(root) { RootDialogLifecycle(root) }
     DisposableEffect(dialogLifecycle) { onDispose { dialogLifecycle.close() } }
@@ -148,18 +148,19 @@ private fun AppShellContent(
                         preferredWidth = if (isChat) chatSidebarWidth else primarySidebarWidth,
                         onPreferredWidthChange = if (isChat) onChatSidebarWidthChange else onPrimarySidebarWidthChange,
                         sidebar = { modifier ->
-                            UnifiedSidebar(sidebarActions, chats.notebooks, projects.coding,
+                            UnifiedSidebar(sidebarActions, chats.notebooks, sidebarProjections,
                                 if (isCoding) selectedId else chats.sessions.firstOrNull { it.id == selectedId }?.researchChatId ?: selectedId, isCoding,
-                                modifier.padding(top = topInset), sidebarRecencyTracker,
+                                modifier.padding(top = topInset),
                                 if (isChat) chatSidebarListState else primarySidebarListState)
                         }) {
                         Box(Modifier.fillMaxSize().then(if (edgeToEdge) Modifier else Modifier.padding(top = topInset))) {
                             key(stack.active.configuration.id) { stack.active.instance.Content() }
                         }
                     }
-                    Notice(navigation.error ?: config.notice ?: chats.notice ?: projects.notice,
+                    Notice(navigation.error ?: config.notice ?: chats.notice ?: sidebarProjections.firstNotNullOfOrNull { it.notices.firstOrNull() },
                         Modifier.align(Alignment.BottomCenter)) {
-                        root.dismissNavigationError(); settings.dismissNotice(); chat.dismissNotice(); coding.dismissNotice()
+                        root.dismissNavigationError(); settings.dismissNotice(); chat.dismissNotice()
+                        contributions.sidebars.forEach { it.dispatch(SidebarCommand.DismissNotice) }
                     }
                 }
                 TopBar(
@@ -185,28 +186,12 @@ private fun AppShellContent(
                                 PaperAction({ root.dismissDialog(); root.navigate(AppRoute.Settings(SettingsSection.MODELS)) }) { PaperText("Настроить модели") }
                             })
                     }
-                    "new-session" -> {
-                        val projectId = dialog.entityId ?: projects.coding.current?.id
-                        val draft = projectId?.let(coding::sessionCreationDraft)
-                        if (projectId == null || draft == null) {
-                            PaperDialog("Новая сессия", { root.dismissDialog(dialog) }) { PaperText("Проект недоступен.") }
-                        } else {
-                            val selection by draft.state.collectAsState()
-                            val operations by coding.sessionCreationStatus.collectAsState()
-                            val operation = operations[projectId] ?: SessionCreationStatus()
-                            val closeCurrent = { if (root.dialogSlot.value.child?.configuration === dialog) root.dismissDialog(dialog) }
-                            NewCodingSessionDialog(selection.value, draft::update,
-                                onDismiss = closeCurrent,
-                                onCancel = { coding.discardCodingSessionDraft(projectId, closeCurrent) },
-                                onCreate = { coding.createCodingSession(projectId) { sessionId ->
-                                    if (root.dialogSlot.value.child?.configuration === dialog) {
-                                        root.dismissDialog(dialog)
-                                        root.navigate(AppRoute.Projects(projectId, sessionId))
-                                    }
-                                } }, loaded = selection.loaded, busy = operation.busy,
-                                error = selection.error?.let { if (it.committed) "Выбор сохранён. Не удалось завершить очистку."
-                                    else "Не удалось сохранить выбор движка. Повторите попытку." } ?: operation.error,
-                                onRetry = if (selection.error != null) draft::retry else null)
+                    else -> {
+                        val contribution = contributions.dialogs.firstOrNull { it.kind == dialog.kind }
+                        if (contribution != null) contribution.Content(dialog, root)
+                        else PaperDialog("Раздел недоступен", { root.dismissDialog(dialog) },
+                            confirmLabel = "Закрыть", onConfirm = { root.dismissDialog(dialog) }) {
+                            PaperText("Этот раздел недоступен на этом устройстве.")
                         }
                     }
                 }

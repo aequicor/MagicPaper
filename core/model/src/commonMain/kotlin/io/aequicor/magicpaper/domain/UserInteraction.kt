@@ -35,6 +35,8 @@ data class UserInteractionRequest(
     val outcomeUnknown: Boolean = false,
     val runtimeGeneration: Long = 0,
     val runId: String = "",
+    /** The exact verification shown to the user; absent on older saved questionnaires. */
+    val verificationProofs: Set<PlanningSkipProof>? = null,
 ) {
     fun affects(session: CodingSession) = projectId == session.projectId && !session.archived && session.id in affectedSessionIds
 }
@@ -77,7 +79,7 @@ class UserInteractionQueue {
 }
 
 @Serializable
-enum class RuntimeQuestionnaireStatus { OPEN, ANSWERED, DELIVERED, CANCELLED, INTERRUPTED }
+enum class RuntimeQuestionnaireStatus { OPEN, ANSWERED, DELIVERED, CANCELLED, INTERRUPTED, DELIVERY_PENDING, DELIVERY_UNKNOWN }
 
 @Serializable
 data class RuntimeQuestionnaireRecord(
@@ -85,9 +87,14 @@ data class RuntimeQuestionnaireRecord(
     val status: RuntimeQuestionnaireStatus = RuntimeQuestionnaireStatus.OPEN,
     val answers: List<PlanningAnswer> = emptyList(),
     val answersRedacted: Boolean = false,
+    val deliveryAttemptId: String? = null,
 )
 
-/** One replacement is the transaction boundary; never complete a waiter before it succeeds. */
 
 
-/** Durable identity and answers are independent from the coroutine/transport waiting for them. */
+@Serializable
+enum class QuestionnairePersistence { READY, UNKNOWN }
+
+/** A successful local write is UNKNOWN; CONFIRMED requires remote protocol evidence. */
+@Serializable
+enum class QuestionnaireDeliveryOutcome { CONFIRMED, UNKNOWN }

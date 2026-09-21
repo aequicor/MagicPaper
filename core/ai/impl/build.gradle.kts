@@ -10,6 +10,7 @@ kotlin {
             api(project(":core:ai:api"))
             implementation(project(":core:storage:api"))
             implementation(libs.ktor.clientCore)
+            implementation(libs.ktor.utils)
         }
         commonTest.dependencies {
             implementation(project(":core:storage:api"))

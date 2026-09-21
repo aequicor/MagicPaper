@@ -93,8 +93,9 @@ main-process preflight на macOS. `NativeApplicationDesktopTest` отдельн
 ```sh
 ./gradlew :designSystem:jvmTest --tests '*PaperFileTransferTest' --tests '*PaperContrastTest' \
   :feature:settings:impl:jvmTest \
-  :feature:session:impl:jvmTest --tests '*DesktopComputerPermissionsTest' \
-  --tests '*ApplicationUseTest' --tests '*NativeApplicationDesktopTest' --tests '*ComputerUsePanelTest' \
+  :magic-agent:computer:impl:jvmTest --tests '*DesktopComputerPermissionsTest' \
+  --tests '*ApplicationUseTest' --tests '*NativeApplicationDesktopTest' \
+  :magic-agent:runtime:impl:jvmTest --tests '*ComputerUsePanelTest' \
   :app:jvmTest --tests '*AppRouteCodecTest' --tests '*RootComponentTest' \
   --tests '*AutomationPolicyTest' --tests '*ShellSettingsComponentTest' \
   -Pmagicpaper.codingTools.offline=true --console=plain

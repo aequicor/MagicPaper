@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.LlmToolDefinition
+import io.aequicor.magicpaper.domain.LlmToolExchange
+import io.aequicor.magicpaper.domain.LlmToolTurn
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.aequicor.magicpaper.domain.LlmTransportException
 import io.ktor.client.HttpClient
@@ -73,21 +76,33 @@ class OpenAiCompatibleGateway(
     private val json: Json,
 ) : LlmGateway {
 
-    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String =
+        parseResponse(request(profile, LlmPayloads.openAi(profile, messages, ModelDefaults.capability(profile))))
+
+    override suspend fun turn(
+        profile: LlmProfile,
+        messages: List<LlmMessage>,
+        tools: List<LlmToolDefinition>,
+        exchanges: List<LlmToolExchange>,
+    ): LlmToolTurn {
+        val base = LlmPayloads.openAi(profile, messages, ModelDefaults.capability(profile))
+        val payload = LlmToolWire.openAiPayload(base, tools, exchanges, profile.provider, json)
+        return LlmToolWire.openAiResponse(request(profile, payload), profile.provider, json)
+    }
+
+    private suspend fun request(profile: LlmProfile, payload: JsonObject): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val url = profile.baseUrl.trimEnd('/') + "/chat/completions"
-        val payload = LlmPayloads.openAi(profile, messages, ModelDefaults.capability(profile))
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("Authorization", "Bearer " + profile.apiKey)
         }
-        val body = client.postJson(
+        return client.postJson(
             url = url,
             headers = headers,
             body = json.encodeToString(JsonObject.serializer(), payload),
             timeoutSeconds = profile.advanced.timeoutSeconds,
             usageProvider = profile.provider,
         )
-        return parseResponse(body)
     }
 
     private fun parseResponse(body: String): String = runCatching {

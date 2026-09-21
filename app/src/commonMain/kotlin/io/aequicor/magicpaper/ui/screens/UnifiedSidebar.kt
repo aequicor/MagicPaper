@@ -24,10 +24,8 @@ import io.aequicor.magicpaper.designsystem.PaperButtonKind
 import io.aequicor.magicpaper.designsystem.PaperDivider
 import io.aequicor.magicpaper.domain.ChatSession
 import io.aequicor.magicpaper.domain.CodingSessionStatus
-import io.aequicor.magicpaper.domain.SessionKind
-import io.aequicor.magicpaper.domain.aggregateCodingStatus
-import io.aequicor.magicpaper.domain.sidebarTitle
-import io.aequicor.magicpaper.ui.CodingUi
+import io.aequicor.magicpaper.ui.SidebarProjection
+import io.aequicor.magicpaper.ui.SidebarCommand
 import io.aequicor.magicpaper.ui.SidebarActions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -50,6 +48,7 @@ internal data class UnifiedSidebarItem(
     val isOrganism: Boolean = false,
     /** Агент ответил, пока сессия не была в фокусе. */
     val unread: Boolean = false,
+    val sourceId: String = if (isCoding) "agent" else "chat",
 )
 
 /** Данные об иммунитете, привязанном к зиготе. */
@@ -180,195 +179,15 @@ internal class SessionRecencyTracker(private val now: () -> Long) {
     }
 }
 
-/** Элементы единого списка: чаты и кодинг-сессии, отсортированные по обновлению. */
-@Composable
-internal fun rememberUnifiedItems(
-    chatSessions: List<ChatSession>,
-    coding: CodingUi,
-    selectedId: String?,
-    viewingCoding: Boolean,
-    recencyTracker: SessionRecencyTracker,
-): List<UnifiedSidebarItem> {
-    val chatItems = remember(chatSessions) {
-        chatSessions.filterNot { it.archived }.map { session ->
-            UnifiedSidebarItem(
-                id = session.id,
-                displayName = session.title,
-                sortTime = session.updatedAt,
-                isCoding = false,
-            )
-        }
-    }
-    // Иммунитет-сессии исключены из списка — они доступны через ромбик на зиготе.
-    // Сопоставляем зиготу с иммунитетом через organisms (надёжная привязка).
-    val immunityByZygote = remember(coding.organisms, coding.sessions, selectedId, viewingCoding) {
-        val result = mutableMapOf<String, ImmunityInfo>()
-        coding.organisms.values.forEach { organism ->
-            val immId = organism.immunityId ?: return@forEach
-            val immSession = coding.sessions.firstOrNull { it.session.id == immId } ?: return@forEach
-            result[organism.zygoteId] = ImmunityInfo(
-                sessionId = immId,
-                status = immSession.status,
-                selected = viewingCoding && immId == selectedId,
-            )
-        }
-        result
-    }
-    val codingItems = remember(coding.sessions, coding.projects, coding.organisms, immunityByZygote, recencyTracker) {
-        // Все сессии (включая архивные) для построения дерева; видимые фильтруются ниже.
-        val allSessions = coding.sessions
-        val sessionById = allSessions.associateBy { it.session.id }
-        // Группируем участников по организмам.
-        val organismMemberIds = mutableMapOf<String, MutableSet<String>>()
-        coding.organisms.values.forEach { organism ->
-            (organism.sessions.keys + organism.zygoteId + organism.immunityId?.let { listOf(it) }.orEmpty())
-                .forEach { id -> organismMemberIds.getOrPut(id) { mutableSetOf() }.add(organism.id) }
-        }
-        val membership = allSessions.associate { item ->
-            item.session.id to (item.session.organismId ?: organismMemberIds[item.session.id]?.singleOrNull())
-        }
-        // Мапа родительских связей внутри организма (originParentId из узла).
-        val organismParents = mutableMapOf<String, String?>()
-        coding.organisms.values.forEach { organism ->
-            organism.sessions.forEach { (id, node) ->
-                if (id != organism.zygoteId && id != organism.immunityId) {
-                    organismParents[id] = node.originParentId
-                }
-            }
-        }
-        // Прямые потомки сессии: из дерева организма (если есть) или по parentSessionId.
-        fun childIdsOf(parentId: String): List<String> {
-            val organismId = membership[parentId]
-            return if (organismId != null) {
-                organismParents.filterValues { it == parentId }.keys.toList()
-            } else {
-                allSessions.filter { it.session.parentSessionId == parentId }.map { it.session.id }
-            }
-        }
-        // Рекурсивный сбор видимых потомков: архивные скрыты, но их дети показаны.
-        fun collectVisibleChildren(parentId: String, excludeIds: Set<String>): List<UnifiedSidebarItem> {
-            val result = mutableListOf<UnifiedSidebarItem>()
-            for (childId in childIdsOf(parentId).filter { it !in excludeIds }) {
-                val childUi = sessionById[childId] ?: continue
-                val children = collectVisibleChildren(childId, excludeIds + parentId + childId)
-                if (childUi.session.archived || childUi.session.sessionKind == SessionKind.IMMUNITY) {
-                    // Архивный родитель скрыт, но его дети показаны.
-                    result.addAll(children)
-                    continue
-                }
-                val childItem = UnifiedSidebarItem(
-                    id = childUi.session.id,
-                    displayName = childUi.session.sidebarTitle(),
-                    sortTime = recencyTracker.observe(
-                        childUi.session.id,
-                        childUi.status,
-                        childUi.session.createdAt,
-                        childUi.session.lastStatus,
-                        childUi.session.statusChangedAt,
-                    ),
-                    isCoding = true,
-                    projectId = childUi.session.projectId,
-                    codingStatus = childUi.status,
-                    unread = childUi.unread,
-                    children = children,
-                )
-                result.add(childItem)
-            }
-            return result.sortedWith(unifiedSidebarItemComparator)
-        }
-        // Корневые элементы: зиготы организмов и автономные сессии без родителя.
-        val visible = allSessions.filter { !it.session.archived && it.session.sessionKind != SessionKind.IMMUNITY }
-        fun hasVisibleAncestor(id: String): Boolean {
-            fun parentOf(childId: String): String? = if (membership[childId] != null) organismParents[childId]
-                else sessionById[childId]?.session?.parentSessionId
-            val visited = mutableSetOf(id)
-            var parent = parentOf(id)
-            while (parent != null && visited.add(parent)) {
-                val session = sessionById[parent]?.session ?: return false
-                if (!session.archived && session.sessionKind != SessionKind.IMMUNITY) return true
-                parent = parentOf(parent)
-            }
-            return false
-        }
-        visible
-            .filter { item ->
-                val organismId = membership[item.session.id]
-                if (organismId != null) {
-                    val organism = coding.organisms[organismId]
-                    // Зигота организма — корневой элемент; остальные участники — дети.
-                    organism?.zygoteId == item.session.id ||
-                        (sessionById[organism?.zygoteId]?.session?.archived != false && !hasVisibleAncestor(item.session.id))
-                } else {
-                    !hasVisibleAncestor(item.session.id)
-                }
-            }
-            .map { sessionUi ->
-                val organismId = membership[sessionUi.session.id]
-                val organism = organismId?.let { coding.organisms[it] }
-                if (organism != null && sessionUi.session.id == organism.zygoteId) {
-                    val excludeIds = setOfNotNull(organism.zygoteId, organism.immunityId)
-                    val children = collectVisibleChildren(organism.zygoteId, excludeIds)
-                        .sortedWith(unifiedSidebarItemComparator)
-                    val memberUis = allSessions.filter { membership[it.session.id] == organismId &&
-                        it.session.id !in excludeIds && !it.session.archived }
-                    val status = aggregateCodingStatus(
-                        (memberUis + sessionUi).map { it.status }
-                    )
-                    UnifiedSidebarItem(
-                        id = sessionUi.session.id,
-                        displayName = sessionUi.session.sidebarTitle(),
-                        sortTime = recencyTracker.observe(
-                            sessionUi.session.id,
-                            status,
-                            sessionUi.session.createdAt,
-                            sessionUi.session.lastStatus,
-                            sessionUi.session.statusChangedAt,
-                        ),
-                        isCoding = true,
-                        projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
-                        projectId = sessionUi.session.projectId,
-                        codingStatus = status,
-                        immunity = immunityByZygote[sessionUi.session.id],
-                        children = children,
-                        isOrganism = true,
-                        unread = sessionUi.unread,
-                    )
-                } else {
-                    UnifiedSidebarItem(
-                        id = sessionUi.session.id,
-                        displayName = sessionUi.session.sidebarTitle(),
-                        sortTime = recencyTracker.observe(
-                            sessionUi.session.id,
-                            sessionUi.status,
-                            sessionUi.session.createdAt,
-                            sessionUi.session.lastStatus,
-                            sessionUi.session.statusChangedAt,
-                        ),
-                        isCoding = true,
-                        projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
-                        projectId = sessionUi.session.projectId,
-                        codingStatus = sessionUi.status,
-                        unread = sessionUi.unread,
-                        children = collectVisibleChildren(sessionUi.session.id, setOf(sessionUi.session.id)),
-                    )
-                }
-            }
-    }
-    return remember(chatItems, codingItems) {
-        (chatItems + codingItems).sortedWith(unifiedSidebarItemComparator)
-    }
-}
-
 /** Единая боковая панель: чаты и кодинг-сессии в одном списке с группировкой по проектам. */
 @Composable
 internal fun UnifiedSidebar(
     vm: SidebarActions,
     chatSessions: List<ChatSession>,
-    coding: CodingUi,
+    projections: List<SidebarProjection>,
     selectedId: String?,
     viewingCoding: Boolean,
     modifier: Modifier = Modifier,
-    recencyTracker: SessionRecencyTracker,
     listState: LazyListState,
 ) {
     // These values are persisted across app upgrades. Separate keyed groups keep
@@ -380,15 +199,19 @@ internal fun UnifiedSidebar(
     }
     var sourceFilterKey by key("sidebar-source-filter") { rememberSaveable { mutableStateOf("all") } }
     val browsing = archivesOnly || query.isNotBlank()
-    val searchCoding = remember(coding.sessions) { coding.sessions.map { it.session to it.messages } }
-    val results by produceState<List<SessionSearchResult>?>(null, query, archivesOnly, chatSessions, searchCoding, coding.projects) {
+    val searchDocuments = remember(projections) { projections.flatMap { it.search } }
+    val projects = remember(projections) { projections.flatMap { it.projects } }
+    val results by produceState<List<SessionSearchResult>?>(null, query, archivesOnly, chatSessions, searchDocuments) {
         value = null
         if (browsing) {
             if (query.isNotBlank()) delay(150)
-            value = withContext(Dispatchers.Default) { searchSessions(chatSessions, searchCoding, coding.projects, query, archivesOnly) }
+            value = withContext(Dispatchers.Default) { searchSessions(chatSessions, searchDocuments, query, archivesOnly) }
         }
     }
-    val items = rememberUnifiedItems(chatSessions, coding, selectedId, viewingCoding, recencyTracker)
+    val items = remember(chatSessions, projections) {
+        (chatSessions.filterNot { it.archived }.map { UnifiedSidebarItem(it.id, it.title, it.updatedAt, false) } +
+            projections.flatMap { it.items }).sortedWith(unifiedSidebarItemComparator)
+    }
     val sourceFilter = when (sourceFilterKey) {
         "chats" -> SidebarSourceFilter.Chats
         "all" -> SidebarSourceFilter.All
@@ -410,20 +233,20 @@ internal fun UnifiedSidebar(
             searchExpanded = !searchExpanded
             if (!searchExpanded) query = ""
         }, archivesOnly,
-            chatSessions.count { it.archived } + coding.sessions.count { it.session.archived },
+            chatSessions.count { it.archived } + searchDocuments.count { it.archived },
             { archivesOnly = !archivesOnly },
             statusFilter = statusFilter,
             onStatusFilter = { statusFilter = it },
             sourceFilterKey = sourceFilterKey,
             onSourceFilter = { sourceFilterKey = it },
-            projects = coding.projects.map { it.id to it.name },
-            codingSupported = coding.supported,
+            projects = projects.map { it.id to it.title },
+            availableStatusFilters = (listOf(SidebarStatusFilter.ALL, SidebarStatusFilter.UNREAD) + projections.flatMap { it.statusFilters }).distinct(),
         )
         PaperDivider()
         if (browsing) {
             SessionBrowserResults(results.orEmpty(), archivesOnly, query.isNotBlank(), selectedId, viewingCoding,
-                onSelect = { vm.selectUnifiedSession(it.id, it.isCoding) },
-                onRestore = { vm.restoreSession(it.id, it.isCoding) },
+                onSelect = { vm.dispatch(it.sourceId, SidebarCommand.Select(it.id)) },
+                onRestore = { vm.dispatch(it.sourceId, SidebarCommand.Restore(it.id)) },
                 modifier = Modifier.weight(1f), loading = results == null)
         }
         if (!browsing) UnifiedSessionFeed(
@@ -435,10 +258,10 @@ internal fun UnifiedSidebar(
                 collapsedGroups = if (group.key in collapsedGroups) collapsedGroups - group.key
                 else collapsedGroups + (group.key to true)
             },
-            onSelect = vm::selectUnifiedSession,
-            onArchive = { item -> if (item.isCoding) vm.archiveCodingSession(item.id) else vm.archiveChatSession(item.id) },
-            onDelete = { item -> if (item.isCoding) vm.deleteCodingSession(item.id) else vm.deleteSession(item.id) },
-            onAddSession = vm::requestCodingSessionInProject,
+            onSelect = { id, source -> vm.dispatch(source, SidebarCommand.Select(id)) },
+            onArchive = { item -> vm.dispatch(item.sourceId, SidebarCommand.Archive(item.id)) },
+            onDelete = { item -> vm.dispatch(item.sourceId, SidebarCommand.Delete(item.id)) },
+            onAddSession = { source, project -> vm.dispatch(source, SidebarCommand.CreateInProject(project)) },
             modifier = Modifier.weight(1f).fillMaxWidth(),
             state = listState,
         )
@@ -446,16 +269,16 @@ internal fun UnifiedSidebar(
         Column(Modifier.padding(8.dp)) {
             PaperButton(
                 "Новый чат",
-                vm::newSession,
+                { vm.dispatch("chat", SidebarCommand.Create) },
                 Modifier.fillMaxWidth(),
                 kind = PaperButtonKind.QUIET,
                 leadingIcon = { PaperNoteAddIcon() },
             )
-            if (coding.supported) {
+            projections.flatMap { it.creationActions }.forEach { action ->
                 Spacer(Modifier.height(2.dp))
                 PaperButton(
-                    "📂 Новый проект",
-                    vm::addCodingProject,
+                    action.label,
+                    { vm.dispatch(action.sourceId, SidebarCommand.Create) },
                     Modifier.fillMaxWidth(),
                     kind = PaperButtonKind.QUIET,
                 )

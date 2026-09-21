@@ -15,9 +15,6 @@ class ExperienceFormOwnerTest {
     private val profile = LlmProfile("profile-a", "Test", baseUrl = "https://llm.invalid", modelId = "test", apiKey = "private-form-test-key")
     private val profiles = object : LlmProfileRepository {
         override suspend fun load() = listOf(profile)
-        override suspend fun save(profile: LlmProfile) = Unit
-        override suspend fun delete(id: String) = Unit
-        override suspend fun replaceAll(profiles: List<LlmProfile>) = Unit
     }
     private class Gateway : LlmGateway {
         var calls = 0

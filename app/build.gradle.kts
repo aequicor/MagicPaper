@@ -12,8 +12,15 @@ kotlin {
     }
 
     sourceSets {
-        commonTest { kotlin.srcDir(rootProject.file("testSupport/planning")) }
+        commonTest { kotlin.srcDir(rootProject.file("testSupport/provider")) }
+        jvmTest { kotlin.srcDir(rootProject.file("testSupport/native")) }
+        jvmTest { kotlin.srcDir(rootProject.file("testSupport/workspace")) }
+        jvmTest { kotlin.srcDir(rootProject.file("testSupport/planning")) }
         commonMain.dependencies {
+            implementation(project(":magic-common:media:impl"))
+            implementation(project(":magic-common:request-pins:impl"))
+            implementation(project(":magic-common:research"))
+            implementation(project(":magic-common:questionnaire:impl"))
             api(project(":core:logging"))
             api(libs.decompose)
             implementation(libs.decompose.compose)
@@ -25,11 +32,11 @@ kotlin {
             api(project(":core:ai:api"))
             implementation(project(":core:storage:impl"))
             implementation(project(":core:ai:impl"))
-            api(project(":feature:session:api"))
-            implementation(project(":feature:session:impl"))
-            implementation(project(":feature:transcript"))
-            implementation(project(":feature:tools:api"))
-            implementation(project(":feature:tools:impl"))
+            api(project(":magic-chat:api"))
+            implementation(project(":magic-chat:impl"))
+            implementation(project(":magic-common:transcript"))
+            implementation(project(":magic-common:tools:api"))
+            implementation(project(":magic-common:tools:impl"))
             api(project(":feature:settings:api"))
             implementation(project(":feature:settings:impl"))
             api(project(":feature:docs:api"))
@@ -53,9 +60,16 @@ kotlin {
             implementation(libs.kotlinx.coroutinesTest)
         }
         jvmMain.dependencies {
+            implementation(project(":magic-agent:checks:impl"))
+            implementation(project(":magic-agent:computer:impl"))
+            implementation(project(":magic-agent:browser:impl"))
+            implementation(project(":magic-agent:workspace:impl"))
+            implementation(project(":magic-agent:organism:impl"))
+            implementation(project(":magic-agent:planning:impl"))
+            api(project(":magic-agent:runtime:api"))
             // Only the desktop host can run an agent. Declared here and nowhere else, so the
             // Android and browser compilations never see coding at all.
-            implementation(project(":feature:coding:impl"))
+            implementation(project(":magic-agent:runtime:impl"))
         }
         jvmTest.dependencies {
             implementation(libs.koin.test)

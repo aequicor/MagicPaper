@@ -119,10 +119,12 @@ fun createAppRoot(runtime: MagicPaperRuntime, componentContext: ComponentContext
                         render
                     }
                     is AppRoute.Projects -> {
-                        val component = koin.get<CodingComponent.Factory>(FeatureFactoryQualifiers.coding).create(attemptContext, CodingInput(route.projectId, route.sessionId)) {
-                            events.navigate(AppRoute.Settings(SettingsSection.MODELS))
+                        val contribution = koin.get<AppContributions>().routes.firstOrNull { it.kind == route.logKind() }
+                        val component = contribution?.create(attemptContext, route, events)
+                        val render: @Composable () -> Unit = {
+                            if (component != null) component.Content()
+                            else io.aequicor.magicpaper.ui.screens.UnavailableAppSection { events.navigate(AppRoute.Chat()) }
                         }
-                        val render: @Composable () -> Unit = { component.Content() }
                         render
                     }
                     is AppRoute.Settings -> {
@@ -218,6 +220,7 @@ class ApplicationRoot(private val delegate: RootComponent<AppChild>, val welcome
 
 internal fun NavigationEvents.settingsOutput(output: SettingsOutput) {
     when (output) {
+        SettingsOutput.Overview -> navigate(AppRoute.Settings())
         SettingsOutput.Back -> back()
         SettingsOutput.Chat -> navigate(AppRoute.Chat())
         SettingsOutput.Projects -> navigate(AppRoute.Projects())

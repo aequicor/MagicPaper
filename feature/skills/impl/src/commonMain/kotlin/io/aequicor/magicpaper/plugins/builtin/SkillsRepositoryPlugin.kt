@@ -25,7 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.data.skills.SkillStore
+import io.aequicor.magicpaper.domain.SkillCommands
+import io.aequicor.magicpaper.domain.SkillInstallOutcome
 import io.aequicor.magicpaper.domain.CatalogEntry
 import io.aequicor.magicpaper.domain.Skill
 import io.aequicor.magicpaper.domain.SkillCatalog
@@ -33,6 +34,7 @@ import io.aequicor.magicpaper.domain.SkillInstaller
 import io.aequicor.magicpaper.domain.SkillSource
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 /**
  * Плагин «Лавка навыков»: магазин проверенных временем скиллов.
@@ -42,7 +44,7 @@ import kotlinx.coroutines.launch
 class SkillsRepositoryPlugin(
     private val catalog: SkillCatalog,
     private val installer: SkillInstaller,
-    private val store: SkillStore,
+    private val store: SkillCommands,
 ) : MagicPlugin {
     override val id = "skill-shop"
     override val title = "Лавка навыков"
@@ -52,10 +54,20 @@ class SkillsRepositoryPlugin(
     @Composable
     override fun Content() {
         val scope = rememberCoroutineScope()
-        val installed by store.skills.collectAsState()
+        val saved by store.catalog.collectAsState()
+        val installed = saved.items.map { it.skill }
         var query by rememberSaveable { mutableStateOf("") }
         var entries by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
         var notice by remember { mutableStateOf<String?>(null) }
+
+        fun action(block: suspend () -> Unit) {
+            notice = null
+            scope.launch {
+                try { block() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { notice = "Не удалось изменить библиотеку. Повторите действие." }
+            }
+        }
 
         LaunchedEffect(query) {
             entries = catalog.search(query, limit = 20)
@@ -76,13 +88,16 @@ class SkillsRepositoryPlugin(
                 placeholder = { PaperText("Найти навык…") },
                 singleLine = true,
             )
-            notice?.let {
+            (saved.failure ?: notice)?.let {
                 Spacer(Modifier.height(4.dp))
                 PaperText(
                     it,
                     style = LocalPaperTypography.current.body,
                     color = LocalPaperColors.current.action,
                 )
+            }
+            if (saved.failure != null || saved.unknown) {
+                PaperAction(onClick = { action { store.reload() } }) { PaperText("Обновить библиотеку") }
             }
             Spacer(Modifier.height(8.dp))
             PaperText("Каталог", style = LocalPaperTypography.current.label)
@@ -91,17 +106,18 @@ class SkillsRepositoryPlugin(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(entries, key = { it.id }) { entry ->
-                    CatalogRow(entry, installed) {
-                        scope.launch {
-                            when (val outcome = installer.installFromCatalog(entry)) {
-                                is SkillInstaller.Outcome.Installed ->
+                    val basis = saved.installBasis(entry.name)
+                    CatalogRow(entry, installed, enabled = basis != null) {
+                        if (basis != null) action {
+                            when (val outcome = installer.installFromCatalog(entry, basis)) {
+                                is SkillInstallOutcome.Installed ->
                                     notice = if (outcome.updated) {
                                         "Навык «${entry.name}» обновлён."
                                     } else {
                                         "Навык «${entry.name}» установлен."
                                     }
 
-                                is SkillInstaller.Outcome.Conflict -> notice = outcome.message
+                                is SkillInstallOutcome.Conflict -> notice = outcome.message
                             }
                         }
                     }
@@ -109,25 +125,27 @@ class SkillsRepositoryPlugin(
             }
             Spacer(Modifier.height(12.dp))
             PaperText("Библиотека (${installed.size})", style = LocalPaperTypography.current.label)
-            if (installed.isEmpty()) {
+            if (!saved.initialized && !saved.unknown) {
+                PaperText("Загрузка навыков…", style = LocalPaperTypography.current.body)
+            } else if (installed.isEmpty() && !saved.unknown) {
                 PaperText(
                     "Пока пусто. Установите навык из каталога выше.",
                     style = LocalPaperTypography.current.body,
                     color = LocalPaperColors.current.secondaryText,
                 )
             }
-            installed.forEach { skill ->
-                LibraryRow(skill, onToggle = { enabled ->
-                    scope.launch { store.save(skill.copy(enabled = enabled)) }
+            saved.items.forEach { item ->
+                LibraryRow(item.skill, enabled = !saved.unknown && !saved.resetting, onToggle = { enabled ->
+                    action { store.setEnabled(item.ref, enabled) }
                 }, onDelete = {
-                    scope.launch { store.delete(skill.id) }
+                    action { store.delete(item.ref) }
                 })
             }
         }
     }
 
     @Composable
-    private fun CatalogRow(entry: CatalogEntry, installed: List<Skill>, onInstall: () -> Unit) {
+    private fun CatalogRow(entry: CatalogEntry, installed: List<Skill>, enabled: Boolean, onInstall: () -> Unit) {
         val existing = installed.firstOrNull {
             it.nameKey == entry.nameKey && it.source == SkillSource.CATALOG
         }
@@ -148,14 +166,14 @@ class SkillsRepositoryPlugin(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            PaperAction(onClick = onInstall) {
+            PaperAction(onClick = onInstall, enabled = enabled) {
                 PaperText(if (existing != null) "Обновить" else "Установить")
             }
         }
     }
 
     @Composable
-    private fun LibraryRow(skill: Skill, onToggle: (Boolean) -> Unit, onDelete: () -> Unit) {
+    private fun LibraryRow(skill: Skill, enabled: Boolean, onToggle: (Boolean) -> Unit, onDelete: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -173,8 +191,8 @@ class SkillsRepositoryPlugin(
                     color = LocalPaperColors.current.secondaryText,
                 )
             }
-            PaperToggle(checked = skill.enabled, onCheckedChange = onToggle)
-            PaperAction(onClick = onDelete) { PaperText("✕") }
+            PaperToggle(checked = skill.enabled, onCheckedChange = onToggle, enabled = enabled)
+            PaperAction(onClick = onDelete, enabled = enabled) { PaperText("✕") }
         }
     }
 }

@@ -11,9 +11,9 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatServiceLifecycleTest {
-    private suspend fun service(f: ModelSettingsFixture, repository: ChatRepository = f.chats, gateway: LlmGateway = f.gateway): DefaultChatService {
+    private suspend fun service(f: ModelSettingsFixture, repository: ChatCheckpointStore = f.chats, gateway: LlmGateway = f.gateway): DefaultChatService {
         f.seed()
-        return DefaultChatService(GatewaySessionRuntime(gateway, f.search, EmbeddedDocRepository()), repository,
+        return DefaultChatService(testGatewayRuntime(gateway, f.search, EmbeddedDocRepository()), f.newChatStore(repository),
             f.settings, f.profiles, null, workerDispatcher = Dispatchers.Main,
             draftRepository = f.draftRepository, draftBlobs = f.draftBlobs).also { it.start(); it.activate("first") }
     }
@@ -22,13 +22,8 @@ class ChatServiceLifecycleTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
         val created = CompletableDeferred<Unit>()
-        val repository = object : ChatRepository by f.chats {
-            override suspend fun save(session: ChatSession) {
-                if (session.id != "first" && session.messages.isEmpty()) created.await()
-                f.chats.save(session)
-            }
-        }
-        val service = service(f, repository)
+        f.beforeChatInput = { if (it is ChatMachine.Intent.CreateNotebook) created.await() }
+        val service = service(f)
         try {
             service.activate(null)
             service.composerDraft(null).update(ComposerDraftData("Первое сообщение"))
@@ -36,7 +31,7 @@ class ChatServiceLifecycleTest {
             service.send("Первое сообщение")
             runCurrent()
             assertTrue(f.calls.isEmpty())
-            assertTrue(service.state.value.busy)
+            assertTrue(service.state.value.current!!.messages.isEmpty(), "No message is accepted before notebook durability")
             created.complete(Unit)
             advanceUntilIdle()
             val id = assertNotNull(service.state.value.current).id
@@ -53,13 +48,8 @@ class ChatServiceLifecycleTest {
     @Test fun failedMessageWriteKeepsDraftAndNeverCallsTheProvider() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
-        val repository = object : ChatRepository by f.chats {
-            override suspend fun save(session: ChatSession) {
-                if (session.messages.isNotEmpty()) error("Disk full")
-                f.chats.save(session)
-            }
-        }
-        val service = service(f, repository)
+        f.beforeChatInput = { if (it is ChatMachine.Intent.Submit) error("Disk full") }
+        val service = service(f)
         try {
             service.composerDraft("first").update(ComposerDraftData("Не терять"))
             runCurrent()
@@ -77,18 +67,13 @@ class ChatServiceLifecycleTest {
         val f = ModelSettingsFixture()
         val save = CompletableDeferred<Unit>()
         val answer = CompletableDeferred<Unit>()
-        val repository = object : ChatRepository by f.chats {
-            override suspend fun save(session: ChatSession) {
-                if (session.messages.size == 1) save.await()
-                f.chats.save(session)
-            }
-        }
+        f.beforeChatInput = { if (it is ChatMachine.Intent.Submit) save.await() }
         val gateway = object : LlmGateway {
             override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
                 answer.await(); return "Ответ"
             }
         }
-        val service = service(f, repository, gateway)
+        val service = service(f, gateway = gateway)
         val lifecycle = LifecycleRegistry().apply { create(); resume() }
         try {
             DefaultChatComponent(DefaultComponentContext(lifecycle), service, ChatInput("first"), NoopFilePicker) {}

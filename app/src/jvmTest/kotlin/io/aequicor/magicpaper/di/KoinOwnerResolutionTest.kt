@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.data.storage.InMemoryDurableByteStore
 import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
 import io.aequicor.magicpaper.data.storage.persistenceStores
 import io.aequicor.magicpaper.domain.ChatRepository
+import io.aequicor.magicpaper.domain.ChatJournalStore
 import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.ui.ChatComponent
 import io.aequicor.magicpaper.ui.ChatService
@@ -16,7 +17,6 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.koin.core.Koin
@@ -26,6 +26,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotSame
+import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -44,6 +45,14 @@ class KoinOwnerResolutionTest {
         val history: ChatRepository by inject()
         val chatFactory: ChatComponent.Factory by inject(FeatureFactoryQualifiers.chat)
         val settingsFactory: SettingsComponent.Factory by inject(FeatureFactoryQualifiers.settings)
+
+        suspend fun createSavedSession(): String {
+            chat.newSession()
+            val id = requireNotNull(chat.state.value.current).id
+            // The UI preview precedes durability; the production storage dispatcher is independent of the test scheduler.
+            getKoin().get<ChatJournalStore>().states.first { it[id]?.sessions?.containsKey(id) == true }
+            return id
+        }
     }
 
     @Test fun qualifiedFactoriesAndServicesStayWithTheirOwnerAfterAnotherRuntimeCloses() = runTest {
@@ -60,17 +69,16 @@ class KoinOwnerResolutionTest {
             }
             assertNotSame(first.getKoin(), second.getKoin())
             assertNotSame(first.chat, second.chat)
-            first.chat.newSession()
-            runCurrent()
-            assertEquals(1, first.history.sessions().size)
+            val firstId = first.createSavedSession()
+            assertEquals(listOf(firstId), first.history.sessions().map { it.id })
             assertTrue(second.history.sessions().isEmpty())
 
             first.runtime.close()
             first.runtime.awaitClosed()
-            second.chat.newSession()
-            runCurrent()
+            val secondId = second.createSavedSession()
             assertEquals(RuntimeState.Ready, second.runtime.ready.value)
-            assertEquals(1, second.history.sessions().size)
+            assertEquals(listOf(secondId), second.history.sessions().map { it.id })
+            assertNotEquals(firstId, secondId)
         } finally {
             first.runtime.close(); first.runtime.awaitClosed()
             second.runtime.close(); second.runtime.awaitClosed()

@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.LlmToolDefinition
+import io.aequicor.magicpaper.domain.LlmToolExchange
+import io.aequicor.magicpaper.domain.LlmToolTurn
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
@@ -17,22 +20,34 @@ class GoogleGateway(
     private val json: Json,
 ) : LlmGateway {
 
-    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String =
+        parseResponse(request(profile, LlmPayloads.google(profile, messages, ModelDefaults.capability(profile))))
+
+    override suspend fun turn(
+        profile: LlmProfile,
+        messages: List<LlmMessage>,
+        tools: List<LlmToolDefinition>,
+        exchanges: List<LlmToolExchange>,
+    ): LlmToolTurn {
+        val base = LlmPayloads.google(profile, messages, ModelDefaults.capability(profile))
+        val payload = LlmToolWire.googlePayload(base, tools, exchanges, profile.provider)
+        return LlmToolWire.googleResponse(request(profile, payload), profile.provider, json, exchanges.size)
+    }
+
+    private suspend fun request(profile: LlmProfile, payload: JsonObject): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val encodedModel = profile.modelId.replace(" ", "")
         val url = profile.baseUrl.trimEnd('/') + "/models/$encodedModel:generateContent"
-        val payload = LlmPayloads.google(profile, messages, ModelDefaults.capability(profile))
         val headers = buildMap {
             if (profile.apiKey.isNotBlank()) put("x-goog-api-key", profile.apiKey)
         }
-        val body = client.postJson(
+        return client.postJson(
             url = url,
             headers = headers,
             body = json.encodeToString(JsonObject.serializer(), payload),
             timeoutSeconds = profile.advanced.timeoutSeconds,
             usageProvider = profile.provider,
         )
-        return parseResponse(body)
     }
 
     private fun parseResponse(body: String): String = runCatching {

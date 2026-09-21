@@ -16,7 +16,8 @@ import androidx.compose.ui.unit.dp
 /** Frequent attachment and settings actions stay visible independently of the settings shelf. */
 @Composable
 public fun PaperComposerActions(expanded: Boolean, onAttach: () -> Unit, onToggleOptions: () -> Unit,
-    modifier: Modifier = Modifier, optionsModifier: Modifier = Modifier, attachEnabled: Boolean = true) {
+    modifier: Modifier = Modifier, optionsModifier: Modifier = Modifier, attachEnabled: Boolean = true,
+    showOptions: Boolean = true) {
     BoxWithConstraints(modifier) {
         val wrap = maxWidth < 232.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale
         FlowRow(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -26,9 +27,9 @@ public fun PaperComposerActions(expanded: Boolean, onAttach: () -> Unit, onToggl
                     Spacer(Modifier.width(6.dp))
                     PaperText("Прикрепить", role = PaperTextRole.CHROME, color = LocalPaperColors.current.secondaryText)
                 }
-                if (!wrap) PaperVerticalDivider(Modifier.padding(horizontal = 4.dp).height(14.dp))
+                if (!wrap && showOptions) PaperVerticalDivider(Modifier.padding(horizontal = 4.dp).height(14.dp))
             }
-            PaperAction(onToggleOptions, optionsModifier.semantics {
+            if (showOptions) PaperAction(onToggleOptions, optionsModifier.semantics {
                 contentDescription = if (expanded) "Скрыть параметры" else "Показать параметры"
                 stateDescription = if (expanded) "Развёрнуто" else "Свёрнуто"
             }) {

@@ -4,7 +4,7 @@ import io.aequicor.magicpaper.logging.AppLog
 
 /** Errors deliberately contain neither stored values nor platform exception messages. */
 class StorageException(val operation: String, val kind: Kind, cause: Throwable? = null, val committed: Boolean = false) : Exception("Storage $operation failed ($kind)", cause) {
-    enum class Kind { UNAVAILABLE, READ, WRITE, QUOTA, CORRUPT, MISSING_SECRET, CLEANUP }
+    enum class Kind { UNAVAILABLE, READ, WRITE, QUOTA, CORRUPT, MISSING_SECRET, CLEANUP, RESET_INCOMPLETE }
     internal var diagnosticReported = false
 }
 
@@ -146,7 +146,11 @@ class PersistenceStores(
     val events: EventJournal,
     private val clear: suspend () -> Unit,
 ) {
-    /** Called after application-owned draft/navigation writers have been flushed and stopped. */
+    /**
+     * Called after application-owned writers have been flushed and stopped. A failed durable reset
+     * blocks journal/draft/navigation access with RESET_INCOMPLETE until an explicit retry succeeds.
+     * Reopening storage never retries destructive cleanup on its own.
+     */
     suspend fun clearOwnedData() = clear()
 }
 

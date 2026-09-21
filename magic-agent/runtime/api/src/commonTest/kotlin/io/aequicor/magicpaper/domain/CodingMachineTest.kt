@@ -1,0 +1,311 @@
+package io.aequicor.magicpaper.domain
+
+import kotlin.test.*
+
+class CodingMachineTest {
+    private val project = CodingProject("project", "Project", "/project", 1)
+    private val session = CodingSession("session", project.id, "Новая сессия", 2, engine = CodingEngine.PI)
+    private fun request(id: String = "request") = CodingRunCheckpoint("message-$id", "Task $id", responseId = "reply-$id",
+        runId = id, responseTimelineId = "timeline-$id")
+    private fun apply(state: CodingMachine.State, input: CodingMachine.Input): CodingMachine.State =
+        CodingMachine.reduce(state, input).also { assertTrue(it.effects.none { effect -> effect is CodingMachine.Effect.Reject }) }.state
+    private fun ready(): CodingMachine.State = apply(apply(CodingMachine.initial(), CodingMachine.Intent.CreateProject(project)),
+        CodingMachine.Intent.CreateSession(session))
+    private fun running(): CodingMachine.State {
+        val queued = apply(ready(), CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request()))
+        return apply(queued, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request(), 3))
+    }
+    private fun CodingMachine.State.ref() = runs.getValue(session.id).ref
+    private fun rejected(state: CodingMachine.State, input: CodingMachine.Input) {
+        val result = CodingMachine.reduce(state, input)
+        assertEquals(state, result.state)
+        assertIs<CodingMachine.Effect.Reject>(result.effects.single())
+    }
+
+    @Test fun onlyAcceptedFreshRequestsProduceExecutionEffects() {
+        val state = ready()
+        val queued = apply(state, CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request()))
+        assertEquals(listOf(request()), queued.sessions.getValue(session.id).queuedPrompts)
+        val accepted = CodingMachine.reduce(queued, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request(), 3))
+        assertEquals(request(), assertIs<CodingMachine.Effect.RunRequest>(accepted.effects.single()).request.copy(interactionMode = null))
+        assertTrue(accepted.state.sessions.getValue(session.id).queuedPrompts.isEmpty())
+        rejected(accepted.state, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("other"), 4))
+    }
+
+    @Test fun everyUnfinishedPhaseRestoresWithoutEffectsOrFreshAdmission() {
+        val active = running()
+        val stopped = apply(active, CodingMachine.Intent.Pause(active.ref()))
+        val unknown = apply(stopped, CodingMachine.Fact.RunStopped(active.ref(), true))
+        val abandoning = apply(unknown, CodingMachine.Intent.Abandon(active.ref(), "decision", NativeRunRecoveryRef(CodingEngine.PI, session.id, active.ref().requestId, 1)))
+        for (state in listOf(active, stopped, unknown, abandoning)) {
+            val restored = CodingMachine.reduce(state, CodingMachine.Fact.Restored)
+            assertTrue(restored.effects.isEmpty())
+            assertEquals(CodingMachine.Phase.UNKNOWN, restored.state.runs.getValue(session.id).phase)
+            rejected(restored.state, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 4))
+        }
+    }
+
+    @Test fun legacyStopIsUnknownAndCannotAuthorizeFreshWork() {
+        for (intent in ExecutionIntent.entries) {
+            val imported = apply(CodingMachine.initial(), CodingMachine.Fact.LegacyImported(project,
+                listOf(session.copy(pendingRun = request().copy(intent = intent))), emptyMap()))
+            assertEquals(CodingMachine.Phase.UNKNOWN, imported.runs.getValue(session.id).phase)
+            rejected(imported, CodingMachine.Intent.DiscardInterrupted(imported.ref()))
+            rejected(imported, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 3))
+        }
+    }
+
+    @Test fun exactAbandonAcknowledgementPreservesOldUnknownAndAllowsOnlyFreshRequestId() {
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val ref = unknown.ref()
+        rejected(unknown, CodingMachine.Intent.Abandon(ref, "decision", NativeRunRecoveryRef(CodingEngine.PI, session.id, ref.requestId, -1)))
+        val abandoning = apply(unknown, CodingMachine.Intent.Abandon(ref, "decision", NativeRunRecoveryRef(CodingEngine.PI, session.id, ref.requestId, 0)))
+        val proof = NativeRunRecoveryAcknowledgement("ack", NativeRunRecoveryRef(CodingEngine.PI, session.id, ref.requestId, 0), "decision")
+        rejected(abandoning, CodingMachine.Fact.AbandonAcknowledged(ref, proof.copy(parentDecisionId = "foreign")))
+        val acknowledged = apply(abandoning, CodingMachine.Fact.AbandonAcknowledged(ref, proof))
+        assertTrue(ref.requestId in acknowledged.startedRequests)
+        assertNull(acknowledged.sessions.getValue(session.id).pendingRun)
+        rejected(acknowledged, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request(), 4))
+        val accepted = CodingMachine.reduce(acknowledged, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 4))
+        assertEquals(proof, assertIs<CodingMachine.Effect.RunRequest>(accepted.effects.single()).previousAcknowledgement)
+        val consumer = accepted.state.ref()
+        val consumed = apply(accepted.state, CodingMachine.Fact.RecoveryAcknowledgementConsumed(consumer,
+            NativeRunRecoveryConsumption(proof.id, CodingEngine.PI, session.id, consumer.requestId)))
+        assertTrue(consumed.acknowledgements.isEmpty())
+    }
+
+    @Test fun noDispatchProofIsAnExactAlternativeToAttemptRecovery() {
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val ref = unknown.ref()
+        val proof = NativeRunNoDispatchProof(CodingEngine.PI, session.id, ref.requestId, "proof", "epoch")
+        for (invalid in listOf(proof.copy(engine = CodingEngine.CODEX), proof.copy(sessionId = "other"),
+            proof.copy(requestId = "other"), proof.copy(proofId = ""), proof.copy(journalGeneration = ""))) {
+            rejected(unknown, CodingMachine.Intent.AbandonNotDispatched(ref, "decision", invalid))
+        }
+        rejected(running(), CodingMachine.Intent.AbandonNotDispatched(ref, "decision", proof))
+        val decision = CodingMachine.reduce(unknown, CodingMachine.Intent.AbandonNotDispatched(ref, "decision", proof))
+        assertEquals(CodingMachine.Effect.AcknowledgeNotDispatched(ref, "decision", proof), decision.effects.single())
+        assertNull(decision.state.runs.getValue(session.id).abandonAttempt)
+        val ack = NativeRunNoDispatchAcknowledgement("ack", proof, "decision")
+        for (invalid in listOf(ack.copy(id = ""), ack.copy(parentDecisionId = "foreign"),
+            ack.copy(proof = proof.copy(proofId = "other")), ack.copy(proof = proof.copy(journalGeneration = "reset")))) {
+            rejected(decision.state, CodingMachine.Fact.NoDispatchAcknowledged(ref, invalid))
+        }
+        val approved = apply(decision.state, CodingMachine.Fact.NoDispatchAcknowledged(ref, ack))
+        assertNull(approved.sessions.getValue(session.id).pendingRun)
+        assertTrue(ref.requestId in approved.startedRequests)
+        rejected(approved, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request(), 4))
+        val next = CodingMachine.reduce(apply(approved, CodingMachine.Fact.Restored),
+            CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 4))
+        val effect = assertIs<CodingMachine.Effect.RunRequest>(next.effects.single())
+        assertNull(effect.previousAcknowledgement)
+        assertEquals(ack, effect.previousNoDispatchAcknowledgement)
+        assertEquals(ack, next.state.noDispatchAcknowledgements[session.id], "Parent admission is not native consumption")
+    }
+
+    @Test fun recoveryConsumptionRequiresExactNativeConsumerAndSurvivesPreNativeFailure() {
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val oldRef = unknown.ref()
+        val proof = NativeRunNoDispatchProof(CodingEngine.PI, session.id, oldRef.requestId, "proof", "epoch")
+        val ack = NativeRunNoDispatchAcknowledgement("ack", proof, "decision")
+        val approved = apply(apply(unknown, CodingMachine.Intent.AbandonNotDispatched(oldRef, "decision", proof)),
+            CodingMachine.Fact.NoDispatchAcknowledged(oldRef, ack))
+        val first = apply(approved, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 4))
+        val preNativeStopped = apply(first, CodingMachine.Fact.RunStopped(first.ref(), unknown = false))
+        val released = apply(preNativeStopped, CodingMachine.Intent.DiscardInterrupted(first.ref()))
+        val next = CodingMachine.reduce(released, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("after-git"), 5))
+        assertEquals(ack, assertIs<CodingMachine.Effect.RunRequest>(next.effects.single()).previousNoDispatchAcknowledgement)
+        val consumer = next.state.ref()
+        val consumed = NativeRunRecoveryConsumption(ack.id, CodingEngine.PI, session.id, consumer.requestId)
+        for (invalid in listOf(consumed.copy(acknowledgementId = "other"), consumed.copy(engine = CodingEngine.CODEX),
+            consumed.copy(sessionId = "other"), consumed.copy(requestId = first.ref().requestId))) {
+            rejected(next.state, CodingMachine.Fact.RecoveryAcknowledgementConsumed(consumer, invalid))
+        }
+        val transferred = apply(next.state, CodingMachine.Fact.RecoveryAcknowledgementConsumed(consumer, consumed))
+        assertTrue(transferred.noDispatchAcknowledgements.isEmpty())
+        val finished = apply(transferred, CodingMachine.Fact.RunFinished(consumer,
+            CodingMessage(consumer.responseId, CodingRole.AGENT, "Done", createdAt = 6)))
+        val third = CodingMachine.reduce(finished, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("third"), 7))
+        assertNull(assertIs<CodingMachine.Effect.RunRequest>(third.effects.single()).previousNoDispatchAcknowledgement)
+        rejected(third.state, CodingMachine.Fact.RecoveryAcknowledgementConsumed(consumer, consumed))
+    }
+
+    @Test fun clarificationIsSavedBeforeAbortAndNeverStartsFromUnknown() {
+        for (state in listOf(running(), apply(running(), CodingMachine.Fact.Restored))) {
+            val next = request("clarification")
+            val message = CodingMessage(next.messageId, CodingRole.USER, "A clarification", createdAt = 4)
+            val result = CodingMachine.reduce(state, CodingMachine.Intent.Clarify(state.ref(), next, message))
+            assertEquals(listOf(next), result.state.sessions.getValue(session.id).queuedPrompts)
+            assertEquals(listOf(message), result.state.histories.getValue(session.id))
+            assertTrue(result.effects.none { it is CodingMachine.Effect.RunRequest })
+            assertEquals(state.runs.getValue(session.id).phase == CodingMachine.Phase.RUNNING,
+                result.effects.any { it is CodingMachine.Effect.AbortRequest })
+        }
+    }
+
+    @Test fun deferringLegacyHistoryIsDurableWithoutInventingARequestOrStoppingProof() {
+        val message = CodingMessage("legacy", CodingRole.USER, "Unfinished", createdAt = 3)
+        val base = apply(ready(), CodingMachine.Fact.HistoryPublished(CodingMachine.ref(session), listOf(message)))
+        rejected(base, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), "foreign"))
+        val transition = CodingMachine.reduce(base, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), message.id))
+        assertTrue(transition.effects.isEmpty())
+        val deferred = transition.state
+        assertEquals(listOf(message), deferred.histories.getValue(session.id))
+        assertEquals(message.id, deferred.sessions.getValue(session.id).pendingRun!!.messageId)
+        assertTrue(deferred.sessions.getValue(session.id).pendingRun!!.stoppedByUser)
+        assertEquals(CodingMachine.Phase.UNKNOWN, deferred.runs.getValue(session.id).phase)
+        assertFalse(deferred.runs.getValue(session.id).knownStopped)
+        assertEquals(deferred, apply(deferred, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), message.id)))
+        val restored = apply(deferred, CodingMachine.Fact.Restored)
+        rejected(restored, CodingMachine.Intent.DiscardInterrupted(restored.ref()))
+        rejected(restored, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("new"), 4))
+        rejected(running(), CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), request().messageId))
+    }
+
+    @Test fun responseIdentityCannotReplaceInputOrAnotherQueuedResponse() {
+        val base = ready()
+        rejected(base, CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request().copy(responseId = request().messageId)))
+        val queued = apply(base, CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request()))
+        rejected(queued, CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request("other").copy(responseId = request().responseId)))
+        rejected(queued, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request().copy(prompt = "changed"), 3))
+    }
+
+    @Test fun organismAdmissionAdoptsExecutionGenerationWithoutLosingRequestIdentity() {
+        val active = running()
+        val organism = SessionOrganism("organism", project.id, session.id, createdAt = 2,
+            sessions = mapOf(session.id to SessionNode(session.id, SessionKind.ZYGOTE, session.name, generation = 1, mode = CodingInteractionMode.CODE)))
+        val projected = apply(active, CodingMachine.Fact.OrganismProjected(organism, CodingMachine.ChildRevision("organism", 1, 0, "input")))
+        assertEquals(active.ref(), projected.ref())
+        assertEquals(1, projected.runs.getValue(session.id).executionGeneration)
+        assertEquals(request(), projected.sessions.getValue(session.id).pendingRun?.copy(interactionMode = null))
+        val bound = apply(projected, CodingMachine.Fact.NativeSessionBound(active.ref(), "native"))
+        assertEquals("native", bound.sessions.getValue(session.id).piSessionId)
+        val finished = apply(bound, CodingMachine.Fact.RunFinished(active.ref(), CodingMessage(request().responseId, CodingRole.AGENT, "Done", createdAt = 4)))
+        assertNull(finished.sessions.getValue(session.id).pendingRun)
+    }
+
+    @Test fun explicitChildRecreationKeepsOldOutcomeUnknownAndRejectsLateNativeReply() {
+        val active = running()
+        val organism = SessionOrganism("organism", project.id, session.id, createdAt = 2,
+            sessions = mapOf(session.id to SessionNode(session.id, SessionKind.ZYGOTE, session.name, generation = 1,
+                previousGeneration = 0, mode = CodingInteractionMode.CODE)))
+        val projected = apply(active, CodingMachine.Fact.OrganismProjected(organism, CodingMachine.ChildRevision("organism", 1, 0, "input")))
+        assertEquals(CodingMachine.Phase.UNKNOWN, projected.runs.getValue(session.id).phase)
+        assertNotNull(projected.sessions.getValue(session.id).pendingRun)
+        rejected(projected, CodingMachine.Fact.RunFinished(active.ref(), CodingMessage(request().responseId, CodingRole.AGENT, "Old", createdAt = 4)))
+    }
+
+    @Test fun historyDeletionIsAtomicWithContextInvalidationAndStopsLateProjectionResurrection() {
+        val a = CodingMessage("a", CodingRole.USER, "A", createdAt = 3)
+        val b = CodingMessage("b", CodingRole.AGENT, "B", createdAt = 4)
+        val state = apply(ready(), CodingMachine.Fact.HistoryPublished(CodingMachine.ref(session), listOf(a, b)))
+        val edited = apply(state, CodingMachine.Intent.ReplaceHistory(CodingMachine.ref(session), listOf(a, b), listOf(a)))
+        assertTrue(edited.sessions.getValue(session.id).needsHistorySeed)
+        assertEquals(setOf("b"), edited.removedMessages[session.id])
+        val late = apply(edited, CodingMachine.Fact.HistoryPublished(CodingMachine.ref(session), listOf(a, b)))
+        assertEquals(listOf(a), late.histories[session.id])
+        rejected(late, CodingMachine.Intent.ReplaceHistory(CodingMachine.ref(session), listOf(a, b), emptyList()))
+    }
+
+    @Test fun deleteReservesIdentityAndRejectsEveryOldExecutionFact() {
+        val active = running()
+        val removed = apply(active, CodingMachine.Intent.DeleteSession(CodingMachine.ref(session)))
+        rejected(removed, CodingMachine.Fact.NativeSessionBound(active.ref(), "late"))
+        rejected(removed, CodingMachine.Fact.RunStopped(active.ref(), false))
+        rejected(removed, CodingMachine.Intent.CreateSession(session))
+        assertTrue(session.id in removed.removedSessions)
+    }
+
+    @Test fun titleResultCannotOverwriteManualNameOrNewTitleAttempt() {
+        val requested = apply(ready(), CodingMachine.Fact.TitleRequested(CodingMachine.ref(session), "old"))
+        val renamed = apply(requested, CodingMachine.Intent.RenameSession(CodingMachine.ref(session), "Mine"))
+        val late = apply(renamed, CodingMachine.Fact.TitleObserved(CodingMachine.ref(session), "old", "Generated title"))
+        assertEquals("Mine", late.sessions.getValue(session.id).name)
+        assertEquals("", late.sessions.getValue(session.id).shortTitle)
+    }
+
+    @Test fun unknownPersistenceRejectsAllCommandsAndProducesNoExecution() {
+        val unknown = apply(running(), CodingMachine.Fact.PersistenceUnknown)
+        for (input in listOf<CodingMachine.Input>(CodingMachine.Intent.Pause(unknown.ref()),
+            CodingMachine.Intent.DeleteProject, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("new"), 5))) rejected(unknown, input)
+    }
+    @Test fun unknownWorkspaceDominatesCompleteAndCannotBeClearedByEqualOrOlderProjection() {
+        val task = TaskWorktree("task", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.COMPLETE)
+        val revision = CodingMachine.ChildRevision("workspace", 4, 0, "four")
+        val completed = apply(ready(), CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task, revision))
+        val unknown = apply(completed, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), null, revision, unknown = true))
+        assertEquals(task, unknown.sessions.getValue(session.id).taskWorktree)
+        assertEquals(setOf("workspace:${session.id}"), unknown.unknownChildren)
+        val same = apply(unknown, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task, revision))
+        assertEquals(unknown, same)
+        val old = apply(unknown, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task,
+            revision.copy(seq = 2, inputId = "two"), unknown = true))
+        assertEquals(unknown, old)
+        rejected(unknown, CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request(), 5))
+        val recovered = apply(unknown, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task,
+            revision.copy(seq = 5, inputId = "five")))
+        assertTrue(recovered.unknownChildren.isEmpty())
+    }
+
+    @Test fun lateCompleteTaskCannotOverwriteNewTaskAndLateStopCannotClearUnknown() {
+        val task = TaskWorktree("old", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.COMPLETE)
+        val revision = CodingMachine.ChildRevision("workspace", 1, 0, "one")
+        val completed = apply(ready(), CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task, revision))
+        val next = apply(completed, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session),
+            task.copy(taskId = "new", phase = TaskWorktreePhase.RUNNING), revision.copy(seq = 2, inputId = "two")))
+        rejected(next, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task, revision.copy(seq = 3, inputId = "three")))
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val lateStop = apply(unknown, CodingMachine.Fact.RunStopped(unknown.ref(), false))
+        assertEquals(CodingMachine.Phase.UNKNOWN, lateStop.runs.getValue(session.id).phase)
+    }
+
+    @Test fun responseCannotReportSuccessWhileWorkspaceOutcomeIsUnknown() {
+        val running = running()
+        val task = TaskWorktree("task", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.COMPLETE)
+        val unknown = apply(running, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task,
+            CodingMachine.ChildRevision("workspace", 1, 0, "one"), unknown = true))
+        val finished = apply(unknown, CodingMachine.Fact.RunFinished(running.ref(),
+            CodingMessage(request().responseId, CodingRole.AGENT, "Done", createdAt = 4)))
+        assertEquals(CodingMachine.Phase.UNKNOWN, finished.runs.getValue(session.id).phase)
+        assertNotNull(finished.sessions.getValue(session.id).pendingRun)
+    }
+
+    @Test fun editAtomicallyRewritesHistoryAndAdmitsOnlyTheMatchingSavedInput() {
+        val old = CodingMessage("old", CodingRole.USER, "Old request", createdAt = 3)
+        val state = apply(ready(), CodingMachine.Fact.HistoryPublished(CodingMachine.ref(session), listOf(old)))
+        val request = request("edited")
+        val message = CodingMessage(request.messageId, CodingRole.USER, request.prompt, createdAt = 4)
+        rejected(state, CodingMachine.Intent.EditRequest(CodingMachine.ref(session), emptyList(), listOf(message), request))
+        val accepted = apply(state, CodingMachine.Intent.EditRequest(CodingMachine.ref(session), listOf(old), listOf(message), request))
+        assertEquals(listOf(message), accepted.histories[session.id])
+        assertEquals(listOf(request), accepted.sessions.getValue(session.id).queuedPrompts)
+        assertEquals(setOf(old.id), accepted.removedMessages[session.id])
+        assertIs<CodingMachine.Effect.RunRequest>(CodingMachine.reduce(accepted,
+            CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request, 5)).effects.single())
+        assertTrue(CodingMachine.reduce(accepted, CodingMachine.Fact.Restored).effects.isEmpty())
+    }
+
+    @Test fun provenNoNativeDispatchCanContinueOnlyAfterNewVerifiedChildOutcome() {
+        val active = running()
+        val task = TaskWorktree("task", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.PREPARING)
+        val revision = CodingMachine.ChildRevision("workspace", 1, 0, "one")
+        val uncertain = apply(active, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task, revision, unknown = true))
+        val stoppedBeforeDispatch = apply(uncertain, CodingMachine.Fact.RunStopped(active.ref(), unknown = false))
+        assertEquals(CodingMachine.Phase.UNKNOWN, stoppedBeforeDispatch.runs.getValue(session.id).phase)
+        assertTrue(stoppedBeforeDispatch.runs.getValue(session.id).knownStopped)
+        val restored = apply(stoppedBeforeDispatch, CodingMachine.Fact.Restored)
+        val inspected = apply(restored, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session),
+            task.copy(phase = TaskWorktreePhase.RUNNING), revision.copy(seq = 2, inputId = "two")))
+        assertEquals(CodingMachine.Phase.INTERRUPTED, inspected.runs.getValue(session.id).phase)
+        val abandoned = apply(inspected, CodingMachine.Intent.DiscardInterrupted(active.ref()))
+        assertIs<CodingMachine.Effect.RunRequest>(CodingMachine.reduce(abandoned,
+            CodingMachine.Intent.BeginRun(CodingMachine.ref(session), request("fresh"), 6)).effects.single())
+        val lostNative = apply(uncertain, CodingMachine.Fact.Restored)
+        val unproven = apply(apply(lostNative, CodingMachine.Fact.RunStopped(active.ref(), false)),
+            CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), task.copy(phase = TaskWorktreePhase.RUNNING),
+                revision.copy(seq = 2, inputId = "two")))
+        assertEquals(CodingMachine.Phase.UNKNOWN, unproven.runs.getValue(session.id).phase)
+        assertFalse(unproven.runs.getValue(session.id).knownStopped)
+    }
+
+}

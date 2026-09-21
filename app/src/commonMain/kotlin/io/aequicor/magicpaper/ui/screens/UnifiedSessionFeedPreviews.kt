@@ -36,8 +36,8 @@ internal fun UnifiedSessionFeedPreview() {
             groups = remember { sidebarPreviewGroups() }, selectedId = selected, viewingCoding = coding,
             collapsedGroups = collapsedGroups,
             onToggleGroup = { collapsedGroups = if (it.key in collapsedGroups) collapsedGroups - it.key else collapsedGroups + it.key },
-            onSelect = { id, isCoding -> selected = id; coding = isCoding },
-            onArchive = {}, onDelete = {}, onAddSession = {}, modifier = Modifier.fillMaxSize(),
+            onSelect = { id, source -> selected = id; coding = source != "chat" },
+            onArchive = {}, onDelete = {}, onAddSession = { _, _ -> }, modifier = Modifier.fillMaxSize(),
         )
     }
 }
@@ -60,7 +60,7 @@ internal fun sidebarStickyPreviewGroups(): List<UnifiedSidebarGroup> {
 internal fun UnifiedStickySessionFeedPreview() = PaperTheme {
     PaperSurface(Modifier.fillMaxSize()) {
         UnifiedSessionFeed(remember { sidebarStickyPreviewGroups() }, "chat", false, emptySet(), {},
-            { _, _ -> }, {}, {}, {}, state = rememberLazyListState(initialFirstVisibleItemIndex = 10))
+            { _, _ -> }, {}, {}, { _, _ -> }, state = rememberLazyListState(initialFirstVisibleItemIndex = 10))
     }
 }
 
@@ -79,6 +79,6 @@ internal fun sidebarOrderedStickyPreviewGroups(): List<UnifiedSidebarGroup> {
 internal fun UnifiedOrderedStickySessionFeedPreview() = PaperTheme {
     PaperSurface(Modifier.fillMaxSize()) {
         UnifiedSessionFeed(remember { sidebarOrderedStickyPreviewGroups() }, "ordered-1", true,
-            emptySet(), {}, { _, _ -> }, {}, {}, {}, state = rememberLazyListState(initialFirstVisibleItemIndex = 9))
+            emptySet(), {}, { _, _ -> }, {}, {}, { _, _ -> }, state = rememberLazyListState(initialFirstVisibleItemIndex = 9))
     }
 }

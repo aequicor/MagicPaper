@@ -16,6 +16,64 @@ HOSTS = {':desktopApp', ':androidApp', ':webApp'}
 # compiles for Android, JS or Wasm breaks those artifacts, so the edge is curated here.
 DESKTOP_ONLY = {':feature:coding:impl'}
 JVM_SOURCE_SETS = {'jvmMain', 'jvmTest'}
+ARCHITECTURE_GROUPS = {'magic-common', 'magic-chat', 'magic-agent', 'backend-agents'}
+BACKEND_PUBLIC = {':backend-agents:api', ':backend-agents:factory'}
+# Private lifecycle infrastructure is not an installable engine contribution.
+BACKEND_INFRASTRUCTURE = {':backend-agents:lifecycle:impl'}
+BACKEND_CONSUMER = ':magic-agent:runtime:impl'
+BACKEND_SPI = 'io.aequicor.magicpaper.backend.BackendAgentContribution'
+NATIVE_CONTRACTS = {
+    'RuntimeStatus', 'RuntimePhase', 'CodingRuntime', 'CodingService', 'CodingComponent',
+    'CodingFeature', 'CodingFeatureDependencies', 'CodingUi', 'CodingState',
+    'ComputerUse', 'ComputerPermissions', 'PlanningWorkspace', 'TaskWorkspace',
+}
+
+
+def architecture_group(name):
+    group = name.lstrip(':').split(':', 1)[0]
+    return group if group in ARCHITECTURE_GROUPS else None
+
+
+def is_desktop_only(name):
+    return name in DESKTOP_ONLY or architecture_group(name) in {'magic-agent', 'backend-agents'}
+
+
+def group_edge_violations(name, dependency):
+    owner, target = architecture_group(name), architecture_group(dependency)
+    errors = []
+    if owner == 'magic-common' and target != 'magic-common' and not dependency.startswith(':core:') and dependency != ':designSystem':
+        errors.append(f'{name}: magic-common must not depend on {dependency}')
+    if owner == 'magic-chat' and target in {'magic-agent', 'backend-agents'}:
+        errors.append(f'{name}: chat must not depend on native agent {dependency}')
+    if owner == 'backend-agents' and target != 'backend-agents' and dependency != ':core:model':
+        errors.append(f'{name}: backend agents may depend only on their group and :core:model, not {dependency}')
+    if target == 'backend-agents' and owner != 'backend-agents':
+        if dependency not in BACKEND_PUBLIC:
+            errors.append(f'{name}: backend engine implementation {dependency} is private to its factory')
+        elif name != BACKEND_CONSUMER:
+            errors.append(f'{name}: only {BACKEND_CONSUMER} may consume {dependency}')
+    if owner == target == 'backend-agents' and dependency not in BACKEND_PUBLIC and name != ':backend-agents:factory':
+        errors.append(f'{name}: only :backend-agents:factory may consume engine {dependency}')
+    return errors
+# The planning package decides; it never observes. Ids, time and jitter arrive as values
+# (StageRetryInputs) and work is described by an effect, so a generated id, a clock, a
+# randomness source or a coroutine builder in these files is a transition that cannot be
+# replayed from a journal.
+PLANNING_PACKAGE = 'core/model/src/commonMain/kotlin/io/aequicor/magicpaper/domain/planning'
+# The requirement is keyed on the Kotlin package, not on the module directory: decision 1 of
+# the target architecture moves :core:model, and an rglob over a path that stopped resolving
+# yields nothing and raises nothing, switching the rule off at exactly the migration it
+# guards. A checkout that holds the domain package must hold planning under PLANNING_PACKAGE;
+# a synthetic --self-test root or any other temporary tree has no domain package at all.
+PLANNING_OWNER = 'io/aequicor/magicpaper/domain'
+IMPURE_PLANNING = re.compile(
+    r'\bClock\.|\bcurrentTimeMillis\b|\bgetTimeMillis\b|\bnanoTime\b|\bTimeSource\b|\bmarkNow\b'
+    r'|\belapsedNow\b|\b(?:Instant|LocalDateTime|LocalDate|LocalTime)\.now\b'
+    r'|\bRandom\b|\bMath\.random\b|\bnext(?:Int|Long|Double|Float|Boolean|Bytes)\b|\bshuffled?\b'
+    r'|\brandom(?:UUID|Uuid)\b|\bUuid\.random\w*|\buuid4\b'
+    r'|\bDispatchers\b|\bGlobalScope\b|\bCoroutineScope\s*\('
+    r'|\b(?:launch|async|withContext|runBlocking|coroutineScope|supervisorScope|delay'
+    r'|flow|channelFlow|callbackFlow|produce)\s*[({]')
 
 def is_retired_module(name):
     return name == ':shared' or name.startswith(':shared:')
@@ -24,7 +82,7 @@ def is_application_module(name):
     # Same predicate as docs/desktop-ui/verify-design-system.py: the application
     # graph is :app, the platform hosts and the features. Foundational modules
     # such as :core:logging are not part of it.
-    return name == ':app' or name in HOSTS or name == ':feature' or name.startswith(':feature:')
+    return name == ':app' or name in HOSTS or name == ':feature' or name.startswith(':feature:') or architecture_group(name) is not None
 
 def production_build(text):
     # Tests may assemble concrete implementations for integration fixtures.
@@ -35,6 +93,139 @@ def production_build(text):
             end += 1
         text = text[:match.start()] + text[end:]
     return text
+
+def kotlin_code(text):
+    """Blank comments and string literals, keeping line structure, before a token scan.
+
+    Prose about a rule names the thing the rule forbids: StageMachine.kt already says in a
+    comment that it never reads a clock. Ordered alternation scanning left to right keeps a
+    quote inside a comment from opening a literal, and the reverse.
+    """
+    pattern = r'"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n])*"|/\*.*?\*/|//[^\n]*'
+    return re.sub(pattern, lambda match: re.sub(r'[^\n]', ' ', match.group(0)), text, flags=re.S)
+
+EFFECT_SUFFIX = re.compile(r'(?:Effect|Event|Signal)$')
+SEALED_DECLARATION = re.compile(r'^[ \t]*(?:(?:public|internal|private|expect|actual|abstract|open)\s+)*'
+                                r'sealed\s+(?:interface|class)\s+(\w+)', re.M)
+DECLARATION = re.compile(r'^[ \t]*(?:(?:public|internal|private|expect|actual|abstract|open|sealed|data'
+                         r'|value|inner|enum|annotation)\s+)*(?:class|interface|object)\s+(\w+)', re.M)
+MEMBER = re.compile(r'\b(?:val|var)\s+(\w+)\s*:')
+
+def generic_open(text, position):
+    # `<` opens a type argument list only after a name; `a < b` is a comparison.
+    previous = text[position - 1:position] if position else ''
+    return (previous.isalnum() or previous in '_>') and text[position + 1:position + 2] not in {' ', '=', '\n', ''}
+
+def bracket_walk(text, start=0):
+    """Yield (position, token, depth) with the depth the token itself sits at.
+
+    `->` is one token, so the `>` of an arrow never closes a type argument list, and the
+    depth reported for a bracket is the one outside it: a `)` at depth 0 ends the list the
+    scan started inside.
+    """
+    depth, position = 0, start
+    while position < len(text):
+        char = text[position]
+        if char == '-' and text[position + 1:position + 2] == '>':
+            yield position, '->', depth
+            position += 2
+            continue
+        yield position, char, depth
+        if char in '([' or (char == '<' and generic_open(text, position)):
+            depth += 1
+        elif char in ')]>' and depth:
+            depth -= 1
+        position += 1
+
+def top_level_colon(text):
+    for position, token, depth in bracket_walk(text):
+        if token == ':' and not depth:
+            return position
+    return -1
+
+def declaration_header(text, index):
+    """Span a declaration from the end of its name to its body brace or the end of its header.
+
+    Constructor parameters and supertype lists wrap, so the walk follows bracket depth and
+    ends at a newline only when no `:` or `,` on either side continues the list.
+    """
+    last = ''
+    for position, token, depth in bracket_walk(text, index):
+        if not depth:
+            if token == '{':
+                return text[index:position], position
+            if token == '\n' and last not in (':', ',') \
+                    and not text[position + 1:position + 64].lstrip().startswith((':', ',')):
+                return text[index:position], None
+        if not token.isspace():
+            last = token[-1]
+    return text[index:], None
+
+def function_typed_members(text):
+    """Yield properties declared with a function type, wherever `val`/`var` stands.
+
+    The type ends at the first comma, close paren, equals or newline outside its own
+    brackets: a single-line constructor property reads through to its arrow, while a `when`
+    arm in a getter body stays behind the `=` and can never be mistaken for a type.
+    """
+    for match in MEMBER.finditer(text):
+        arrow = False
+        type_text = ''
+        for _, token, depth in bracket_walk(text, match.end()):
+            if (token == '\n' and not depth and type_text.strip() not in ('', 'suspend')) or (not depth and token in ',)='):
+                break
+            type_text += token
+            arrow = arrow or token == '->'
+        arrow = arrow or bool(re.search(r'\b(?:Suspend)?Function\d+\s*<', type_text))
+        if arrow:
+            yield match.group(1)
+
+def effect_function_members(code, planning, known_names=()):
+    """Report function-typed properties of sealed Effect/Event/Signal hierarchies.
+
+    An effect is a description, so a function-typed member smuggles behaviour into the data a
+    machine returns and makes the transition untestable without impl. Two shapes carry a
+    payload: a member of the sealed body, nested subclass constructors included, and a
+    subclass declared beside it whose supertype list names the hierarchy. Sealed roots in
+    another file are resolved within the same module and Kotlin package.
+    """
+    names, spans, found = set(known_names), [], set()
+    for declaration in SEALED_DECLARATION.finditer(code):
+        name = declaration.group(1)
+        if not planning and not EFFECT_SUFFIX.search(name):
+            continue
+        names.add(name)
+        header, brace = declaration_header(code, declaration.end())
+        colon = top_level_colon(header)
+        for member in function_typed_members(header if colon < 0 else header[:colon]):
+            found.add((name, member))
+        if brace is None:
+            continue
+        depth, end = 1, brace + 1
+        while depth and end < len(code):
+            depth += (code[end] == '{') - (code[end] == '}')
+            end += 1
+        spans.append((declaration.start(), end))
+        for member in function_typed_members(code[brace + 1:max(brace + 1, end - 1)]):
+            found.add((name, member))
+    for declaration in DECLARATION.finditer(code):
+        if any(start <= declaration.start() < end for start, end in spans):
+            continue
+        header, brace = declaration_header(code, declaration.end())
+        colon = top_level_colon(header)
+        # The name must head a supertype entry: `Consumer<StageEffect>` is a use, not a branch.
+        if colon < 0 or not any(re.search(rf'(?:^|,)\s*{name}\b', header[colon + 1:]) for name in names):
+            continue
+        branch = header[:colon]
+        if brace is not None:
+            depth, end = 1, brace + 1
+            while depth and end < len(code):
+                depth += (code[end] == '{') - (code[end] == '}')
+                end += 1
+            branch += code[brace + 1:max(brace + 1, end - 1)]
+        for member in function_typed_members(branch):
+            found.add((declaration.group(1), member))
+    return sorted(found)
 
 def scoped_dependencies(text):
     """Attribute each project dependency to the Kotlin source set that declares it.
@@ -73,8 +264,58 @@ def local_settings(text):
         text = text[:match.start()] + text[end:]
     return text
 
+def owns_planning(root):
+    # True for a MagicPaper checkout: something in it declares the domain package that
+    # planning belongs to, wherever the module holding it has been moved to.
+    return any(candidate.is_dir() and not any(part in IGNORED for part in candidate.relative_to(root).parts)
+               for candidate in root.rglob(PLANNING_OWNER))
+
+def project_directories(root):
+    """Project identity comes from Gradle, including explicit source-preserving relocations."""
+    settings = root / 'settings.gradle.kts'
+    if not settings.is_file():
+        return {}
+    return {Path(directory).as_posix(): name for name, directory in re.findall(
+        r'project\(\s*["\'](:[^"\']+)["\']\s*\)\.projectDir\s*=\s*file\(\s*["\']([^"\']+)["\']\s*\)',
+        local_settings(settings.read_text(encoding="utf-8")))}
+
+
+def backend_agent_projects(root, directories):
+    """The factory includes every concrete backend project declared in settings."""
+    settings = root / 'settings.gradle.kts'
+    if not settings.is_file():
+        return {}
+    included = set()
+    for block in re.findall(r'\binclude\s*\((.*?)\)', local_settings(settings.read_text(encoding='utf-8')), re.S):
+        included.update(':' + name.lstrip(':') for name in re.findall(r'["\']([^"\']+)["\']', block))
+    relocated = {name: directory for directory, name in directories.items()}
+    return {name: root / relocated.get(name, name.lstrip(':').replace(':', '/'))
+            for name in included if architecture_group(name) == 'backend-agents' and name not in BACKEND_PUBLIC | BACKEND_INFRASTRUCTURE
+            and (root / relocated.get(name, name.lstrip(':').replace(':', '/')) / 'build.gradle.kts').is_file()}
+
+
+def backend_catalog_violations(engines):
+    errors, owners = [], {}
+    for name, directory in sorted(engines.items()):
+        registration = directory / 'src/jvmMain/resources/META-INF/services' / BACKEND_SPI
+        if not registration.is_file():
+            errors.append(f'{name}: backend engine must register its {BACKEND_SPI} service')
+            continue
+        classes = [line.split('#', 1)[0].strip() for line in registration.read_text(encoding='utf-8').splitlines()]
+        classes = [value for value in classes if value]
+        if not classes or any(not re.fullmatch(r'[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+', value) for value in classes):
+            errors.append(f'{name}: invalid backend contribution service registration')
+        for value in classes:
+            if value in owners:
+                errors.append(f'{name}: duplicate backend contribution {value} already registered by {owners[value]}')
+            owners[value] = name
+    return errors
+
+
 def violations(root):
     errors, graph = [], {}
+    directories = project_directories(root)
+    backend_engines = backend_agent_projects(root, directories)
     for name in ('settings.gradle.kts', 'settings.gradle'):
         settings = root / name
         if not settings.is_file():
@@ -103,15 +344,25 @@ def violations(root):
             errors.append(f'{relative}: :shared is retired; depend on the owning feature API or :app')
         if build.parent == root:
             continue
-        name = ':' + ':'.join(relative.parts[:-1])
+        name = directories.get(build.parent.relative_to(root).as_posix(), ':' + ':'.join(relative.parts[:-1]))
+        if name != ':app' and re.search(r'\blibs\.koin\b|["\']io\.insert-koin:', production_build(raw)):
+            errors.append(f'{name}: Koin dependencies belong only to :app')
         if is_retired_module(name):
             errors.append(f'{name}: retired module directory; application composition belongs to app/')
         deps = set(re.findall(r'project\(\s*["\'](:[^"\']+)["\']\s*\)', production_build(raw)))
+        dynamic_projects = [value.strip() for value in re.findall(r'\bproject\(\s*([^)]*)\)', production_build(raw))
+                            if not re.fullmatch(r'["\']:[^"\']+["\']\s*', value)]
+        if dynamic_projects:
+            if name == ':backend-agents:factory' and dynamic_projects == ['it'] and 'backendAgentProjects.forEach' in raw:
+                deps.update(backend_engines)
+            else:
+                errors.append(f'{name}: dynamic project dependencies are allowed only for the backend factory catalog')
         graph[name] = deps
         for dependency in deps:
+            errors.extend(group_edge_violations(name, dependency))
             if name.endswith(':api') and (dependency.endswith(':impl') or dependency == ':app'):
                 errors.append(f'{name}: API depends on implementation {dependency}')
-            if name.startswith(':feature:') and name.endswith(':impl') and dependency.endswith(':impl'):
+            if (name.startswith(':feature:') or architecture_group(name)) and name.endswith(':impl') and dependency.endswith(':impl'):
                 errors.append(f'{name}: consume the API of {dependency}')
             if dependency == ':app' and name not in HOSTS:
                 errors.append(f'{name}: only platform applications may depend on :app')
@@ -119,24 +370,79 @@ def violations(root):
                 errors.append(f'{name}: foundational module must not depend on project {dependency}')
             if name == ':designSystem' and is_application_module(dependency):
                 errors.append(f'{name}: Paper must remain independent of application modules')
+        if architecture_group(name) in {'magic-common', 'magic-chat'} and re.search(r'magicpaper\.jvm(?:-compose)?-library', raw):
+            errors.append(f'{name}: shared group must preserve JVM, Android, JS and Wasm targets')
+        if architecture_group(name) in {'magic-agent', 'backend-agents'}:
+            target_code = kotlin_code(raw)
+            if ('magicpaper.kmp-library' in raw or 'magicpaper.compose-library' in raw
+                    or re.search(r'\b(?:android|androidTarget|js|wasmJs|iosArm64|iosSimulatorArm64)\s*[({]', target_code)):
+                errors.append(f'{name}: native agent module must declare JVM targets only')
         for source_set, dependency in scoped_dependencies(raw):
-            if dependency in DESKTOP_ONLY and source_set not in JVM_SOURCE_SETS:
+            if is_desktop_only(dependency) and not is_desktop_only(name) and source_set not in JVM_SOURCE_SETS:
                 errors.append(f'{name}: only jvmMain may depend on {dependency}; '
                               f'{source_set} compiles for Android and the browser')
-    # Kotlin/JVM top-level facade names can hide API extension functions when an
-    # implementation file keeps the same package and basename after extraction.
-    facades = {}
+    # Sealed effects may have branches in another file in the same Kotlin package.
+    # Gather those roots before checking members; a file move must not disable the rule.
+    production_sources, effect_roots = [], {}
     for source in root.rglob('*.kt'):
         relative = source.relative_to(root)
-        if relative.parts[:2] == ('tools', 'mission-visualization'):
-            continue
-        if any(part in IGNORED for part in relative.parts) or 'src' not in relative.parts:
+        if relative.parts[:2] == ('tools', 'mission-visualization') or any(part in IGNORED for part in relative.parts) or 'src' not in relative.parts:
             continue
         index = relative.parts.index('src')
         if index + 1 >= len(relative.parts) or not relative.parts[index + 1].endswith('Main'):
             continue
-        module = relative.parts[:index]
         content = source.read_text(encoding="utf-8")
+        code = kotlin_code(content)
+        package = re.search(r'^package ([\w.]+)', code, re.M)
+        production_sources.append((source, relative, index, content, code, package))
+        if package:
+            planning = relative.as_posix().startswith(PLANNING_PACKAGE + '/')
+            key = (relative.parts[:index], package.group(1), planning)
+            effect_roots.setdefault(key, set()).update(declaration.group(1) for declaration in SEALED_DECLARATION.finditer(code)
+                                                     if planning or EFFECT_SUFFIX.search(declaration.group(1)))
+    # Kotlin/JVM top-level facade names can hide API extension functions when an
+    # implementation file keeps the same package and basename after extraction.
+    facades = {}
+    has_backend_catalog = False
+    for source, relative, index, content, code, package in production_sources:
+        module = relative.parts[:index]
+        module_name = directories.get('/'.join(module), ':' + ':'.join(module))
+        code = kotlin_code(content)
+        if architecture_group(module_name) == 'backend-agents' and re.search(r'\binterface\s+BackendAgentContribution\b', code):
+            has_backend_catalog = True
+        if architecture_group(module_name) != 'backend-agents' and module_name != ':core:model':
+            if re.search(r'\bCodingEngine\s*\.\s*(?:entries\b|values\s*\()', code):
+                errors.append(f'{relative}: enumerate the installed backend descriptors, not CodingEngine identities')
+            if re.search(r'(?:==|!=)\s*CodingEngine\.\w+|\bCodingEngine\.\w+\s*(?:==|!=|->)', code):
+                errors.append(f'{relative}: branch on backend capabilities, not CodingEngine identities')
+        if re.search(r'\b(?:class|object|typealias)\s+ToolHost\b', code):
+            errors.append(f'{relative}: ToolHost is retired; inject the owning tool ports through constructors')
+        if re.search(r'\b(?:class|object|typealias)\s+(?:UnavailableCoding\w*|UnsupportedCodingComponentFactory|NoopCodingRuntime)\b', code):
+            errors.append(f'{relative}: native execution has no production fallback; an absent platform has no registration')
+        if architecture_group(module_name) not in {'magic-agent', 'backend-agents'}:
+            for declaration in DECLARATION.finditer(code):
+                if declaration.group(1) in NATIVE_CONTRACTS:
+                    errors.append(f'{relative}: {declaration.group(1)} is an executable native contract; '
+                                  f'declare it in the JVM agent API, not a shared module')
+        if module_name != ':app' and re.search(r'^\s*import\s+org\.koin\b', code, re.M):
+            errors.append(f'{relative}: Koin belongs only to :app')
+        # The suffix is a naming convention, not the rule: every sealed hierarchy in the
+        # planning package is an effect vocabulary by construction, whatever it is called.
+        # The scan runs on blanked code so a brace inside a literal or a comment cannot move
+        # the body walk; positions are still reported against the real file.
+        planning = relative.as_posix().startswith(PLANNING_PACKAGE + '/')
+        api_machine = module_name.endswith(':api') and re.search(r'\bfun\s+reduce\s*\(', code)
+        if api_machine:
+            for token in sorted(set(IMPURE_PLANNING.findall(code))):
+                errors.append(f'{relative}: {token.strip()} performs work inside a machine API; '
+                              f'pass ids, time and randomness as input values')
+            for declaration in re.finditer(r'\b(?:data\s+)?class\s+(\w*State)\b\s*([^\n{]*)', code):
+                header = declaration.group(2).lstrip()
+                if not header.startswith('internal constructor'):
+                    errors.append(f'{relative}: {declaration.group(1)} state requires an internal constructor')
+        for owner, member in effect_function_members(code, planning, effect_roots.get((module, package.group(1), planning), ()) if package else ()):
+            errors.append(f'{relative}: {owner}.{member} declares a function type; '
+                          f'an effect carries data, not behaviour')
         package = re.search(r'^package ([\w.]+)', content, re.M)
         if not package or not re.search(r'^(?:(?:public|internal|private|suspend|inline|expect|actual) )*(?:fun|val|var)\b', content, re.M):
             continue
@@ -145,6 +451,19 @@ def violations(root):
         if previous and previous[0] != module:
             errors.append(f'Duplicate JVM facade {key[0]}.{key[1]}Kt: {previous[1]} and {relative}')
         facades[key] = (module, relative)
+    if has_backend_catalog:
+        errors.extend(backend_catalog_violations(backend_engines))
+    # Scoped by package path rather than a *Machine.kt name: PlanProjection and PlanStrategy
+    # are not machines yet owe the same purity, and a rename must not escape the rule.
+    if not (root / PLANNING_PACKAGE).is_dir() and owns_planning(root):
+        errors.append(f'{PLANNING_PACKAGE}: planning package not found, so the purity rule scans '
+                      f'nothing; point PLANNING_PACKAGE at the module that now holds it')
+    for source in sorted((root / PLANNING_PACKAGE).rglob('*.kt')):
+        code = kotlin_code(source.read_text(encoding="utf-8"))
+        for token in sorted(set(IMPURE_PLANNING.findall(code))):
+            errors.append(f'{source.relative_to(root)}: {token.strip()} generates an id, reads a clock '
+                          f'or randomness, or launches work; a planning transition takes ids, time and '
+                          f'effects as values')
     active, complete = set(), set()
     def visit(name, trail):
         if name in active:
@@ -160,6 +479,204 @@ def violations(root):
     for name in graph:
         visit(name, [])
     return errors
+
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / 'settings.gradle.kts').write_text('include(":backend-agents:alpha", ":backend-agents:beta", ":backend-agents:lifecycle:impl")\n')
+        infrastructure = root / 'backend-agents/lifecycle/impl'
+        infrastructure.mkdir(parents=True)
+        (infrastructure / 'build.gradle.kts').write_text('plugins { id("magicpaper.jvm-library") }\n')
+        for engine in ('alpha', 'beta'):
+            directory = root / 'backend-agents' / engine
+            directory.mkdir(parents=True)
+            (directory / 'build.gradle.kts').write_text('plugins { id("magicpaper.jvm-library") }\n')
+        engines = backend_agent_projects(root, {})
+        assert set(engines) == {':backend-agents:alpha', ':backend-agents:beta'}
+        assert group_edge_violations(':app', ':backend-agents:lifecycle:impl')
+        assert group_edge_violations(':magic-agent:runtime:impl', ':backend-agents:lifecycle:impl')
+        assert group_edge_violations(':backend-agents:alpha', ':backend-agents:lifecycle:impl')
+        assert not group_edge_violations(':backend-agents:factory', ':backend-agents:lifecycle:impl')
+        assert len(backend_catalog_violations(engines)) == 2
+        for name, directory in engines.items():
+            registration = directory / 'src/jvmMain/resources/META-INF/services' / BACKEND_SPI
+            registration.parent.mkdir(parents=True)
+            registration.write_text('fixture.' + name.rsplit(':', 1)[-1].title() + 'Contribution\n')
+        assert not backend_catalog_violations(engines)
+        registration = engines[':backend-agents:beta'] / 'src/jvmMain/resources/META-INF/services' / BACKEND_SPI
+        registration.write_text('fixture.AlphaContribution\n')
+        assert any('duplicate backend contribution' in e for e in backend_catalog_violations(engines))
+        registration.write_text('not a class\n')
+        assert any('invalid backend contribution' in e for e in backend_catalog_violations(engines))
+        registration.write_text('fixture.BetaContribution\n')
+        factory = root / 'backend-agents/factory/build.gradle.kts'
+        factory.parent.mkdir(parents=True)
+        factory.write_text('jvmMain.dependencies { backendAgentProjects.forEach { implementation(project(it)) } }')
+        assert not violations(root), violations(root)
+        # The derived factory edges participate in the same cycle check as literal ones.
+        (engines[':backend-agents:alpha'] / 'build.gradle.kts').write_text(
+            'commonMain.dependencies { implementation(project(":backend-agents:factory")) }')
+        assert any('Module cycle:' in e for e in violations(root))
+        (engines[':backend-agents:alpha'] / 'build.gradle.kts').write_text(
+            'commonMain.dependencies { implementation(project(hiddenModule)) }')
+        assert any('dynamic project dependencies' in e for e in violations(root))
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        source = root / 'magic-agent/runtime/impl/src/commonMain/kotlin/EngineUi.kt'
+        source.parent.mkdir(parents=True)
+        for statement in ('CodingEngine.entries', 'CodingEngine.values()',
+                          'engine == CodingEngine.PI', 'CodingEngine.CODEX != engine',
+                          'when (engine) { CodingEngine.PI -> run() }'):
+            source.write_text('package fixture\nfun selection() = ' + statement + '\n')
+            assert any('backend' in e and 'identities' in e for e in violations(root)), violations(root)
+        source.write_text('package fixture\nval legacyDefault = CodingEngine.PI\n'
+                          'fun selection() = descriptors.filter { it.capabilities.resume }\n')
+        assert not violations(root), violations(root)
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        source = root / 'core/model/src/commonMain/kotlin/NativeLeak.kt'
+        source.parent.mkdir(parents=True)
+        for declaration in ('class RuntimeStatus', 'interface CodingRuntime', 'enum class RuntimePhase'):
+            source.write_text('package fixture\n' + declaration + '\n')
+            assert any('executable native contract' in error for error in violations(root))
+        source.write_text('package fixture\nenum class CodingEngine { PI, CODEX }\n')
+        assert not violations(root), violations(root)
+        source.unlink()
+        native = root / 'magic-agent/runtime/api/src/commonMain/kotlin/Native.kt'
+        native.parent.mkdir(parents=True)
+        native.write_text('package fixture\ninterface CodingRuntime\nclass RuntimeStatus\n')
+        assert not violations(root), violations(root)
+        native.write_text('package fixture\nobject UnavailableCodingFeature\n')
+        assert any('no production fallback' in error for error in violations(root))
+        native.write_text('package fixture\nobject NoopCodingRuntime\n')
+        assert any('no production fallback' in error for error in violations(root))
+        native.unlink()
+        fixture = root / 'magic-agent/runtime/impl/src/commonTest/kotlin/NoopCodingRuntime.kt'
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('package fixture\nobject NoopCodingRuntime\n')
+        assert not violations(root), violations(root)
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        module = root / 'magic-chat/impl/build.gradle.kts'
+        module.parent.mkdir(parents=True)
+        module.write_text('plugins { id("magicpaper.jvm-compose-library") }')
+        assert any('shared group must preserve' in error for error in violations(root))
+        module.write_text('plugins { id("magicpaper.compose-library") }')
+        assert not violations(root), violations(root)
+        machine = root / 'magic-common/questionnaire/api/src/commonMain/kotlin/QuestionMachine.kt'
+        machine.parent.mkdir(parents=True)
+        machine.write_text('package fixture\nclass QuestionState\nfun reduce(state: QuestionState) = Clock.System.now()\n')
+        errors = violations(root)
+        assert any('internal constructor' in error for error in errors), errors
+        assert any('performs work inside a machine API' in error for error in errors), errors
+        machine.write_text('package fixture\nclass QuestionState internal constructor(val now: Long)\n'
+                           'fun reduce(state: QuestionState) = state.now\n')
+        assert not violations(root), violations(root)
+
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / 'settings.gradle.kts').write_text(
+            'include(":magic-agent:runtime:impl")\n'
+            'project(":magic-agent:runtime:impl").projectDir = file("legacy/runtime")\n')
+        runtime = root / 'legacy/runtime/build.gradle.kts'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('commonMain.dependencies { implementation(project(":backend-agents:factory")) }')
+        assert not violations(root), violations(root)
+        runtime.write_text('commonMain.dependencies { implementation(project(":backend-agents:pi")) }')
+        assert any('engine implementation' in error and ':magic-agent:runtime:impl' in error for error in violations(root))
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        source = root / 'magic-common/questionnaire/api/src/commonMain/kotlin/Effects.kt'
+        source.parent.mkdir(parents=True)
+        source.write_text('package fixture\nsealed interface QuestionEffect\n')
+        branch = source.with_name('Answer.kt')
+        branch.write_text('package fixture\ndata class Answer(val callback: () -> Unit) : QuestionEffect\n')
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 1 and 'Answer.callback' in found[0], found
+        for declaration in (
+            'class Answer : QuestionEffect { val callback: () -> Unit = {} }',
+            'data class Answer(val callback: \n    (String) -> Unit) : QuestionEffect',
+            'data class Answer(val callback: (\n    String\n) -> Unit) : QuestionEffect',
+            'data class Answer(val callback: Function1<String, Unit>) : QuestionEffect',
+        ):
+            branch.write_text('package fixture\n' + declaration + '\n')
+            found = [error for error in violations(root) if 'declares a function type' in error]
+            assert len(found) == 1 and 'Answer.callback' in found[0], found
+        branch.write_text('package fixture\ndata class Answer(val text: String) : QuestionEffect\n')
+        assert not violations(root), violations(root)
+        branch.write_text('package another\ndata class Answer(val callback: () -> Unit) : QuestionEffect\n')
+        assert not violations(root), 'unrelated packages do not share a sealed hierarchy'
+
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        consumer = root / 'magic-common/tools/api/build.gradle.kts'
+        consumer.parent.mkdir(parents=True)
+        for dependency in (':magic-chat:api', ':magic-agent:runtime:api', ':backend-agents:api'):
+            consumer.write_text(f'commonMain.dependencies {{ implementation(project("{dependency}")) }}')
+            assert any('magic-common must not depend' in error for error in violations(root)), dependency
+        consumer.write_text('commonMain.dependencies { api(project(":core:model")) }')
+        assert not violations(root), violations(root)
+        native = root / 'backend-agents/pi/build.gradle.kts'
+        native.parent.mkdir(parents=True)
+        for dependency in (':core:storage:api', ':magic-common:tools:api', ':magic-chat:api', ':magic-agent:runtime:api'):
+            native.write_text(f'commonMain.dependencies {{ implementation(project("{dependency}")) }}')
+            assert any('backend agents may depend only' in error for error in violations(root)), dependency
+        native.write_text('commonMain.dependencies { api(project(":backend-agents:api")) }')
+        assert not violations(root), violations(root)
+        consumer.write_text('')
+        chat = root / 'magic-chat/impl/build.gradle.kts'
+        chat.parent.mkdir(parents=True)
+        chat.write_text('jvmMain.dependencies { implementation(project(":magic-agent:runtime:api")) }')
+        assert any('chat must not depend on native agent' in error for error in violations(root))
+        chat.write_text('')
+        runtime = root / 'magic-agent/runtime/impl/build.gradle.kts'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('commonMain.dependencies { implementation(project(":backend-agents:factory")) }')
+        assert not violations(root), violations(root)
+        runtime.write_text('commonMain.dependencies { implementation(project(":backend-agents:pi")) }')
+        assert any('engine implementation' in error for error in violations(root))
+        runtime.write_text('')
+        app = root / 'app/build.gradle.kts'
+        app.parent.mkdir()
+        app.write_text('jvmMain.dependencies { implementation(project(":backend-agents:factory")) }')
+        assert any('only :magic-agent:runtime:impl' in error for error in violations(root))
+        for source_set in ('commonMain', 'commonTest', 'androidMain', 'jsMain', 'wasmJsMain'):
+            app.write_text(f'{source_set}.dependencies {{ implementation(project(":magic-agent:runtime:api")) }}')
+            assert any('only jvmMain may depend' in error for error in violations(root)), source_set
+        app.write_text('jvmMain.dependencies { implementation(project(":magic-agent:runtime:api")) }')
+        assert not violations(root), violations(root)
+        for plugin in ('magicpaper.kmp-library', 'magicpaper.compose-library'):
+            native.write_text(f'plugins {{ id("{plugin}") }}')
+            assert any('JVM targets only' in error for error in violations(root)), plugin
+        native.write_text('plugins { id("magicpaper.jvm-library") }')
+        assert not violations(root), violations(root)
+        factory = root / 'backend-agents/factory/build.gradle.kts'
+        factory.parent.mkdir(parents=True)
+        factory.write_text('commonMain.dependencies { implementation(project(":backend-agents:pi")) }')
+        assert not violations(root), violations(root)
+        native.write_text('commonMain.dependencies { implementation(project(":backend-agents:codex")) }')
+        assert any('only :backend-agents:factory may consume engine' in error for error in violations(root))
+        native.write_text('')
+        source = root / 'magic-chat/impl/src/commonMain/kotlin/Fixture.kt'
+        source.parent.mkdir(parents=True)
+        chat_build = root / 'magic-chat/impl/build.gradle.kts'
+        for dependency in ('libs.koin.core', '"io.insert-koin:koin-core:4.0.0"'):
+            chat_build.write_text(f'commonMain.dependencies {{ implementation({dependency}) }}')
+            assert any('Koin dependencies belong only' in error for error in violations(root))
+        chat_build.write_text('')
+        source.write_text('package fixture\nimport org.koin.core.Koin\n')
+        assert any('Koin belongs only' in error for error in violations(root))
+        source.write_text('package fixture\n// import org.koin.core.Koin\n')
+        assert not violations(root), violations(root)
+        source.write_text('package fixture\nclass ToolHost\n')
+        assert any('ToolHost is retired' in error for error in violations(root))
+        source.write_text('package fixture\n// class ToolHost\n')
+        assert not violations(root), violations(root)
 
 if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory
@@ -254,7 +771,144 @@ if '--self-test' in sys.argv:
         (root / 'settings.gradle.kts').write_text('project(":shared").projectDir = file("app")')
         assert len(violations(root)) == 3, 'Local aliases must still fail'
         assert all('tools/mission-visualization/' not in error for error in found)
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        source = root / 'core/model/src/commonMain/kotlin/Effects.kt'
+        source.parent.mkdir(parents=True)
+        # The KDoc brace, the `when` arms inside the body and the bodiless declaration are
+        # all places a coarser walk would either desync or report an arbitrary `->`.
+        source.write_text('package fixture\n'
+                          '/** Effects are descriptions; a lambda member would hide work behind a `{`. */\n'
+                          'sealed interface StageEffect {\n'
+                          '    data class Block(val issue: PlanningIssue) : StageEffect\n'
+                          '    val issue: PlanningIssue\n'
+                          '    val onDone: () -> Unit\n'
+                          '    val label: String get() = when (this) {\n'
+                          '        is Block -> "block"\n'
+                          '        else -> ""\n'
+                          '    }\n'
+                          '}\n'
+                          'sealed interface PlanEvent\n'
+                          'class NavigationEvents {\n'
+                          '    sealed interface Event {\n'
+                          '        val perform: () -> Unit\n'
+                          '    }\n'
+                          '}\n')
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 2, found
+        assert any('StageEffect.onDone' in error for error in found), found
+        assert any('Event.perform' in error for error in found), 'a nested hierarchy is still a hierarchy'
+        assert not any('issue' in error or 'label' in error for error in found), found
+        # The form this codebase actually writes: the payload rides the constructor, on one
+        # line, so a scan anchored to a line-leading `val` would never see it.
+        source.write_text('package fixture\n'
+                          'sealed interface StageEffect {\n'
+                          '    data class Ask(val onAnswer: (String) -> Unit) : StageEffect\n'
+                          '    data class Block(val issue: PlanningIssue) : StageEffect\n'
+                          '    val label: String get() = when (this) {\n'
+                          '        is Block -> "block"\n'
+                          '    }\n'
+                          '}\n')
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 1 and 'StageEffect.onAnswer' in found[0], found
+        for subclass in ('data class Ask(val onAnswer: (String) -> Unit) : StageEffect\n',
+                         'data class Ask(\n    val onAnswer: (String) -> Unit,\n) : StageEffect\n'):
+            source.write_text('package fixture\nsealed interface StageEffect\n' + subclass)
+            found = [error for error in violations(root) if 'declares a function type' in error]
+            assert len(found) == 1 and 'Ask.onAnswer' in found[0], found
+        # A brace inside a literal must not move the body walk in either direction.
+        source.write_text('package fixture\n'
+                          'sealed interface StageEffect {\n'
+                          '    data class Block(val label: String = "{") : StageEffect\n'
+                          '}\n'
+                          'class Unrelated {\n'
+                          '    val onDone: () -> Unit = {}\n'
+                          '}\n')
+        assert not any('declares a function type' in error for error in violations(root)), violations(root)
+        source.write_text('package fixture\n'
+                          'sealed interface StageEffect {\n'
+                          '    data class Block(val label: String = "}") : StageEffect\n'
+                          '    val onDone: () -> Unit\n'
+                          '}\n')
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 1 and 'StageEffect.onDone' in found[0], found
+        # CoordinatorContinuation is an effect vocabulary by every criterion but its name, so
+        # the planning package carries the rule and the same name elsewhere does not.
+        source.write_text('package fixture\n')
+        vocabulary = ('package fixture\n'
+                      'sealed interface CoordinatorContinuation {\n'
+                      '    data class Ask(val onAnswer: (String) -> Unit) : CoordinatorContinuation\n'
+                      '}\n')
+        planning = root / PLANNING_PACKAGE
+        planning.mkdir(parents=True)
+        (planning / 'CoordinationMachine.kt').write_text(vocabulary)
+        (root / 'core/model/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Session.kt').write_text(vocabulary)
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 1 and 'planning/CoordinationMachine.kt' in found[0], found
+
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        planning = root / PLANNING_PACKAGE
+        planning.mkdir(parents=True)
+        (planning / 'StageMachine.kt').write_text('package fixture\nval now = Clock.System.now()\n')
+        found = [error for error in violations(root) if 'reads a clock' in error]
+        assert len(found) == 1 and 'StageMachine.kt' in found[0] and 'Clock.' in found[0], found
+        # A pure sibling: the forbidden names appear only as prose and as data, which the
+        # comment and string blanking must not confuse with a call.
+        (planning / 'PlanProjection.kt').write_text(
+            'package fixture\n'
+            '// Time enters as a value: Clock.System.now() is the caller\'s business, not ours.\n'
+            '/* Nor does this file launch( ) anything. */\n'
+            'data class StageRetryInputs(val limit: Int?, val now: Long, val jitter: Long)\n'
+            'fun label() = "runBlocking(worker)"\n')
+        assert not any('PlanProjection' in error for error in violations(root)), violations(root)
+        for builder in ('launch(block)', 'async(block)', 'withContext(context) { }', 'runBlocking { }',
+                        'launch { work() }'):
+            (planning / 'StageMachine.kt').write_text(f'package fixture\nfun start() = scope.{builder}\n')
+            assert any('launches work' in error for error in violations(root)), builder
+        (planning / 'StageMachine.kt').write_text('package fixture\nfun relaunch() = describe(asynchronous)\n')
+        assert not any('launches work' in error for error in violations(root)), 'a builder name is a whole word'
+        (planning / 'StageMachine.kt').write_text('package fixture\nval seed = Random.nextInt(4)\n')
+        assert len([error for error in violations(root) if 'reads a clock' in error]) == 2, 'one entry per distinct token'
+        # A generated id is the transition most likely to be written by accident, and the
+        # clock, randomness and coroutine vocabularies have more than one spelling each.
+        for impure in ('val id = UUID.randomUUID()', 'val id = Uuid.random()', 'val share = Math.random()',
+                       'val seed = rng.nextLong()', 'val jitter = rng.nextDouble()',
+                       'val start = System.nanoTime()', 'val mark = TimeSource.Monotonic.markNow()',
+                       'fun run() = execute(Dispatchers.IO)', 'val stages = flow { }',
+                       'suspend fun run() = coroutineScope { }'):
+            (planning / 'StageMachine.kt').write_text(f'package fixture\n{impure}\n')
+            assert any('StageMachine.kt' in error and 'planning transition' in error
+                       for error in violations(root)), impure
+        # The shape StageMachine.kt actually writes: time arrives as a value and the wait is
+        # an effect, so neither the field nor the effect name may be read as a call.
+        (planning / 'StageMachine.kt').write_text(
+            'package fixture\n'
+            'fun wait(inputs: StageRetryInputs) = StageEffect.Delay(delayMillis(inputs.now))\n')
+        assert not any('StageMachine.kt' in error for error in violations(root)), violations(root)
+        # The rule is bounded by the package, not by the module or the filename.
+        outside = root / 'core/model/src/commonMain/kotlin/io/aequicor/magicpaper/domain/Session.kt'
+        outside.write_text('package fixture\nval started = Clock.System.now()\n')
+        assert not any('Session.kt' in error for error in violations(root)), violations(root)
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        assert not violations(root), 'a tree with no domain package is not a checkout to guard'
+        owner = root / 'magic-common/core-model/src/commonMain/kotlin' / PLANNING_OWNER
+        owner.mkdir(parents=True)
+        (owner / 'Session.kt').write_text('package fixture\n')
+        assert any('planning package not found' in error for error in violations(root)), violations(root)
+        # Moving the module keeps the Kotlin package: the rule must fail loudly rather than
+        # scan an empty directory and let the migration through.
+        moved = owner / 'planning'
+        moved.mkdir()
+        (moved / 'StageMachine.kt').write_text('package fixture\nval now = Clock.System.now()\n')
+        assert any('planning package not found' in error for error in violations(root)), 'a moved package is unresolved'
+
 errors = violations(ROOT)
 if errors:
     raise SystemExit('FAIL\n' + '\n'.join(errors))
-print('PASS: acyclic API/impl graph; platform hosts compose through :app; :shared is retired')
+print('PASS: acyclic API/impl and architecture groups; JVM agent boundary; value effects; composition in :app')

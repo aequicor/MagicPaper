@@ -11,6 +11,7 @@ import io.aequicor.magicpaper.di.*
 import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.navigation.VisitPresentationState
 import io.aequicor.magicpaper.ui.*
+import java.awt.EventQueue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
@@ -21,9 +22,9 @@ class SidebarRestorationTest {
     @Test fun legacyCollapseMapsDoNotBecomeSearchOrArchiveFlags() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val runtime = runtime()
-        try {
+        try { onUi {
             var snapshot: String? = null
-            val actions = SidebarActions(runtime.koin.get<ChatService>(), runtime.koin.get<CodingService>())
+            val actions = SidebarActions(runtime.koin.get<ChatService>(), emptyList())
             val recency = SessionRecencyTracker { 0L }
             // Legacy consecutive rememberSaveable calls shared one positional key.
             // Before search existed, that key contained the two collapse maps.
@@ -43,7 +44,7 @@ class SidebarRestorationTest {
                 assertNotNull(scene.action("Закрыть поиск"))
                 assertNotNull(scene.action("Вернуться ко всем сессиям"))
             }
-        } finally {
+        } } finally {
             runtime.close(); runtime.awaitClosed()
             Dispatchers.resetMain()
         }
@@ -52,8 +53,8 @@ class SidebarRestorationTest {
     @Test fun everyStatusFilterSurvivesPresentationRestore() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val runtime = runtime()
-        try {
-            val actions = SidebarActions(runtime.koin.get<ChatService>(), runtime.koin.get<CodingService>())
+        try { onUi {
+            val actions = SidebarActions(runtime.koin.get<ChatService>(), emptyList())
             val recency = SessionRecencyTracker { 0L }
             for (filter in SidebarStatusFilter.entries) {
                 var snapshot: String? = null
@@ -83,7 +84,7 @@ class SidebarRestorationTest {
                 }
                 assertTrue(errors.isEmpty(), errors.joinToString())
             }
-        } finally {
+        } } finally {
             runtime.close(); runtime.awaitClosed()
             Dispatchers.resetMain()
         }
@@ -100,8 +101,8 @@ class SidebarRestorationTest {
         ImageComposeScene(320, 720) {
             PaperTheme {
                 owner.Content {
-                    UnifiedSidebar(actions, emptyList(), CodingUi(), null, false,
-                        recencyTracker = recency, listState = LazyListState())
+                    UnifiedSidebar(actions, emptyList(), listOf(SidebarProjection(statusFilters = SidebarStatusFilter.entries)), null, false,
+                        listState = LazyListState())
                 }
             }
         }
@@ -115,4 +116,13 @@ class SidebarRestorationTest {
     }
     private fun ImageComposeScene.nodes() = semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
     private fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+
+    // Scene lifecycle and snapshot notifications must share the AWT thread. Otherwise
+    // an apply observer can hold the snapshot lock while the test holds the scene lock.
+    private fun <T> onUi(block: () -> T): T {
+        if (EventQueue.isDispatchThread()) return block()
+        var result: Result<T>? = null
+        EventQueue.invokeAndWait { result = runCatching(block) }
+        return checkNotNull(result).getOrThrow()
+    }
 }

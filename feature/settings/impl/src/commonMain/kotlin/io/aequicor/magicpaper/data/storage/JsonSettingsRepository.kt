@@ -1,13 +1,11 @@
 package io.aequicor.magicpaper.data.storage
 
 import io.aequicor.magicpaper.domain.AppSettings
-import io.aequicor.magicpaper.domain.PluginState
 import io.aequicor.magicpaper.domain.SettingsRepository
 import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
@@ -18,7 +16,6 @@ class JsonSettingsRepository(
 ) : SettingsRepository {
     private val credentials = CredentialRecords(secrets, store, "settings-credential-cleanup")
     private val mutex = Mutex()
-    private val statesSerializer = ListSerializer(PluginState.serializer())
 
     override suspend fun load(): AppSettings = mutex.withLock {
         val raw = store.read(KEY_SETTINGS) ?: run { credentials.clean(emptyList()); return@withLock AppSettings() }
@@ -36,7 +33,7 @@ class JsonSettingsRepository(
         settings
     }
 
-    override suspend fun save(settings: AppSettings) = mutex.withLock {
+    suspend fun save(settings: AppSettings) = mutex.withLock {
         settings.agentLimits.validate()
         val previous = store.read(KEY_SETTINGS)?.let(::parse)
         val saved = credentials.encode(json.encodeToJsonElement(AppSettings.serializer(), settings) as JsonObject, SECRET_FIELDS)
@@ -45,20 +42,10 @@ class JsonSettingsRepository(
         credentials.clean(listOf(saved))
     }
 
-    override suspend fun pluginStates(): List<PluginState> {
-        val raw = store.read(KEY_PLUGINS) ?: return emptyList()
-        return runCatching { json.decodeFromString(statesSerializer, raw) }.getOrDefault(emptyList())
-    }
-
-    override suspend fun savePluginStates(states: List<PluginState>) {
-        store.write(KEY_PLUGINS, json.encodeToString(statesSerializer, states))
-    }
-
-    override suspend fun wipe() = mutex.withLock {
+    suspend fun wipe() = mutex.withLock {
         val previous = store.read(KEY_SETTINGS)?.let(::parse)
         credentials.stageCleanup(listOfNotNull(previous))
         store.delete(KEY_SETTINGS)
-        store.delete(KEY_PLUGINS)
         credentials.clean(emptyList())
     }
 
@@ -69,7 +56,6 @@ class JsonSettingsRepository(
 
     private companion object {
         const val KEY_SETTINGS = "settings"
-        const val KEY_PLUGINS = "plugins"
         val SECRET_FIELDS = setOf("queritApiKey", "queritContentApiKey", "googleApiKey", "llmApiKey")
     }
 }

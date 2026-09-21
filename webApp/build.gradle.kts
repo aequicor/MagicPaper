@@ -26,6 +26,7 @@ kotlin {
             implementation(project(":designSystem"))
 
             implementation(libs.compose.ui)
+            implementation(libs.compose.foundation)
             implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.kotlinx.browser)
         }

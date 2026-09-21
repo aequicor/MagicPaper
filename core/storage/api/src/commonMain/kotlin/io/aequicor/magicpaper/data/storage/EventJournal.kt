@@ -6,7 +6,10 @@ import kotlinx.coroutines.sync.withLock
 /** An opaque concurrency token, bound to one stream and one application reset generation. */
 data class JournalRevision(val stream: String, val seq: Long, val resetEpoch: Long = 0)
 
-/** Records and their concurrency token are read under the same backend lock. */
+/**
+ * Records and their concurrency token are read under the same backend lock. An incomplete durable
+ * reset is an error, never old records relabelled with a new epoch or a successful empty snapshot.
+ */
 data class JournalSnapshot(val revision: JournalRevision, val records: List<JournalRecord>)
 
 /**

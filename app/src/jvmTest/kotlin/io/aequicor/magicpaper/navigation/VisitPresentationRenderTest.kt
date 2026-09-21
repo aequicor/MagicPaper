@@ -8,6 +8,7 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.use
 import io.aequicor.magicpaper.designsystem.*
+import java.awt.EventQueue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
@@ -17,7 +18,7 @@ import kotlin.test.*
 class VisitPresentationRenderTest {
     @Test fun realRememberSaveableRestoresAfterCompositionAndOwnerRecreation() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
-        try {
+        try { onUi {
             var snapshot: String? = null
             val owner = VisitPresentationState(null) { snapshot = it }
             scene(owner).use { scene ->
@@ -37,7 +38,7 @@ class VisitPresentationRenderTest {
                 assertFalse(scene.contains("Свёрнуто"))
             }
             assertNull(restored.restoreError)
-        } finally { Dispatchers.resetMain() }
+        } } finally { Dispatchers.resetMain() }
     }
     private fun scene(owner: VisitPresentationState) = ImageComposeScene(400, 300) {
         PaperTheme { owner.Content { Panel() } }
@@ -53,4 +54,11 @@ class VisitPresentationRenderTest {
     private fun ImageComposeScene.contains(text: String) = semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
         .any { it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == text } == true }
     private fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+
+    private fun <T> onUi(block: () -> T): T {
+        if (EventQueue.isDispatchThread()) return block()
+        var result: Result<T>? = null
+        EventQueue.invokeAndWait { result = runCatching(block) }
+        return checkNotNull(result).getOrThrow()
+    }
 }

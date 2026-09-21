@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.ui
 
-import io.aequicor.magicpaper.data.coding.NoopCodingRuntime
 import io.aequicor.magicpaper.data.storage.JsonChatRepository
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.*
@@ -120,7 +119,7 @@ class ChatResearchTest {
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
-    @Test fun modelFailureHasOneSafeErrorAndCanResumeWithoutLosingSourcesOrDuplicatingTheQuestion() = runTest {
+    @Test fun modelFailureHasOneSafeErrorAndInspectionDoesNotResendTheQuestion() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
         val runtime = Runtime()
@@ -140,14 +139,19 @@ class ChatResearchTest {
             assertEquals(1, stored.resources.size)
             service.resume()
             advanceUntilIdle()
+            assertEquals(1, runtime.calls.size, "Read-only inspection must not send the failed prompt again")
+            assertNotNull(f.chats.session("first")!!.pendingRun)
+            assertEquals(1, f.chats.session("first")!!.messages.count { it.role == ChatRole.USER })
+            service.discardPendingRequest(); advanceUntilIdle()
+            service.send("Новый запрос после проверки подключения"); advanceUntilIdle()
             assertEquals(2, runtime.calls.size)
             assertEquals(1, runtime.calls.last().session.resources.size)
-            runtime.finish("first", "Ответ после восстановления подключения")
+            runtime.finish("first", "Ответ на новый запрос")
             advanceUntilIdle()
             val completed = f.chats.session("first")!!
             assertNull(completed.pendingRun)
-            assertEquals(1, completed.messages.count { it.role == ChatRole.USER })
-            assertContains(completed.messages.last().text, "Ответ после восстановления подключения")
+            assertEquals(2, completed.messages.count { it.role == ChatRole.USER })
+            assertContains(completed.messages.last().text, "Ответ на новый запрос")
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
@@ -309,12 +313,20 @@ class ChatResearchTest {
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
-    private class Runtime : CodingRuntime by NoopCodingRuntime {
+    private class Runtime : ChatBackend {
+        override fun abort(sessionId: String) = Unit
         data class Call(val session: ChatSession, val prompt: String, val attachments: List<Attachment>)
         val calls = mutableListOf<Call>()
         val events = mutableMapOf<String, Channel<CodingEvent>>()
         val deleted = mutableListOf<String>()
         val reconciled = mutableListOf<String>()
+        val savedReplies = mutableMapOf<String, String>()
+        val inspected = mutableListOf<ChatMachine.RunRef>()
+        override suspend fun inspectSavedResponse(request: ChatMachine.RunRef): ChatSavedResponse {
+            inspected += request
+            return savedReplies[request.runId]?.let { text -> ChatSavedResponse.Completed(request,
+                ChatMachine.OutputProof(request.runId, "saved-attempt", "saved-input", "saved-digest"), text) } ?: ChatSavedResponse.Missing
+        }
         override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             calls += Call(session, prompt, attachments)
             val channel = events.getOrPut(session.id) { Channel(Channel.UNLIMITED) }
@@ -328,12 +340,12 @@ class ChatResearchTest {
         override suspend fun reconcile(sessionId: String) { reconciled += sessionId }
     }
 
-    private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatRepository = f.chats,
+    private suspend fun service(f: ModelSettingsFixture, runtime: Runtime, repository: ChatCheckpointStore = f.chats,
         search: SearchEngine? = null, pins: RequestPinService? = null,
         sourceAccess: ResearchSourceAccess = ResearchSourceAccess { "Readable fixture evidence" },
         sourceBrowser: ResearchPageBrowser? = null): DefaultChatService {
         f.seed()
-        return DefaultChatService(runtime, repository, f.settings, f.profiles, pins,
+        return DefaultChatService(runtime, f.newChatStore(repository), f.settings, f.profiles, pins,
             workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs,
             researchSearch = search, sourceAccess = sourceAccess, sourceBrowser = sourceBrowser)
             .also { it.start(); it.activate("first") }
@@ -347,6 +359,7 @@ class ChatResearchTest {
         var removals = 0
         val pins = object : RequestPinService {
             override val groups = kotlinx.coroutines.flow.MutableStateFlow<Map<PinConversation, List<RequestPinGroup>>>(emptyMap())
+            override val failures = kotlinx.coroutines.flow.MutableStateFlow<Map<PinConversation, String>>(emptyMap())
             override fun isTracking(conversation: PinConversation) = true
             override fun sync(conversation: PinConversation, messages: List<PinMessage>, profile: LlmProfile?, reopened: Boolean) { syncs++ }
             override fun remove(conversation: PinConversation) { removals++ }
@@ -354,6 +367,14 @@ class ChatResearchTest {
         }
         val service = service(f, runtime, pins = pins)
         try {
+            pins.failures.value = mapOf(PinConversation("different") to "Ошибка другого чата")
+            runCurrent()
+            assertNotEquals("Ошибка другого чата", service.state.value.notice)
+            pins.failures.value = mapOf(PinConversation("first") to "Не удалось обновить содержание")
+            runCurrent()
+            assertEquals("Не удалось обновить содержание", service.state.value.notice)
+            service.dismissNotice(); runCurrent()
+            assertNull(service.state.value.notice, "The same failure must not reappear on unrelated state changes")
             service.setVisible(true)
             service.send("Исследовательский вопрос")
             runCurrent()
@@ -416,7 +437,7 @@ class ChatResearchTest {
         } finally { service.close(); Dispatchers.resetMain() }
     }
 
-    @Test fun restartRestoresEveryRunningQuestionWithoutRepeatingStoppedWork() = runTest {
+    @Test fun restartRestoresEveryQuestionAndExplicitInspectionRecoversSavedOutputWithoutSending() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val f = ModelSettingsFixture()
         f.seed()
@@ -436,25 +457,28 @@ class ChatResearchTest {
         f.chats.save(question("third", ExecutionIntent.RUN))
         f.chats.save(question("stopped", ExecutionIntent.STOP))
         val runtime = Runtime()
-        val restored = DefaultChatService(runtime, JsonChatRepository(f.kv, f.json), f.settings, f.profiles, null,
+        val restored = DefaultChatService(runtime, f.newChatStore(JsonChatRepository(f.kv, f.json)), f.settings, f.profiles, null,
             workerDispatcher = Dispatchers.Main, draftRepository = f.draftRepository, draftBlobs = f.draftBlobs)
         try {
             restored.start()
             restored.activate(root.id)
             runCurrent()
 
-            assertEquals(setOf("second", "third"), runtime.calls.map { it.session.id }.toSet())
-            assertEquals(setOf("second", "third"), runtime.reconciled.toSet())
-            assertTrue(runtime.calls.all { it.prompt.startsWith("Продолжи незавершённую работу") })
+            assertTrue(runtime.calls.isEmpty(), "Restore must not resend a provider or tool request")
+            assertTrue(runtime.reconciled.isEmpty())
             assertEquals("second", restored.state.value.current?.id)
-            assertTrue(restored.state.value.busy)
+            assertFalse(restored.state.value.busy)
             assertEquals(1, f.chats.session("second")!!.messages.count { it.id == "request-second" })
 
-            runtime.finish("second", "Second answer")
-            runtime.finish("third", "Third answer")
-            advanceUntilIdle()
+            runtime.savedReplies[f.chats.session("second")!!.pendingRun!!.runId] = "Second answer"
+            restored.resume()
+            runCurrent()
+            assertTrue(runtime.calls.isEmpty(), "Saved output inspection cannot run a model")
+            assertTrue(runtime.reconciled.isEmpty(), "Storage inspection cannot prepare native resources")
+            assertEquals(listOf("second"), runtime.inspected.map { it.sessionId })
+            assertContains(f.chats.session("second")!!.messages.last().text, "не удалось подтвердить")
             assertNull(f.chats.session("second")!!.pendingRun)
-            assertNull(f.chats.session("third")!!.pendingRun)
+            assertNotNull(f.chats.session("third")!!.pendingRun)
             assertEquals(ExecutionIntent.STOP, f.chats.session("stopped")!!.pendingRun?.intent)
             assertFalse(restored.state.value.busy)
         } finally { restored.close(); Dispatchers.resetMain() }
@@ -580,10 +604,8 @@ class ChatResearchTest {
         val f = ModelSettingsFixture()
         val runtime = Runtime()
         var fail = false
-        val repository = object : ChatRepository by f.chats {
-            override suspend fun save(session: ChatSession) { if (fail) error("Disk full") else f.chats.save(session) }
-        }
-        val service = service(f, runtime, repository)
+        f.beforeChatInput = { if (fail) error("Disk full") }
+        val service = service(f, runtime)
         try {
             assertTrue(service.addWebsite("first", "https://example.org/").isSuccess)
             val source = service.state.value.notebook!!.resources.single()
@@ -683,10 +705,8 @@ class ChatResearchTest {
         val f = ModelSettingsFixture()
         val runtime = Runtime()
         var writes = 0
-        val repository = object : ChatRepository by f.chats {
-            override suspend fun save(session: ChatSession) { writes++; f.chats.save(session) }
-        }
-        val service = service(f, runtime, repository)
+        f.beforeChatInput = { writes++ }
+        val service = service(f, runtime)
         var closed = false
         try {
             val sharedFile = Attachment.fromBytes("shared.txt", "text/plain", "Shared".encodeToByteArray())

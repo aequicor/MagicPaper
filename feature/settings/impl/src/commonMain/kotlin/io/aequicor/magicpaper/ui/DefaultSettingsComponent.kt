@@ -14,17 +14,15 @@ import kotlinx.coroutines.*
 class DefaultSettingsComponent(
     context: ComponentContext,
     private val service: DefaultSettingsService,
-    val coding: CodingService,
     val plugins: PluginService,
     val draftRepository: DraftRepository,
     val draftBlobs: DraftBlobStore,
     val input: SettingsInput,
     private val onOutput: (SettingsOutput) -> Unit,
+    val contributions: SettingsContributions = SettingsContributions(),
 ) : SettingsComponent, SettingsService by service {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val drafts get() = service.drafts
-    internal val computerPermissions = ComputerPermissionController(coding.computerPermissions, scope)
-    internal fun saveComputerAccess(settings: AppSettings) = service.saveComputerAccess(settings.computerAccess, settings.applicationAccess)
     internal fun saveOverviewSettings(settings: AppSettings) = service.saveOverviewSettings(settings)
     private var draftCreationError by mutableStateOf(false)
     private var profileCreationCandidate: LlmProfile? = null
@@ -48,25 +46,15 @@ class DefaultSettingsComponent(
         context.lifecycle.doOnResume { if (input.page == SettingsPage.PROFILE) service.prepareProfileEditor() }
         context.lifecycle.doOnDestroy { scope.cancel() }
     }
+    fun openContribution(entry: SettingsNavigationEntry) = onOutput(entry.destination)
     fun openChat() = onOutput(SettingsOutput.Chat)
-    fun openProjects() = onOutput(SettingsOutput.Projects)
     fun openPlugins() = onOutput(SettingsOutput.Plugins)
     fun openDocs() = onOutput(SettingsOutput.Docs)
     fun openModelsSettings() = onOutput(SettingsOutput.Models)
-    fun openEnginesSettings() = onOutput(SettingsOutput.Engines)
-    fun openComputerSettings() = onOutput(SettingsOutput.Computer)
     fun closeModelsSettings() = onOutput(SettingsOutput.Back)
     fun closeLlmProfileEditor() = onOutput(SettingsOutput.Back)
-    fun closeEnginesSettings() = onOutput(SettingsOutput.Back)
-    fun closeComputerSettings() = onOutput(SettingsOutput.Back)
     fun editLlmProfile(id: String) = onOutput(SettingsOutput.Profile(id))
     fun togglePlugin(id: String, enabled: Boolean) = plugins.togglePlugin(id, enabled)
-    fun prepareCodingRuntime(engine: CodingEngine) = coding.prepareCodingRuntime(engine)
-    fun uninstallCodingRuntime(engine: CodingEngine) = coding.uninstallCodingRuntime(engine)
-    fun enableComputerUse(id: String, access: ComputerAccess) = coding.enableComputerUse(id, access)
-    fun disableComputerUse(id: String) = coding.disableComputerUse(id)
-    fun previewComputerUse(id: String) = coding.previewComputerUse(id)
-    fun openComputerSystemSettings() = coding.openComputerSystemSettings()
     override fun onAction(action: SettingsAction) {
         when(action) {
             is SettingsAction.Save -> service.saveSettings(action.settings)
@@ -82,8 +70,7 @@ class DefaultSettingsComponent(
         when(input.page) {
             SettingsPage.OVERVIEW -> SettingsScreen(this, current)
             SettingsPage.MODELS -> ModelsSettings(this, current)
-            SettingsPage.ENGINES -> EnginesSettings(this, current)
-            SettingsPage.COMPUTER -> ComputerSettings(this, current)
+            SettingsPage.ENGINES, SettingsPage.COMPUTER -> MissingSettingsPage { onOutput(SettingsOutput.Overview) }
             SettingsPage.WELCOME -> WelcomeScreen(this, current)
             SettingsPage.PROFILE -> {
                 var restored by remember(input.profileId) { mutableStateOf<LlmProfile?>(null) }
@@ -112,11 +99,12 @@ class DefaultSettingsComponent(
 
 class DefaultSettingsComponentFactory(
     private val service: DefaultSettingsService,
-    private val coding: CodingService,
     private val plugins: PluginService,
     private val draftRepository: DraftRepository,
     private val draftBlobs: DraftBlobStore,
+    private val contributions: SettingsContributions = SettingsContributions(),
 ) : SettingsComponent.Factory {
     override fun create(context: ComponentContext, input: SettingsInput, onOutput: (SettingsOutput) -> Unit): SettingsComponent =
-        DefaultSettingsComponent(context, service, coding, plugins, draftRepository, draftBlobs, input, onOutput)
+        contributions.pages.firstOrNull { it.page == input.page }?.factory?.create(context, input, onOutput)
+            ?: DefaultSettingsComponent(context, service, plugins, draftRepository, draftBlobs, input, onOutput, contributions)
 }

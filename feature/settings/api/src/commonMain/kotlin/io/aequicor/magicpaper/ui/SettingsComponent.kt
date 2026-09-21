@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 enum class SettingsPage { OVERVIEW, MODELS, ENGINES, PROFILE, WELCOME, COMPUTER }
 data class SettingsInput(val page: SettingsPage = SettingsPage.OVERVIEW, val profileId: String? = null)
 sealed interface SettingsOutput {
+    data object Overview : SettingsOutput
     data object Back : SettingsOutput
     data object Chat : SettingsOutput
     data object Projects : SettingsOutput

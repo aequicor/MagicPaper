@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.LlmToolDefinition
+import io.aequicor.magicpaper.domain.LlmToolExchange
+import io.aequicor.magicpaper.domain.LlmToolTurn
 import io.aequicor.magicpaper.domain.ModelDefaults
 import io.ktor.client.HttpClient
 import kotlinx.serialization.json.Json
@@ -17,22 +20,34 @@ class AnthropicGateway(
     private val json: Json,
 ) : LlmGateway {
 
-    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+    override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String =
+        parseResponse(request(profile, LlmPayloads.anthropic(profile, messages, ModelDefaults.capability(profile))))
+
+    override suspend fun turn(
+        profile: LlmProfile,
+        messages: List<LlmMessage>,
+        tools: List<LlmToolDefinition>,
+        exchanges: List<LlmToolExchange>,
+    ): LlmToolTurn {
+        val base = LlmPayloads.anthropic(profile, messages, ModelDefaults.capability(profile))
+        val payload = LlmToolWire.anthropicPayload(base, tools, exchanges, profile.provider)
+        return LlmToolWire.anthropicResponse(request(profile, payload), profile.provider, json)
+    }
+
+    private suspend fun request(profile: LlmProfile, payload: JsonObject): String {
         require(profile.configured) { "Профиль не настроен: укажите Base URL и модель." }
         val url = profile.baseUrl.trimEnd('/') + "/v1/messages"
-        val payload = LlmPayloads.anthropic(profile, messages, ModelDefaults.capability(profile))
         val headers = buildMap {
             put("x-api-key", profile.apiKey)
             put("anthropic-version", API_VERSION)
         }
-        val body = client.postJson(
+        return client.postJson(
             url = url,
             headers = headers,
             body = json.encodeToString(JsonObject.serializer(), payload),
             timeoutSeconds = profile.advanced.timeoutSeconds,
             usageProvider = profile.provider,
         )
-        return parseResponse(body)
     }
 
     /** content — массив блоков; склеиваем текстовые. */

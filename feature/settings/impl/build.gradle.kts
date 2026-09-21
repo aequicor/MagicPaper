@@ -16,9 +16,9 @@ kotlin {
             implementation(project(":designSystem"))
             implementation(project(":core:platform"))
             implementation(project(":core:storage:api"))
+            implementation(libs.ktor.utils)
             implementation(project(":core:ai:api"))
-            implementation(libs.koin.core)
-            implementation(project(":feature:session:api"))
+            implementation(project(":magic-chat:api"))
             implementation(project(":feature:settings:api"))
             implementation(project(":feature:docs:api"))
             implementation(project(":feature:plugins:api"))
@@ -31,7 +31,9 @@ kotlin {
         jvmTest.dependencies {
             implementation(libs.compose.material3)
             implementation(libs.markdownRenderer.m3)
-            implementation(project(":feature:session:impl"))
+            implementation(project(":magic-chat:impl"))
+            // DefaultChatPresentation for the shared render theme; session:impl keeps transcript internal.
+            implementation(project(":magic-common:transcript"))
             implementation(compose.desktop.currentOs)
             implementation(libs.compose.material3)
             implementation(libs.markdownRenderer.m3)

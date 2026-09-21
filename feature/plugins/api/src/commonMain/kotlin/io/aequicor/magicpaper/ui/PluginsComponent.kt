@@ -13,7 +13,7 @@ data class PluginsState(
     val error: String? = null,
 )
 /** Application lifetime service; navigation never cancels an in-flight preference write. */
-interface PluginService {
+interface PluginService : io.aequicor.magicpaper.plugins.PluginPreferences {
     val state: StateFlow<PluginsState>
     suspend fun start()
     fun togglePlugin(id: String, enabled: Boolean)

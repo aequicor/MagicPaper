@@ -1,18 +1,21 @@
 package io.aequicor.magicpaper.ui
 
 /** Sidebar commands cross feature boundaries through their service APIs. */
-class SidebarActions(private val chat: ChatService, private val coding: CodingService) {
-    fun newSession() = chat.newSession()
-    fun addCodingProject() = coding.addCodingProject()
-    fun requestCodingSessionInProject(id: String) = coding.requestCodingSessionInProject(id)
-    fun selectUnifiedSession(id: String, isCoding: Boolean) {
-        if (isCoding) coding.selectCodingSession(id) else chat.selectSession(id)
+internal class SidebarActions(private val chat: ChatService, contributions: List<SidebarContribution>) {
+    private val sources = contributions.associateBy { it.sourceId }
+    fun dispatch(sourceId: String, command: SidebarCommand) {
+        if (sourceId != "chat") {
+            requireNotNull(sources[sourceId]) { "Sidebar command has no registered owner" }.dispatch(command)
+            return
+        }
+        when (command) {
+            SidebarCommand.Create -> chat.newSession()
+            is SidebarCommand.Select -> chat.selectSession(command.id)
+            is SidebarCommand.Archive -> chat.archiveSession(command.id)
+            is SidebarCommand.Restore -> chat.restoreSession(command.id)
+            is SidebarCommand.Delete -> chat.deleteSession(command.id)
+            SidebarCommand.DismissNotice -> chat.dismissNotice()
+            is SidebarCommand.CreateInProject -> error("Chat does not own project sessions")
+        }
     }
-    fun archiveCodingSession(id: String) = coding.archiveCodingSession(id)
-    fun restoreSession(id: String, isCoding: Boolean) {
-        if (isCoding) coding.restoreCodingSession(id) else chat.restoreSession(id)
-    }
-    fun archiveChatSession(id: String) = chat.archiveSession(id)
-    fun deleteCodingSession(id: String) = coding.deleteCodingSession(id)
-    fun deleteSession(id: String) = chat.deleteSession(id)
 }

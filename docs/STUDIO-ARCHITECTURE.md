@@ -19,11 +19,13 @@
   получает пакет улик, а не историю диалога, и решает с нуля на каждом вызове.
 - **Изоляция исполнения.** `GitPlanningWorkspace`, worktree попыток, манифест переноса,
   сверка процессов по PID и владельцу.
-- **Разделение платформ.** `:feature:coding:impl` объявляет только jvm-цель; Android и браузер
-  его не компилируют, хосты без агента связывают `UnavailableCodingFeature`. Защищено правилом
+- **Разделение платформ.** `:magic-agent:runtime:api/impl` объявляют только jvm-цель; Android и браузер
+  их не компилируют. Общий чат имеет собственный API; исполняемые контракты и страницы агента
+  связываются только JVM-хостом через immutable contributions. `UnavailableCoding` удалён.
+  Защищено правилом
   `DESKTOP_ONLY` в [verify-module-architecture.py](verify-module-architecture.py): зависеть на
   него разрешено только из `jvmMain`/`jvmTest`. Авторитетная проверка — `compileMigrationTargets`.
-- **Словарь инструментов отдельно от исполнения.** `:feature:tools:api` — каталог, схемы,
+- **Словарь инструментов отдельно от исполнения.** `:magic-common:tools:api` — каталог, схемы,
   матрица «режим → инструмент → полномочия», типы отказа. Ни рантайма, ни Koin.
 - **Узкий порт чата.** `DefaultChatService` зависит от `ChatBackend` (четыре метода), а не от
   всего `CodingRuntime`.
@@ -337,13 +339,15 @@ JS/Wasm компиляция и проверка модульных границ
 
 ## Где план разошёлся с реальностью
 
-Записано, чтобы расхождения не всплывали как сюрприз.
+Историческое состояние до перехода по `TARGET-ARCHITECTURE.md`; пункты ниже объясняют
+исходные решения, но не описывают текущие границы. Текущий ход — в
+[TARGET-ARCHITECTURE-WORKFLOW.md](TARGET-ARCHITECTURE-WORKFLOW.md).
 
 - **`:feature:coding:api` не заведён.** Контракты кодинга (`CodingFeature`,
   `CodingFeatureDependencies`, `UnavailableCoding*`) легли в `:feature:session:api`, потому что
   они и так ссылались на его типы, а отдельный api-модуль добавил бы только ещё одну границу.
-  Платформенная изоляция от этого не пострадала: её даёт `:feature:coding:impl`.
-- **Движок инструментов остался у кодинга.** План выносил `AgentTools.kt` в `:feature:tools:api`
+  Платформенная изоляция от этого не пострадала: её даёт `:magic-agent:runtime:impl`.
+- **Движок инструментов остался у кодинга.** План выносил `AgentTools.kt` в `:magic-common:tools:api`
   на том основании, что чат потеряет инструменты, уйдя с `CodingRuntime`. Основание оказалось
   ложным: чат жил в `session:impl` рядом с движком, а все тесты инструментов ходят через
   `ToolHost`. Переехал только словарь.
@@ -354,13 +358,135 @@ JS/Wasm компиляция и проверка модульных границ
 
 ## Долги
 
-- `:feature:tools:api`, `:feature:transcript`, `:feature:session:api` — ноль собственных тестов.
-- `ToolHost` — 16 изменяемых портов (было 13, стало больше). Его надо **удалить** в пользу
-  конструкторной инъекции, а не переселить.
-- `:app:jvmTest` — два отказа (`SessionAutoArchiveServiceTest`, `RequestPinViewModelTest`),
-  воспроизводятся на `c629d130` и старше. Не «чинить» ослаблением проверок.
+- У `:magic-common:transcript` пока нет собственного набора тестов; его контракты
+  проверяют потребители. У runtime API теперь есть тесты CodingMachine. У chat,
+  tools, questionnaire, request-pins, media, browser, computer, organism, workspace
+  и backend lifecycle API/impl есть отдельные переходные и journal-тесты.
+- Миграция целевой архитектуры: `ToolHost` удалён и заменён неизменяемыми портами
+  и отдельными владельцами команд. Общий и нативный API разделены, `UnavailableCoding`
+  удалён; Android production и host-test компилируются без нативных контрактов.
+  Общий provider tool loop и capability-dispatch нативных адаптеров реализованы.
+  Автоматическая регистрация новых адаптеров реализована; перевод остальных владельцев
+  на API-машины ещё в работе; ход — `TARGET-ARCHITECTURE-WORKFLOW.md`.
+- `:app:jvmTest` — исходные отказы `SessionAutoArchiveServiceTest` и `RequestPinViewModelTest`
+  воспроизводились на `c629d130` и старше. В checkpoint 20 сентября после запрета
+  автоматического продолжения чата первый тест проходит; текущий отказ остался только
+  `RequestPinViewModelTest.chatAnswerUsesOverrideButPinsUseOperationalDefaultAndOldChatsAreLazy`.
+  Не «чинить» ослаблением проверок.
+- `./gradlew jvmTest --continue` по всем модулям — единственная проверка, которая видит отказы
+  ниже. Шесть команд владельцев срезов гоняют только свои модули и молчат; корневой
+  `checkMigrationJvm` зависит от `jvmTest` каждого подпроекта, и это то, что видит CI.
+  Записанная база до целевой архитектуры: два отказавших таска (`:app:jvmTest`, `:designSystem:jvmTest`), три теста —
+  2411 тестов, 12 пропущено. Все три отказа воспроизведены на чистом рабочем дереве `84a1c815`
+  (без этого набора изменений), поэтому ни один из них не регрессия.
+  Счёт берётся из `build/test-results/jvmTest/*.xml` после `--rerun-tasks`: холодное дерево
+  открывает у `:app` 43 класса вместо 47, и итог выходит на 30 тестов меньше. Отказы при этом
+  те же, но число из такого прогона в базу не годится.
+  Текущий checkpoint второго среза (20 сентября): 2570 JVM-тестов, 13 пропущено,
+  три отказа — оставшиеся RequestPin/TreeHeader и отдельно описанная нестабильность
+  PaperSemantics. Новые регрессии Pi event-flow и устаревшее ожидание silent dossier
+  corruption исправлены; runtime 1247 и skills 147 тестов проходят. `compileMigrationTargets`,
+  Android host-tests, desktop host и nodeProtocolTest проходят. Последующие изменения
+  требуют нового checkpoint, эти числа относятся к срезу перед ChatMachine/computer/catalog.
+- Checkpoint третьего среза (20 сентября): 2674 JVM-теста, 13 пропущено. Browser API6/impl19,
+  computer API11/impl74, chat API16/impl170, runtime1183 и skills147 проходят. Сборка
+  `compileMigrationTargets`, Android/desktop host-tests, backend Pi Node и computer
+  screenshot Node проходят. Архив: `/tmp/magicpaper-target-third-slice-results/summary.json`.
+  Помимо исходных RequestPin/TreeHeader найден отказ KoinOwnerResolutionTest: fixture
+  читал историю до публикации асинхронного journal commit. Проверка теперь дожидается
+  точного принятого session ID; focused тест проходит, assertions изоляции усилены.
+  Полный повтор app после исправления — 213 тестов, только исходный RequestPin отказ;
+  KoinOwnerResolution проходит. Лог `/tmp/magicpaper-target-third-app-repeat.log`. PaperSemantics в этом
+  общем прогоне проходит. Счёт не включает независимую сборку tools/mission-visualization.
+- Повторный checkpoint четвёртого среза (20 сентября): 2790 JVM-тестов, 13 пропущено,
+  два исходных отказа RequestPin/TreeHeader. Runtime 1167, app 221 из 222, chat 170,
+  skills 147 и все новые API/impl владельцев проходят. Девять новых отказов первого
+  прогона (2786 тестов, 11 отказов) исправлены: fixtures используют journal owner и
+  явное восстановление, Pi fixture выдаёт terminal agent_end, DeferRecovery сохраняет
+  выбор «оставить остановленной» без нового сообщения. JS/Wasm settings компилируется
+  с common accessor suppressedExceptions. `compileMigrationTargets`, Android app
+  host-tests, desktop host и оба Node checks проходят; androidApp unit task — NO-SOURCE.
+  Авторитетный архив: `/tmp/magicpaper-target-fourth-repeat-results/summary.json`,
+  лог `/tmp/magicpaper-target-fourth-repeat.log`. PaperSemantics проходит.
+- Пятый срез первоначально не прошёл приёмку: полный JVM/platform повтор дал 2952 теста, 23 skip,
+  два исходных отказа и гонку виртуального timeout в SessionTreeRuntimeTest.
+  После её исправления runtime 1172/1172 проходит; общий JVM повтор обнаружил
+  RuntimeLifecycleTest, читавший repository раньше асинхронного commit нового чата.
+  Fixture теперь ожидает конкретную опубликованную session identity; оба новых отказа
+  устранены и проходят в полном шестом checkpoint. Они не входят в допустимую базу.
+  Архивы и разграничение последующих исходников — TARGET-ARCHITECTURE-WORKFLOW.md.
+- Полный checkpoint шестого среза: 3033 JVM-теста, 24 пропущено, только два
+  исходных отказа RequestPin/TreeHeader. Runtime 1189 без отказов (1 skip),
+  planning API 86/86 и impl 36/36, workspace impl 21/21, plugins API 3/3 и
+  impl 24/24, settings 56/56; checks API 11/11 и impl 62 без отказов (11 skip).
+  Все прежние регрессии пятого/шестого focused-прогонов устранены.
+  `compileMigrationTargets`, Android host-tests, desktop host, Pi Node protocol
+  и screenshot context checks проходят; androidApp unit task — NO-SOURCE.
+  Лог `/tmp/magicpaper-target-sixth-checkpoint.log`, авторитетный архив
+  `/tmp/magicpaper-target-sixth-results/summary.json`; architecture/Paper self-tests PASS.
+  Это checkpoint шестого среза, не завершение целевой архитектуры: оставались
+  отдельные окна восстановления до native Begin и между закрытием intent/проекцией
+  решения, перевод Git-процессов на проверяемое владение и оставшиеся владельцы
+  settings/usage/drafts/navigation.
+- Полный checkpoint седьмого среза: 3147 JVM-тестов, 24 пропущено, только два
+  исходных отказа RequestPin/TreeHeader. Runtime 1199 без отказов (1 skip),
+  settings API 8/8 и impl 83/83, usage/core AI API 8/8 и impl 123/123,
+  checks API 18/18 и impl 78 (11 skip), computer API 16/16 и impl 80 (6 skip).
+  Все 14 новых отказов промежуточного runtime-прогона устранены. Первый полный
+  прогон дополнительно выявил гонку ожидания асинхронного Markdown parsing в
+  PaperMarkdownTableTest; тест теперь ждёт фактическую таблицу, сохраняя assertions.
+  Focused 2/2 и общий повтор проходят. Авторитетный JVM архив:
+  `/tmp/magicpaper-target-seventh-repeat-results/summary.json`, лог
+  `/tmp/magicpaper-target-seventh-repeat.log`. Все platform/host/Node targets из
+  `/tmp/magicpaper-target-seventh-checkpoint.log` проходят; androidApp — NO-SOURCE.
+  Architecture/Paper self-tests PASS. Settings и usage переведены на владельцев;
+  остаются skills/package/experience, drafts/navigation, durable global reset и
+  cross-owner import, закрытие planning writer, native reserve/activate до host
+  preflight и legacy binding, GitTaskWorkspace и восстановление UNKNOWN checks.
+  Это checkpoint среза, не завершение целевой архитектуры. Изменения после него
+  требуют нового прогона; компиляция браузера не доказывает IndexedDB cross-tab,
+  host tests не заменяют установленное приложение и opt-in нативные проверки.
+- Повторный полный checkpoint восьмого среза: 3214 JVM-тестов, 24 пропущено,
+  только исходные RequestPin/TreeHeader отказы. Runtime 1209 (1 skip), native
+  lifecycle 28/28, Pi 82 (1 skip), Codex 38/38; skills API 6/6 и impl 174 (2 skip),
+  storage impl 71/71. Первый прогон (3204 теста) обнаружил настоящую потерю
+  частичного output перед NativeRunRecoveryRequired. Лишние очереди удалены;
+  необходимые transport boundaries сохраняют порядок output → typed failure,
+  отмена остаётся отменой. Focused 165 тестов и общий повтор проходят.
+  Авторитетный архив `/tmp/magicpaper-target-eighth-repeat-results/summary.json`,
+  лог `/tmp/magicpaper-target-eighth-repeat.log`. Все platform/host/Node targets
+  проходят; androidApp — NO-SOURCE. Architecture/Paper self-tests PASS.
+  Common skills owner, Task Git authority и durable PersistenceStores reset barrier
+  интегрированы. JS и Wasm IndexedDB проверены в установленном Chromium — по
+  68 сценариев без отказов. Детали и ограничения: TARGET-ARCHITECTURE-WORKFLOW.md.
+  Package/experience skills, drafts/navigation, global cross-owner reset/import,
+  planning writer, native reservation/legacy binding и доказуемая очистка UNKNOWN
+  checks остаются незавершёнными. Scratch следующего среза не включён в этот
+  checkpoint; его интеграция потребует новых проверок.
+- `:designSystem:jvmTest` — один исходный отказ, воспроизведённый до этого набора изменений:
+  - `PaperTreeGroupHeaderTest.narrowHeaderRetainsDisclosureStatusAndFullTitleAtEveryTextScale`:
+    `expected <Ellipsis> but was <Clip>`. Заголовок перешёл на `PaperFadingText`, а тот намеренно
+    ставит `TextOverflow.Clip` и заменяет многоточие затенением с бегущей строкой по наведению
+    (3bcd9e1b). Устарел тест, а не компонент; править вместе с решением о контракте обрезки.
+  - Не отказ, а заметка: `PaperSemanticsTest.contextIndicatorExposesProgressAndSupportsKeyboard`
+    один раз дал `expected <Сжатие контекста> but was <50%>` — `stateDescription` прочитан раньше,
+    чем перекомпоновка с `compacting = true` дошла до кадра. Больше не воспроизводится: два полных
+    прогона модуля, три прогона класса, прогон по всем модулям и прогон на `84a1c815` зелёные.
+    Чувствительность к нагрузке; в базе не числится. При checkpoint целевой миграции
+    20 сентября 2026 повторился тот же отказ; отдельный повтор класса снова прошёл.
+    Это остаётся нестабильной проверкой, а не основанием ослаблять assertion.
+- `:feature:settings:impl` и `:feature:skills:impl` обоим понадобилась явная зависимость `jvmTest`
+  на модуль, до которого дотягивается только `:app` (`:magic-common:transcript`, `:magic-agent:runtime:impl`):
+  `implementation` в `:app` не транзитивна. Следующий модуль с общим `testSupport/rendering` или с
+  десктопным рантаймом в фикстуре упрётся в то же. `:magic-agent:runtime:impl` сидит в `DESKTOP_ONLY`
+  верификатора, поэтому объявлять его можно только в `jvmTest`.
 - `maxParallelForks` в тестах замерен и отвергнут: ускоряет coding и session, ломает `:app`
   (`SidebarRestorationTest` — 315 s вместо 0.68 s). Не возвращать без решения этой причины.
+  В повторном checkpoint второго среза дамп подтвердил инверсию Compose snapshot/scene
+  locks между test worker и AWT в этом тесте. SidebarRestorationTest и аналогичный
+  VisitPresentationRenderTest теперь создают, проверяют и закрывают сцену на AWT,
+  как существующий VisitPresentationScrollTest; assertions сохранены. Общий повтор
+  завершился без зависания. Параллельные fork-процессы не включались заново.
 
 ## Куда не идти
 

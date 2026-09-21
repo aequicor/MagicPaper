@@ -39,8 +39,9 @@ MCP image blocks (Pi получает те же блоки). При первом
 установки Chromium и воспроизводимой локальной проверки:
 
 ```sh
-./gradlew :feature:session:impl:installAgentBrowser
-./gradlew :feature:session:impl:jvmTest -Pmagicpaper.browser.native=true --tests '*BrowserToolsTest' --tests '*HtmlValidationTest' --tests '*BrowserNativeTest' --tests '*AgentToolBridgeTest' --tests '*CodingSystemPromptsTest'
+./gradlew :magic-agent:browser:impl:installAgentBrowser
+./gradlew :magic-agent:browser:api:jvmTest :magic-agent:browser:impl:jvmTest -Pmagicpaper.browser.native=true
+./gradlew :magic-agent:runtime:impl:jvmTest --tests '*BrowserToolBridgeTest' --tests '*AgentToolBridgeTest' --tests '*CodingSystemPromptsTest'
 ```
 
 Нативная проверка использует локальный HTTP fixture и настоящий Chromium, без
@@ -50,7 +51,10 @@ Playwright; проверку на каждой целевой ОС следуе�
 
 ## Владение и ошибки
 
-Владелец реализации — `feature/session/impl`, пакет `data.browser` в `jvmMain`.
+Владелец — JVM-only `magic-agent/browser/api` и `impl`; пакет `data.browser` сохранён.
+Runtime зависит только от `BrowserSessions`/`BrowserSession`, а app передаёт фабрике
+`createDesktopBrowserSessions` долговременный `EventJournal`. Playwright и HTML validator
+доступны только реализации браузера.
 `BrowserToolSession` — адаптер Playwright и владелец потока: создание, команды и
 закрытие выполняются последовательно на одном потоке, как требует Playwright.
 Вычисление JavaScript использует CDP через Playwright: обычный `Page.evaluate`
@@ -61,8 +65,8 @@ Playwright; проверку на каждой целевой ОС следуе�
 защитой от повторного эффекта. Отдельного глобального каталога или сервиса нет.
 Вспомогательные verifier-запуски не получают браузерные команды.
 
-`BrowserAvailability` принадлежит desktop runtime и разделяется Pi и клиентами
-Codex. Ошибка создания драйвера или запуска Chromium запоминается до перезапуска
+`BrowserAvailability` — общий для desktop browser factory кеш проверки установки.
+Журналируемая машина `BrowserMachine` отдельно владеет действиями каждого запуска. Ошибка создания драйвера или запуска Chromium запоминается до перезапуска
 приложения: повторный вызов возвращает понятный отказ без повторного запуска.
 Следующие мосты не публикуют браузерные команды; системная инструкция не предлагает
 недоступный браузер. Проверка ленивая: до первого обращения готовность не утверждается
@@ -75,8 +79,18 @@ Codex. Ошибка создания драйвера или запуска Chro
 точные пиксели. Размеры viewport и координат при смене формата не меняются.
 
 Отказ до действия возвращается как явная ошибка с возможностью исправления.
-Неподтверждённый внешний эффект проходит существующий механизм UNKNOWN, без
-автоматического повтора. Диагностика браузера не пишет URL, введённый текст,
+Намерение сохраняется перед браузерным действием, результат — отдельным фактом.
+`BrowserInputJournal` проверяет stream, владельца session/request, поколение сброса,
+порядок записей и точное подтверждение append. При потере подтверждения допускается
+только проверка уже записанного входа; неизвестная запись блокирует дальнейшие действия.
+Неподтверждённый внешний эффект сохраняет UNKNOWN после чтения страницы и закрытия.
+В живом запуске доступны наблюдения; они не разрешают повторную мутацию. После
+восстановления прежние вкладки и процессы не создаются, старый request не открывает
+новый browser session. Для нового явно запущенного запроса создаётся отдельный контекст.
+Журнал содержит только идентичности операций, вид действия и fingerprint аргументов;
+URL, HTML, скрипты, поля и изображения туда не записываются. Сам журнал не исполняет
+эффекты при проигрывании. Закрытие освобождает все ресурсы даже при частичном отказе,
+сохраняет первичную ошибку и сообщает владельцу о неподтверждённом освобождении. Диагностика браузера не пишет URL, введённый текст,
 скрипты и содержимое страниц в обычные логи. Страницы и HTML-ошибки — недоверенные
 данные. Скриншоты, DOM и результаты сохраняются в истории вызовов текущей сессии.
 
@@ -93,7 +107,7 @@ cookies и файлы аккаунтов не используются. Окно
 
 `ResearchPageBrowserNativeTest` проверяет настоящий видимый Chromium с локальной
 синтетической проверкой и JS-содержимым. Запуск:
-`./gradlew :feature:session:impl:jvmTest -Pmagicpaper.browser.native=true --tests '*ResearchPageBrowserNativeTest'`.
+`./gradlew :magic-agent:browser:impl:jvmTest -Pmagicpaper.browser.native=true --tests '*ResearchPageBrowserNativeTest'`.
 Внешние сайты, аккаунты и реальные CAPTCHA в тесте не используются.
 
 ## UI-рекомендации

@@ -69,11 +69,12 @@ class MediaSettingsPersistenceTest {
             form.update { it.copy(fields = it.fields + ("model" to image.modelId)) }
             form.awaitSaved()
             val before = fixture.drafts.load(SettingsDrafts.mediaKey(MediaKind.IMAGE))
-            fixture.settings.failSaves = true
+            fixture.store.failInputWrites = true
             fixture.service.saveMediaSelection(MediaKind.IMAGE, image, verify = true)
             runCurrent()
             assertNull(fixture.service.state.value.settings.media.image)
             assertNull(fixture.settings.load().media.image)
+            assertTrue(fixture.configuration.state.value.unknown, "A failed private input write fences the owner until reload")
             assertTrue(fixture.media.checks.isEmpty())
             assertEquals(before, fixture.drafts.load(SettingsDrafts.mediaKey(MediaKind.IMAGE)))
             assertFalse(fixture.service.state.value.settingsSaving)
@@ -230,23 +231,41 @@ class MediaSettingsPersistenceTest {
     }
 
     private inner class Fixture {
-        val store = InMemoryKeyValueStore()
-        val settings = FailingSettingsRepository(JsonSettingsRepository(store, json))
-        val profiles = JsonLlmProfileRepository(store, json)
+        val store = FailingSettingsStore()
+        val settings = JsonSettingsRepository(store, json, store.secrets)
+        val profiles = JsonLlmProfileRepository(store, json, store.secrets)
         val chats = JsonChatRepository(store, json)
         val bridge = RecordingBridge()
         val drafts = InMemoryDraftRepository()
         val assets = MemoryMediaStore()
+        val configuration = DefaultSettingsConfiguration(store, InMemoryEventJournal(), store.secrets, json,
+            runtime = object : SettingsRuntimeParticipant {
+                override suspend fun prepare(previous: AppSettings, next: AppSettings) = Unit
+                override suspend fun apply(settings: AppSettings) = Unit
+            }, dispatcher = Dispatchers.Main)
         val media = FakeMediaService(settings)
-        val service = DefaultSettingsService(settings, profiles, chats, bridge, store, json,
+        private val chatStore = ChatJournalStore(chats, InMemoryEventJournal(), StoredChatPayloads(store, json, Dispatchers.Main), json, Dispatchers.Main)
+        private val chatHistory = object : ChatHistoryCommands {
+            override suspend fun importNotebooks(sessions: List<ChatSession>) {
+                sessions.groupBy { it.researchChatId }.forEach { (id, notebook) -> chatStore.dispatch(id, ChatMachine.Intent.ImportNotebook(notebook)) }
+            }
+            override suspend fun unlinkProfile(profileId: String) {
+                chatStore.start()
+                chatStore.states.value.keys.forEach { chatStore.dispatch(it, ChatMachine.Intent.UnlinkProfile(profileId)) }
+            }
+            override suspend fun wipeHistory() = chatStore.wipe()
+        }
+        val service = DefaultSettingsService(configuration, chatStore, bridge, store, json, pluginPreferences = TestPluginPreferences(), chatHistory = chatHistory,
             usage = TestUsageLedger(), draftRepository = drafts, mediaGeneration = media, mediaStore = assets)
     }
 
-    private class FailingSettingsRepository(private val delegate: SettingsRepository) : SettingsRepository by delegate {
-        var failSaves = false
-        override suspend fun save(settings: AppSettings) {
-            if (failSaves) error("private persistence details")
-            delegate.save(settings)
+    private class FailingSettingsStore(private val backing: InMemoryKeyValueStore = InMemoryKeyValueStore()) : KeyValueStore by backing {
+        val secrets = backing.secrets
+        var failInputWrites = false
+        override fun write(key: String, value: String) {
+            if (failInputWrites && key.startsWith(SettingsInputJournal.PREFIX))
+                throw StorageException("controlled private input write", StorageException.Kind.WRITE)
+            backing.write(key, value)
         }
     }
 
@@ -322,9 +341,12 @@ class MediaSettingsPersistenceTest {
     private class TestUsageLedger : UsageLedger {
         override val state = MutableStateFlow(UsageArchive())
         override val failure = MutableStateFlow<String?>(null)
-        override suspend fun record(record: UsageRecord, replacesId: String?) = error("Unexpected usage")
-        override suspend fun context(snapshot: ContextUsageSnapshot) = error("Unexpected context")
-        override suspend fun cumulative(key: String, fingerprint: String, total: TokenUsage, last: TokenUsage, record: UsageRecord) = error("Unexpected usage")
+        override suspend fun start() = Unit
+        override suspend fun captureObservation(): UsageObservation = error("Unexpected usage capture")
+        override suspend fun exportArchive() = state.value
+        override suspend fun record(observation: UsageObservation, record: UsageRecord, replacesId: String?) = error("Unexpected usage")
+        override suspend fun context(observation: UsageObservation, snapshot: ContextUsageSnapshot) = error("Unexpected context")
+        override suspend fun cumulative(observation: UsageObservation, key: String, fingerprint: String, total: TokenUsage, last: TokenUsage, record: UsageRecord) = error("Unexpected usage")
         override suspend fun replace(archive: UsageArchive) { state.value = archive }
         override suspend fun clear() { state.value = UsageArchive() }
         override suspend fun <T> measure(profile: LlmProfile, block: suspend () -> T): T = block()

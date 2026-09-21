@@ -16,6 +16,50 @@ class IndexedDbPersistenceTest {
         assertEquals(listOf("created"), DurableEventJournal(IndexedDbDurableByteStore(database)).read("plan").map { it.operation })
     }
 
+    @Test fun resetBarrierUpgradePreservesVersionThreeJournalWithoutInventingAReadyReceipt() = runTest {
+        val database = "magicpaper-reset-upgrade-" + storageId()
+        seedLegacyJournalDatabase(database, version = 3)
+        val backend = IndexedDbDurableByteStore(database)
+        val journal = DurableEventJournal(backend)
+        val old = journal.snapshot("legacy-owner")
+        assertEquals(5L, old.revision.resetEpoch)
+        assertEquals(listOf(JournalRecord(1, 1, "legacy-owner", "saved", "private-reference")), old.records)
+        assertEquals("v3-payload", backend.read(StorageArea.DRAFTS, "legacy")?.decodeToString())
+        assertTrue(backend.values(StorageArea.CONTROL).isEmpty(), "Schema upgrade cannot certify an unobserved old reset")
+        persistenceStores(backend).clearOwnedData()
+        val reopened = DurableEventJournal(IndexedDbDurableByteStore(database))
+        assertTrue(reopened.read("legacy-owner").isEmpty())
+        assertEquals(6L, reopened.snapshot("legacy-owner").revision.resetEpoch)
+        assertNull(reopened.append(old.revision, "stale", 2))
+    }
+
+    @Test fun incompleteResetRemainsBlockedAcrossBrowserInstancesUntilExplicitRetry() = runTest {
+        val database = "magicpaper-reset-incomplete-" + storageId()
+        val backend = IndexedDbDurableByteStore(database)
+        val journal = DurableEventJournal(backend)
+        journal.append("owner", "saved", 1)
+        val old = journal.snapshot("owner")
+        val saved = backend.values(StorageArea.EVENTS).map { it.decodeToString() }.sorted()
+        val failing = object : DurableByteStore by backend {
+            override suspend fun clear(area: StorageArea) {
+                if (area == StorageArea.EVENTS) throw StorageException("injected browser clear", StorageException.Kind.CLEANUP)
+                backend.clear(area)
+            }
+        }
+        assertFailsWith<StorageException> { persistenceStores(failing).clearOwnedData() }
+        val reopenedBackend = IndexedDbDurableByteStore(database)
+        assertEquals(saved, reopenedBackend.values(StorageArea.EVENTS).map { it.decodeToString() }.sorted())
+        val reopened = persistenceStores(reopenedBackend)
+        assertEquals(StorageException.Kind.RESET_INCOMPLETE,
+            assertFailsWith<StorageException> { reopened.events.snapshot("owner") }.kind)
+        assertEquals(StorageException.Kind.RESET_INCOMPLETE,
+            assertFailsWith<StorageException> { reopened.events.append(old.revision, "late", 2) }.kind)
+        reopened.clearOwnedData()
+        assertTrue(journal.read("owner").isEmpty())
+        assertEquals(old.revision.resetEpoch + 1, journal.snapshot("owner").revision.resetEpoch)
+        assertNull(journal.append(old.revision, "stale", 3))
+    }
+
     @Test fun journalRevisionCoordinatesInstancesAndRejectsDeletedAndResetGenerations() = runTest {
         val database = "magicpaper-journal-cas-" + storageId()
         val backend = IndexedDbDurableByteStore(database)
@@ -97,4 +141,4 @@ class IndexedDbPersistenceTest {
     }
 }
 
-internal expect suspend fun seedLegacyJournalDatabase(database: String)
+internal expect suspend fun seedLegacyJournalDatabase(database: String, version: Int = 2)

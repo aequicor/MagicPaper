@@ -10,7 +10,4 @@ import io.aequicor.magicpaper.util.Id
 
 interface LlmProfileRepository {
     suspend fun load(): List<LlmProfile>
-    suspend fun save(profile: LlmProfile)
-    suspend fun delete(id: String)
-    suspend fun replaceAll(profiles: List<LlmProfile>)
 }

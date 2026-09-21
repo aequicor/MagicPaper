@@ -4,6 +4,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":core:logging"))
+            implementation(libs.ktor.utils)
             api(libs.kotlinx.coroutinesCore)
             api(libs.kotlinx.serializationJson)
             api(project(":core:model"))
@@ -15,8 +16,7 @@ kotlin {
             implementation(project(":core:platform"))
             implementation(project(":core:storage:api"))
             implementation(project(":core:ai:api"))
-            implementation(libs.koin.core)
-            implementation(project(":feature:session:api"))
+            implementation(project(":magic-chat:api"))
             implementation(project(":feature:settings:api"))
             implementation(project(":feature:docs:api"))
             implementation(project(":feature:plugins:api"))

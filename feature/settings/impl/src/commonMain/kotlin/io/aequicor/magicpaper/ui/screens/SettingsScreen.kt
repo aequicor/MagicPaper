@@ -45,6 +45,8 @@ import io.aequicor.magicpaper.domain.ProviderSpec
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.SearchProvider
 import io.aequicor.magicpaper.ui.*
+import io.aequicor.magicpaper.ui.components.SubscriptionAccountAction
+import io.aequicor.magicpaper.ui.components.subscriptionAccountAction
 import io.aequicor.magicpaper.ui.components.EffortControl
 import io.aequicor.magicpaper.ui.SettingsState
 import io.aequicor.magicpaper.util.Id
@@ -69,7 +71,7 @@ fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
         Section("Разделы")
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             NavEntry("✦", "Чат", "Лента свитка и поле заклинаний") { vm.openChat() }
-            NavEntry("⌘", "Проекты и код", "Кодинг-агент работает в папке проекта") { vm.openProjects() }
+            vm.contributions.navigation.forEach { entry -> NavEntry(entry.icon, entry.title, entry.subtitle) { vm.openContribution(entry) } }
             NavEntry("∑", "Плагины", "Панели и переключатели расширений") { vm.openPlugins() }
             NavEntry("◷", "Справка", "Документация с живым поиском") { vm.openDocs() }
             NavEntry("✦", "Первый запуск", "Пройти ознакомительный тур заново") { vm.restartOnboarding() }
@@ -115,8 +117,9 @@ fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
         Spacer(Modifier.height(12.dp))
 
         NavEntry("✦", "Модели", "По умолчанию, избранное и поставщики") { vm.openModelsSettings() }
-        NavEntry("⚙", "Движки", "pi, Codex и движок новых сессий") { vm.openEnginesSettings() }
-        NavEntry("▣", "Управление компьютером", "Доступ к экрану, приложениям и разрешения системы") { vm.openComputerSettings() }
+        vm.contributions.pages.forEach { page -> page.entry.let { entry ->
+            NavEntry(entry.icon, entry.title, entry.subtitle) { vm.openContribution(entry) }
+        } }
 
         Spacer(Modifier.height(12.dp))
         PlanningRulesSettingsSection(draft.planningRules) { draft = draft.copy(planningRules = it) }
@@ -381,8 +384,11 @@ private fun ProviderRow(spec: ProviderSpec, selected: Boolean, enabled: Boolean,
 
 /** Авторизация и квоты OpenAI-подписки. URL OAuth открывается вызывающим composable. */
 @Composable
-internal fun SubscriptionAccount(vm: DefaultSettingsComponent, state: SettingsState) {
-    val auth = state.openAiSubscription
+internal fun SubscriptionAccount(vm: SettingsService, state: SettingsState) =
+    SubscriptionAccountContent(state.openAiSubscription, vm::subscriptionAccountAction)
+
+@Composable
+internal fun SubscriptionAccountContent(auth: OpenAiSubscriptionUi, onAction: (SubscriptionAccountAction) -> Unit) {
     var showDetails by rememberSaveable { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
     if (!auth.available) {
@@ -410,6 +416,8 @@ internal fun SubscriptionAccount(vm: DefaultSettingsComponent, state: SettingsSt
     if (account?.signedIn == true) PaperAction(onClick = { showDetails = !showDetails }) {
         PaperText(if (showDetails) "Скрыть лимиты ▴" else "Лимиты подписки ▾", style = paperTextStyle(PaperTextRole.LABEL))
     }
+    if (account?.rateLimitsUnavailable == true) PaperText("Лимиты сейчас недоступны",
+        style = paperTextStyle(PaperTextRole.LABEL), color = LocalPaperColors.current.secondaryText)
     if (showDetails) account?.rateLimits?.forEach { limit ->
         val reset = limit.resetsAtEpochSeconds?.let {
             val minutes = ((it - Id.now() / 1000).coerceAtLeast(0) + 59) / 60
@@ -432,13 +440,13 @@ internal fun SubscriptionAccount(vm: DefaultSettingsComponent, state: SettingsSt
         when {
             auth.signingIn -> {
                 PaperAction(onClick = { auth.login?.url?.let(uriHandler::openUri) }) { PaperText("Открыть страницу входа") }
-                PaperAction(onClick = vm::cancelOpenAiSubscriptionLogin) { PaperText("Отмена") }
+                PaperAction(onClick = { onAction(SubscriptionAccountAction.CANCEL_LOGIN) }) { PaperText("Отмена") }
             }
             account?.signedIn == true -> {
-                PaperAction(onClick = { vm.refreshOpenAiSubscription(true) }) { PaperText("Обновить") }
-                PaperAction(onClick = vm::logoutOpenAiSubscription) { PaperText("Выйти") }
+                PaperAction(onClick = { onAction(SubscriptionAccountAction.REFRESH) }) { PaperText("Обновить") }
+                PaperAction(onClick = { onAction(SubscriptionAccountAction.LOGOUT) }) { PaperText("Выйти") }
             }
-            else -> PaperAction(onClick = vm::startOpenAiSubscriptionLogin) { PaperText("Войти через ChatGPT") }
+            else -> PaperAction(onClick = { onAction(SubscriptionAccountAction.LOGIN) }) { PaperText("Войти через ChatGPT") }
         }
     }
 }

@@ -39,7 +39,7 @@ class UnifiedSessionFeedRenderTest {
                     selected = id
                     val moved = initialItems.first { it.id == id }.copy(sortTime = 100L)
                     groups.value = groupUnifiedSidebarItems(listOf(moved) + initialItems.filterNot { it.id == id })
-                }, {}, {}, {}, state = state)
+                }, {}, {}, { _, _ -> }, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -64,7 +64,7 @@ class UnifiedSessionFeedRenderTest {
             PaperTheme {
                 key(selected.value) {
                     UnifiedSessionFeed(sidebarPreviewGroups(), selected.value, true, emptySet(), {},
-                        { id, _ -> selected.value = id }, {}, {}, {}, state = state)
+                        { id, _ -> selected.value = id }, {}, {}, { _, _ -> }, state = state)
                 }
             }
         }.use { scene ->
@@ -90,7 +90,7 @@ class UnifiedSessionFeedRenderTest {
             session("root"), session("parent", "root"), session("archived", "parent", true), session("leaf", "archived")))
         var items = emptyList<UnifiedSidebarItem>()
         ImageComposeScene(1, 1) {
-            items = rememberUnifiedItems(emptyList(), coding, null, true, remember { SessionRecencyTracker { 20L } })
+            items = rememberNativeSidebarItems(coding, null, true, remember { SessionRecencyTracker { 20L } })
         }.use { it.settle() }
         assertEquals("root", items.single().id)
         assertEquals("parent", items.single().children.single().id)
@@ -104,7 +104,7 @@ class UnifiedSessionFeedRenderTest {
                 UnifiedSessionFeed(sidebarPreviewGroups(), "child-5", true, emptySet(),
                     onToggleGroup = {},
                     onSelect = { _, _ -> }, onArchive = {}, onDelete = {},
-                    onAddSession = {}, state = state)
+                    onAddSession = { _, _ -> }, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -134,7 +134,7 @@ class UnifiedSessionFeedRenderTest {
         val state = LazyListState(firstVisibleItemIndex = index)
         ImageComposeScene(320, 520) {
             PaperTheme {
-                UnifiedSessionFeed(groups, "chat", false, emptySet(), {}, { _, _ -> }, {}, {}, {}, state = state)
+                UnifiedSessionFeed(groups, "chat", false, emptySet(), {}, { _, _ -> }, {}, {}, { _, _ -> }, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -175,7 +175,7 @@ class UnifiedSessionFeedRenderTest {
         ImageComposeScene(320, 420) {
             PaperTheme {
                 UnifiedSessionFeed(groups, "child-5", true, emptySet(), {},
-                    { _, _ -> }, { archived = it.id }, {}, {}, state = state)
+                    { _, _ -> }, { archived = it.id }, {}, { _, _ -> }, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -234,7 +234,7 @@ class UnifiedSessionFeedRenderTest {
         ImageComposeScene(320, 420) {
             PaperTheme {
                 UnifiedSessionFeed(groups, "selected", true, emptySet(), {},
-                    { _, _ -> }, {}, {}, {}, state = state)
+                    { _, _ -> }, {}, {}, { _, _ -> }, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -258,7 +258,7 @@ class UnifiedSessionFeedRenderTest {
         val state = LazyListState(firstVisibleItemIndex = 10)
         ImageComposeScene(320, 520) {
             PaperTheme { io.aequicor.magicpaper.designsystem.PaperSurface {
-                UnifiedSessionFeed(groups, "chat", false, emptySet(), {}, { _, _ -> }, {}, {}, {}, state = state)
+                UnifiedSessionFeed(groups, "chat", false, emptySet(), {}, { _, _ -> }, {}, {}, { _, _ -> }, state = state)
             } }
         }.use { scene ->
             scene.settle()
@@ -320,7 +320,7 @@ class UnifiedSessionFeedRenderTest {
             PaperTheme { PaperSurface {
                 UnifiedSessionFeed(groups, "ordered-1", true, collapsed.value,
                     { group -> collapsed.value = if (group.key in collapsed.value) collapsed.value - group.key else collapsed.value + group.key },
-                    { _, _ -> }, {}, {}, {}, state = state)
+                    { _, _ -> }, {}, {}, { _, _ -> }, state = state)
             } }
         }.use { scene ->
             scene.settle()
@@ -346,7 +346,7 @@ class UnifiedSessionFeedRenderTest {
         ImageComposeScene(320, 520) {
             PaperTheme { PaperSurface {
                 UnifiedSessionFeed(sidebarOrderedStickyPreviewGroups(), selected.value, true, emptySet(), {},
-                    { id, _ -> selected.value = id }, {}, {}, {}, state = state)
+                    { id, _ -> selected.value = id }, {}, {}, { _, _ -> }, state = state)
             } }
         }.use { scene ->
             scene.settle()

@@ -25,15 +25,18 @@ class ShellSettingsComponentTest {
             override suspend fun save(snapshot: String) { value = snapshot }
         }
         val service = DefaultSettingsService(
-            settingsRepo = settings,
-            profileRepo = JsonLlmProfileRepository(store, json),
+            configuration = DefaultSettingsConfiguration(store, InMemoryEventJournal(), store.secrets, json, dispatcher = Dispatchers.Main),
             chats = JsonChatRepository(store, json),
             bridge = object : ProfileBridge {
                 override val supportsFilePicker = false
                 override suspend fun export(json: String) = false
                 override suspend fun import(): String? = null
             },
-            store = store, json = json, usage = UsageLedger(JsonUsageRepository(store, json)),
+            store = store, json = json, pluginPreferences = DefaultPluginService(io.aequicor.magicpaper.plugins.PluginRegistry(), store, InMemoryEventJournal(), json, storageDispatcher = Dispatchers.Main), chatHistory = object : ChatHistoryCommands {
+                override suspend fun importNotebooks(sessions: List<ChatSession>) = error("Unexpected history import")
+                override suspend fun unlinkProfile(profileId: String) = error("Unexpected history update")
+                override suspend fun wipeHistory() = error("Unexpected history reset")
+            }, usage = UsageLedger(JsonUsageRepository(store, json), InMemoryEventJournal(), store, json),
         )
         suspend fun start() { settings.save(AppSettings(onboardingDone = true)); service.start() }
     }

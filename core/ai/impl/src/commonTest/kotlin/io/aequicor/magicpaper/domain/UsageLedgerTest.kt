@@ -9,18 +9,19 @@ import kotlin.test.*
 
 class UsageLedgerTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private fun ledger(store: KeyValueStore = InMemoryKeyValueStore()) = UsageLedger(JsonUsageRepository(store, json))
+    private suspend fun ledger(store: KeyValueStore = InMemoryKeyValueStore(), journal: EventJournal = InMemoryEventJournal()): UsageLedger =
+        UsageLedger(JsonUsageRepository(store, json), journal, store, json).also { it.start() }
     private fun tokens(input: Long, output: Long) = TokenUsage(input, output, 0, 0, total = input + output)
 
     @Test fun cumulativeResumeDoesNotChargeOldHistoryOrRepeatedNotifications() = runTest {
-        val store = InMemoryKeyValueStore()
-        val first = ledger(store)
+        val store = InMemoryKeyValueStore(); val journal = InMemoryEventJournal()
+        val first = ledger(store, journal)
         val record = UsageRecord("sample", scope = UsageScope(conversationId = "coding:worker", parentConversationId = "coding:plan"))
-        first.cumulative("thread", "turn1", tokens(1100, 110), tokens(100, 10), record)
-        first.cumulative("thread", "turn1", tokens(1100, 110), tokens(100, 10), record)
-        val restored = ledger(store)
-        restored.cumulative("thread", "turn1", tokens(1100, 110), tokens(100, 10), record)
-        restored.cumulative("thread", "turn2", tokens(1300, 130), tokens(200, 20), record)
+        first.cumulative(first.captureObservation(), "thread", "turn1", tokens(1100, 110), tokens(100, 10), record)
+        first.cumulative(first.captureObservation(), "thread", "turn1", tokens(1100, 110), tokens(100, 10), record)
+        val restored = ledger(store, journal)
+        restored.cumulative(restored.captureObservation(), "thread", "turn1", tokens(1100, 110), tokens(100, 10), record)
+        restored.cumulative(restored.captureObservation(), "thread", "turn2", tokens(1300, 130), tokens(200, 20), record)
         assertEquals(listOf(110L, 220L), restored.state.value.records.map { it.tokens.totalTokens })
         assertEquals(2, restored.state.value.records.count { it.scope.includes("coding:plan") })
         assertEquals(2, restored.state.value.records.count { it.scope.includes("coding:worker") })
@@ -28,14 +29,14 @@ class UsageLedgerTest {
     }
 
     @Test fun independentParallelOwnersAndPendingRequestsSurviveStorageRoundtrip() = runTest {
-        val store = InMemoryKeyValueStore(); val tracker = ledger(store)
+        val store = InMemoryKeyValueStore(); val journal = InMemoryEventJournal(); val tracker = ledger(store, journal)
         coroutineScope { repeat(30) { i -> launch {
             val pending = UsageRecord("pending:$i", scope = UsageScope.chat("$i"))
-            tracker.record(pending)
-            tracker.record(pending.copy(id = "final:$i", tokens = tokens(i.toLong(), 1)), pending.id)
-            tracker.record(pending.copy(id = "final:$i", tokens = tokens(i.toLong(), 1)))
+            tracker.record(tracker.captureObservation(), pending)
+            tracker.record(tracker.captureObservation(), pending.copy(id = "final:$i", tokens = tokens(i.toLong(), 1)), pending.id)
+            tracker.record(tracker.captureObservation(), pending.copy(id = "final:$i", tokens = tokens(i.toLong(), 1)))
         } } }
-        val restored = ledger(store).state.value
+        val restored = ledger(store, journal).state.value
         assertEquals(30, restored.records.size)
         assertEquals(465L, restored.records.sumOf { it.tokens.totalTokens ?: 0 })
         assertTrue(restored.records.all { it.scope.conversationId == "chat:${it.id.substringAfter(':')}" })
@@ -60,9 +61,9 @@ class UsageLedgerTest {
     }
 
     @Test fun cancelledCallsRetainUsageWithoutReplacingTheForegroundContext() = runTest {
-        val store = InMemoryKeyValueStore(); val tracker = ledger(store)
+        val store = InMemoryKeyValueStore(); val journal = InMemoryEventJournal(); val tracker = ledger(store, journal)
         val before = ContextUsageSnapshot("coding:plan", "foreground", 900, 1000)
-        tracker.context(before)
+        tracker.context(tracker.captureObservation(), before)
         assertFailsWith<CancellationException> {
             withContext(UsageOwner(UsageScope("coding:plan"), updatesContext = false)) {
                 tracker.measure(LlmProfile("p", "Background", modelId = "background")) {
@@ -71,7 +72,7 @@ class UsageLedgerTest {
                 }
             }
         }
-        val restored = ledger(store).state.value
+        val restored = ledger(store, journal).state.value
         assertEquals(15L, restored.records.single().tokens.totalTokens)
         assertEquals(before, restored.contexts["coding:plan"])
         val recorder = CodingRunRecorder()
@@ -91,8 +92,8 @@ class UsageLedgerTest {
 
     @Test fun archiveAndOldProfileFormatsRemainCompatible() = runTest {
         val tracker = ledger()
-        tracker.record(UsageRecord("r", tokens = tokens(50, 5)))
-        tracker.context(ContextUsageSnapshot("coding:s", "m", 55, 1000))
+        tracker.record(tracker.captureObservation(), UsageRecord("r", tokens = tokens(50, 5)))
+        tracker.context(tracker.captureObservation(), ContextUsageSnapshot("coding:s", "m", 55, 1000))
         val bundle = ProfileBundle(exportedAt = 1, settings = AppSettings(), plugins = emptyList(), sessions = emptyList(), usage = tracker.state.value)
         val decoded = json.decodeFromString<ProfileBundle>(json.encodeToString(bundle))
         assertEquals(tracker.state.value, decoded.usage)

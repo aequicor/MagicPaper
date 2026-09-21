@@ -12,7 +12,8 @@ import kotlin.test.*
 
 class SearchUsageTest {
     @Test fun searchAndFailedContentCountActualCallsAndDistinctPages() = runTest {
-        val ledger = UsageLedger(JsonUsageRepository(InMemoryKeyValueStore(), Json))
+        val usageStore = InMemoryKeyValueStore()
+        val ledger = UsageLedger(JsonUsageRepository(usageStore, Json), InMemoryEventJournal(), usageStore, Json)
         val client = HttpClient(MockEngine { request ->
             if (request.url.encodedPath.endsWith("contents")) respond("failure", HttpStatusCode.BadGateway)
             else respond("""{"results":[{"url":"https://a.example","title":"A"}]}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))

@@ -3,8 +3,8 @@ package io.aequicor.magicpaper.data.storage
 import io.aequicor.magicpaper.logging.AppLog
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -15,6 +15,8 @@ import kotlin.random.Random
 enum class StorageArea(val storeName: String) {
     SECRETS("secrets"), DRAFTS("drafts"), BLOBS("draft-blobs"), NAVIGATION("navigation"), PRESENTATION("view-states"),
     EVENTS("events"),
+    /** Durable reset protocol metadata; never part of application data cleanup. */
+    CONTROL("control"),
 }
 
 /** Each write completes only after the filesystem commit / IndexedDB transaction has committed. */
@@ -161,12 +163,7 @@ private data class StoredPresentation(
     val snapshot: String,
 )
 
-private const val RESET_EPOCH_KEY = "\u0000magicpaper-reset-epoch"
-private suspend fun readResetEpoch(backend: DurableByteStore): Long {
-    val raw = backend.read(StorageArea.NAVIGATION, RESET_EPOCH_KEY) ?: return 0
-    return raw.decodeToString().toLongOrNull()?.takeIf { it >= 0 }
-        ?: throw StorageException("read reset epoch", StorageException.Kind.CORRUPT)
-}
+private suspend fun readResetEpoch(backend: DurableByteStore): Long = DurableResetBarrier.epoch(backend)
 
 @Serializable
 private data class StoredDraft(
@@ -190,27 +187,24 @@ class DurableDraftRepository(
     private val mutex = Mutex()
     override var generation: Long = 0
         private set
-    private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock(block) }
-    suspend fun reset(clear: suspend () -> Unit): Long = locked {
-        val epoch = readResetEpoch(backend) + 1
+    private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock {
+        readResetEpoch(backend)
+        block()
+    } }
+
+    // Reset alone may enter while RESETTING. Ordinary reads/writes must leave the retained bytes
+    // untouched until an explicit retry has completed every clear under the same backend lock.
+    suspend fun reset(clear: suspend () -> Unit): Long = mutex.withLock { backend.withDraftLock {
+        currentCoroutineContext().ensureActive()
+        val admission = DurableResetBarrier.begin(backend)
         generation++
-        AppLog.info("DurableDraftRepository", "reset_started", mapOf("generation" to epoch.toString()))
-        // Even a partially failed clear must invalidate writers from other live windows.
-        var primaryFailure: Throwable? = null
-        try { clear() }
-        catch (failure: Throwable) { primaryFailure = failure; throw failure }
-        finally {
-            try { withContext(NonCancellable) { backend.write(StorageArea.NAVIGATION, RESET_EPOCH_KEY, epoch.toString().encodeToByteArray()) } }
-            catch (failure: CancellationException) { throw failure }
-            catch (failure: Exception) {
-                if (primaryFailure == null) throw failure
-                primaryFailure?.addSuppressed(failure)
-                logPersistenceFailure("DurableDraftRepository", "reset_fence_failed", failure, mapOf("generation" to epoch.toString()))
-            }
-        }
-        AppLog.info("DurableDraftRepository", "reset_completed", mapOf("generation" to epoch.toString()))
-        epoch
-    }
+        AppLog.info("DurableDraftRepository", "reset_started", mapOf("generation" to admission.epoch.toString()))
+        currentCoroutineContext().ensureActive()
+        clear()
+        DurableResetBarrier.complete(backend, admission)
+        AppLog.info("DurableDraftRepository", "reset_completed", mapOf("generation" to admission.epoch.toString()))
+        admission.epoch
+    } }
 
     override suspend fun revision(key: String): Long = locked { (stored(key)?.revision ?: 0L).coerceAtLeast(0) }
     override suspend fun ownerEpoch(key: String): Long = locked { stored(key)?.ownerEpoch ?: 0L }
@@ -335,7 +329,10 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
     private val mutex = Mutex()
     private val json = Json { encodeDefaults = true }
 
-    private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock(block) }
+    private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock {
+        readResetEpoch(backend)
+        block()
+    } }
 
     override suspend fun append(stream: String, operation: String, at: Long, detail: String): JournalRecord = locked {
         appendLocked(stream, operation, at, detail)
@@ -470,9 +467,12 @@ fun persistenceStores(backend: DurableByteStore, journalId: String = "main", sec
     return PersistenceStores(secrets, drafts, DurableDraftBlobStore(backend), navigation, DurableEventJournal(backend)) {
         val epoch = drafts.reset {
             var firstFailure: Exception? = null
-            StorageArea.entries.forEach { area ->
+            StorageArea.entries.filter { it != StorageArea.CONTROL }.forEach { area ->
                 try { backend.clear(area) }
-                catch (cancelled: CancellationException) { throw cancelled }
+                catch (cancelled: CancellationException) {
+                    firstFailure?.let { if (it !== cancelled) cancelled.addSuppressed(it) }
+                    throw cancelled
+                }
                 catch (failure: Exception) {
                     if (firstFailure == null) firstFailure = failure else firstFailure?.addSuppressed(failure)
                 }

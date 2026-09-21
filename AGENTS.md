@@ -296,3 +296,19 @@ In code review, prioritize lost data, duplicate side effects, wrong identity,
 runtime cancellation, dependency leaks and inaccessible UI. Give a concrete
 trigger and consequence for a finding. Do not weaken safety assertions to make
 an unexplained or pre-existing failure disappear.
+
+Owner checks are the default, but they cannot see a sibling module that stopped
+compiling: each one builds only its own closure. `./gradlew jvmTest --continue`
+across every module is the check that does, and the root `checkMigrationJvm`
+depends on each subproject's `jvmTest`, so that is what CI sees. Run it before
+calling a change set ready, and reconcile the result with the Долги section of
+[STUDIO-ARCHITECTURE.md](docs/STUDIO-ARCHITECTURE.md) in both directions. A debt
+list that lists too little hides a new regression among accepted ones; a list
+that claims too much invites the next agent to dismiss a real failure as known.
+
+A module's `jvmTest` may need an explicit project dependency on a module reached
+only through `:app`: `:app` consumes features with `implementation`, which is not
+transitive, so a test fixture referencing them resolves nowhere. Both
+`:feature:settings:impl` and `:feature:skills:impl` were silently uncompilable for
+this reason. Declare such an edge in `jvmTest` alone when the target is in
+`DESKTOP_ONLY`, or the platform boundary breaks while the tests go green.

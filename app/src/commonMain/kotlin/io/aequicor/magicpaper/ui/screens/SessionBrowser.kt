@@ -25,13 +25,25 @@ internal data class SessionSearchResult(
     val updatedAt: Long,
     val project: String? = null,
     val excerpt: String? = null,
+    val sourceId: String = if (isCoding) "agent" else "chat",
 )
 
-/** Search uses saved conversations, including children hidden by the normal tree. */
+/** Only searchable presentation data crosses the host boundary. System records are excluded by their owner. */
+internal data class SessionSearchDocument(
+    val id: String,
+    val title: String,
+    val sourceId: String,
+    val archived: Boolean,
+    val updatedAt: Long,
+    val project: String? = null,
+    val aliases: List<String> = emptyList(),
+    val messages: List<String> = emptyList(),
+)
+
+/** Search includes descendants even when their tree is collapsed. */
 internal fun searchSessions(
     chats: List<ChatSession>,
-    coding: List<Pair<CodingSession, List<CodingMessage>>>,
-    projects: List<CodingProject>,
+    contributions: List<SessionSearchDocument>,
     query: String,
     archivesOnly: Boolean,
 ): List<SessionSearchResult> {
@@ -41,27 +53,16 @@ internal fun searchSessions(
         val start = (text.indexOf(needle, ignoreCase = true) - 30).coerceAtLeast(0)
         return (if (start > 0) "…" else "") + text.substring(start).take(160).replace('\n', ' ')
     }
-    val projectNames = projects.associate { it.id to it.name }
-    return buildList {
-        for (chat in chats) {
-            if (archivesOnly && !chat.archived) continue
-            val message = if (needle.isEmpty()) null else chat.messages.firstOrNull { matches(it.text) }
-            if (!matches(chat.title) && message == null) continue
-            add(SessionSearchResult(chat.id, chat.title, false, chat.archived, chat.updatedAt,
-                excerpt = message?.text?.let(::excerpt)))
-        }
-        for ((session, messages) in coding) {
-            if (archivesOnly && !session.archived) continue
-            val project = projectNames[session.projectId]
-            val message = if (needle.isEmpty()) null else messages.firstOrNull { !it.systemContext && !it.systemNotice && matches(it.text) }
-            if (!matches(session.sidebarTitle()) && !matches(session.name) && project?.let(::matches) != true && message == null) continue
-            add(SessionSearchResult(session.id, session.sidebarTitle(), true, session.archived,
-                messages.lastOrNull()?.createdAt ?: session.createdAt, project, message?.text?.let(::excerpt)))
-        }
+    val documents = chats.map { SessionSearchDocument(it.id, it.title, "chat", it.archived, it.updatedAt,
+        messages = it.messages.map { message -> message.text }) } + contributions
+    return documents.mapNotNull { document ->
+        if (archivesOnly && !document.archived) return@mapNotNull null
+        val message = if (needle.isEmpty()) null else document.messages.firstOrNull(::matches)
+        if (!matches(document.title) && document.aliases.none(::matches) && document.project?.let(::matches) != true && message == null) return@mapNotNull null
+        SessionSearchResult(document.id, document.title, document.sourceId != "chat", document.archived,
+            document.updatedAt, document.project, message?.let(::excerpt), document.sourceId)
     }.sortedByDescending { it.updatedAt }
 }
-
-private val chatStatusFilters = setOf(SidebarStatusFilter.ALL, SidebarStatusFilter.UNREAD)
 
 @Composable
 internal fun SessionBrowserControls(
@@ -77,7 +78,7 @@ internal fun SessionBrowserControls(
     sourceFilterKey: String = "all",
     onSourceFilter: (String) -> Unit = {},
     projects: List<Pair<String, String>> = emptyList(),
-    codingSupported: Boolean = true,
+    availableStatusFilters: List<SidebarStatusFilter> = SidebarStatusFilter.entries,
 ) {
     var filterOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -98,8 +99,7 @@ internal fun SessionBrowserControls(
                 PaperMenuHost(filterOpen, { filterOpen = false }, Modifier.widthIn(min = 220.dp)) {
                     PaperText("Статус", role = PaperTextRole.LABEL,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-                    // Eight of these describe agent progress; without an agent they can never match.
-                    SidebarStatusFilter.entries.filter { codingSupported || it in chatStatusFilters }.forEach { filter ->
+                    availableStatusFilters.forEach { filter ->
                         PaperRichMenuAction(
                             text = { PaperText(if (statusFilter == filter) "✓ ${filter.label}" else filter.label) },
                             onClick = { onStatusFilter(filter); filterOpen = false },

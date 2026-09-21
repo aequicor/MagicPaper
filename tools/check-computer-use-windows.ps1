@@ -6,9 +6,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 $repo = Split-Path -Parent $PSScriptRoot
 Push-Location $repo
 try {
-    & .\gradlew.bat :feature:session:impl:jvmTest --tests '*WindowCaptureExclusionTest' --tests '*DesktopComputerWindowsIntegrationTest' --tests '*DesktopComputerUseTest' --tests '*ScreenshotEncodingTest' --tests '*DesktopScreenshotDetailTest' --tests '*DesktopImageCoordinatesTest' '-Pmagicpaper.computer.windows.native=true' --rerun
+    & .\gradlew.bat :magic-agent:computer:impl:jvmTest --tests '*WindowCaptureExclusionTest' --tests '*DesktopComputerWindowsIntegrationTest' --tests '*DesktopComputerUseTest' --tests '*ScreenshotEncodingTest' --tests '*DesktopScreenshotDetailTest' --tests '*DesktopImageCoordinatesTest' '-Pmagicpaper.computer.windows.native=true' --rerun
     if ($LASTEXITCODE -ne 0) { throw 'Computer capture/input checks failed.' }
-    [xml]$nativeResult = Get-Content -Raw 'feature/session/impl/build/test-results/jvmTest/TEST-io.aequicor.magicpaper.data.computer.DesktopComputerWindowsIntegrationTest.xml'
+    [xml]$nativeResult = Get-Content -Raw 'magic-agent/computer/impl/build/test-results/jvmTest/TEST-io.aequicor.magicpaper.data.computer.DesktopComputerWindowsIntegrationTest.xml'
     if ([int]$nativeResult.testsuite.tests -ne 1 -or [int]$nativeResult.testsuite.skipped -ne 0) {
         throw 'The native Windows test did not run.'
     }
@@ -21,7 +21,7 @@ try {
     & .\gradlew.bat :designSystem:jvmTest --tests '*PaperComputerFeedbackTest' --rerun
     if ($LASTEXITCODE -ne 0) { throw 'Stop control/render checks failed.' }
     Write-Host 'PASS: native Windows capture, pointer, window restoration and Stop control checks.'
-    Write-Host 'Evidence: feature/session/impl/build/reports/computer-use/windows-native.txt and module JUnit reports.'
+    Write-Host 'Evidence: magic-agent/computer/impl/build/reports/computer-use/windows-native.txt and module JUnit reports.'
 } finally {
     Pop-Location
 }

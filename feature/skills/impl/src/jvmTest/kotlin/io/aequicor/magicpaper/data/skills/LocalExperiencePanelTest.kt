@@ -19,9 +19,6 @@ class LocalExperiencePanelTest {
         val base = Files.createTempDirectory("experience-panel-")
         val profiles = object : LlmProfileRepository {
             override suspend fun load() = emptyList<LlmProfile>()
-            override suspend fun save(profile: LlmProfile) = Unit
-            override suspend fun delete(id: String) = Unit
-            override suspend fun replaceAll(profiles: List<LlmProfile>) = Unit
         }
         val gateway = object : LlmGateway {
             override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("UI must not send requests")

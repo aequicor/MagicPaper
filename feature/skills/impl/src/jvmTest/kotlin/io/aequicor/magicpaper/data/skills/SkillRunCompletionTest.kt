@@ -30,8 +30,8 @@ class SkillRunCompletionTest {
 
     @Test fun desktopRuntimeUsesCheckpointIdentityAcrossCallsAndRecordsCancellationBeforeTransport() = workspace { root, repo ->
         journal(root, repo).use { j ->
-            val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile()),
-                CodexAppServerOpenAiSubscription(SkillPackageFormat.json, root.resolve("codex")),
+            val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
+                CodexAppServerOpenAiSubscription(SkillPackageFormat.json, root.resolve("codex"), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
                 skillSnapshot = { throw CancellationException("private transport detail") }, runObserver = skillExperienceObserver({ j }, passed))
             val project = CodingProject("project-private", "private name", root.toString(), 0)
             for (engine in CodingEngine.entries) {

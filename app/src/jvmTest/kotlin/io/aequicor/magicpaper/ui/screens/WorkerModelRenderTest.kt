@@ -12,6 +12,8 @@ import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingUi
 import io.aequicor.magicpaper.ui.ModelSettingsFixture
+import io.aequicor.magicpaper.ui.prepareCoding
+import io.aequicor.magicpaper.ui.prepareCodingComponent
 import io.aequicor.magicpaper.ui.theme.MagicPaperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi

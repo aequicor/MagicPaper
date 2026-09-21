@@ -75,7 +75,7 @@ class SkillRuntimeIntegrationTest {
                     override suspend fun articles(): List<DocArticle> = error("No docs on skill route")
                     override suspend fun search(query: String, limit: Int): List<DocMatch> = error("No docs on skill route")
                 }
-                val agent = GatewaySessionRuntime(gateway, search, docs, packageRuntime = runtime)
+                val agent = testGatewayRuntime(gateway, search, docs, packageRuntime = runtime)
                 val profile = LlmProfile("p", "Text", baseUrl = "https://chosen.example/v1", modelId = "m")
                 val result = agent.answer(emptyList(), "@skill:local.summary найди секрет проекта", AppSettings(), profile)
                 assertContains(result.text, "2.0.0")

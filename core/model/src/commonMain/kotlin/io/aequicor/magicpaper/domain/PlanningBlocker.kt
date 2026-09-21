@@ -1,5 +1,26 @@
 package io.aequicor.magicpaper.domain
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+/** Full decision evidence; message IDs are presentation tokens, never a substitute for this proof. */
+@Serializable
+data class PlanningSkipProof(
+    val planId: String,
+    val runId: String,
+    val stageId: String?,
+    val attemptId: String,
+    val sessionId: String,
+    val sessionGeneration: Long,
+    val turnIndex: Int,
+    val repairRetries: Int,
+    val mergeRetries: Int,
+    val transportRetries: Int,
+    val issue: PlanningIssue,
+    val acceptance: AcceptanceRecord,
+)
+
 val PlanningIssue.isPlannerAnswerWait: Boolean
     get() = kind == IssueKind.CONFIGURATION && message == "Ожидается ответ планировщику"
 
@@ -21,7 +42,36 @@ data class PlanningBlocker(
     val needsWorker: Boolean get() = issue.kind == IssueKind.VERIFICATION && (acceptance == null || acceptance?.canRetryWithWorker == true)
     val canSkipVerification: Boolean get() = issue.kind == IssueKind.VERIFICATION && acceptance?.canSkipByUser == true &&
         attempt?.phase == AttemptPhase.VERIFYING && attempt.pendingTool.isBlank() && !attempt.pendingToolExternal && !attempt.mergeProgress.started
-    val messageId: String get() = "$planId-blocked-$runId-${stage?.id ?: "plan"}-${attempt?.id.orEmpty()}-${attempt?.sessionGeneration ?: 0}-${attempt?.turnIndex ?: 0}-${attempt?.repairRetries ?: 0}-${issue.hashCode()}"
+    private val identityPrefix: String get() = "$planId-blocked-$runId-${stage?.id ?: "plan"}-${attempt?.id.orEmpty()}-${attempt?.sessionGeneration ?: 0}-${attempt?.turnIndex ?: 0}-${attempt?.repairRetries ?: 0}-"
+    // Enum.hashCode uses process identity on JVM. Serialize explicit values before hashing the UI token.
+    // Commands compare verificationProof in full, so a token hash collision cannot grant a waiver.
+    val messageId: String get() = identityPrefix + "v2-" + buildJsonObject {
+        put("kind", issue.kind.name)
+        put("message", issue.message)
+        put("retryAt", issue.retryAt)
+        put("retries", issue.retries)
+        put("requiresUser", issue.requiresUser)
+        put("retryBlocked", issue.retryBlocked)
+    }.toString().hashCode().toUInt().toString(16)
+
+    val verificationProof: PlanningSkipProof? get() {
+        if (!canSkipVerification) return null
+        val current = requireNotNull(attempt)
+        return PlanningSkipProof(planId, runId, stage?.id, current.id, current.sessionId, current.sessionGeneration,
+            current.turnIndex, current.repairRetries, current.mergeRetries, current.transportRetries,
+            issue, requireNotNull(acceptance))
+    }
+
+    /** Reader-only recognition of an already accepted v2 journal input, never validation of a live UI command.
+     * The old numeric suffix contains an unrecoverable JVM enum identity hash. Match its exact saved structure;
+     * the journal reader must separately require one-to-one blockers and current full acceptance proofs.
+     */
+    fun matchesLegacyMessageId(saved: String): Boolean {
+        if (!saved.startsWith(identityPrefix)) return false
+        val suffix = saved.removePrefix(identityPrefix)
+        val hash = suffix.toIntOrNull() ?: return false
+        return hash.toString() == suffix
+    }
     val title: String get() = when {
         acceptance?.status == AcceptanceStatus.PARTIAL && stage != null -> "Этап «${stage.title}»: не хватает подтверждений"
         acceptance?.status == AcceptanceStatus.PARTIAL -> "Итоговая проверка: не хватает подтверждений"

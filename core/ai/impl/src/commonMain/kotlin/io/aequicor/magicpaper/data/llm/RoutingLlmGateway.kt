@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.LlmGateway
 import io.aequicor.magicpaper.domain.LlmMessage
 import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.LlmToolDefinition
+import io.aequicor.magicpaper.domain.LlmToolExchange
+import io.aequicor.magicpaper.domain.LlmToolTurn
 import io.aequicor.magicpaper.domain.ProviderType
 import io.aequicor.magicpaper.domain.forModel
 
@@ -15,6 +18,13 @@ class RoutingLlmGateway(
     private val transports: Map<ProviderType, LlmGateway>,
     private val usage: io.aequicor.magicpaper.domain.UsageLedger? = null,
 ) : LlmGateway {
+
+    override suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>, exchanges: List<LlmToolExchange>): LlmToolTurn {
+        val transport = transports[profile.provider] ?: error("Нет транспорта для провайдера ${profile.provider}.")
+        val effective = profile.forModel()
+        return usage?.measure(effective) { transport.turn(effective, messages, tools, exchanges) }
+            ?: transport.turn(effective, messages, tools, exchanges)
+    }
 
     override suspend fun completeWithActivity(profile: LlmProfile, messages: List<LlmMessage>, onActivity: (io.aequicor.magicpaper.domain.CodingStep) -> Unit): String {
         val transport = transports[profile.provider] ?: error("Нет транспорта для провайдера ${profile.provider}.")

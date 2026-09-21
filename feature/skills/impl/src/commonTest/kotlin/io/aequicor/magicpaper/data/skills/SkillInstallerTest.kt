@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
 import io.aequicor.magicpaper.domain.CatalogEntry
 import io.aequicor.magicpaper.domain.Skill
 import io.aequicor.magicpaper.domain.SkillDraft
+import io.aequicor.magicpaper.domain.SkillInstallOutcome
 import io.aequicor.magicpaper.domain.SkillInstaller
 import io.aequicor.magicpaper.domain.SkillSource
 import kotlinx.coroutines.test.runTest
@@ -15,7 +16,7 @@ import kotlin.test.assertTrue
 class SkillInstallerTest {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val store = SkillStore(JsonSkillRepository(InMemoryKeyValueStore(), json))
+    private val store = SkillStore(InMemoryKeyValueStore(), io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), json, kotlinx.coroutines.Dispatchers.Unconfined)
     private val installer = SkillInstaller(store)
 
     private val entry = CatalogEntry(
@@ -28,9 +29,10 @@ class SkillInstallerTest {
 
     @Test
     fun installsCatalogEntry() = runTest {
-        val outcome = installer.installFromCatalog(entry)
-        val installed = (outcome as SkillInstaller.Outcome.Installed).skill
-        assertTrue(outcome is SkillInstaller.Outcome.Installed)
+        store.start()
+        val outcome = installer.installFromCatalog(entry, checkNotNull(store.catalog.value.installBasis(entry.name)))
+        val installed = (outcome as SkillInstallOutcome.Installed).skill
+        assertTrue(outcome is SkillInstallOutcome.Installed)
         assertEquals(SkillSource.CATALOG, installed.source)
         assertTrue(installed.enabled)
         assertEquals(1, store.all().size)
@@ -38,9 +40,10 @@ class SkillInstallerTest {
 
     @Test
     fun reinstallUpdatesKeepingId() = runTest {
-        val first = (installer.installFromCatalog(entry) as SkillInstaller.Outcome.Installed).skill
-        val again = installer.installFromCatalog(entry.copy(description = "обновлено"))
-        val updated = (again as SkillInstaller.Outcome.Installed).skill
+        store.start()
+        val first = (installer.installFromCatalog(entry, checkNotNull(store.catalog.value.installBasis(entry.name))) as SkillInstallOutcome.Installed).skill
+        val again = installer.installFromCatalog(entry.copy(description = "обновлено"), checkNotNull(store.catalog.value.installBasis(entry.name)))
+        val updated = (again as SkillInstallOutcome.Installed).skill
         assertEquals(first.id, updated.id)
         assertEquals("обновлено", updated.description)
         assertEquals(1, store.all().size)
@@ -48,14 +51,16 @@ class SkillInstallerTest {
 
     @Test
     fun conflictBlocksCrossSourceName() = runTest {
-        installer.installFromCatalog(entry)
+        store.start()
+        installer.installFromCatalog(entry, checkNotNull(store.catalog.value.installBasis(entry.name)))
         val draft = SkillDraft(
             name = "резюме текста",
             description = "самодельный",
             instructions = "по-своему",
         )
-        val outcome = installer.installDraft(draft)
-        assertTrue(outcome is SkillInstaller.Outcome.Conflict)
+        store.start()
+        val outcome = installer.installDraft(draft, checkNotNull(store.catalog.value.installBasis(draft.name)))
+        assertTrue(outcome is SkillInstallOutcome.Conflict)
         assertEquals(1, store.all().size)
     }
 
@@ -66,16 +71,18 @@ class SkillInstallerTest {
             description = "Когда нужна магия.",
             instructions = "Делай шаг за шагом.",
         )
-        val outcome = installer.installDraft(draft)
-        val installed = (outcome as SkillInstaller.Outcome.Installed).skill
+        store.start()
+        val outcome = installer.installDraft(draft, checkNotNull(store.catalog.value.installBasis(draft.name)))
+        val installed = (outcome as SkillInstallOutcome.Installed).skill
         assertEquals(SkillSource.SELF_MADE, installed.source)
         assertTrue(installed.createdAt > 0)
     }
 
     @Test
     fun blankNameIsRejected() = runTest {
-        val outcome = installer.installDraft(SkillDraft("", "d", "i"))
-        assertTrue(outcome is SkillInstaller.Outcome.Conflict)
+        store.start()
+        val outcome = installer.installDraft(SkillDraft("", "d", "i"), checkNotNull(store.catalog.value.installBasis("")))
+        assertTrue(outcome is SkillInstallOutcome.Conflict)
         assertTrue(store.all().isEmpty())
     }
 }
@@ -86,18 +93,19 @@ class SkillStoreTest {
 
     @Test
     fun storeReflectsRepoAndExposesFlow() = runTest {
-        val store = SkillStore(JsonSkillRepository(InMemoryKeyValueStore(), json))
-        assertTrue(store.skills.value.isEmpty())
+        val store = SkillStore(InMemoryKeyValueStore(), io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), json, kotlinx.coroutines.Dispatchers.Unconfined)
+        assertTrue(store.catalog.value.items.isEmpty())
         val skill = Skill(
             id = "s1",
             name = "Тест",
             description = "Когда тестируем.",
             instructions = "Проверь всё.",
         )
-        store.save(skill)
-        assertEquals(1, store.skills.value.size)
+        store.start()
+        store.install(skill, checkNotNull(store.catalog.value.installBasis(skill.name)))
+        assertEquals(1, store.catalog.value.items.size)
         assertEquals(1, store.relevantFor("что угодно").size)
-        store.delete("s1")
-        assertTrue(store.skills.value.isEmpty())
+        store.delete(store.catalog.value.items.single().ref)
+        assertTrue(store.catalog.value.items.isEmpty())
     }
 }
