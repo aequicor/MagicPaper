@@ -51,9 +51,14 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
         val envelope = Envelope(id, hash(raw), before.revision.resetEpoch)
         val detail = json.encodeToString(Envelope.serializer(), envelope)
         val at = System.currentTimeMillis()
+        // Cancellation is control flow. It poisons the owner only while the outcome is genuinely
+        // unproven: a pause that cancels an opening screen must not block the workspace for
+        // the rest of the process.
+        var cancellationSettled = false
         try {
             withContext(NonCancellable) { immutable(inputKey(id), raw) }
-            currentCoroutineContext().ensureActive()
+            try { currentCoroutineContext().ensureActive() }
+            catch (cancelled: CancellationException) { cancellationSettled = true; throw cancelled } // No record was requested.
             val after = try {
                 val record = events.append(before.revision, OPERATION, at, detail) ?: error("Check revision changed")
                 check(record.stream == stream && record.operation == OPERATION && record.at == at &&
@@ -63,22 +68,31 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
                 val recovered = try { withContext(NonCancellable) {
                     events.snapshot(stream).also { observed ->
                         replay(observed)
+                        // The stream is exactly as it was: the record neither landed nor changed anything else.
+                        if (failure is CancellationException && observed.revision == before.revision && observed.records == before.records) {
+                            cancellationSettled = true
+                            throw failure
+                        }
                         val last = observed.records.lastOrNull()
                         check(observed.revision.resetEpoch == before.revision.resetEpoch &&
                             observed.records.size == before.records.size + 1 && observed.records.dropLast(1) == before.records &&
                             last != null && last.seq > before.revision.seq && last.operation == OPERATION &&
                             last.at == at && last.detail == detail && readInput(envelope) == frozen)
                     }
-                } } catch (readFailure: Exception) { failure.addSuppressed(readFailure); throw failure }
+                } } catch (readFailure: Exception) {
+                    if (readFailure === failure) throw failure
+                    failure.addSuppressed(readFailure); throw failure
+                }
                 snapshot = recovered
                 state = next.state
-                if (failure is CancellationException) throw failure
+                if (failure is CancellationException) { cancellationSettled = true; throw failure } // The exact record is committed and adopted.
                 recovered
             }
             snapshot = after
             state = next.state
             return next
         } catch (failure: Exception) {
+            if (failure is CancellationException && cancellationSettled) throw failure
             uncertain(failure, "commit.unknown")
             if (failure is CancellationException) throw failure
             throw CheckOutcomeUnknown(failure)

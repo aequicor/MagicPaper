@@ -4,6 +4,8 @@ import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.checks.*
 import io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import java.io.IOException
 import kotlin.test.*
@@ -135,6 +137,60 @@ class CheckInputJournalTest {
         assertTrue(chain.any { it === cancellation })
         assertIs<IOException>(cancellation.suppressedExceptions.single())
         assertTrue(owner.state.persistenceUnknown)
+    }
+
+    @Test fun cancellationBeforeTheAppendLeavesTheOwnerUsable() = runTest {
+        val actual = InMemoryKeyValueStore(); val events = InMemoryEventJournal()
+        lateinit var caller: Job
+        var cancelOnWrite = true
+        val payloads = object : KeyValueStore by actual {
+            override fun write(key: String, value: String) { actual.write(key, value); if (cancelOnWrite) caller.cancel() }
+        }
+        val owner = CheckInputJournal(events, payloads, workspace)
+        owner.initialize()
+        caller = launch { owner.append(Input.Intent.Submit(command)) }
+        caller.join()
+        assertTrue(caller.isCancelled)
+        // Nothing was appended, so a screen pause cannot make the whole workspace unavailable.
+        assertFalse(owner.state.persistenceUnknown)
+        assertTrue(events.read(owner.stream).isEmpty())
+        cancelOnWrite = false
+        assertIs<CommandCheckMachine.Effect.Prepare>(owner.append(Input.Intent.Submit(command)).effects.single())
+        assertEquals(1, events.read(owner.stream).size)
+    }
+
+    @Test fun cancellationAfterAnExactCommitKeepsTheRecoveredState() = runTest {
+        val actual = InMemoryEventJournal(); var cancel = true
+        val events = object : EventJournal by actual {
+            override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+                val value = actual.append(expected, operation, at, detail)
+                if (cancel) { cancel = false; throw CancellationException("cancelled after the record landed") }
+                return value
+            }
+        }
+        val owner = CheckInputJournal(events, InMemoryKeyValueStore(), workspace)
+        owner.initialize()
+        assertFailsWith<CancellationException> { owner.append(Input.Intent.Submit(command)) }
+        assertFalse(owner.state.persistenceUnknown)
+        assertEquals(CommandCheckMachine.Phase.PREPARING, owner.state.checks.getValue(ref).phase)
+        owner.append(Input.Fact.ProcessPrepared(ref, receipt))
+        assertEquals(2, actual.read(owner.stream).size)
+    }
+
+    @Test fun cancellationThatProvablyAppendedNothingLeavesTheOwnerUsable() = runTest {
+        val actual = InMemoryEventJournal(); var cancel = true
+        val events = object : EventJournal by actual {
+            override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+                if (cancel) { cancel = false; throw CancellationException("cancelled before the record landed") }
+                return actual.append(expected, operation, at, detail)
+            }
+        }
+        val owner = CheckInputJournal(events, InMemoryKeyValueStore(), workspace)
+        owner.initialize()
+        assertFailsWith<CancellationException> { owner.append(Input.Intent.Submit(command)) }
+        assertFalse(owner.state.persistenceUnknown)
+        assertTrue(actual.read(owner.stream).isEmpty())
+        assertIs<CommandCheckMachine.Effect.Prepare>(owner.append(Input.Intent.Submit(command)).effects.single())
     }
 
     @Test fun callerMutationDuringAcknowledgementCannotChangeDispatchedCommand() = runTest {
