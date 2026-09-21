@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.storage
 
+import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -32,8 +33,15 @@ internal class CredentialRecords(private val secrets: SecretStore, private val s
             if (field !in fields) continue
             val reference = (value as? JsonPrimitive)?.contentOrNull
                 ?: throw StorageException("read credential reference", StorageException.Kind.CORRUPT)
-            values[field] = JsonPrimitive(secrets.read(reference)
-                ?: throw StorageException("read credential", StorageException.Kind.MISSING_SECRET))
+            val secret = secrets.read(reference)
+            if (secret == null) {
+                // A lost secret must not block the entire restore; the field falls back to its
+                // default (empty) value so the user can re-enter it without losing other settings.
+                AppLog.error("settings.credentials", "missing_secret",
+                    mapOf("field" to field, "reference" to reference))
+                continue
+            }
+            values[field] = JsonPrimitive(secret)
         }
         return JsonObject((record - REFS) + values)
     }

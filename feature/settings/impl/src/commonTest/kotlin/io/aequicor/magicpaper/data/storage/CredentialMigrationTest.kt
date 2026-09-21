@@ -108,12 +108,12 @@ class CredentialMigrationTest {
     }
 
     @Test
-    fun missingSecretIsAnErrorInsteadOfBlankCredential() = runTest {
+    fun missingSecretFallsBackToDefaultInsteadOfFailingRestore() = runTest {
         val store = InMemoryKeyValueStore()
         val secrets = InMemorySecretStore()
         store.write("settings", """{"secretReferences":{"googleApiKey":"missing"}}""")
-        val failure = assertFailsWith<StorageException> { JsonSettingsRepository(store, json, secrets).load() }
-        assertEquals(StorageException.Kind.MISSING_SECRET, failure.kind)
+        val restored = JsonSettingsRepository(store, json, secrets).load()
+        assertEquals("", restored.googleApiKey)
         assertTrue(store.read("settings")!!.contains("missing"))
     }
 

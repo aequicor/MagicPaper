@@ -178,6 +178,28 @@ class SettingsInputJournalTest {
         assertNull(backing.read(checkNotNull(profile.credential)))
     }
 
+    @Test fun missingSecretDuringRestoreFallsBackToDefaultAndPreservesOtherSettings() = runTest {
+        val store = InMemoryKeyValueStore()
+        val backing = InMemorySecretStore()
+        val records = SettingsCredentialRecords(store, backing, json, null)
+        val journal = InMemoryEventJournal()
+        val owner = SettingsInputJournal(store, journal, json)
+        val initial = records.encode(AppSettings(googleApiKey = "google-key", queritApiKey = "querit-key"))
+        val profile = records.encode(LlmProfile("provider", "Provider", apiKey = "profile-key"))
+        owner.restore { SettingsMachine.Fact.Initialized(initial, listOf(profile), emptyList(), "initial") }
+        records.checkpoint(owner.state)
+        // Simulate a lost secret store: delete only the googleApiKey secret.
+        backing.delete(initial.credentials.getValue("googleApiKey"))
+        val restored = SettingsInputJournal(store, journal, json)
+        restored.restore { error("Legacy data must not be read") }
+        // The missing secret falls back to empty; other secrets and settings remain intact.
+        val hydratedSettings = records.hydrate(restored.state.settings)
+        assertEquals("", hydratedSettings.googleApiKey)
+        assertEquals("querit-key", hydratedSettings.queritApiKey)
+        val hydratedProfile = records.hydrate(restored.state.profiles.getValue("provider").record)
+        assertEquals("profile-key", hydratedProfile.apiKey)
+    }
+
     private class FaultJournal(val delegate: EventJournal = InMemoryEventJournal()) : EventJournal by delegate {
         var ack: (JournalRecord) -> JournalRecord = { it }
         var snapshotMap: (JournalSnapshot) -> JournalSnapshot = { it }
