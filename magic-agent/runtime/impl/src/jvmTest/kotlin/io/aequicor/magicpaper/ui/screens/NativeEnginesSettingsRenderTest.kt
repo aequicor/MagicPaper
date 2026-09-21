@@ -6,7 +6,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.use
-import io.aequicor.magicpaper.data.coding.backendProtocols
+import io.aequicor.magicpaper.data.coding.backendCatalog
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -21,7 +21,7 @@ class NativeEnginesSettingsRenderTest {
                 fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
                 val nodes = scene.semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
                 val text = nodes.flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } }
-                backendProtocols.descriptors.forEach { descriptor ->
+                backendCatalog.descriptors.forEach { descriptor ->
                     assertTrue(descriptor.adapterName in text)
                     assertTrue(descriptor.summary in text)
                     assertTrue(descriptor.providerSummary in text)

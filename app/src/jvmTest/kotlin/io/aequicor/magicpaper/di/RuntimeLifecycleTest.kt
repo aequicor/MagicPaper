@@ -317,6 +317,7 @@ private class ResetFeature(private val events: MutableList<String>) : CodingFeat
     override val projects: CodingProjectRepository get() = error("Unexpected project access")
     override val planning: PlanningRepository get() = error("Unexpected planning access")
     override val runtime: CodingRuntime get() = error("Unexpected native access")
+    override val models: CodingModelCatalog get() = error("Unexpected model catalog access")
     override val service: CodingService get() = error("Unexpected service access")
     override val componentFactory: CodingComponent.Factory get() = error("Unexpected UI access")
     override val presentation: io.aequicor.magicpaper.ui.components.CodingPresentation get() = error("Unexpected UI access")

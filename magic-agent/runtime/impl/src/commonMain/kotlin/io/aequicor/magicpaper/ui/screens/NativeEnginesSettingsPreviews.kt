@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import io.aequicor.magicpaper.data.coding.backendProtocols
+import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.domain.RuntimePhase

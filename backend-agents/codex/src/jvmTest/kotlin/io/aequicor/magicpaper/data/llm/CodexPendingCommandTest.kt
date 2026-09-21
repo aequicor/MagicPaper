@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.data.coding.backendProtocols
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.tools.ToolPhase
 import kotlinx.coroutines.channels.Channel
@@ -46,20 +45,20 @@ class CodexPendingCommandTest {
         }
     }
     @Test fun reconciliationRequiresExactThreadCallAndExitEvidence() {
-        assertTrue(backendProtocols.codex.readToolResults(response(command()), "thread", setOf("exec-check")).isEmpty())
-        assertTrue(backendProtocols.codex.readToolResults(response(command("completed")), "thread", setOf("exec-check")).isEmpty())
-        assertTrue(backendProtocols.codex.readToolResults(response(command("completed", 0)), "other-thread", setOf("exec-check")).isEmpty())
-        assertTrue(backendProtocols.codex.readToolResults(response(command("completed", 0)), "thread", setOf("other-call")).isEmpty())
-        assertEquals(ToolPhase.FAILED, backendProtocols.codex.readToolResults(response(command("completed", 1)), "thread", setOf("exec-check")).single().phase)
-        assertEquals(ToolPhase.SUCCEEDED, backendProtocols.codex.readToolResults(response(command("completed", 0)), "thread", setOf("exec-check")).single().phase)
+        assertTrue(CodexNativeAdapter().readToolResults(response(command()), "thread", setOf("exec-check")).isEmpty())
+        assertTrue(CodexNativeAdapter().readToolResults(response(command("completed")), "thread", setOf("exec-check")).isEmpty())
+        assertTrue(CodexNativeAdapter().readToolResults(response(command("completed", 0)), "other-thread", setOf("exec-check")).isEmpty())
+        assertTrue(CodexNativeAdapter().readToolResults(response(command("completed", 0)), "thread", setOf("other-call")).isEmpty())
+        assertEquals(ToolPhase.FAILED, CodexNativeAdapter().readToolResults(response(command("completed", 1)), "thread", setOf("exec-check")).single().phase)
+        assertEquals(ToolPhase.SUCCEEDED, CodexNativeAdapter().readToolResults(response(command("completed", 0)), "thread", setOf("exec-check")).single().phase)
         val prose = buildJsonObject { put("id", "exec-check"); put("type", "agentMessage"); put("status", "completed"); put("text", "BUILD SUCCESSFUL") }
-        assertTrue(backendProtocols.codex.readToolResults(response(prose), "thread", setOf("exec-check")).isEmpty())
+        assertTrue(CodexNativeAdapter().readToolResults(response(prose), "thread", setOf("exec-check")).isEmpty())
     }
 
     @Suppress("UNCHECKED_CAST")
     private class Stream : AutoCloseable {
         private val home = Files.createTempDirectory("codex-pending-command-")
-        private val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
+        private val service = codexTestClient(Json, home)
         private val type = nativeAccumulatorType(service)
         private val run = type.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
         private val events = type.getDeclaredField("events").apply { isAccessible = true }.get(run) as Channel<CodingEvent>

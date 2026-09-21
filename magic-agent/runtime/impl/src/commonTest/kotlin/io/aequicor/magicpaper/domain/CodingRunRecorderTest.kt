@@ -1,6 +1,6 @@
 package io.aequicor.magicpaper.domain
 
-import io.aequicor.magicpaper.data.coding.backendProtocols
+import io.aequicor.magicpaper.data.coding.backendCatalog
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -238,17 +238,9 @@ class CodingRunRecorderTest {
 
     @Test
     fun failedMessageKeepsTruncationReason() {
-        val profile = LlmProfile(
-            id = "p",
-            name = "Alibaba",
-            baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            provider = ProviderType.OPENAI_COMPATIBLE,
-            modelId = "qwen3.8-flash",
-            advanced = AdvancedLlmOptions(maxTokens = 8192),
-        )
         val recorder = CodingRunRecorder()
-        // Именно этот текст даёт рантайм вместо «Агент завершился без ответа».
-        recorder.apply(CodingEvent.Failed(backendProtocols.pi.truncationAdvice(profile, 8192, 8192)))
+        // Именно такой текст даёт движок вместо «Агент завершился без ответа»; его состав закреплён тестами движка.
+        recorder.apply(CodingEvent.Failed("Модель израсходовала весь лимит вывода на рассуждение: 8192 из 16384 токенов."))
         val message = recorder.message("m1", createdAt = 0L)
         assertTrue(message.failed)
         // «Заклинание не сработало» остаётся, но внутри — настоящая причина.

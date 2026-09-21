@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.data.coding
 
-import io.aequicor.magicpaper.backend.PiProviderTurnRequest
 import io.aequicor.magicpaper.domain.*
 import kotlinx.serialization.json.*
 import kotlin.test.*

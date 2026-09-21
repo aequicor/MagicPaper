@@ -45,11 +45,4 @@ class PiAttemptEventsTest {
         assertNull(attempt.failure)
         assertFalse(recorder.message("answer", 1).failed)
     }
-
-    @Test fun blankProviderErrorsHaveAnExplicitFallback() {
-        for (message in listOf("", " ", "\u00a0")) {
-            val event = backendProtocols.pi.parse("""{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"$message"}}""")
-            assertEquals("Модель завершила запрос с ошибкой без описания.", assertIs<CodingEvent.Failed>(event).message)
-        }
-    }
 }

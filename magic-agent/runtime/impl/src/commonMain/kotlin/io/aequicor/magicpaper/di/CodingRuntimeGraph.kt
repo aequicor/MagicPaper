@@ -42,6 +42,7 @@ class CodingRuntimeGraph(
     private val taskWorktreeOwner: TaskWorktreeOwner,
     private val modelDossiers: ModelDossierRepository,
     private val settingsCommands: SettingsCommands,
+    private val nativeModels: NativeModelSnapshots = NativeModelSnapshots.None,
 ) {
     val organisms: SessionOrganismService? = codingProjects?.let { io.aequicor.magicpaper.domain.SessionOrganismService(
         organismStoreFactory.create(::knownToolSecrets), it, settingsRepo,
@@ -98,16 +99,20 @@ class CodingRuntimeGraph(
     private fun knownToolSecrets(): Set<String> = planningChat?.knownSecrets().orEmpty()
     val planningStore = planningStoreFactory.create(::knownToolSecrets)
     val acceptanceChecks = io.aequicor.magicpaper.domain.AcceptanceChecks()
+    /** Recommendations follow the rollout flag; admission and recovery judge saved plans by the catalog whatever the flag says. */
+    private val nativeRecommendations = NativeModelSnapshots { engine ->
+        if (settingsRepo.load().featureFlags.isEnabled(FeatureFlag.NATIVE_CODING_MODELS)) nativeModels.snapshot(engine) else null
+    }
     val planComposer = PlanComposer(gateway, json, search,
         io.aequicor.magicpaper.domain.RuntimePlanningGateway(runtime),
         projectLookup = { id -> codingProjects?.all()?.firstOrNull { it.id == id } }, acceptanceChecks = acceptanceChecks, toolSessions = toolSessions,
-        retryLimit = { settingsRepo.load().agentLimits.retries })
+        retryLimit = { settingsRepo.load().agentLimits.retries }, nativeRecommendations = nativeRecommendations)
     val planningJournalRecovery = PlanningJournalRecovery(planningStore, runtime, codingProjects, organisms)
     val planStrategyClassifier = PlanStrategyClassifier(planningStore, gateway, profileRepo, settingsRepo)
     val planningExecution = io.aequicor.magicpaper.domain.PlanningExecutionService(
         planningStore, runtime, codingProjects, profileRepo, settingsRepo,
         LlmMilestoneVerifier(gateway, json, retryLimit = { settingsRepo.load().agentLimits.retries }), planningWorkspace, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees, journalRecovery = planningJournalRecovery,
-        strategyClassifier = planStrategyClassifier,
+        strategyClassifier = planStrategyClassifier, nativeModels = nativeModels,
         attemptAuthority = object : PlanningAttemptAuthority {
             private fun owner() = checkNotNull(organisms) { "Владелец сессий планирования недоступен" }
             override suspend fun requireRuntimePolicyReady() {
@@ -123,7 +128,7 @@ class CodingRuntimeGraph(
         chatHooksProvider = { planningChat },
     )
     val planningChat: OrchestrationService? by lazy { codingProjects?.let { OrchestrationService(planningStore, planningExecution, it, profileRepo, settingsRepo, planComposer, gateway,
-        toolSessions = toolSessions, organisms = organisms, sessionTree = sessionTree, draftRepository = draftRepository, modelDossiers = modelDossiers) } }
+        toolSessions = toolSessions, organisms = organisms, sessionTree = sessionTree, draftRepository = draftRepository, modelDossiers = modelDossiers, nativeModels = nativeModels) } }
 
     private suspend fun searchTools(context: ToolExecutionContext, query: String): kotlinx.serialization.json.JsonElement {
         val saved = settingsRepo.load()

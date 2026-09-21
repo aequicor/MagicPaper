@@ -1,7 +1,5 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.data.coding.OwnedCodingProcess
-import io.aequicor.magicpaper.data.coding.ProcessLifetimeFixture
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import java.io.File
@@ -12,26 +10,20 @@ import kotlin.test.*
 
 /** Local process trees only: no Codex installation, provider, network, or actual task commands. */
 class CodexBackgroundProcessRecoveryTest {
-    private fun helper(): Process {
-        val cp = listOf(ProcessLifetimeFixture::class.java.protectionDomain.codeSource.location,
-            Unit::class.java.protectionDomain.codeSource.location).joinToString(File.pathSeparator) { File(it.toURI()).path }
-        return ProcessBuilder(File(System.getProperty("java.home"), "bin/java").path, "-cp", cp,
-            ProcessLifetimeFixture::class.java.name, "parent").start()
-    }
     private fun child(parent: Process): ProcessHandle {
         parent.outputStream.write(10); parent.outputStream.flush()
         val pid = CompletableFuture.supplyAsync { parent.inputStream.bufferedReader().readLine() }.get(10, TimeUnit.SECONDS)
         return ProcessHandle.of(pid.toLong()).orElseThrow()
     }
     private fun field(owner: Any, name: String) = owner.javaClass.getDeclaredField(name).apply { isAccessible = true }
-    private fun accumulator(service: io.aequicor.magicpaper.backend.CodexClient): Any = nativeAccumulatorType(service)
+    private fun accumulator(service: CodexNativeClient): Any = nativeAccumulatorType(service)
         .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-    private fun notify(service: io.aequicor.magicpaper.backend.CodexClient, method: String, params: JsonObject) {
+    private fun notify(service: CodexNativeClient, method: String, params: JsonObject) {
         service.javaClass.getDeclaredMethod("handleNotification", String::class.java, JsonObject::class.java)
             .apply { isAccessible = true }.invoke(service, method, params)
     }
     @Suppress("UNCHECKED_CAST")
-    private fun deferred(service: io.aequicor.magicpaper.backend.CodexClient): Any {
+    private fun deferred(service: CodexNativeClient): Any {
         val run = accumulator(service)
         (field(service, "codingSessions").get(service) as MutableMap<String, String>)["session"] = "thread"
         (field(service, "codingRuns").get(service) as MutableMap<String, Any>)["thread"] = run
@@ -48,8 +40,9 @@ class CodexBackgroundProcessRecoveryTest {
 
     @Test fun closingClientStopsCapturedChildBeforeLosingItsParent() {
         val home = Files.createTempDirectory("codex-close-children-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
-        val parent = helper(); var tool: ProcessHandle? = null
+        val ownership = InMemoryProcessOwnership()
+        val service = codexTestClient(Json, home, ownership)
+        val parent = startProcessTreeParent(home); var tool: ProcessHandle? = null
         try {
             tool = child(parent)
             field(service, "process").set(service, parent)
@@ -61,12 +54,12 @@ class CodexBackgroundProcessRecoveryTest {
 
     @Test fun deferredCompletedTurnReconcilesItsOwnedProcessTreeWithoutClaimingToolSuccess() = runBlocking {
         val home = Files.createTempDirectory("codex-background-recovery-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
-        val parent = helper(); var tool: ProcessHandle? = null
+        val ownership = InMemoryProcessOwnership()
+        val service = codexTestClient(Json, home, ownership)
+        val parent = startProcessTreeParent(home); var tool: ProcessHandle? = null
         try {
             tool = child(parent)
             field(service, "process").set(service, parent)
-            val ownership = OwnedCodingProcess(home.resolve("coding-processes").toFile())
             ownership.record("session", parent)
             val run = deferred(service)
             service.reconcileCoding("session")
@@ -80,12 +73,12 @@ class CodexBackgroundProcessRecoveryTest {
     @Suppress("UNCHECKED_CAST")
     @Test fun deferredCommandCannotKillSharedProcessUsedByAnotherTask() = runBlocking {
         val home = Files.createTempDirectory("codex-shared-background-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
-        val parent = helper(); var tool: ProcessHandle? = null
+        val ownership = InMemoryProcessOwnership()
+        val service = codexTestClient(Json, home, ownership)
+        val parent = startProcessTreeParent(home); var tool: ProcessHandle? = null
         try {
             tool = child(parent)
             field(service, "process").set(service, parent)
-            val ownership = OwnedCodingProcess(home.resolve("coding-processes").toFile())
             ownership.record("session", parent)
             deferred(service)
             (field(service, "codingRuns").get(service) as MutableMap<String, Any>)["other-thread"] = accumulator(service)

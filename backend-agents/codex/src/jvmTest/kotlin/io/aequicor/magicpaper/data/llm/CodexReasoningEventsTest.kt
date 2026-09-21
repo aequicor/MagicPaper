@@ -10,7 +10,7 @@ class CodexReasoningEventsTest {
     @Suppress("UNCHECKED_CAST")
     @Test fun streamedSummaryAndFinalSummaryStaySeparateFromCommand() {
         val home = Files.createTempDirectory("codex-reasoning-test-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
+        val service = codexTestClient(Json, home)
         try {
             val type = nativeAccumulatorType(service)
             val run = type.getDeclaredConstructor().apply { isAccessible = true }.newInstance()

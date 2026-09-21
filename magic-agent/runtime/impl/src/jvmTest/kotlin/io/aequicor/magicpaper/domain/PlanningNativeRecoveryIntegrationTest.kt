@@ -425,7 +425,7 @@ class PlanningNativeRecoveryIntegrationTest {
         @Volatile var entered = 0
         @Volatile var processes = 0
         val requests = mutableListOf<String>()
-        override val descriptor = createBackendAgentProtocols().pi.descriptor.copy(capabilities = emptySet())
+        override val descriptor = createBackendAgentCatalog().descriptor(io.aequicor.magicpaper.domain.CodingEngine.PI).copy(capabilities = emptySet())
         override val rootPath = "fixture"
         override val approvals: NativeApprovalRequests? = null
         override val history: NativeToolHistory? = null
@@ -466,7 +466,6 @@ class PlanningNativeRecoveryIntegrationTest {
         override fun close() = Unit
     }
     private object Library : NativeProviderLibrary {
-        override val installation: PiInstallation get() = error("No provider installation")
         override fun prepare(): Flow<NativeInstallationStatus> = error("No provider installation")
         override suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
             exchanges: List<LlmToolExchange>, accessToken: String, onUsage: (UsageCallResult) -> Unit): LlmToolTurn = error("No provider")

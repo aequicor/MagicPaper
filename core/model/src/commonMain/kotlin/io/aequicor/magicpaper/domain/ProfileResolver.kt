@@ -40,6 +40,19 @@ object ProfileResolver {
         return ModelSelection(first.id, first.displayModels.first())
     }
 
+    /**
+     * Подключение, через которое движок запускает модель из собственного каталога, с моделью и
+     * уровнем выбора. Модель каталога не ищется среди избранных профиля: каталог — источник.
+     * Пока нативный выбор есть только у Codex, чьи модели принадлежат подписке ChatGPT; нет
+     * рабочего профиля подписки — нет и подключения (`null`), запуск честно откажет.
+     * Уровень в профиле нужен лишь показу: движок получает строку выбора как есть.
+     */
+    private fun nativeCoding(choice: CodingModelSelection, session: CodingSession, profiles: List<LlmProfile>): LlmProfile? {
+        val connections = profiles.filter { it.isNativeConnectionFor(choice.engine) }
+        val connection = connections.firstOrNull { it.id == session.llmProfileId } ?: connections.firstOrNull() ?: return null
+        return connection.forModel(choice.modelId, choice.displayEffort())
+    }
+
     fun coding(session: CodingSession, project: CodingProject?, settings: AppSettings, profiles: List<LlmProfile>, plan: Plan? = null): LlmProfile? {
         val stage = plan?.takeIf { it.id == session.planId && it.projectId == session.projectId }
             ?.milestones?.firstOrNull { it.id == session.stageId }
@@ -49,6 +62,11 @@ object ProfileResolver {
         val assignment = (if (attempt?.mergeProgress?.started == true) attempt.mergeAssignment else null)
             ?: attempt?.assignment ?: stage?.assignment
         if (assignment != null) {
+            assignment.native?.let { choice ->
+                return profiles.firstOrNull { it.id == assignment.profileId && it.isNativeConnectionFor(choice.engine) }
+                    ?.forModel(choice.modelId, choice.displayEffort())
+                    ?.let { if (assignment.options != null) it.copy(advanced = assignment.options) else it }
+            }
             return selection(ModelSelection(assignment.profileId, assignment.modelId, assignment.effort), profiles)
                 ?.takeIf { it.supportsCoding }
                 ?.let { if (assignment.options != null) it.copy(advanced = assignment.options) else it }
@@ -59,6 +77,7 @@ object ProfileResolver {
             val model = stage.agentModelId.ifBlank { profile.codingModel }
             return selection(ModelSelection(profile.id, model, profile.effortSelectionFor(model)), profiles)
         }
+        session.codingModel?.let { return nativeCoding(it, session, profiles) }
         val choice = session.modelSelection ?: project?.modelSelection
         if (choice != null) return selection(choice, profiles)?.takeIf { it.supportsCoding }
         val profile = profiles.firstOrNull { it.id == session.llmProfileId && it.operational }

@@ -5,14 +5,10 @@ import io.aequicor.magicpaper.domain.CodingMachine.Effect
 import io.aequicor.magicpaper.domain.CodingMachine.Fact
 import io.aequicor.magicpaper.domain.CodingMachine.Intent
 import io.aequicor.magicpaper.domain.planning.OrchestrationEvent
-import io.aequicor.magicpaper.machine.Machine
-import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.PhaseId
-import io.aequicor.magicpaper.machine.Step
 import io.aequicor.magicpaper.machine.verifyStateSpace
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -98,6 +94,7 @@ class CodingSpaceTest {
         sessions = mapOf(session.id to SessionNode(session.id, SessionKind.ZYGOTE, session.name, generation = 0, mode = CodingInteractionMode.CODE)))
     private val response = CodingMessage(ref.responseId, CodingRole.AGENT, "Done", createdAt = 5)
     private val edited = request("edit")
+    private val codingModel = CodingModelSelection(CodingEngine.PI, "provider", "model")
 
     init {
         // Every input that addresses a run carries one reference, and `DeferRecovery` names the message
@@ -110,26 +107,15 @@ class CodingSpaceTest {
         assertEquals(2, ref.generation)
     }
 
-    /**
-     * `QueuedClarified` looks its request up with `single { }` and so escapes `reduce` as a
-     * `NoSuchElementException` when nothing is queued under that id, where every other guard answers
-     * with a `Reject`. The harness cannot drive an input that throws, so it runs against this
-     * wrapper, which turns exactly that exception into the refusal the guard clearly means. The pin
-     * below fails when the reducer is fixed, and the wrapper should then be deleted.
-     */
-    private object Guarded : Machine<CodingMachine.State, CodingMachine.Input, Effect> {
-        override val id: MachineId get() = CodingMachine.id
-        override val space get() = CodingMachine.space
-        override fun step(state: CodingMachine.State, input: CodingMachine.Input): Step<CodingMachine.State, Effect> =
-            try { CodingMachine.step(state, input) } catch (missing: NoSuchElementException) {
-                if (input !is Intent.QueuedClarified) throw missing
-                Step(state, listOf(Effect.Reject("Запрос не найден в очереди")))
-            }
-    }
-
-    @Test fun clarifyingARequestThatIsNotQueuedEscapesTheReducerInsteadOfBeingRefused() {
+    @Test fun clarifyingARequestThatIsNotQueuedIsRefusedInsteadOfEscapingTheReducer() {
         val note = CodingMessage("note", CodingRole.USER, "More detail", createdAt = 4)
-        assertFailsWith<NoSuchElementException> { CodingMachine.reduce(idle, Intent.QueuedClarified(sessionRef, "held", note, emptyList())) }
+        // Nothing is queued under the id; a run that already started is no longer queued; a queue holds another id.
+        val cases = listOf(idle to "held", at(CodingSpace.RUNNING) to ref.requestId, at(CodingSpace.QUEUED) to "another")
+        for ((state, id) in cases) {
+            val step = CodingMachine.reduce(state, Intent.QueuedClarified(sessionRef, id, note, emptyList()))
+            assertEquals(state, step.state, "a clarification of $id changed the state")
+            assertTrue(step.effects.single() is Effect.Reject, "a clarification of $id was not refused")
+        }
     }
 
     /**
@@ -199,7 +185,7 @@ class CodingSpaceTest {
     }
 
     @Test fun declaredSpaceIsClosedAndMatchesEveryTransition() = verifyStateSpace(
-        Guarded,
+        CodingMachine,
         states = mapOf(
             CodingSpace.UNRESTORED to initial,
             CodingSpace.PROJECT_ONLY to projectOnly,
@@ -227,6 +213,7 @@ class CodingSpaceTest {
         inputs = mapOf(
             CodingSpace.CREATE_PROJECT to Intent.CreateProject(project),
             CodingSpace.SET_PROJECT_MODEL to Intent.SetProjectModel(null),
+            CodingSpace.SET_PROJECT_CODING_MODEL to Intent.SetProjectCodingModel(codingModel),
             CodingSpace.DELETE_PROJECT to Intent.DeleteProject,
             CodingSpace.CREATE_SESSION to Intent.CreateSession(session.copy(id = "created")),
             CodingSpace.DELETE_SESSION to Intent.DeleteSession(sessionRef),
@@ -234,6 +221,7 @@ class CodingSpaceTest {
             CodingSpace.ARCHIVE to Intent.ArchiveSession(sessionRef, archived = true),
             CodingSpace.UNARCHIVE to Intent.ArchiveSession(sessionRef, archived = false),
             CodingSpace.SET_SESSION_MODEL to Intent.SetSessionModel(sessionRef, null),
+            CodingSpace.SET_SESSION_CODING_MODEL to Intent.SetSessionCodingModel(sessionRef, codingModel),
             CodingSpace.SET_SEARCH_PROVIDER to Intent.SetSearchProvider(sessionRef, SearchProvider.WIKIPEDIA),
             CodingSpace.CHANGE_MODE to Intent.ChangeMode(sessionRef, CodingInteractionMode.RESEARCH),
             CodingSpace.SET_MEDIA_TOOL to Intent.SetMediaTool(sessionRef, MediaKind.IMAGE, enabled = false),

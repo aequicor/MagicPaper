@@ -37,6 +37,17 @@ class GenericNativeRuntimeTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun runtimeOffersTheNativeModelCatalogUnderTheAgentsOwnEngineOnlyWhenItHasOne() = runBlocking<Unit> {
+        val listed = listOf(CodingModel("openai", "gpt-fixture", levels = listOf("low", "ultra"), defaultLevel = "low"))
+        val withCatalog = object : BackendAgent by Agent() { override val models = NativeModelCatalog { listed } }
+        fun runtime(agent: BackendAgent) = GenericNativeRuntime(agent, Library, {}, { it }, null,
+            testQuestionnaireFactory().create("fixture", null), testBrowserSessions, testCommandChecks)
+        val sources = runtime(withCatalog).modelSources
+        assertEquals(setOf(withCatalog.descriptor.engine), sources.keys)
+        assertEquals(listed, sources.getValue(withCatalog.descriptor.engine).fetch())
+        assertTrue(runtime(Agent()).modelSources.isEmpty())
+    }
+
     @Test fun noDispatchProofDecisionAndConsumptionKeepExactNativeIdentityAcrossDesktopTransport() = runBlocking<Unit> {
         val root = Files.createTempDirectory("generic-native-no-dispatch").toFile()
         try {
@@ -254,7 +265,6 @@ class GenericNativeRuntimeTest {
         override suspend fun shutdown() = close()
         override suspend fun prepareForReset() = Unit
         override suspend fun resumeAfterReset() = Unit
-        override val installation: PiInstallation get() = error("Direct native adapter must not request provider installation")
         override fun prepare(): Flow<NativeInstallationStatus> = error("Direct adapter does not need a proxy")
         override suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
             exchanges: List<LlmToolExchange>, accessToken: String, onUsage: (UsageCallResult) -> Unit): LlmToolTurn = error("Unexpected provider turn")

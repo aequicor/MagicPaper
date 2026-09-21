@@ -45,6 +45,7 @@ internal fun Module.nativeRuntimeBindings(
     )) }
     single<CodingProjectRepository> { get<CodingFeature>().projects }
     single<CodingRuntime> { get<CodingFeature>().runtime }
+    single<CodingModelCatalog> { get<CodingFeature>().models }
     single<PlanningRepository> { get<CodingFeature>().planning }
     single<CodingService> { get<CodingFeature>().service }
     factory<CodingComponent.Factory>(FeatureFactoryQualifiers.coding) { get<CodingFeature>().componentFactory }

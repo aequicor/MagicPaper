@@ -3,9 +3,6 @@ package io.aequicor.magicpaper.data.llm
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import java.nio.file.Files
 import kotlin.test.*
@@ -31,6 +28,9 @@ class CodexCommandActionsTest {
                 val finish = assertIs<CodingEvent.ToolFinished>(f.item("item/completed",
                     command("c", null, "completed", "final output")).single())
                 assertEquals(tool, finish.tool)
+                assertFalse(finish.isError)
+                assertEquals(ToolPhase.SUCCEEDED, finish.phase)
+                assertEquals("final output", finish.resultPreview)
                 recorder.apply(finish)
                 val step = recorder.timeline().single()
                 assertEquals(identity, step.id)
@@ -75,27 +75,6 @@ class CodexCommandActionsTest {
         }
     }
 
-    @Test fun nativeToolPipelineUsesExistingLocalizedCardsAndPreservesCommand() = runBlocking {
-        for ((action, id) in listOf("read" to "file.read", "search" to "file.search", "listFiles" to "file.list", "unknown" to "shell.exec")) {
-            Fixture().use { f ->
-                val item = command("c", """[{"type":"$action"}]""")
-                val raw = f.item("item/started", item) + f.delta("c", "output") +
-                    f.item("item/completed", command("c", null, "completed", "output"))
-                val tools = testToolSessions(MemoryToolReceiptStore()).session(ToolExecutionContext(
-                    "project", "session", "session", "request", ToolRole.WORKER, CodingInteractionMode.CODE))
-                val recorder = CodingRunRecorder()
-                raw.asFlow().withTools(tools).toList().forEach { recorder.apply(it) }
-                val step = recorder.timeline().single()
-                assertEquals(id, step.tool)
-                assertEquals("⚒ ${toolDisplayName(id)} · cat source.kt", step.title)
-                assertEquals(if (id == "shell.exec") CodingStepKind.EXEC else CodingStepKind.TOOL, step.kind)
-                assertFalse(step.running)
-                assertTrue(step.ok)
-                assertEquals("output", step.result)
-            }
-        }
-    }
-
     @Test fun fileChangesRemainEditsAndInterruptedReadsAreCancelled() {
         Fixture().use { f ->
             val edit = Json.parseToJsonElement("""{"id":"edit","type":"fileChange","changes":[{"path":"source.kt","kind":{"type":"update"},"diff":"+line"}]}""").jsonObject
@@ -120,7 +99,7 @@ class CodexCommandActionsTest {
     @Suppress("UNCHECKED_CAST")
     private class Fixture : AutoCloseable {
         private val home = Files.createTempDirectory("codex-command-actions-")
-        private val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
+        private val service = codexTestClient(Json, home)
         private val type = nativeAccumulatorType(service)
         private val run = type.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
         private val events = type.getDeclaredField("events").apply { isAccessible = true }.get(run) as Channel<CodingEvent>

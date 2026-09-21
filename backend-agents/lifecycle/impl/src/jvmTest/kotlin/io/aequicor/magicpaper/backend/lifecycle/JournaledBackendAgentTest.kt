@@ -54,6 +54,13 @@ class JournaledBackendAgentTest {
         assertEquals(1, launches)
     }
 
+    @Test fun theJournalingWrapperExposesTheNativeModelCatalogUnchanged() = runTest {
+        val catalog = NativeModelCatalog { listOf(CodingModel("provider", "model")) }
+        val native = Adapter { }.also { it.models = catalog }
+        assertSame(catalog, JournaledBackendAgent(native, NativeLifecycleOwner(Memory(), diagnostics)).models)
+        assertNull(JournaledBackendAgent(Adapter { }, NativeLifecycleOwner(Memory(), diagnostics)).models)
+    }
+
     @Test fun anAdmittedLaunchWithoutAnAttachedProcessNeverBecomesANoDispatchProof() = runTest {
         val agent = JournaledBackendAgent(Adapter {
             val context = checkNotNull(currentCoroutineContext()[NativeAttemptContext])
@@ -247,6 +254,7 @@ class JournaledBackendAgentTest {
         override val approvals: NativeApprovalRequests? = null
         override val history: NativeToolHistory? = null
         override val removal: NativeRemoval? = null
+        override var models: NativeModelCatalog? = null
         override suspend fun status() = NativeInstallationStatus(NativeInstallationPhase.READY, "Ready")
         override fun prepare() = flowOf(NativeInstallationStatus(NativeInstallationPhase.READY, "Ready"))
         override fun modelProfile(profile: LlmProfile, mode: CodingInteractionMode, speedBoost: Boolean) = profile

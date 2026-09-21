@@ -1,25 +1,48 @@
 package io.aequicor.magicpaper.backend
 
 import io.aequicor.magicpaper.domain.CodingEngine
-import io.aequicor.magicpaper.domain.CodingEvent
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
 import kotlin.test.*
 
 class BackendAgentFactoryTest {
-    @Test fun factoryConnectsOnlyImplementedProtocolsAndTheirCapabilities() {
-        val protocols = createBackendAgentProtocols()
-        assertEquals(setOf(CodingEngine.PI, CodingEngine.CODEX), protocols.descriptors.map { it.engine }.toSet())
-        assertEquals(protocols.descriptors.size, protocols.descriptors.map { it.engine }.distinct().size)
-        val pi = protocols.descriptor(CodingEngine.PI)
+    @Test fun factoryConnectsOnlyImplementedEnginesAndTheirCapabilities() {
+        val catalog = createBackendAgentCatalog()
+        assertEquals(setOf(CodingEngine.PI, CodingEngine.CODEX), catalog.descriptors.map { it.engine }.toSet())
+        assertEquals(catalog.descriptors.size, catalog.descriptors.map { it.engine }.distinct().size)
+        val pi = catalog.descriptor(CodingEngine.PI)
         assertEquals("Pi", pi.adapterName)
         assertContains(pi.capabilities, BackendAgentCapability.MANAGED_INSTALLATION)
         assertFalse(BackendAgentCapability.EXTERNAL_INSTALLATION in pi.capabilities)
-        val codex = protocols.descriptor(CodingEngine.CODEX)
+        val codex = catalog.descriptor(CodingEngine.CODEX)
         assertContains(codex.capabilities, BackendAgentCapability.EXTERNAL_INSTALLATION)
         assertContains(codex.capabilities, BackendAgentCapability.NATIVE_TOOL_HISTORY)
         assertFalse(BackendAgentCapability.MANAGED_INSTALLATION in codex.capabilities)
-        assertEquals(CodingEvent.SessionStarted("native"), protocols.pi.parse("""{"type":"session","id":"native"}"""))
-        assertNull(protocols.codex.terminalToolResult(Json.parseToJsonElement("""{"type":"agentMessage","id":"message","text":"Done"}""").jsonObject))
+    }
+
+    @Test fun onlyAnEngineWithItsOwnAccountOffersSubscriptionAccess() {
+        assertNotNull(subscriptionAccess(CodingEngine.CODEX))
+        assertNull(subscriptionAccess(CodingEngine.PI))
+    }
+
+    private fun subscriptionAccess(engine: CodingEngine): NativeSubscriptionAccess? {
+        val home = java.nio.file.Files.createTempDirectory("subscription-access-")
+        try {
+            return createNativeSubscriptionAccess(engine, NativeSubscriptionEnvironment(kotlinx.serialization.json.Json, home.toString(),
+                processes = object : NativeProcessRecovery {
+                    override fun record(id: String, process: Process, attachLifetime: Boolean) = error("No process launch")
+                    override fun clear(id: String) = error("No process cleanup")
+                    override fun belongsTo(id: String, process: Process?) = false
+                    override fun reconcile(id: String) = error("No process recovery")
+                },
+                accessTokens = NativeAuthTokens { error("No tokens") },
+                questionnaires = object : NativeQuestionnaires {
+                    override suspend fun ask(request: io.aequicor.magicpaper.domain.UserInteractionRequest) = error("No questionnaire")
+                    override suspend fun beginDelivery(requestId: String) = error("No questionnaire")
+                    override suspend fun finishDelivery(requestId: String, attemptId: String,
+                        outcome: io.aequicor.magicpaper.domain.QuestionnaireDeliveryOutcome) = error("No questionnaire")
+                },
+                diagnostics = NativeDiagnostics { _, _, cause, _ -> throw AssertionError(cause) },
+                toolPresentation = NativeToolPresentationResolver { _, _, _ -> error("No tools") }))
+                ?.also { it.close() }
+        } finally { home.toFile().deleteRecursively() }
     }
 }

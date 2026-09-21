@@ -44,4 +44,26 @@ class PlanningStopAuthorityTest {
         assertEquals(1, projected)
         service.shutdown()
     }
+
+    @Test fun stoppingAFinishedPlanChangesNothingAndDoesNotFail() = runTest {
+        // Archiving or deleting a session stops every plan it owns, finished or not, and waits for each stop.
+        val storage = InMemoryKeyValueStore()
+        val checkpoints = JsonPlanningRepository(storage, Json)
+        checkpoints.save(Plan("plan", "project", "Goal", runId = "run", phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE,
+            milestones = listOf(Milestone("stage", "Stage", status = MilestoneStatus.DONE))))
+        val owner = DefaultPlanningStore(checkpoints, InMemoryEventJournal())
+        val runtime = object : CodingRuntime by NoopCodingRuntime { override val supported = true }
+        var projected = 0
+        val ports = TestPlanningExecutionPorts().also { it.onStoppedCheckpoint = { projected++ } }
+        val service = PlanningExecutionService(owner, runtime, null, JsonLlmProfileRepository(storage, Json),
+            JsonSettingsRepository(storage, Json), object : MilestoneVerifier {
+                override suspend fun verify(milestone: Milestone, goal: String, report: String, profile: LlmProfile?) = error("No verification during stop")
+            }, workspaces = LocalPlanningWorkspace(), scope = backgroundScope, attemptAuthority = ports, chatHooksProvider = { ports.chatHooks })
+        val finished = checkNotNull(owner.planFor("plan"))
+        service.stopAndJoin("plan"); runCurrent()
+        assertEquals(finished, owner.planFor("plan"))
+        assertEquals(PlanStatus.DONE, checkNotNull(owner.planFor("plan")).status)
+        assertEquals(0, projected)
+        service.shutdown()
+    }
 }

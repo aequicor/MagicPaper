@@ -82,6 +82,8 @@ interface CodingFeature {
     val projects: CodingProjectRepository
     val planning: PlanningRepository
     val runtime: CodingRuntime
+    /** Нативные каталоги моделей движков; опрос запускает потребитель через `refresh`, не сборка фичи. */
+    val models: CodingModelCatalog
     val service: CodingService
     val componentFactory: CodingComponent.Factory
     val presentation: CodingPresentation

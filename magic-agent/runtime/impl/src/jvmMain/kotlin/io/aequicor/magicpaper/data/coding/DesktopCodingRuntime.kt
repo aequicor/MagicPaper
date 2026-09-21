@@ -48,6 +48,9 @@ class DesktopCodingRuntime(
             checkNotNull(binding(proof.engine).runtime.recovery).acknowledgeNoDispatch(proof, parentDecisionId)
     }
 
+    override val modelSources: Map<CodingEngine, CodingModelSource> =
+        engines.flatMap { it.runtime.modelSources.entries }.associate { it.key to it.value }
+
     override var globalFeatureFlags: FeatureFlagState = FeatureFlagState()
         set(value) {
             field = value

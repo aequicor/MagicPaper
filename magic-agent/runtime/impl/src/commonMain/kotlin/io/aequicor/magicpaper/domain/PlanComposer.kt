@@ -33,8 +33,9 @@ class PlanComposer(
     acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
     val toolSessions: ToolSessionFactory? = null,
     retryLimit: suspend () -> Int? = { null },
+    nativeRecommendations: NativeModelSnapshots = NativeModelSnapshots.None,
 ) {
-    private val decisions = DecisionPlanner(json, ::completePlanning, acceptanceChecks, retryLimit)
+    private val decisions = DecisionPlanner(json, ::completePlanning, acceptanceChecks, retryLimit, nativeRecommendations)
 
     suspend fun completePlanning(plan: Plan, profile: LlmProfile, messages: List<LlmMessage>, onActivity: (CodingStep) -> Unit): String {
         val project = projectLookup(plan.projectId) ?: error("Папка проекта плана недоступна. Откройте проект в desktop-приложении.")

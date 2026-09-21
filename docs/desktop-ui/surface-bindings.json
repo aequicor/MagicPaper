@@ -1463,6 +1463,19 @@
     "kind": "surface"
   },
   {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+    "symbol": "NodeEditor",
+    "annotationLine": 345,
+    "targets": [
+      "PaperDialog",
+      "PaperField",
+      "PaperChoice",
+      "PaperButton"
+    ],
+    "stage": "6",
+    "kind": "composition-helper"
+  },
+  {
     "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/DefaultCodingComponent.kt",
     "symbol": "Content",
     "annotationLine": 63,
@@ -2802,6 +2815,129 @@
     "kind": "ui-contract"
   },
   {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "CommonSkillsPreview",
+    "annotationLine": 53,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsCatalogDefaultPreview",
+    "annotationLine": 60,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperInput",
+      "PaperAction",
+      "PaperLazyColumn"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsCatalogEmptyPreview",
+    "annotationLine": 62,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperInput",
+      "PaperAction",
+      "PaperLazyColumn"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsCatalogLoadingPreview",
+    "annotationLine": 64,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperInput",
+      "PaperAction",
+      "PaperLazyColumn"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsCatalogErrorPreview",
+    "annotationLine": 67,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperInput",
+      "PaperAction",
+      "PaperLazyColumn"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsEducationDefaultPreview",
+    "annotationLine": 69,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperAction"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsEducationEmptyPreview",
+    "annotationLine": 71,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperAction"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsEducationLoadingPreview",
+    "annotationLine": 73,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperAction"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
+    "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/CommonSkillsPreviews.kt",
+    "symbol": "SkillsEducationErrorPreview",
+    "annotationLine": 76,
+    "targets": [
+      "PaperTheme",
+      "PaperSurface",
+      "PaperText",
+      "PaperAction"
+    ],
+    "stage": "7",
+    "kind": "surface"
+  },
+  {
     "path": "feature/skills/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/SelfEducationPlugin.kt",
     "symbol": "Content",
     "annotationLine": 61,
@@ -3128,6 +3264,39 @@
       "PaperPanel",
       "PaperButton",
       "PaperDialog"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/NativeCodingModelDialog.kt",
+    "symbol": "NativeCodingModelDialog",
+    "annotationLine": 29,
+    "targets": [
+      "PaperDialog",
+      "PaperAction",
+      "PaperScrollColumn",
+      "PaperDivider"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/NativeCodingModelDialog.kt",
+    "symbol": "NativeCodingModelChip",
+    "annotationLine": 110,
+    "targets": [
+      "PaperAction"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/NativeCodingModelDialog.kt",
+    "symbol": "NativeLevelControl",
+    "annotationLine": 88,
+    "targets": [
+      "PaperChoice"
     ],
     "stage": "6",
     "kind": "surface"

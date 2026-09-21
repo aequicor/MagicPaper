@@ -72,7 +72,7 @@ class PiBackendEventDeliveryTest {
             override suspend fun finishDelivery(requestId: String, attemptId: String, outcome: QuestionnaireDeliveryOutcome): Unit = error("No questionnaire")
         }, diagnostics = NativeDiagnostics { _, _, cause, _ -> throw AssertionError(cause) },
         toolPresentation = NativeToolPresentationResolver { _, _, _ -> error("No tools") },
-        providerLibrary = object : NativeProviderLibrary {
+        providerLibrary = object : NativeProviderLibrary, PiInstallationSource {
             override val installation = installation
             override suspend fun shutdown() = Unit
             override suspend fun prepareForReset() = Unit

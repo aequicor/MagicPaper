@@ -183,13 +183,19 @@ fun Plan.prepareRefinement(requireApproval: Boolean, selection: ModelSelection?,
     return RefinementPreparation(if (continuation) effective.refinementView() else effective, continuation)
 }
 
-/** Profile resolution is validation of supplied values; no provider or repository is consulted here. */
-fun Plan.recoveredAssignments(roster: List<LlmProfile>, sessions: List<CodingSession>): Plan {
+/**
+ * Profile resolution is validation of supplied values; no provider or repository is consulted here.
+ * [catalog] is the last known snapshot of the engine's own model catalog: a native assignment whose
+ * model left it is replaced only by the orchestrator session's own native choice that the catalog
+ * still offers. Otherwise it stays as it is and admission refuses it by name (reassign the stage).
+ */
+fun Plan.recoveredAssignments(roster: List<LlmProfile>, sessions: List<CodingSession>, catalog: CodingModelSnapshot? = null): Plan {
     val parent = sessions.firstOrNull { it.id == parentSessionId }
     val selected = parent?.modelSelection?.let { ProfileResolver.selection(it, roster) }
     val replacement = selected?.takeIf { it.configured && it.supportsCoding }
     fun recover(assignment: StageAssignment, stage: Milestone? = null): StageAssignment {
-        if (runCatching { assignment.executionProfile(roster) }.isSuccess) return assignment
+        if (runCatching { assignment.executionProfile(roster, catalog) }.isSuccess) return assignment
+        assignment.native?.let { return recoverNative(assignment, it, parent, roster, catalog) }
         val workerChoice = stage?.let { m -> sessions.firstOrNull { it.planId == id && it.stageId == m.id }?.modelSelection }
         val workerProfile = workerChoice?.let { ProfileResolver.selection(it, roster) }?.takeIf { it.configured && it.supportsCoding }
         val candidate = when {
@@ -198,7 +204,7 @@ fun Plan.recoveredAssignments(roster: List<LlmProfile>, sessions: List<CodingSes
             replacement != null -> assignment.copy(profileId = replacement.id)
             else -> return assignment
         }
-        return candidate.takeIf { runCatching { it.executionProfile(roster) }.isSuccess } ?: assignment
+        return candidate.takeIf { runCatching { it.executionProfile(roster, catalog) }.isSuccess } ?: assignment
     }
     return copy(plannerSelection = parent?.modelSelection?.takeIf { selected != null } ?: plannerSelection,
         milestones = milestones.map { stage -> if (stage.completed) stage else stage.copy(
@@ -207,4 +213,13 @@ fun Plan.recoveredAssignments(roster: List<LlmProfile>, sessions: List<CodingSes
                 assignment = recover(attempt.assignment, stage), mergeAssignment = attempt.mergeAssignment?.let { recover(it, stage) }) }) },
         finalAttempt = finalAttempt?.takeIf { it.phase != AttemptPhase.COMPLETE }?.let { it.copy(
             assignment = recover(it.assignment), mergeAssignment = it.mergeAssignment?.let(::recover)) } ?: finalAttempt)
+}
+
+private fun recoverNative(assignment: StageAssignment, native: CodingModelSelection, parent: CodingSession?,
+    roster: List<LlmProfile>, catalog: CodingModelSnapshot?): StageAssignment {
+    val choice = parent?.codingModel?.takeIf { it.engine == native.engine && catalog?.resolve(it) is CodingModelResolution.Available }
+    val model = choice?.let { catalog?.find(it.provider, it.modelId) } ?: return assignment
+    val connection = roster.firstOrNull { it.id == assignment.profileId && it.isNativeConnectionFor(native.engine) }
+        ?: roster.firstOrNull { it.isNativeConnectionFor(native.engine) } ?: return assignment
+    return nativeStageAssignment(connection, choice.engine, model, choice.level, assignment.explanation, assignment.manual)
 }

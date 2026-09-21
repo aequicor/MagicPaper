@@ -1,4 +1,4 @@
-package io.aequicor.magicpaper.backend
+package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.domain.*
 
@@ -15,8 +15,4 @@ data class PiProviderTurnRequest(
 ) {
     override fun toString(): String = "PiProviderTurnRequest(provider=${profile.provider}, model=${profile.modelId}, " +
         "messages=${messages.size}, tools=${tools.size}, exchanges=${exchanges.size})"
-}
-
-interface PiProviderTurns : AutoCloseable {
-    suspend fun turn(request: PiProviderTurnRequest, onUsage: (UsageCallResult) -> Unit): LlmToolTurn
 }

@@ -41,6 +41,9 @@ class BackendAgentCatalog constructor(contributions: List<BackendAgentContributi
                 require((BackendAgentCapability.MANAGED_INSTALLATION in declared) == (agent.removal != null)) {
                     "Managed installation capability and implementation disagree"
                 }
+                require((BackendAgentCapability.NATIVE_MODEL_CATALOG in declared) == (agent.models != null)) {
+                    "Native model catalog capability and implementation disagree"
+                }
             }
             return created.toList()
         } catch (failure: Throwable) {

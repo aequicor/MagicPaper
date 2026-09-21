@@ -201,6 +201,7 @@ import io.aequicor.magicpaper.ui.components.paperChatDisclosure
 import io.aequicor.magicpaper.ui.components.CodingAttachments
 import io.aequicor.magicpaper.ui.components.CodingModelChip
 import io.aequicor.magicpaper.ui.components.CodingModelSwitcherDialog
+import io.aequicor.magicpaper.ui.components.NativeCodingModelChip
 import io.aequicor.magicpaper.ui.components.PendingAttachmentsRow
 import io.aequicor.magicpaper.ui.components.paperStickToBottom
 import io.aequicor.magicpaper.designsystem.PaperFonts
@@ -412,11 +413,16 @@ private fun SessionArea(
                     { provider -> vm.selectCodingSearchProvider(sessionInfo.id, provider) }
                 } else null,
                 modelChip = {
-                    CodingModelChip(
-                        profile = vm.codingProfileOf(sessionInfo, workerPlan),
-                        overridden = sessionInfo.llmProfileId != null,
-                        onClick = { switcherOpen = true },
-                    )
+                    if (ui.usesNativeModels(sessionInfo, sessionInfo.featureFlags.resolve(globalFeatureFlags))) {
+                        NativeCodingModelChip(sessionInfo.codingModel, sessionInfo.engine?.let(ui.modelCatalogs::get),
+                            onClick = { switcherOpen = true })
+                    } else {
+                        CodingModelChip(
+                            profile = vm.codingProfileOf(sessionInfo, workerPlan),
+                            overridden = sessionInfo.llmProfileId != null,
+                            onClick = { switcherOpen = true },
+                        )
+                    }
                 },
                 featureFlags = sessionInfo.featureFlags.resolve(globalFeatureFlags),
                 onToggleFeatureFlag = { flag -> vm.toggleSessionFeatureFlag(sessionInfo.id, flag) },

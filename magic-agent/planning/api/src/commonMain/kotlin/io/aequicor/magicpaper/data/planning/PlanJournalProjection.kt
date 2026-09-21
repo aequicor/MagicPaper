@@ -80,7 +80,7 @@ fun projectPlanningRecord(state: PlanningMachine.State, record: JournalRecord): 
         if(state.plan == null) PlanningMachine.Fact.LegacyImported(plan, emptySet(), stamp)
         else PlanningMachine.Fact.LegacyCheckpoint(plan, stamp)
     } ?: return state
-    val transition = PlanningMachine.reduce(state, input)
+    val transition = PlanningMachine.reduce(state, input, replay = true)
     require(transition.rejection == null) { "Rejected persisted plan input" }
     return transition.state
 }

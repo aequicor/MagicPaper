@@ -49,6 +49,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
     @Serializable sealed interface Intent : Input {
         @Serializable @SerialName("CreateProject") data class CreateProject(val project: CodingProject) : Intent
         @Serializable @SerialName("SetProjectModel") data class SetProjectModel(val selection: ModelSelection?) : Intent
+        @Serializable @SerialName("SetProjectCodingModel") data class SetProjectCodingModel(val selection: CodingModelSelection?) : Intent
         @Serializable @SerialName("DeleteProject") data object DeleteProject : Intent
         @Serializable @SerialName("CreateSession") data class CreateSession(val session: CodingSession,
             val messages: List<CodingMessage> = emptyList()) : Intent
@@ -58,6 +59,9 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         @Serializable @SerialName("ArchiveSession") data class ArchiveSession(val session: SessionRef, val archived: Boolean, val at: Long? = null) : Intent
         @Serializable @SerialName("SetSessionModel") data class SetSessionModel(val session: SessionRef,
             val selection: ModelSelection?) : Intent
+        /** Выбор из каталога движка. Прежний [SetSessionModel] остаётся для сессий без нативного выбора. */
+        @Serializable @SerialName("SetSessionCodingModel") data class SetSessionCodingModel(val session: SessionRef,
+            val selection: CodingModelSelection?) : Intent
         @Serializable @SerialName("SetSearchProvider") data class SetSearchProvider(val session: SessionRef, val provider: SearchProvider) : Intent
         @Serializable @SerialName("ChangeMode") data class ChangeMode(val session: SessionRef, val mode: CodingInteractionMode) : Intent
         @Serializable @SerialName("SetMediaTool") data class SetMediaTool(val session: SessionRef, val kind: MediaKind, val enabled: Boolean) : Intent
@@ -156,6 +160,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         return try { when (input) {
             is Intent.CreateProject, is Fact.LegacyImported -> reject("Проект уже существует")
             is Intent.SetProjectModel -> Transition(state.copy(project = state.project!!.copy(modelSelection = input.selection)))
+            is Intent.SetProjectCodingModel -> Transition(state.copy(project = state.project!!.copy(codingModel = input.selection)))
             Intent.DeleteProject -> Transition(state.copy(deleted = true, sessions = emptyMap(), histories = emptyMap(),
                 runs = emptyMap(), removedSessions = state.removedSessions + state.sessions.keys), listOf(Effect.CleanupDeleted(state.sessions.keys)))
             is Intent.CreateSession -> createSession(state, input)
@@ -175,6 +180,10 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
                 it.copy(archived = input.archived, archiveReadySince = if (!input.archived) input.at ?: it.archiveReadySince else it.archiveReadySince)
             }
             is Intent.SetSessionModel -> change(state, input.session) { it.copy(modelSelection = input.selection, llmProfileId = input.selection?.profileId) }
+            is Intent.SetSessionCodingModel -> change(state, input.session) {
+                require(input.selection == null || it.engine == null || it.engine == input.selection.engine) { "Модель принадлежит другому движку" }
+                it.copy(codingModel = input.selection)
+            }
             is Intent.SetSearchProvider -> change(state, input.session) { it.copy(searchProvider = input.provider) }
             is Intent.ChangeMode -> change(state, input.session) { it.changeInteractionMode(input.mode,
                 state.runs[it.id] != null || it.queuedPrompts.isNotEmpty()) }
@@ -199,7 +208,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             }
             is Intent.QueuedClarified -> {
                 val session = requireSession(state, input.session)
-                val request = session.queuedPrompts.single { it.runId == input.requestId }
+                val request = requireNotNull(session.queuedPrompts.singleOrNull { it.runId == input.requestId }) { "Запрос уже не в очереди" }
                 require(input.requestId !in state.startedRequests && input.note.role == CodingRole.USER && input.note.id.isNotBlank())
                 val reserved = state.histories[session.id].orEmpty().map { it.id } + state.removedMessages[session.id].orEmpty() +
                     session.queuedPrompts.flatMap { listOf(it.messageId, it.responseId, it.responseTimelineId) }

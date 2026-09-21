@@ -27,6 +27,12 @@ interface CodingRuntime : ChatBackend {
     override val questionnaires: kotlinx.coroutines.flow.StateFlow<List<UserInteractionRequest>> get() = noRuntimeQuestionnaires
     override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) { error("Опросник недоступен") }
     val computerUse: ComputerUse? get() = null
+
+    /**
+     * Источники нативных каталогов моделей по движкам, у которых такая возможность объявлена.
+     * Пусто там, где движка нет (веб, Android): каталог тогда работает только по кэшу.
+     */
+    val modelSources: Map<CodingEngine, CodingModelSource> get() = emptyMap()
     val approvals: kotlinx.coroutines.flow.StateFlow<List<CodingApproval>> get() = noCodingApprovals
     suspend fun respondApproval(id: String, decision: CodingApprovalDecision) = Unit
     /** Verify engine prerequisites without starting a stage executor. */

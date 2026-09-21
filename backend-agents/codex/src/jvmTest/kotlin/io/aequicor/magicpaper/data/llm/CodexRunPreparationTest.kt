@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.backend.CodexRunRequest
 import io.aequicor.magicpaper.domain.CodingInteractionMode
 import kotlinx.serialization.json.*
 import kotlin.test.*

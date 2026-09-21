@@ -9,25 +9,11 @@ import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class SubscriptionProviderTurnsTest {
-    private class Installation(var phase: NativeInstallationPhase = NativeInstallationPhase.READY) : PiInstallation {
-        override val cliPath = "unused-agent-cli"
-        override fun aiDirectory() = "library"
-        override suspend fun status() = NativeInstallationStatus(phase, "private installer detail")
-        override fun ensureReady() = flowOf(NativeInstallationStatus(phase, "private installer detail"))
-        override suspend fun uninstall() = error("Not part of a provider call")
-        override suspend fun node() = "node"
-        override fun prepareBundledTools() = error("Not part of a provider call")
-        override fun toolsNotice() = ""
-        override fun ensureFuzzySafety() = error("Not part of a provider call")
-        override fun bashPath(): String? = null
-        override fun homeDefaults(directory: String) = error("Not part of a provider call")
-        override fun environment(nodePath: String, home: String) = emptyMap<String, String>()
-    }
-    private class Provider(override val installation: Installation = Installation()) : NativeProviderLibrary {
+    private class Provider(private val phase: NativeInstallationPhase = NativeInstallationPhase.READY) : NativeProviderLibrary {
         override suspend fun shutdown() = close()
         override suspend fun prepareForReset() = Unit
         override suspend fun resumeAfterReset() = Unit
-        override fun prepare() = installation.ensureReady()
+        override fun prepare() = flowOf(NativeInstallationStatus(phase, "private installer detail"))
         override suspend fun bridge(profile: LlmProfile, parameters: JsonObject): NativeProviderBridge = error("Not part of provider turn")
         data class Request(val messages: List<LlmMessage>, val tools: List<LlmToolDefinition>,
             val exchanges: List<LlmToolExchange>, val accessToken: String)
@@ -69,7 +55,7 @@ class SubscriptionProviderTurnsTest {
     }
 
     @Test fun installationFailureIsVisibleBeforeTokenRefreshOrRequest() = runBlocking<Unit> {
-        val provider = Provider(Installation(NativeInstallationPhase.ERROR))
+        val provider = Provider(NativeInstallationPhase.ERROR)
         SubscriptionProviderTurns(provider) { fail("Token must not be read before dependencies are ready") }.let { transport ->
             val failure = assertFailsWith<IllegalStateException> { transport.turn(profile, emptyList(), emptyList(), emptyList()) }
             assertContains(failure.message.orEmpty(), "настройки")

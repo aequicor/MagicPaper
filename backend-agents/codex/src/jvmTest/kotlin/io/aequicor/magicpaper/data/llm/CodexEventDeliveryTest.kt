@@ -145,32 +145,5 @@ class CodexEventDeliveryTest {
             override fun user(): Optional<String> = Optional.empty()
         }
     }
-    private fun environment(home: Path) = NativeBackendEnvironment(Json, home.toString(),
-        resources = NativeResources { error("No resource read") },
-        processes = object : NativeProcessRecovery {
-            override fun record(id: String, process: Process, attachLifetime: Boolean) { assertEquals(session.id, id); assertEquals(42L, process.pid()) }
-            override fun clear(id: String) = error("No confirmed outcome")
-            override fun belongsTo(id: String, process: Process?) = false
-            override fun reconcile(id: String) = error("No recovery effect")
-        }, cachedAccessTokens = NativeAuthTokens { error("No token read") }, refreshedAccessTokens = NativeAuthTokens { error("No token refresh") },
-        questionnaires = object : NativeQuestionnaires {
-            override suspend fun ask(request: UserInteractionRequest): List<PlanningAnswer> = error("No questionnaire")
-            override suspend fun beginDelivery(requestId: String): String = error("No questionnaire")
-            override suspend fun finishDelivery(requestId: String, attemptId: String, outcome: QuestionnaireDeliveryOutcome): Unit = error("No questionnaire")
-        }, diagnostics = NativeDiagnostics { _, _, cause, _ -> throw AssertionError(cause) },
-        toolPresentation = NativeToolPresentationResolver { _, _, _ -> error("No tools") },
-        providerLibrary = object : NativeProviderLibrary {
-            override val installation: PiInstallation get() = error("No provider installation")
-            override suspend fun shutdown() = Unit
-            override suspend fun prepareForReset() = Unit
-            override suspend fun resumeAfterReset() = Unit
-            override fun close() = Unit
-            override fun prepare() = error("No provider preparation")
-            override suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
-                exchanges: List<LlmToolExchange>, accessToken: String, onUsage: (UsageCallResult) -> Unit): LlmToolTurn = error("No provider request")
-            override suspend fun bridge(profile: LlmProfile, parameters: JsonObject): NativeProviderBridge = error("No provider bridge")
-        }, lifecycleJournal = object : NativeLifecycleJournal {
-            override suspend fun snapshot(): NativeJournalSnapshot = error("Client receives its scoped lifecycle")
-            override suspend fun append(expected: NativeJournalRevision, entry: NativeJournalEntry): NativeJournalRevision? = error("Client receives its scoped lifecycle")
-        })
+    private fun environment(home: Path) = nativeTestEnvironment(home, session.id)
 }

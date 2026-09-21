@@ -110,7 +110,7 @@ class PiEngineModelLimitsTest {
      * Симптом, из-за которого правка нужна: профиль Alibaba сохранён с `contextWindow: null`,
      * и `models.json` движка уходил с потолком конфигурации вместо предела модели.
      */
-    @Test fun installedEngineRepairsTheRuntimeConfiguration() {
+    @Test fun installedEngineRepairsTheRuntimeLimits() {
         val limits = installedEngine()
         val saved = LlmProfile(
             id = "alibaba", name = "Alibaba", baseUrl = tokenPlan, modelId = "qwen3.8-max", modelLibraryVersion = 1,
@@ -119,10 +119,11 @@ class PiEngineModelLimitsTest {
         )
         val enriched = saved.withCatalogLimits(limits)
         val runtime = enriched.forCoding()
-        assertEquals(1_000_000, backendProtocols.pi.modelConfiguration(runtime).contextWindow)
-        assertTrue(backendProtocols.pi.modelConfiguration(runtime).root.toString().contains("\"contextWindow\":1000000"))
+        assertEquals(1_000_000, runtime.modelCatalog.first { it.id == "qwen3.8-max" }.contextWindow)
+        // Именно этот предел движок кладёт в models.json: цепочка до конфигурации проверена в PiProtocolBoundaryTest.
+        assertEquals(1_000_000, runtime.advanced.safeContextLimit)
         // Без фактов каталога запрос остаётся на пределе конфигурации — догадок по семейству нет.
-        assertEquals(128_000, backendProtocols.pi.modelConfiguration(saved.forCoding()).contextWindow)
+        assertEquals(128_000, saved.forCoding().advanced.safeContextLimit)
     }
 
     /** Каталог установленного движка; без движка проверка пропускается, а не проходит молча. */

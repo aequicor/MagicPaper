@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
-import io.aequicor.magicpaper.data.coding.backendProtocols
+import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.domain.CodingEngine

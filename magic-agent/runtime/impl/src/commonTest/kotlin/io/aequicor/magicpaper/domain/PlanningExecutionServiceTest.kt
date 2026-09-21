@@ -234,10 +234,11 @@ class PlanningExecutionServiceTest {
     }
     private data class ExecutionFixture(val store: TestPlanningStore, val service: PlanningExecutionService, val runtime: Runtime, val ports: TestPlanningExecutionPorts)
     private suspend fun TestScope.fixture(runtime: Runtime = Runtime(), workspace: PlanningWorkspace = Workspaces(), verifier: MilestoneVerifier = pass,
-        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3, taskWorkspace: TaskWorkspace? = null, events: EventJournal = InMemoryEventJournal(), strategyGateway: LlmGateway? = null): ExecutionFixture {
+        acceptanceChecks: AcceptanceChecks = AcceptanceChecks(), retryLimit: Int? = 3, taskWorkspace: TaskWorkspace? = null, events: EventJournal = InMemoryEventJournal(), strategyGateway: LlmGateway? = null,
+        roster: List<LlmProfile> = listOf(profile), nativeModels: NativeModelSnapshots = NativeModelSnapshots.None): ExecutionFixture {
         val kv = InMemoryKeyValueStore()
         val store = TestPlanningStore(JsonPlanningRepository(kv, json), events)
-        val profiles = JsonLlmProfileRepository(kv, json).also { it.save(profile) }
+        val profiles = JsonLlmProfileRepository(kv, json).also { repository -> roster.forEach { repository.save(it) } }
         val projects = journalCodingProjects(kv, json).also { it.createTestProject(project) }
         if (taskWorkspace != null) projects.createTestSession(CodingSession("parent", project.id, "Task", 1, planningMode = true))
         val taskWorktrees = taskWorkspace?.let { testTaskWorktreeService(projects, it, workspace, events, kv) }
@@ -246,11 +247,53 @@ class PlanningExecutionServiceTest {
         val ports = TestPlanningExecutionPorts()
         return ExecutionFixture(store, PlanningExecutionService(store, runtime, projects, profiles, settings, verifier, workspace, backgroundScope,
             outputClock = { testScheduler.currentTime }, retryClock = { testScheduler.currentTime }, acceptanceChecks = acceptanceChecks, taskWorktrees = taskWorktrees,
-            strategyClassifier = strategyGateway?.let { PlanStrategyClassifier(store, it, profiles, settings) },
+            strategyClassifier = strategyGateway?.let { PlanStrategyClassifier(store, it, profiles, settings) }, nativeModels = nativeModels,
             attemptAuthority = ports, chatHooksProvider = { ports.chatHooks }), runtime, ports)
     }
     private fun plan(vararg stages: Milestone) = Plan("plan", "project", "Goal", milestones = stages.toList())
     private fun stage(id: String, depends: List<String> = emptyList()) = Milestone(id, id, description = "Check result", agentProfileId = "agent", dependsOn = depends)
+
+    private val astra = CodingModel("openai", "gpt-6-astra", "GPT-6 Astra", levels = listOf("low", "medium", "max", "ultra"), defaultLevel = "medium")
+    private val codexSnapshot = CodingModelSnapshot(CodingEngine.CODEX, listOf(astra), 1)
+    private val subscription = LlmProfile("chatgpt", "ChatGPT", provider = ProviderType.OPENAI_SUBSCRIPTION, modelId = "profile-default", modelLibraryVersion = 1)
+    private fun nativeStage(model: CodingModel, level: String?) = stage("one").copy(agentProfileId = subscription.id,
+        assignment = nativeStageAssignment(subscription, CodingEngine.CODEX, model, level))
+
+    @Test fun nativeStageRunsItsCatalogChoiceInTheWorkerSession() = runTest {
+        val (store, service, runtime) = fixture(roster = listOf(subscription), nativeModels = NativeModelSnapshots { codexSnapshot })
+        store.save(plan(nativeStage(astra, "ultra")).copy(engine = CodingEngine.CODEX))
+        service.start("plan"); advanceTimeBy(2_000); runCurrent()
+        val completed = checkNotNull(store.planFor("plan"))
+        assertEquals(PlanStatus.DONE, completed.status, completed.issue?.message)
+        val choice = CodingModelSelection(CodingEngine.CODEX, "openai", "gpt-6-astra", "ultra")
+        assertEquals(choice, runtime.sessions.single { it.stageId == "one" }.codingModel, "the worker session carries the choice verbatim, ultra included")
+        assertTrue(runtime.sessions.size > 1, "the plan also runs a final verification session")
+        assertTrue(runtime.sessions.all { it.codingModel == choice }, "every session run from the assignment must carry it, or the engine falls back to the app ladder")
+        service.shutdown()
+    }
+
+    @Test fun nativeStageWhoseModelLeftTheCatalogIsRefusedByNameBeforeAnyWorkerStarts() = runTest {
+        val gone = astra.copy(id = "gpt-gone", name = "Gone")
+        val (store, service, runtime) = fixture(roster = listOf(subscription), nativeModels = NativeModelSnapshots { codexSnapshot })
+        store.save(plan(nativeStage(gone, "low")).copy(engine = CodingEngine.CODEX))
+        service.start("plan"); advanceTimeBy(2_000); runCurrent()
+        val blocked = checkNotNull(store.planFor("plan"))
+        val message = blocked.issue?.message.orEmpty()
+        assertContains(message, "gpt-gone")
+        assertContains(message, "переназначьте этап")
+        assertNotEquals(PlanStatus.DONE, blocked.status)
+        assertTrue(runtime.calls.isEmpty(), "no worker may start on a model the engine no longer offers")
+        service.shutdown()
+    }
+
+    @Test fun nativeStageIsNotJudgedWhenNoCatalogIsKnownSoAnOfflineStartStillRuns() = runTest {
+        val (store, service, runtime) = fixture(roster = listOf(subscription))
+        store.save(plan(nativeStage(astra, "max")).copy(engine = CodingEngine.CODEX))
+        service.start("plan"); advanceTimeBy(2_000); runCurrent()
+        assertEquals(PlanStatus.DONE, checkNotNull(store.planFor("plan")).status)
+        assertTrue(runtime.sessions.isNotEmpty() && runtime.sessions.all { it.codingModel?.level == "max" })
+        service.shutdown()
+    }
 
     @Test fun classifierPausePrecedesEveryWorkspaceAndWorkerEffect() = runTest {
         val events = InMemoryEventJournal()

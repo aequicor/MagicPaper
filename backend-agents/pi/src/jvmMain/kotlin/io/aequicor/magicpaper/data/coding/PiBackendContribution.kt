@@ -22,7 +22,9 @@ internal class PiBackendAgent(private val environment: NativeBackendEnvironment,
     override val descriptor: BackendAgentDescriptor) : NativeAgentAdapter {
     private val protocol = PiNativeAdapter()
     private val root = File(environment.home)
-    private val installation = environment.providerLibrary.installation
+    private val installation = checkNotNull((environment.providerLibrary as? PiInstallationSource)?.installation) {
+        "Pi runs only with the provider library created by its own backend"
+    }
     private val sessions = File(root, "sessions")
     private val uploads = File(root, "uploads")
     private val running = ConcurrentHashMap<String, PiNativeExecution>()

@@ -17,6 +17,12 @@ import kotlinx.serialization.Serializable
     val manual: Boolean = false,
     val displayName: String = "",
     val options: AdvancedLlmOptions? = null,
+    /**
+     * Модель из каталога самого движка. Когда задано, оно и есть исполняемый выбор: [effort] и
+     * [effectiveEffort] лишь показывают его в шкале приложения, а движку уходит строка уровня из
+     * выбора. Старые назначения без него исполняются прежним путём через профиль.
+     */
+    val native: CodingModelSelection? = null,
 )
 
 /** 0 means unknown; higher values are better for quality/speed/economy/safety. */

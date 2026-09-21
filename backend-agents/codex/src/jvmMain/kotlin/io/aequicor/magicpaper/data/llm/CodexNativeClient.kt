@@ -225,6 +225,28 @@ class CodexNativeClient(
         val ids = mutableListOf<String>()
         val declarations = mutableMapOf<String, DeclaredReasoning>()
         val metadata = mutableMapOf<String, io.aequicor.magicpaper.domain.ProviderModel>()
+        modelListItems().forEach { model ->
+            if (model["hidden"]?.jsonPrimitive?.booleanOrNull == true) return@forEach
+            val id = model.string("model") ?: model.string("id") ?: return@forEach
+            ids += id
+            val efforts = model["supportedReasoningEfforts"]?.jsonArray.orEmpty()
+                .mapNotNull { it.jsonObject.string("reasoningEffort") }
+                .mapNotNull(ReasoningEffort::fromWire)
+                .toSet()
+            declarations[id] = if (efforts.isEmpty()) DeclaredReasoning.None else DeclaredReasoning(efforts = efforts, default = model.string("defaultReasoningEffort")?.let(ReasoningEffort::fromWire))
+            metadata[id] = io.aequicor.magicpaper.domain.ProviderModel(id, model.string("displayName") ?: id, supportedParameters = emptySet(), reasoning = declarations[id])
+        }
+        val cachedWindows = cachedContextWindows()
+        cachedWindows.forEach { (id, window) ->
+            metadata[id]?.let { metadata[id] = it.copy(contextWindow = window) }
+        }
+        return ModelDefaults.discover(ProviderType.OPENAI_SUBSCRIPTION, ids, declarations).map { it.copy(metadata = metadata[it.id]) }
+    }
+
+    override suspend fun codingModels(): List<CodingModel> = codexCodingModels(modelListItems(), cachedContextWindows())
+
+    private suspend fun modelListItems(): List<JsonObject> {
+        val items = mutableListOf<JsonObject>()
         var cursor: String? = null
         do {
             val page = request(
@@ -235,25 +257,10 @@ class CodexNativeClient(
                     cursor?.let { put("cursor", it) }
                 },
             ).jsonObject
-            page["data"]?.jsonArray.orEmpty().forEach { element ->
-                val model = element.jsonObject
-                if (model["hidden"]?.jsonPrimitive?.booleanOrNull == true) return@forEach
-                val id = model.string("model") ?: model.string("id") ?: return@forEach
-                ids += id
-                val efforts = model["supportedReasoningEfforts"]?.jsonArray.orEmpty()
-                    .mapNotNull { it.jsonObject.string("reasoningEffort") }
-                    .mapNotNull(ReasoningEffort::fromWire)
-                    .toSet()
-                declarations[id] = if (efforts.isEmpty()) DeclaredReasoning.None else DeclaredReasoning(efforts = efforts, default = model.string("defaultReasoningEffort")?.let(ReasoningEffort::fromWire))
-                metadata[id] = io.aequicor.magicpaper.domain.ProviderModel(id, model.string("displayName") ?: id, supportedParameters = emptySet(), reasoning = declarations[id])
-            }
+            page["data"]?.jsonArray.orEmpty().forEach { items += it.jsonObject }
             cursor = page.string("nextCursor")
         } while (!cursor.isNullOrBlank())
-        val cachedWindows = cachedContextWindows()
-        cachedWindows.forEach { (id, window) ->
-            metadata[id]?.let { metadata[id] = it.copy(contextWindow = window) }
-        }
-        return ModelDefaults.discover(ProviderType.OPENAI_SUBSCRIPTION, ids, declarations).map { it.copy(metadata = metadata[it.id]) }
+        return items
     }
 
     /** Apply the same native Codex budget to a Pi subscription run, including already saved profiles. */
@@ -286,7 +293,7 @@ class CodexNativeClient(
         emptyMap()
     }
 
-    override suspend fun complete(request: CodexCompletionRequest, onActivity: (CodingStep) -> Unit,
+    override suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit,
         onUsage: (UsageCallResult) -> Unit): String {
         check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
         val thread = request(

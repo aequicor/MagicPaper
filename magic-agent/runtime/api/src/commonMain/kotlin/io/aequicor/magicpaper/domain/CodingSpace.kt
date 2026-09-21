@@ -56,7 +56,7 @@ import io.aequicor.magicpaper.machine.StateSpace
  *  - which record of many. A project with two sessions is one position, named by the most pressing
  *    session, while an input addresses exactly one of them;
  *  - payload validation: blank or duplicate ids, a response that belongs to another request, a request
- *    whose mode differs from its session, a name already changed, a task replaced by another;
+ *    whose mode differs from its session, a coding model that belongs to another engine than the session's, a name already changed, a task replaced by another;
  *  - `expected`. `EditRequest` and `ReplaceHistory` compare the history they saw against the current
  *    one. The representatives send an empty `expected`, so every position whose history is not empty
  *    (`unfinished-history`, `answered`) reads as a refusal for a reason of payload, not of position;
@@ -95,6 +95,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
 
     val CREATE_PROJECT = InputId("CreateProject")
     val SET_PROJECT_MODEL = InputId("SetProjectModel")
+    val SET_PROJECT_CODING_MODEL = InputId("SetProjectCodingModel")
     val DELETE_PROJECT = InputId("DeleteProject")
     val CREATE_SESSION = InputId("CreateSession")
     val DELETE_SESSION = InputId("DeleteSession")
@@ -102,6 +103,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     val ARCHIVE = InputId("Archive")
     val UNARCHIVE = InputId("Unarchive")
     val SET_SESSION_MODEL = InputId("SetSessionModel")
+    val SET_SESSION_CODING_MODEL = InputId("SetSessionCodingModel")
     val SET_SEARCH_PROVIDER = InputId("SetSearchProvider")
     val CHANGE_MODE = InputId("ChangeMode")
     val SET_MEDIA_TOOL = InputId("SetMediaTool")
@@ -157,6 +159,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     override val inputs = listOf(
         InputSpec(CREATE_PROJECT, Branch.INTENT),
         InputSpec(SET_PROJECT_MODEL, Branch.INTENT),
+        InputSpec(SET_PROJECT_CODING_MODEL, Branch.INTENT),
         InputSpec(DELETE_PROJECT, Branch.INTENT),
         InputSpec(CREATE_SESSION, Branch.INTENT),
         InputSpec(DELETE_SESSION, Branch.INTENT),
@@ -164,6 +167,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         InputSpec(ARCHIVE, Branch.INTENT),
         InputSpec(UNARCHIVE, Branch.INTENT),
         InputSpec(SET_SESSION_MODEL, Branch.INTENT),
+        InputSpec(SET_SESSION_CODING_MODEL, Branch.INTENT),
         InputSpec(SET_SEARCH_PROVIDER, Branch.INTENT),
         InputSpec(CHANGE_MODE, Branch.INTENT),
         InputSpec(SET_MEDIA_TOOL, Branch.INTENT),
@@ -241,6 +245,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     override val accepts: Map<InputId, Set<PhaseId>> = mapOf(
         CREATE_PROJECT to setOf(UNRESTORED),
         SET_PROJECT_MODEL to PROJECT,
+        SET_PROJECT_CODING_MODEL to PROJECT,
         DELETE_PROJECT to PROJECT,
         CREATE_SESSION to PROJECT,
         DELETE_SESSION to SESSION,
@@ -248,6 +253,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         ARCHIVE to SESSION - LIVE,
         UNARCHIVE to SESSION,
         SET_SESSION_MODEL to SESSION,
+        SET_SESSION_CODING_MODEL to SESSION,
         SET_SEARCH_PROVIDER to SESSION,
         CHANGE_MODE to setOf(IDLE, UNFINISHED_HISTORY, ANSWERED, WORKSPACE_UNKNOWN),
         SET_MEDIA_TOOL to SESSION,
@@ -344,6 +350,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     override fun name(input: CodingMachine.Input): InputId = when (input) {
         is CodingMachine.Intent.CreateProject -> CREATE_PROJECT
         is CodingMachine.Intent.SetProjectModel -> SET_PROJECT_MODEL
+        is CodingMachine.Intent.SetProjectCodingModel -> SET_PROJECT_CODING_MODEL
         CodingMachine.Intent.DeleteProject -> DELETE_PROJECT
         is CodingMachine.Intent.CreateSession -> CREATE_SESSION
         is CodingMachine.Intent.DeleteSession -> DELETE_SESSION
@@ -351,6 +358,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         // One intent, two inputs: a running session cannot be archived, and only archiving can be refused for it.
         is CodingMachine.Intent.ArchiveSession -> if (input.archived) ARCHIVE else UNARCHIVE
         is CodingMachine.Intent.SetSessionModel -> SET_SESSION_MODEL
+        is CodingMachine.Intent.SetSessionCodingModel -> SET_SESSION_CODING_MODEL
         is CodingMachine.Intent.SetSearchProvider -> SET_SEARCH_PROVIDER
         is CodingMachine.Intent.ChangeMode -> CHANGE_MODE
         is CodingMachine.Intent.SetMediaTool -> SET_MEDIA_TOOL

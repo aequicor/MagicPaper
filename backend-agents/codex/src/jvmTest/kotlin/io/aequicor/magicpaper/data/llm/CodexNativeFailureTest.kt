@@ -1,6 +1,6 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.backend.CodexCompletionRequest
+import io.aequicor.magicpaper.backend.NativeCompletionRequest
 import io.aequicor.magicpaper.backend.NativeDiagnostics
 import java.io.BufferedWriter
 import java.io.ByteArrayInputStream
@@ -58,7 +58,7 @@ class CodexNativeFailureTest {
             }
         }.use { fixture ->
             val completion = async {
-                fixture.client.complete(CodexCompletionRequest("model", "", "", JsonArray(emptyList()), null, 0), {}, {})
+                fixture.client.complete(NativeCompletionRequest("model", "", "", JsonArray(emptyList()), null, 0), {}, {})
             }
             withTimeout(5_000) { turnStarted.await() }
             // Wait until the start response was consumed, so cancellation exercises interrupt too.

@@ -11,6 +11,8 @@ interface BackendAgentContribution {
     val descriptor: BackendAgentDescriptor
     val paths: NativeBackendPaths
     fun create(environment: NativeBackendEnvironment): NativeAgentAdapter
+    /** Account access is optional: an engine without its own account offers none. The caller closes the result. */
+    fun createSubscription(environment: NativeSubscriptionEnvironment): NativeSubscriptionAccess? = null
 }
 
 /** Relative to the existing application home. These are migration-sensitive, not display names. */
@@ -83,6 +85,9 @@ fun interface NativeToolHistory {
 
 fun interface NativeRemoval { suspend fun remove() }
 
+/** Каталог моделей как его объявляет сам движок, без эвристик приложения. Ошибку опроса пробрасывает. */
+fun interface NativeModelCatalog { suspend fun models(): List<CodingModel> }
+
 /** One native engine instance. Native-specific connection/attempt state stays behind this boundary. */
 interface NativeAgentAdapter : AutoCloseable {
     val descriptor: BackendAgentDescriptor
@@ -90,6 +95,8 @@ interface NativeAgentAdapter : AutoCloseable {
     val approvals: NativeApprovalRequests?
     val history: NativeToolHistory?
     val removal: NativeRemoval?
+    /** Задан ровно тогда, когда у дескриптора есть [BackendAgentCapability.NATIVE_MODEL_CATALOG]. */
+    val models: NativeModelCatalog? get() = null
     suspend fun status(): NativeInstallationStatus
     fun prepare(): Flow<NativeInstallationStatus>
     /** Pure native model policy, resolved before the host builds provider controls and enrichment. */
@@ -120,7 +127,6 @@ interface NativeProviderLibrary : AutoCloseable {
     suspend fun shutdown()
     suspend fun prepareForReset()
     suspend fun resumeAfterReset()
-    val installation: PiInstallation
     fun prepare(): Flow<NativeInstallationStatus>
     suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
         exchanges: List<LlmToolExchange>, accessToken: String, onUsage: (UsageCallResult) -> Unit): LlmToolTurn

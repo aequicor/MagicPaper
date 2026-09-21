@@ -17,6 +17,7 @@ import io.aequicor.magicpaper.ui.screens.CodingStepRow
 import io.aequicor.magicpaper.ui.components.DecisionGraph
 import io.aequicor.magicpaper.ui.components.FavoriteModelPicker
 import io.aequicor.magicpaper.ui.components.EffortControl
+import io.aequicor.magicpaper.ui.components.NativeLevelControl
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +33,8 @@ class CodingPlanningPlugin(
     private val profileRepo: LlmProfileRepository, private val settingsRepo: SettingsRepository,
     private val draftRepository: DraftRepository, private val applicationScope: CoroutineScope,
     private val modelDossiers: ModelDossierRepository,
+    /** Каталоги моделей движков: плагин предлагает их в редакторе этапа, когда включён флаг. */
+    private val models: CodingModelCatalog? = null,
 ) : MagicPlugin, CodingSessionPanel, PersistentPlugin {
     private val formDrafts = linkedMapOf<String, PersistentDraftValue<PlanningFormDraft>>()
     private val nodeDrafts = linkedMapOf<String, PersistentDraftValue<PlanningNodeDraft>>()
@@ -83,6 +86,8 @@ class CodingPlanningPlugin(
         val project = locked ?: projects.firstOrNull { it.id == projectId } ?: projects.firstOrNull()
         val plan = display.planFor(project?.id)
         val run = display.runs[plan?.id] ?: io.aequicor.magicpaper.ui.PlanningRunUi()
+        val catalogs by (models?.snapshots ?: remember { kotlinx.coroutines.flow.MutableStateFlow<Map<CodingEngine, CodingModelSnapshot>>(emptyMap()) }).collectAsState()
+        val nativeCatalog = plan?.engine?.let(catalogs::get)?.takeIf { settings.featureFlags.isEnabled(FeatureFlag.NATIVE_CODING_MODELS) }
         if (project?.id in display.removedProjects || display.removedPlans.any { it.first == project?.id && it.second == plan?.id }) {
             PaperText(if (project?.id in display.removedProjects) "Проект удалён" else "План удалён")
             return
@@ -288,7 +293,7 @@ class CodingPlanningPlugin(
                 projected.tree.firstOrNull { it.id == selected }?.let { node ->
                     StageDetailsDialog(projected, node, { selected = null }) {
                         if (!running && plan.tree.any { it.id == node.id }) {
-                            NodeEditor(plan, node, profiles, nodeDraft(plan, node), ::edit)
+                            NodeEditor(plan, node, profiles, nativeCatalog, nodeDraft(plan, node), ::edit)
                             PaperButton("Уточнить этап", enabled = !busy && !submitting, kind = PaperButtonKind.QUIET, onClick = {
                                 selected = null; doRefine("Пересчитай участок «${node.title}».", node.id)
                             })
@@ -337,7 +342,14 @@ class CodingPlanningPlugin(
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun NodeEditor(plan: Plan, node: DecisionNode, profiles: List<LlmProfile>, draftOwner: PersistentDraftValue<PlanningNodeDraft>, edit: ((Plan) -> Plan) -> Unit) {
+@Composable internal fun NodeEditor(plan: Plan, node: DecisionNode, profiles: List<LlmProfile>, draftOwner: PersistentDraftValue<PlanningNodeDraft>, edit: ((Plan) -> Plan) -> Unit) =
+    NodeEditor(plan, node, profiles, null, draftOwner, edit)
+
+/**
+ * [nativeCatalog] — каталог движка плана, когда включён флаг: тогда этапу можно назначить модель из
+ * него. Нативное назначение показывается и правится в словаре движка при любом значении флага.
+ */
+@Composable internal fun NodeEditor(plan: Plan, node: DecisionNode, profiles: List<LlmProfile>, nativeCatalog: CodingModelSnapshot?, draftOwner: PersistentDraftValue<PlanningNodeDraft>, edit: ((Plan) -> Plan) -> Unit) {
     val stage = plan.milestones.firstOrNull { it.id == (node.stageId ?: node.id) }
     val frozen = stage != null && (stage.attempts.isNotEmpty() || stage.status != MilestoneStatus.PENDING)
     val draftState by draftOwner.draft.state.collectAsState()
@@ -382,20 +394,41 @@ class CodingPlanningPlugin(
         PaperAction(enabled = !frozen && title.isNotBlank() && complexityValid, onClick = { edit { old -> old.copy(goal = if (node.kind == DecisionKind.GOAL) title else old.goal, tree = old.tree.map { if (it.id == node.id) it.copy(title = title) else it }, milestones = old.milestones.map { if (it.id == stage?.id) it.copy(title = title, description = description, acceptance = acceptance, complexityPoints = parsedComplexity) else it }) } }) { PaperText("Сохранить изменения", role = PaperTextRole.LABEL) }
         if (stage != null) {
             val assignment = stage.assignment
-            PaperText(assignment?.let { "Модель: ${profiles.firstOrNull { p -> p.id == it.profileId }?.modelName(it.modelId) ?: it.displayName.ifBlank { it.modelId }} · effort: ${it.effort.shortLabel}" } ?: "Исполнитель не назначен")
+            val nativeChoice = assignment?.native
+            val nativeModel = nativeChoice?.let { choice -> nativeCatalog?.find(choice.provider, choice.modelId) }
+            PaperText(assignment?.let {
+                if (nativeChoice != null) "Модель: ${nativeModel?.name ?: it.displayName.ifBlank { it.modelId }} · уровень: ${nativeModel?.levelLabel(nativeChoice.level) ?: nativeChoice.level ?: "по умолчанию"}"
+                else "Модель: ${profiles.firstOrNull { p -> p.id == it.profileId }?.modelName(it.modelId) ?: it.displayName.ifBlank { it.modelId }} · effort: ${it.effort.shortLabel}"
+            } ?: "Исполнитель не назначен")
             if (!frozen) {
                 var menu by remember { mutableStateOf(false) }
                 Box {
                     PaperAction(onClick = { menu = true }) { PaperText("Выбрать модель", role = PaperTextRole.LABEL) }
-                    PaperMenuHost(menu, { menu = false }) { profiles.filter { it.connectionConfigured && it.supportsCoding }.forEach { p -> p.displayModels.forEach { model ->
+                    PaperMenuHost(menu, { menu = false }) {
+                    nativeCatalog?.let { snapshot -> profiles.firstOrNull { it.isNativeConnectionFor(snapshot.engine) }?.let { connection ->
+                        snapshot.models.forEach { model ->
+                            PaperMenuAction(label = "${connection.name} · ${model.name} · каталог движка", onClick = {
+                                updateStage { it.copy(agentProfileId = connection.id, agentModelId = model.id,
+                                    assignment = nativeStageAssignment(connection, snapshot.engine, model, null, manual = true)) }; menu = false
+                            })
+                        }
+                    } }
+                    profiles.filter { it.connectionConfigured && it.supportsCoding }.forEach { p -> p.displayModels.forEach { model ->
                         PaperMenuAction(label = "${p.name} · ${p.modelName(model)}${if (p.enabled) "" else " · отключён"}", enabled = p.enabled, onClick = {
                             val effective = EffortSelection.ofOrNull(ModelDefaults.capability(p.copy(modelId = model)).resolveEffort(p.effortSelectionFor(model)).level)
                             updateStage { it.copy(agentProfileId = p.id, agentModelId = model, assignment = StageAssignment(p.id, model, effective, effective, manual = true, displayName = p.modelName(model))) }; menu = false
                         })
                     } } }
                 }
+                if (assignment != null && nativeChoice != null && nativeModel != null && nativeModel.supportsLevels) {
+                    // The engine's own levels: the app ladder would fold ultra into max and hide the real choice.
+                    NativeLevelControl(nativeModel, nativeChoice.level) { level ->
+                        val next = nativeChoice.copy(level = level)
+                        updateStage { it.copy(assignment = assignment.copy(native = next, effort = next.displayEffort(), effectiveEffort = next.displayEffort(), manual = true)) }
+                    }
+                }
                 val profile = profiles.firstOrNull { it.id == assignment?.profileId }
-                if (profile?.enabled == true && assignment != null) {
+                if (profile?.enabled == true && assignment != null && nativeChoice == null) {
                     val capability = ModelDefaults.capability(profile.copy(modelId = assignment.modelId))
                     EffortControl(capability, assignment.effort, { effort -> updateStage { it.copy(assignment = assignment.copy(effort = effort, effectiveEffort = EffortSelection.ofOrNull(capability.resolveEffort(effort).level), manual = true)) } })
                 }
