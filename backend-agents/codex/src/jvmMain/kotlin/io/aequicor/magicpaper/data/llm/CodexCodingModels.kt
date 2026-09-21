@@ -1,6 +1,10 @@
 package io.aequicor.magicpaper.data.llm
 
+import io.aequicor.magicpaper.domain.CodingEngine
 import io.aequicor.magicpaper.domain.CodingModel
+import io.aequicor.magicpaper.domain.CodingSession
+import io.aequicor.magicpaper.domain.LlmProfile
+import io.aequicor.magicpaper.domain.ModelDefaults
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -36,6 +40,30 @@ internal fun codexCodingModels(items: List<JsonObject>, contextWindows: Map<Stri
             acceptsImages = modalities?.contains("image") ?: true,
         )
     }.distinctBy { it.id }
+
+/** Что уйдёт в `thread/start` и `turn/start`: модель и уровень; [effort] `null` — поле не отправляется. */
+internal data class CodexLaunchModel(val modelId: String, val effort: String?)
+
+/**
+ * Нативный выбор сессии ([CodingSession.codingModel]) уходит Codex как есть: без подмены
+ * профилем и без клампа уровня к шкале приложения. Уровень `null` — «по умолчанию»: поле
+ * `effort` не отправляется, и умолчание определяет сам Codex. Допустимость уровня для модели
+ * здесь не проверяется: сверку с каталогом делает тот, кто выбирает (интерфейс, допуск этапа),
+ * а на запуске Codex отвечает на неподходящее значение собственной ошибкой.
+ *
+ * Без нативного выбора действует прежний путь через профиль. Каталог Codex перечисляет модели
+ * подписки, поэтому нативный выбор требует прямого подключения ([direct]): идентификатор из
+ * каталога не имеет смысла на чужом сервере за прокси Responses.
+ */
+internal fun codexLaunchModel(session: CodingSession, profile: LlmProfile, direct: Boolean): CodexLaunchModel {
+    val selection = session.codingModel
+        ?: return CodexLaunchModel(profile.modelId, profile.resolveEffort(ModelDefaults.capability(profile)).level?.wire)
+    require(selection.engine == CodingEngine.CODEX && selection.provider == CODEX_NATIVE_PROVIDER) {
+        "Native model selection belongs to another engine or provider"
+    }
+    require(direct) { "Native Codex model selection requires the direct ChatGPT connection" }
+    return CodexLaunchModel(selection.modelId, selection.level)
+}
 
 private fun JsonObject.text(key: String): String? =
     (get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }

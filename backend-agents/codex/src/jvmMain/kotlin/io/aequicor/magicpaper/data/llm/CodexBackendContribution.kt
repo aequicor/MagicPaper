@@ -70,10 +70,12 @@ internal class CodexBackendAgent(
                             require((modelConnection(request.profile) == NativeModelConnectionKind.RESPONSES_PROXY) == (connection != null)) {
                                 "Provider connection does not match the prepared native request"
                             }
-                            val payload = CodexRunRequest(request.workingDirectory, request.profile.modelId,
+                            val launch = codexLaunchModel(request.session, request.profile,
+                                direct = modelConnection(request.profile) == NativeModelConnectionKind.DIRECT)
+                            val payload = CodexRunRequest(request.workingDirectory, launch.modelId,
                                 connection?.providerId ?: "openai", connection?.configuration() ?: JsonObject(emptyMap()),
                                 request.tools.mcpConfiguration, request.instructions, input(request.prompt, request.attachments),
-                                request.mode, request.profile.resolveEffort(ModelDefaults.capability(request.profile)).level?.wire,
+                                request.mode, launch.effort,
                                 request.session.piSessionId.takeIf { request.mode != CodingInteractionMode.PLANNING && it.isNotBlank() },
                                 when (request.mode) {
                                     CodingInteractionMode.PLANNING -> "MagicPaper Planning"
