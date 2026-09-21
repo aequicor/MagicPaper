@@ -11,6 +11,21 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 IGNORED = {'build', '.gradle', '.git', 'node_modules', '.magicpaper', 'build-logic'}
+WORKTREES = ('.claude', 'worktrees')
+
+def nested_checkout(root, relative):
+    """True when ``relative`` lies inside another working copy of the project.
+
+    Sessions create git worktrees under ``.claude/worktrees/<name>/``. Git ignores them through
+    ``.git/info/exclude``, but a walk of the filesystem does not, so every module would be seen
+    twice and the copy's stale state reported as this tree's. A directory carrying its own ``.git``
+    marks a nested checkout for the same reason. ``root`` itself is never tested: a real checkout
+    has a ``.git`` of its own. The same rule lives in docs/desktop-ui/verify-design-system.py.
+    """
+    parts = relative.parts
+    if any(parts[i:i + 2] == WORKTREES for i in range(len(parts) - 1)):
+        return True
+    return any((root.joinpath(*parts[:depth]) / '.git').exists() for depth in range(1, len(parts)))
 HOSTS = {':desktopApp', ':androidApp', ':webApp'}
 # Modules that declare only a jvm target. Reaching them from a source set that also
 # compiles for Android, JS or Wasm breaks those artifacts, so the edge is curated here.
@@ -270,6 +285,7 @@ def owns_planning(root):
     # True for a MagicPaper checkout: something in it declares the domain package that
     # planning belongs to, wherever the module holding it has been moved to.
     return any(candidate.is_dir() and not any(part in IGNORED for part in candidate.relative_to(root).parts)
+               and not nested_checkout(root, candidate.relative_to(root))
                for candidate in root.rglob(PLANNING_OWNER))
 
 def project_directories(root):
@@ -338,7 +354,7 @@ def violations(root):
         relative = build.relative_to(root)
         if relative.parts[:2] == ('tools', 'mission-visualization'):
             continue  # Separate build and ownership graph.
-        if any(part in IGNORED for part in relative.parts):
+        if any(part in IGNORED for part in relative.parts) or nested_checkout(root, relative):
             continue
         raw = build.read_text(encoding="utf-8")
         # A test dependency or root-level wiring must not resurrect the retired module either.
@@ -389,6 +405,8 @@ def violations(root):
     for source in root.rglob('*.kt'):
         relative = source.relative_to(root)
         if relative.parts[:2] == ('tools', 'mission-visualization') or any(part in IGNORED for part in relative.parts) or 'src' not in relative.parts:
+            continue
+        if nested_checkout(root, relative):
             continue
         index = relative.parts.index('src')
         if index + 1 >= len(relative.parts) or not relative.parts[index + 1].endswith('Main'):
@@ -712,6 +730,43 @@ if '--self-test' in sys.argv:
         convention.parent.mkdir(parents=True, exist_ok=True)
         convention.write_text('dependencies { implementation(project(":hidden")) }')
         assert any('declare project dependencies' in error for error in violations(root))
+    # Another working copy inside the tree is not this tree. A session worktree under
+    # .claude/worktrees, or any directory with its own .git, holds a second copy of every module;
+    # scanning it reports duplicate facades and stale violations nobody in this tree wrote.
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        def module(base, name, dependency=''):
+            directory = base / name
+            (directory / 'src/commonMain/kotlin').mkdir(parents=True, exist_ok=True)
+            (directory / 'build.gradle.kts').write_text(
+                f'commonMain.dependencies {{ implementation(project("{dependency}")) }}' if dependency else '')
+            (directory / 'src/commonMain/kotlin/Shared.kt').write_text('package fixture\npublic fun operation() = Unit\n')
+        module(root, 'feature/session/api')
+        assert not violations(root), violations(root)
+        # The same module copied where a session worktree lives, carrying an edge that would be
+        # reported if it were scanned: neither the facade nor the edge may surface.
+        module(root / '.claude/worktrees/other', 'feature/session/api', ':feature:session:impl')
+        module(root / '.claude/worktrees/other', 'feature/session/impl', ':feature:session:api')
+        assert not violations(root), violations(root)
+        # A checkout carries its own .git; the root having one must not hide the tree itself.
+        (root / '.git').mkdir()
+        module(root, 'feature/session/copy')
+        assert any('Duplicate JVM facade' in error for error in violations(root)), 'the root .git must not skip the tree'
+        # The same duplicate anywhere else is still reported, including beside a look-alike path.
+        for reported in ('elsewhere', '.claude/notes', '.claude/worktrees-archive'):
+            with TemporaryDirectory() as other:
+                clean = Path(other)
+                module(clean, 'feature/session/api')
+                module(clean / reported, 'feature/session/api', ':feature:session:impl')
+                assert any('Duplicate JVM facade' in error for error in violations(clean)), reported
+        # A directory with its own .git is a nested checkout wherever it sits; without one it is not.
+        with TemporaryDirectory() as other:
+            clean = Path(other)
+            module(clean, 'feature/session/api')
+            module(clean / 'vendor/checkout', 'feature/session/api', ':feature:session:impl')
+            assert any('Duplicate JVM facade' in error for error in violations(clean)), 'no marker, still scanned'
+            (clean / 'vendor/checkout/.git').write_text('gitdir: /elsewhere\n')
+            assert not violations(clean), violations(clean)
     with TemporaryDirectory() as folder:
         root = Path(folder)
         for name, dependency in [('app', ':feature:session:impl'), ('desktopApp', ':app')]:

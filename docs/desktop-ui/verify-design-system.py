@@ -5,6 +5,22 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKTREES = ('.claude', 'worktrees')
+
+
+def nested_checkout(root, relative):
+    """True when ``relative`` lies inside another working copy of the project.
+
+    Sessions create git worktrees under ``.claude/worktrees/<name>/``. Git ignores them through
+    ``.git/info/exclude``, but a walk of the filesystem does not, so every module would be seen
+    twice and the copy's stale state reported as this tree's. A directory carrying its own ``.git``
+    marks a nested checkout for the same reason. ``root`` itself is never tested: a real checkout
+    has a ``.git`` of its own. The same rule lives in docs/verify-module-architecture.py.
+    """
+    parts = relative.parts
+    if any(parts[i:i + 2] == WORKTREES for i in range(len(parts) - 1)):
+        return True
+    return any((root.joinpath(*parts[:depth]) / '.git').exists() for depth in range(1, len(parts)))
 FORBIDDEN = re.compile(r'androidx\s*\.\s*compose\s*\.\s*material(?:3)?\b|com\s*\.\s*mikepenz\s*\.\s*markdown\b|androidx\.compose\.ui\.window\.(?:Dialog|Popup)\b|androidx\.compose\.foundation\.(?:clickable|combinedClickable|text\.BasicTextField|selection\.(?:selectable|toggleable))\b')
 APPLICATION_DEPENDENCY = re.compile(
     r'project\s*\(\s*(?:path\s*=\s*)?["\']:(?:app|desktopApp|androidApp|webApp|feature|magic-common|magic-chat|magic-agent|backend-agents)(?::[^"\']*)?["\']'
@@ -18,6 +34,8 @@ def violations(root):
         if build.relative_to(root).parts[:2] == ('tools', 'mission-visualization'):
             continue  # Independent Git submodule, not a Paper consumer.
         if any(part in {'build', '.gradle', '.git', 'node_modules', '.magicpaper'} for part in build.relative_to(root).parts):
+            continue
+        if nested_checkout(root, build.relative_to(root)):
             continue
         if build.parent.name == 'designSystem':
             if APPLICATION_DEPENDENCY.search(build.read_text(encoding='utf-8')):
@@ -80,6 +98,30 @@ if '--self-test' in sys.argv:
         found = violations(root)
         assert len(found) == 4, found
         assert all('tools/mission-visualization/' not in error for error in found)
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    # Another working copy inside the tree is not this tree: a session worktree under
+    # .claude/worktrees, or any directory with its own .git, must not be scanned.
+    def feature(base):
+        (base / 'src/commonMain').mkdir(parents=True)
+        (base / 'build.gradle.kts').write_text('commonMain.dependencies { implementation(libs.compose.material3) }')
+        (base / 'src/commonMain/Bad.kt').write_text('import androidx.compose.material3.Text')
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        feature(root / 'feature')
+        assert len(violations(root)) == 2, violations(root)
+        feature(root / '.claude/worktrees/other/feature')
+        assert len(violations(root)) == 2, 'a session worktree must not be scanned'
+        # A real checkout has a .git of its own; it must not hide the tree.
+        (root / '.git').mkdir()
+        assert len(violations(root)) == 2, 'the root .git must not skip the tree'
+        for reported in ('elsewhere', '.claude/notes', '.claude/worktrees-archive'):
+            feature(root / reported / 'feature')
+        assert len(violations(root)) == 8, violations(root)
+        feature(root / 'vendor/checkout/feature')
+        assert len(violations(root)) == 10, 'no marker, still scanned'
+        (root / 'vendor/checkout/.git').write_text('gitdir: /elsewhere\n')
+        assert len(violations(root)) == 8, 'a nested .git marks another checkout'
 errors = violations(ROOT)
 if errors:
     raise SystemExit('FAIL\n' + '\n'.join(errors))
