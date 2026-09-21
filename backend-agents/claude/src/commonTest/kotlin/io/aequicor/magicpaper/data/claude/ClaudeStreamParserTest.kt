@@ -95,12 +95,14 @@ class ClaudeStreamParserTest {
             """{"duration_api_ms":0,"is_error":true,"subtype":"success","result":"Not logged in · Please run /login","type":"result","terminal_reason":"api_error"}""")
         assertEquals(listOf<CodingEvent>(CodingEvent.AgentEnd), events)
         assertEquals(true, parser.result?.failed)
+        assertEquals(true, parser.result?.signedOut)
         assertContains(parser.result?.message.orEmpty(), "не авторизован")
     }
 
     @Test fun otherFailuresKeepOneShortLineAndNeverTheRawBody() {
         val parser = ClaudeStreamParser()
         parser.parse("""{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}""")
+        assertEquals(false, parser.result?.signedOut)
         assertContains(parser.result?.message.orEmpty(), "предел шагов")
         val long = ClaudeStreamParser()
         long.parse("""{"type":"result","is_error":true,"result":"API Error: 500\n${"x".repeat(2000)}"}""")

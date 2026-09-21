@@ -68,7 +68,12 @@ internal class AgentToolBridge(
         if (exchange.requestURI.path != "/mcp") { reject(exchange, 404, "unknown_path"); return }
         if (exchange.requestHeaders.containsKey("Origin") || !MessageDigest.isEqual(
                 exchange.requestHeaders.getFirst("Authorization").orEmpty().toByteArray(), "Bearer $token".toByteArray())) { reject(exchange, 403, "unauthorized"); return }
-        if (exchange.requestMethod != "POST") { reject(exchange, 405, "unsupported_method"); return }
+        // MCP streamable HTTP: a client may probe GET (server stream) or DELETE (end of session). This endpoint offers
+        // neither, and 405 with Allow is the specified answer, so it is a declined probe rather than a rejected request.
+        if (exchange.requestMethod != "POST") {
+            AppLog.debug("coding.tools", "request.method_declined", mapOf("method" to exchange.requestMethod))
+            exchange.responseHeaders.set("Allow", "POST"); reply(exchange, 405); return
+        }
         val bytes = exchange.requestBody.readNBytes(1_048_577)
         if (bytes.size > 1_048_576) { reject(exchange, 413, "payload_too_large"); return }
         val request = runCatching { Json.parseToJsonElement(bytes.decodeToString()).jsonObject }.getOrNull()

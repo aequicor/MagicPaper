@@ -132,7 +132,9 @@ cat <<'JSON'
 JSON
 exit 1""")
             val events = run(f, f.request())
-            assertContains(events.filterIsInstance<CodingEvent.Failed>().single().message, "не авторизован")
+            val message = events.filterIsInstance<CodingEvent.Failed>().single().message
+            assertContains(message, "не авторизован")
+            assertContains(message, "\"${f.binary.path}\" auth login", message = "the command must name the executable that is actually used")
             assertTrue(events.none { it is CodingEvent.FinalText })
             assertEquals(CodingEvent.Finished, events.last())
         }

@@ -125,6 +125,7 @@ internal class ClaudeBackendAgent(
                 mapOf("sessionId" to sessionId, "result" to "native_failure", "failure" to failure.javaClass.simpleName)) }
             return when {
                 result.aborted -> "Прогон прерван по команде пользователя."
+                terminal?.signedOut == true -> "Claude Code не авторизован. Выполните в терминале: \"${launch.arguments.first()}\" auth login — или укажите ключ API в подключении Anthropic."
                 terminal?.failed == true -> terminal.message
                 result.launchError != null -> "Не удалось запустить Claude Code. Проверьте установку в настройках движков."
                 terminal == null && result.exitCode != null && result.exitCode != 0 -> "Claude Code завершился с кодом ${result.exitCode}."

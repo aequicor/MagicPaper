@@ -123,6 +123,25 @@ class AgentToolBridgeTest {
         } finally { connection.disconnect() }
     }
 
+    @Test fun streamProbesAreDeclinedWithAllowAndUnauthenticatedOnesStillForbidden() {
+        val session = testToolSessions(MemoryToolReceiptStore()).session(ToolExecutionContext("p", "s", "s", "r",
+            ToolRole.PLANNER, CodingInteractionMode.PLANNING, "plan"))
+        AgentToolBridge(session, io.aequicor.magicpaper.data.browser.fakeBrowserSession()).use { bridge ->
+            fun status(method: String, authorized: Boolean): Pair<Int, String?> {
+                val connection = URI(bridge.url).toURL().openConnection() as HttpURLConnection
+                try {
+                    connection.requestMethod = method
+                    if (authorized) connection.setRequestProperty("Authorization", "Bearer ${bridge.token}")
+                    connection.connectTimeout = 5_000; connection.readTimeout = 5_000
+                    return connection.responseCode to connection.getHeaderField("Allow")
+                } finally { connection.disconnect() }
+            }
+            assertEquals(405 to "POST", status("GET", authorized = true))
+            assertEquals(405 to "POST", status("DELETE", authorized = true))
+            assertEquals(403, status("GET", authorized = false).first)
+        }
+    }
+
     @Test fun restrictedMcpAllowlistCannotOverwriteTheBridgeAndOrdinarySessionsKeepInheritedServers() {
         val session = testToolSessions(MemoryToolReceiptStore()).session(ToolExecutionContext("p", "s", "s", "r",
             ToolRole.PLANNER, CodingInteractionMode.PLANNING, "plan"))

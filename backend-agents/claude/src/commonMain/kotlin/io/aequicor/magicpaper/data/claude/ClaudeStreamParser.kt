@@ -28,7 +28,8 @@ internal class ClaudeStreamParser(
     /** Set once a `result` line was parsed: the only proof the engine finished, however the process exits. */
     val result: Terminal? get() = terminal
 
-    class Terminal(val failed: Boolean, val text: String, val message: String?)
+    /** [signedOut] is a failure of authentication, which only the host can word fully: it knows the executable's path. */
+    class Terminal(val failed: Boolean, val text: String, val message: String?, val signedOut: Boolean = false)
 
     private class Call(val id: String, var input: TokenUsage) {
         var output: Long? = null
@@ -136,20 +137,21 @@ internal class ClaudeStreamParser(
         val failed = (event["is_error"] as? JsonPrimitive)?.booleanOrNull ?: false
         val text = event.string("result").orEmpty()
         val message = if (failed) failure(event, text) else null
-        terminal = Terminal(failed, text, message)
+        terminal = Terminal(failed, text, message, signedOut = failed && isSignedOut(text))
         return listOf(CodingEvent.AgentEnd)
     }
 
     /** Safe one-line reason: the sign-in advice for a missing login, the CLI's own short text otherwise. */
     private fun failure(event: JsonObject, text: String): String = when {
-        text.contains("Not logged in", ignoreCase = true) || text.contains("/login", ignoreCase = true) || text.contains("Invalid API key", ignoreCase = true) ->
-            "Claude Code не авторизован. Войдите командой `claude` → /login или укажите ключ API в подключении Anthropic."
+        isSignedOut(text) -> "Claude Code не авторизован. Выполните вход или укажите ключ API в подключении Anthropic."
         event.string("subtype") == "error_max_turns" -> "Claude Code остановился: достигнут предел шагов агента."
         event.string("subtype") == "error_max_budget_usd" -> "Claude Code остановился: достигнут предел расхода."
         else -> text.replace(Regex("\\s+"), " ").trim().takeIf { it.isNotEmpty() }
             ?.let { if (it.length <= REASON_LIMIT) it else it.take(REASON_LIMIT) + "…" }
             ?: "Claude Code завершил запрос с ошибкой без описания."
     }
+
+    private fun isSignedOut(text: String) = listOf("Not logged in", "/login", "Invalid API key").any { text.contains(it, ignoreCase = true) }
 
     private fun usage(source: String, tokens: TokenUsage): List<CodingEvent> {
         if (tokens.totalTokens.let { it == null || it == 0L } || !reported.add(source)) return emptyList()
