@@ -30,6 +30,13 @@ class DefaultRequestPinService(
         var analysis: Job? = null
     }
     @Serializable private data class JournalInput(val id: String, val input: RequestPinMachine.Input)
+    private val machineJournal = MachineJournal(journal, RequestPinMachine, RequestPinMachine.initial(), OPERATION,
+        object : InputCodec<RequestPinMachine.Input> {
+            override fun encode(input: RequestPinMachine.Input, revision: JournalRevision) =
+                json.encodeToString(JournalInput.serializer(), JournalInput(Id.new(), input))
+            override fun decode(record: JournalRecord, revision: JournalRevision) =
+                json.decodeFromString<JournalInput>(record.detail).input
+        }, elideNoOps = true)
     private val entries = mutableMapOf<PinConversation, Entry>()
     private val removed = mutableSetOf<PinConversation>()
     private var generation = 0L
@@ -128,7 +135,7 @@ class DefaultRequestPinService(
 
     private suspend fun restore(conversation: PinConversation, entry: Entry) {
         val snapshot = withContext(storageDispatcher) { journal.snapshot(stream(conversation)) }
-        entry.state = replay(snapshot); entry.revision = snapshot.revision
+        entry.state = machineJournal.replay(snapshot); entry.revision = snapshot.revision
         if (!entry.state.initialized) {
             val records = if (snapshot.revision.seq == 0L) withContext(storageDispatcher) { repository.load(conversation) } else emptyList()
             apply(conversation, entry, RequestPinMachine.Fact.Initialized(records))
@@ -140,40 +147,20 @@ class DefaultRequestPinService(
         publish(conversation, entry)
     }
 
-    private fun replay(snapshot: JournalSnapshot): RequestPinMachine.State {
-        var state = RequestPinMachine.initial()
-        var previous = 0L
-        for (record in snapshot.records) {
-            check(record.stream == snapshot.revision.stream && record.seq > previous && record.operation == OPERATION) { "Повреждён журнал закреплений" }
-            previous = record.seq
-            val next = RequestPinMachine.reduce(state, json.decodeFromString<JournalInput>(record.detail).input)
-            check(next.effects.none { it is RequestPinMachine.Effect.Reject }) { "Недопустимый переход закреплений" }
-            state = next.state
-        }
-        return state
-    }
-
     private suspend fun commit(entry: Entry, input: RequestPinMachine.Input): List<RequestPinMachine.Effect> {
-        val next = RequestPinMachine.reduce(entry.state, input)
-        next.effects.filterIsInstance<RequestPinMachine.Effect.Reject>().firstOrNull()?.let { error(it.reason) }
-        if (next.state == entry.state && next.effects.isEmpty()) return emptyList()
         val expected = checkNotNull(entry.revision)
-        val encoded = json.encodeToString(JournalInput.serializer(), JournalInput(Id.new(), input))
-        withContext(NonCancellable + storageDispatcher) {
-            val record = try {
-                checkNotNull(journal.append(expected, OPERATION, Id.now(), encoded)) { "Закрепления изменены другим владельцем" }
-            } catch (failure: Exception) {
-                // Only this exact accepted input can settle a lost acknowledgement.
-                val observed = try { journal.snapshot(expected.stream) } catch (readFailure: Exception) {
-                    failure.addSuppressed(readFailure); throw failure
+        // The state moves inside the block: an admitted append must reach it even if the caller is cancelled.
+        return withContext(NonCancellable + storageDispatcher) {
+            when (val appended = try { machineJournal.append(expected, entry.state, input, Id.now()) }
+                catch (unknown: JournalOutcomeUnknown) { throw unknown.cause ?: unknown }) {
+                is Appended.Refused -> error(appended.step.effects.filterIsInstance<RequestPinMachine.Effect.Reject>().first().reason)
+                Appended.Conflict -> error("Закрепления изменены другим владельцем")
+                is Appended.Accepted -> {
+                    entry.revision = appended.revision; entry.state = appended.step.state
+                    appended.step.effects
                 }
-                observed.records.singleOrNull { it.seq > expected.seq && it.operation == OPERATION && it.detail == encoded }
-                    ?.takeIf { observed.revision.resetEpoch == expected.resetEpoch && observed.records.lastOrNull() == it }
-                    ?: throw failure
             }
-            entry.revision = expected.copy(seq = record.seq); entry.state = next.state
         }
-        return next.effects
     }
 
     private suspend fun apply(conversation: PinConversation, entry: Entry, input: RequestPinMachine.Input): List<RequestPinMachine.Effect> {

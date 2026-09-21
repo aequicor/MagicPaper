@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.data.storage.*
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.AppLogEntry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
@@ -106,6 +108,81 @@ class RequestPinJournalTest {
         assertEquals(0, calls)
         assertNotNull(service.failures.value[key])
         assertEquals(source.text, service.groups.value.getValue(key).single().request.summary)
+    }
+
+    /** What the pin service reported after [marker], the last entry seen before the step under test. */
+    private fun reportedSince(marker: AppLogEntry?): List<AppLogEntry> {
+        val all = AppLog.history()
+        return (if (marker == null) all else all.dropWhile { it !== marker }.drop(1)).filter { it.component == "request-pins" }
+    }
+
+    /** An append whose outcome can never be read back, so the owner has to stop at persistence-unknown. */
+    private fun unreadable(backing: InMemoryEventJournal, refuse: Boolean = false) = object : EventJournal by backing {
+        var broken = false
+        override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+            if (type(detail) == "Analyse") {
+                broken = true
+                if (refuse) return null
+                throw StorageException("append outcome unknown", StorageException.Kind.WRITE)
+            }
+            return backing.append(expected, operation, at, detail)
+        }
+        override suspend fun snapshot(stream: String): JournalSnapshot {
+            if (broken && !refuse) throw StorageException("read unavailable", StorageException.Kind.UNAVAILABLE)
+            return backing.snapshot(stream)
+        }
+    }
+
+    @Test fun aSyncThatChangesNothingIsNotJournaled() = runTest {
+        val journal = InMemoryEventJournal()
+        val service = DefaultRequestPinService(repository(), gateway { answer }, backgroundScope, journal, storageDispatcher = UnconfinedTestDispatcher(testScheduler))
+        service.sync(key, listOf(source), profile); runCurrent()
+        val stream = journal.streams().single()
+        val written = journal.read(stream).size
+        service.sync(key, listOf(source), profile); runCurrent()
+        assertEquals(written, journal.read(stream).size, "An input that changes nothing and asks for nothing is not a record")
+    }
+
+    @Test fun anInputTheStateRefusesIsReportedAsAFailureNotDroppedInSilence() = runTest {
+        val conversation = PinConversation("refusedinput")
+        val service = DefaultRequestPinService(repository(), gateway { answer }, backgroundScope, unreadable(InMemoryEventJournal()), storageDispatcher = UnconfinedTestDispatcher(testScheduler))
+        service.sync(conversation, listOf(source), profile); runCurrent()
+        val marker = AppLog.history().lastOrNull()
+        // The state is now persistence-unknown, which refuses every input until a reopen restores it.
+        service.sync(conversation, listOf(source), profile); runCurrent()
+        val updates = reportedSince(marker).filter { it.fields["operation"] == "update" }
+        assertEquals(1, updates.size, reportedSince(marker).toString())
+    }
+
+    @Test fun aJournalThatRefusesTheAppendAsChangedByAnotherOwnerBlocksTheProvider() = runTest {
+        val conversation = PinConversation("anotherowner")
+        var calls = 0
+        val backing = InMemoryEventJournal()
+        val service = DefaultRequestPinService(repository(), gateway { calls++; answer }, backgroundScope, unreadable(backing, refuse = true), storageDispatcher = UnconfinedTestDispatcher(testScheduler))
+        val marker = AppLog.history().lastOrNull()
+        service.sync(conversation, listOf(source), profile); runCurrent()
+        assertEquals(0, calls)
+        assertNotNull(service.failures.value[conversation])
+        assertTrue(reportedSince(marker).any { it.event == "operation.failed" }, "A refused append is a failure, not an accepted input")
+        assertEquals(0, backing.streams().flatMap { backing.read(it) }.count { type(it.detail) == "Analyse" })
+    }
+
+    @Test fun anAdmittedAppendCompletesEvenWhenItsOwnerIsCancelledMidWrite() = runTest {
+        val backing = InMemoryEventJournal()
+        val entered = CompletableDeferred<Unit>()
+        val journal = object : EventJournal by backing {
+            override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+                if (type(detail) == "Analyse") { entered.complete(Unit); delay(1_000) }
+                return backing.append(expected, operation, at, detail)
+            }
+        }
+        val owner = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val service = DefaultRequestPinService(repository(), gateway { answer }, owner, journal, storageDispatcher = UnconfinedTestDispatcher(testScheduler))
+        service.sync(key, listOf(source), profile); runCurrent()
+        entered.await()
+        owner.cancel(); runCurrent()
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(1, backing.read(backing.streams().single()).count { type(it.detail) == "Analyse" }, "An admitted write is non-cancellable")
     }
 
     @Test fun profileCredentialsAndConnectionMetadataNeverEnterTheJournal() = runTest {
