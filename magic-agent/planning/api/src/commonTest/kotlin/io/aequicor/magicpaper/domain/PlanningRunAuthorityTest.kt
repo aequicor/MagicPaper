@@ -31,6 +31,42 @@ class PlanningRunAuthorityTest {
         assertNotNull(PlanningMachine.reduce(unknown, PlanningMachine.Intent.Pause(stamp())).rejection)
         assertNotNull(PlanningMachine.reduce(unknown, PlanningMachine.Intent.Start("run", PlanningRulesSettings().snapshot(), stamp())).rejection)
     }
+    private fun completed(): PlanningMachine.State {
+        val workspace = PlanWorkspace("/root", "/root/integration", "base", git = true)
+        val criteria = plan.acceptanceCriteria()
+        val final = StageAttempt("final", "review", StageAssignment("p", "m"), phase = AttemptPhase.COMPLETE,
+            acceptanceRecord = AcceptanceRecord("run", "final", "snapshot", criteria,
+                criteria.map { AcceptanceFinding(it.id, CheckStatus.PASS, it.description, "Checked") }, status = AcceptanceStatus.ACCEPTED))
+        val active = start(initial(plan.copy(runId = "run", workspace = workspace, finalAttempt = final,
+            milestones = plan.milestones.map { it.copy(status = MilestoneStatus.DONE) })))
+        return accepted(active, PlanningMachine.Fact.Applied(checkNotNull(active.run).ref, workspace.copy(applied = true), stamp()))
+    }
+
+    @Test fun pauseCannotReopenAStoppedRunForResume() {
+        val running = start(initial())
+        val ref = checkNotNull(running.run).ref
+        val stopping = accepted(running, PlanningMachine.Intent.Stop(stamp()))
+        val stopped = accepted(stopping, PlanningMachine.Fact.StopConfirmed(stamp(), stopping.stopId))
+        val paused = PlanningMachine.reduce(stopped, PlanningMachine.Intent.Pause(stamp()))
+        assertNotNull(paused.rejection); assertEquals(stopped, paused.state)
+        // Pause would have led here: the stopped admission asked to run again. Only a new Start does that.
+        assertNotNull(PlanningMachine.reduce(stopped, PlanningMachine.Intent.Resume(ref, stamp())).rejection)
+        val restarted = PlanningMachine.reduce(stopped, PlanningMachine.Intent.Start("run", PlanningRulesSettings().snapshot(), stamp()))
+        assertNull(restarted.rejection); assertNotEquals(ref, checkNotNull(restarted.state.run).ref)
+    }
+
+    @Test fun aFinishedPlanRefusesPauseAndStopAndKeepsItsOutcome() {
+        val finishedRun = completed()
+        val importedFinished = initial(plan.copy(runId = "saved", phase = ExecutionPhase.COMPLETE, status = PlanStatus.DONE))
+        for (state in listOf(finishedRun, importedFinished)) {
+            for (input in listOf(PlanningMachine.Intent.Pause(stamp()), PlanningMachine.Intent.Stop(stamp()))) {
+                val refused = PlanningMachine.reduce(state, input)
+                assertNotNull(refused.rejection, "$input was accepted by a finished plan"); assertEquals(state, refused.state)
+            }
+            assertEquals(PlanStatus.DONE, state.plan?.status)
+        }
+    }
+
     @Test fun genericPhaseFactCannotInventCompletion() {
         val active = start(initial())
         val rejected = PlanningMachine.reduce(active, PlanningMachine.Fact.PhaseObserved(checkNotNull(active.run).ref, ExecutionPhase.COMPLETE, stamp()))

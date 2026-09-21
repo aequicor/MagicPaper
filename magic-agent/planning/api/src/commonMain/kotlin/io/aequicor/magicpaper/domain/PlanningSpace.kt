@@ -27,10 +27,12 @@ import io.aequicor.magicpaper.machine.acceptance
  *    `RecoveryConfirmed` refuse while one is pending. The unknown positions are [UNKNOWN_RUN],
  *    [UNKNOWN_STOPPING] and [STOP_UNCONFIRMED] (`StopUnknown`: the run is unknown and nothing is
  *    pending, so `RecoveryConfirmed` is accepted there and refused at [UNKNOWN_STOPPING]).
- * 4. Otherwise the run phase decides, and `RUNNING` is three positions because acceptance depends on
- *    the evidence already received: [RUNNING] accepts `FinalAttemptCreated`, [RUNNING_FINAL] holds a
- *    final attempt and accepts the inputs that name it, and [READY] holds an accepted final attempt
- *    over stages that are all done, which is the only place `Applied` is accepted.
+ * 4. Otherwise the run phase decides, and `RUNNING` is four positions because acceptance depends on
+ *    the evidence already received: [ADMITTED] is a run nothing has started on, where no stage holds an
+ *    attempt and so every input that names one is refused; [RUNNING] has begun a stage and accepts
+ *    `FinalAttemptCreated`; [RUNNING_FINAL] holds a final attempt and accepts the inputs that name it;
+ *    and [READY] holds an accepted final attempt over stages that are all done, which is the only place
+ *    `Applied` is accepted.
  *
  * `unknown(state)` and the position agree: it is true at exactly the four unknown-outcome positions
  * and at [PERSISTENCE_UNKNOWN], which `PlanningSpaceTest` pins.
@@ -39,7 +41,7 @@ import io.aequicor.magicpaper.machine.acceptance
  *
  * - Identity. A run reference, an attempt reference, a stop id, a refinement reference, a request id
  *   or a stamp that names something else is a refusal of identity, not of position. Every
- *   representative that holds a run carries one admission, one run and one attempt.
+ *   representative that holds a run carries one admission and one run, and all but [ADMITTED] one attempt.
  * - Payload that snapshots the plan. `Edit` and `LegacyCheckpoint` carry the plan or its revision,
  *   `Retry` carries the expected plan, and `FinalRecorded`, `FinalTurnStarted`, `FinalAttemptCleared`
  *   and `MergeAcceptanceRecorded` carry the final attempt. Their rows say only where the
@@ -47,8 +49,9 @@ import io.aequicor.magicpaper.machine.acceptance
  *   [INTERRUPTED] shares the running plan, [RUNNING_FINAL] holds the final attempt — and read as
  *   refusals everywhere else. A fresh `Edit` is accepted at every position that has a plan, since
  *   the reducer never looks at the run phase, and a fresh `Retry` wherever `Start` is.
- * - Evidence that is not a position. Whether a stage has an attempt and in which phase, the
- *   workspace the run applies, a plan issue (which is why `StrategySelected` is accepted only at
+ * - Evidence that is not a position. Whether a stage has an attempt is a position only for a running
+ *   run that has none anywhere ([ADMITTED]); which stage has one, in which phase, the workspace the run
+ *   applies, a plan issue (which is why `StrategySelected` is accepted only at
  *   [STOP_UNCONFIRMED], the one representative that carries one) and the recorded native requests
  *   (which is why `ConfirmNativeRecovery` is accepted only at [UNKNOWN_RUN]) stay behind the
  *   position. A final attempt is a position only while the run is running; a paused or stopped run
@@ -56,6 +59,13 @@ import io.aequicor.magicpaper.machine.acceptance
  *   refinement is a position only without a run, so `RefinementCompleted` reads as refused at a
  *   running plan that has one captured. A pending outcome, a stop request and a refinement together
  *   are named by the pending outcome alone.
+ * - A stop id that is missing. Only an old journal entry carries none, and `DefaultPlanningStore` refuses
+ *   it from a live command, so the reducer stays lenient for replay: `StopUnknown` without an id is
+ *   accepted wherever a plan exists, although `StopConfirmed` without one needs a stop request. The
+ *   representatives send no id, which is why the `StopUnknown` column is accepted at every position.
+ * - Replay. The matrix describes a live command. A journal is replayed with `replay = true`, which lifts the
+ *   refusal of `Pause` at [STOPPED] and of `Pause` and `Stop` at [COMPLETE], because an earlier reducer
+ *   accepted them and a plan holding one must still load.
  * - Columns refused everywhere. `SkipVerification` needs a plan blocked by a failed acceptance with
  *   its proofs, and `NativeProofObserved` needs a native decision that was recorded; no position
  *   here holds either. `PlanningRunAuthorityTest` and `PlanningNativeRecoveryTest` cover them.
@@ -74,6 +84,7 @@ object PlanningSpace : StateSpace<PlanningMachine.State, PlanningMachine.Input, 
     val REFINING = PhaseId("refining")
     val DRAFT_UNRESOLVED = PhaseId("draft-unresolved")
     val DRAFT_STOPPING = PhaseId("draft-stopping")
+    val ADMITTED = PhaseId("admitted")
     val RUNNING = PhaseId("running")
     val RUNNING_FINAL = PhaseId("running-final")
     val READY = PhaseId("ready-to-apply")
@@ -155,7 +166,7 @@ object PlanningSpace : StateSpace<PlanningMachine.State, PlanningMachine.Input, 
 
     override val phases = listOf(
         NEW, DRAFT, REFINING, DRAFT_UNRESOLVED, DRAFT_STOPPING,
-        RUNNING, RUNNING_FINAL, READY, PAUSED, STOPPING, STOPPED, INTERRUPTED,
+        ADMITTED, RUNNING, RUNNING_FINAL, READY, PAUSED, STOPPING, STOPPED, INTERRUPTED,
         UNKNOWN_RUN, UNKNOWN_STOPPING, STOP_UNCONFIRMED, COMPLETE,
         PERSISTENCE_UNKNOWN, DELETED,
     )
@@ -238,17 +249,18 @@ object PlanningSpace : StateSpace<PlanningMachine.State, PlanningMachine.Input, 
         /* refining                 */ "000110110011111010110000111111000100000100000000000001001101000",
         /* draft-unresolved         */ "001100110011111110000001110111000100000100000000000001001101000",
         /* draft-stopping           */ "000100010011111110100000111111000100000100000000000011001101000",
+        /* admitted                 */ "000100110011111111000000111111010111111110010000010001101111111",
         /* running                  */ "000100110011111111001000111111011111111110011111110001101111111",
         /* running-final            */ "000100110011111111001000111111011111111101111111111001111111111",
         /* ready-to-apply           */ "000100110011111111001000111111011111111100011111110101101111111",
         /* paused                   */ "000111110011111111100000111111011111101100000111110001101101111",
         /* stopping                 */ "000100010011111111000000111111011111101100000011110011101101111",
-        /* stopped                  */ "000110110011111111100000111111011111101100000011010001101101111",
+        /* stopped                  */ "000110010011111111100000111111011111101100000011010001101101111",
         /* interrupted              */ "000110111011111111100000111111011111101100000011110001101101111",
         /* unknown-outcome          */ "100100010011111111000000110111011111101100000011110001101101111",
         /* unknown-outcome-stopping */ "000100010011111111000000110111011111101100000011110011101101111",
         /* stop-unconfirmed         */ "000100010011111111000000111111111111101100000011110011101101111",
-        /* complete                 */ "000100110011111111100000111111000100000100000000000001001101000",
+        /* complete                 */ "000100000011111111100000111111000100000100000000000001001101000",
         /* persistence-unknown      */ "000000000000000000000000010000000000000000000000000000000000000",
         /* deleted                  */ "000000000000000000000000010000000000000000000000000000000000000",
     ))
@@ -280,6 +292,7 @@ object PlanningSpace : StateSpace<PlanningMachine.State, PlanningMachine.Input, 
             PlanningMachine.RunPhase.RUNNING -> when {
                 ready(plan) -> READY
                 plan.finalAttempt != null -> RUNNING_FINAL
+                plan.milestones.none { it.attempts.isNotEmpty() } -> ADMITTED
                 else -> RUNNING
             }
             PlanningMachine.RunPhase.PAUSED -> PAUSED

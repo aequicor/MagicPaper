@@ -199,7 +199,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             }
             is Intent.QueuedClarified -> {
                 val session = requireSession(state, input.session)
-                val request = session.queuedPrompts.single { it.runId == input.requestId }
+                val request = requireNotNull(session.queuedPrompts.singleOrNull { it.runId == input.requestId }) { "Запрос уже не в очереди" }
                 require(input.requestId !in state.startedRequests && input.note.role == CodingRole.USER && input.note.id.isNotBlank())
                 val reserved = state.histories[session.id].orEmpty().map { it.id } + state.removedMessages[session.id].orEmpty() +
                     session.queuedPrompts.flatMap { listOf(it.messageId, it.responseId, it.responseTimelineId) }

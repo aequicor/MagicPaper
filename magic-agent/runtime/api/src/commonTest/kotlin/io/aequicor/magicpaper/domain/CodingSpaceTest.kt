@@ -5,14 +5,10 @@ import io.aequicor.magicpaper.domain.CodingMachine.Effect
 import io.aequicor.magicpaper.domain.CodingMachine.Fact
 import io.aequicor.magicpaper.domain.CodingMachine.Intent
 import io.aequicor.magicpaper.domain.planning.OrchestrationEvent
-import io.aequicor.magicpaper.machine.Machine
-import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.PhaseId
-import io.aequicor.magicpaper.machine.Step
 import io.aequicor.magicpaper.machine.verifyStateSpace
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -110,26 +106,15 @@ class CodingSpaceTest {
         assertEquals(2, ref.generation)
     }
 
-    /**
-     * `QueuedClarified` looks its request up with `single { }` and so escapes `reduce` as a
-     * `NoSuchElementException` when nothing is queued under that id, where every other guard answers
-     * with a `Reject`. The harness cannot drive an input that throws, so it runs against this
-     * wrapper, which turns exactly that exception into the refusal the guard clearly means. The pin
-     * below fails when the reducer is fixed, and the wrapper should then be deleted.
-     */
-    private object Guarded : Machine<CodingMachine.State, CodingMachine.Input, Effect> {
-        override val id: MachineId get() = CodingMachine.id
-        override val space get() = CodingMachine.space
-        override fun step(state: CodingMachine.State, input: CodingMachine.Input): Step<CodingMachine.State, Effect> =
-            try { CodingMachine.step(state, input) } catch (missing: NoSuchElementException) {
-                if (input !is Intent.QueuedClarified) throw missing
-                Step(state, listOf(Effect.Reject("Запрос не найден в очереди")))
-            }
-    }
-
-    @Test fun clarifyingARequestThatIsNotQueuedEscapesTheReducerInsteadOfBeingRefused() {
+    @Test fun clarifyingARequestThatIsNotQueuedIsRefusedInsteadOfEscapingTheReducer() {
         val note = CodingMessage("note", CodingRole.USER, "More detail", createdAt = 4)
-        assertFailsWith<NoSuchElementException> { CodingMachine.reduce(idle, Intent.QueuedClarified(sessionRef, "held", note, emptyList())) }
+        // Nothing is queued under the id; a run that already started is no longer queued; a queue holds another id.
+        val cases = listOf(idle to "held", at(CodingSpace.RUNNING) to ref.requestId, at(CodingSpace.QUEUED) to "another")
+        for ((state, id) in cases) {
+            val step = CodingMachine.reduce(state, Intent.QueuedClarified(sessionRef, id, note, emptyList()))
+            assertEquals(state, step.state, "a clarification of $id changed the state")
+            assertTrue(step.effects.single() is Effect.Reject, "a clarification of $id was not refused")
+        }
     }
 
     /**
@@ -199,7 +184,7 @@ class CodingSpaceTest {
     }
 
     @Test fun declaredSpaceIsClosedAndMatchesEveryTransition() = verifyStateSpace(
-        Guarded,
+        CodingMachine,
         states = mapOf(
             CodingSpace.UNRESTORED to initial,
             CodingSpace.PROJECT_ONLY to projectOnly,

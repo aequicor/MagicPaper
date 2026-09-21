@@ -31,8 +31,10 @@ import kotlin.test.assertTrue
  * Every state is built by running the machine from `initial`, never by constructing one, which is
  * what the `internal constructor` on `State` is there to enforce. Every position that holds a run is
  * built from one admission — stamp `start`, run `run`, generation 1 — so a single `RunRef` fits all
- * of them, and from one attempt `a1` on the stage `stage`, so a single `AttemptRef` does. The second
- * stage, `extra`, is never started, which is why `StageCreated` names it. `ready` is the one place
+ * of them, and every one but `admitted` from one attempt `a1` on the stage `stage`, so a single
+ * `AttemptRef` does; `admitted` is that admission before the attempt exists, and is where an input
+ * naming the attempt is refused. The second stage, `extra`, is never started, which is why
+ * `StageCreated` names it. `ready` is the one place
  * a plan is seeded: the evidence `Applied` needs cannot be produced by a short chain of inputs.
  */
 class PlanningSpaceTest {
@@ -97,6 +99,7 @@ class PlanningSpaceTest {
         PlanningSpace.REFINING to refining,
         PlanningSpace.DRAFT_UNRESOLVED to accepted(draft, Fact.OperationUnknown(9, stamp())),
         PlanningSpace.DRAFT_STOPPING to accepted(draft, Intent.Stop(stamp())),
+        PlanningSpace.ADMITTED to started,
         PlanningSpace.RUNNING to running,
         PlanningSpace.RUNNING_FINAL to runningFinal,
         PlanningSpace.READY to ready,
@@ -189,6 +192,16 @@ class PlanningSpaceTest {
     )
 
     @Test fun declaredSpaceIsClosedAndMatchesEveryTransition() = verifyStateSpace(PlanningMachine, states, inputs)
+
+    @Test fun aRunIsAdmittedOnlyUntilAnyStageHoldsAnAttempt() {
+        val admitted = states.getValue(PlanningSpace.ADMITTED)
+        assertEquals(PlanningSpace.ADMITTED, PlanningSpace.label(admitted))
+        // Any stage counts, not only the one the representatives name.
+        val elsewhere = accepted(admitted, Fact.StageCreated(ref, "extra", "a2", "s2", assignment, 1, stamp()))
+        assertEquals(PlanningSpace.RUNNING, PlanningSpace.label(elsewhere))
+        // Only a running run splits on it: a paused one is named by its run phase alone.
+        assertEquals(PlanningSpace.PAUSED, PlanningSpace.label(accepted(admitted, Intent.Pause(stamp()))))
+    }
 
     @Test fun persistenceUnknownOutranksDeletion() {
         // The flag fact is accepted even by a deleted plan, and the flag is the stronger fence.

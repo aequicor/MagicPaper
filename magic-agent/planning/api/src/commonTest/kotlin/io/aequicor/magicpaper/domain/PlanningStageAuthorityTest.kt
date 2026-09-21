@@ -31,6 +31,35 @@ class PlanningStageAuthorityTest {
         assertTrue(transition.effects.none { it is PlanningMachine.Effect.StageDecision })
     }
 
+    @Test fun aStageThatDoesNotExistIsRefusedInsteadOfEscapingTheReducer() {
+        val state = active()
+        val ref = checkNotNull(state.run).ref
+        val attempt = state.attempt()
+        val expected = PlanningMachine.AttemptRef.from(attempt)
+        for (input in listOf<PlanningMachine.Input>(
+            PlanningMachine.Fact.StageCreated(ref, "missing", "other-attempt", "other-worker", StageAssignment("profile", "model"), 1, stamp()),
+            PlanningMachine.Fact.StageProgressObserved(ref, "missing", expected, StageProgress.from(attempt), stamp()),
+            PlanningMachine.Fact.StageTransitioned(ref, "missing", expected, StageEvent.EngineResolved(CodingEngine.PI), null, stamp()),
+            PlanningMachine.Fact.VerificationObserved(ref, "missing", expected, true, "ok", stamp()),
+            PlanningMachine.Fact.AttemptRecorded(ref, "missing", attempt, stamp = stamp()),
+        )) rejected(state, input)
+    }
+
+    @Test fun aStageWithoutAnAttemptRefusesWhatNeedsOne() {
+        val plan = Plan("plan", "project", "Goal", milestones = listOf(Milestone("stage", "Stage", description = "Verify result")))
+        val created = accepted(PlanningMachine.initial(plan.id), PlanningMachine.Intent.Create(plan, stamp()))
+        val state = accepted(created, PlanningMachine.Intent.Start("run", PlanningRulesSettings().snapshot(), stamp()))
+        val ref = checkNotNull(state.run).ref
+        // The attempt exists nowhere on the stage, so the references below name something that was never created.
+        val absent = attempt()
+        val expected = PlanningMachine.AttemptRef.from(absent)
+        for (input in listOf<PlanningMachine.Input>(
+            PlanningMachine.Fact.StageProgressObserved(ref, "stage", expected, StageProgress.from(absent), stamp()),
+            PlanningMachine.Fact.StageTransitioned(ref, "stage", expected, StageEvent.EngineResolved(CodingEngine.PI), null, stamp()),
+            PlanningMachine.Fact.VerificationObserved(ref, "stage", expected, true, "ok", stamp()),
+        )) rejected(state, input)
+    }
+
     @Test fun progressCannotRebindEitherNativeSessionIdentity() {
         val state = active()
         val progress = StageProgress.from(state.attempt())
