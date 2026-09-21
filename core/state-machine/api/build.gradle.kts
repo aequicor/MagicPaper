@@ -1,15 +1,14 @@
 plugins { id("magicpaper.kmp-library") }
 
+// A foundational leaf: the machine contract, the declared state space and the journaled
+// runtime port. It carries no project dependency at all, because :core:model and
+// :backend-agents:api own machines and may depend only on modules of that kind.
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            api(project(":core:model"))
-            api(project(":core:state-machine:api"))
-            api(project(":core:logging"))
             api(libs.kotlinx.coroutinesCore)
             api(libs.kotlinx.serializationJson)
         }
-        commonTest { kotlin.srcDir(rootProject.file("testSupport/statemachine")) }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutinesTest)

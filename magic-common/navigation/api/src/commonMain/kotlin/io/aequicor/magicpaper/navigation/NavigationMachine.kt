@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper.navigation
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
+
 /** Only dialog identity lives here; form and questionnaire contents belong to feature draft stores. */
 data class DialogRoute(val kind: String, val entityId: String? = null)
 
@@ -14,7 +18,12 @@ data class DialogRoute(val kind: String, val entityId: String? = null)
  * and refuses every write until an explicit [Intent.Reset], rather than overwriting history it
  * could not read. Visit identity, like every other new id, arrives as an input value.
  */
-object NavigationMachine {
+object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.Input, NavigationMachine.Effect> {
+    override val id = MachineId("navigation")
+    override val space get() = NavigationSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     const val RESTORE_FAILED = "Не удалось восстановить историю переходов."
     const val SAVE_FAILED = "Не удалось сохранить историю переходов."
     const val TRANSITION_FAILED = "Не удалось открыть раздел. Повторите переход."

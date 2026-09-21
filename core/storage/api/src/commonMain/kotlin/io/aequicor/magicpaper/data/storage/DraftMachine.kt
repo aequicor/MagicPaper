@@ -1,5 +1,9 @@
 package io.aequicor.magicpaper.data.storage
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
+
 /** A write outcome as a comparable value: transitions must not carry a platform exception. */
 data class DraftFailure(val operation: String, val kind: StorageException.Kind, val committed: Boolean)
 
@@ -16,7 +20,12 @@ data class DraftFailure(val operation: String, val kind: StorageException.Kind, 
  * The payload itself stays outside the machine. Versions identify an edit; the executor owns the
  * value, its secrets and its blobs, so a transition can be compared without deserializing a draft.
  */
-object DraftMachine {
+object DraftMachine : Machine<DraftMachine.State, DraftMachine.Input, DraftMachine.Effect> {
+    override val id = MachineId("draft")
+    override val space get() = DraftSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(
         /** Repository generation captured when the writer was opened; reset replaces it. */

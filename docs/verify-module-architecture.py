@@ -104,7 +104,9 @@ def kotlin_code(text):
     pattern = r'"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n])*"|/\*.*?\*/|//[^\n]*'
     return re.sub(pattern, lambda match: re.sub(r'[^\n]', ' ', match.group(0)), text, flags=re.S)
 
-EFFECT_SUFFIX = re.compile(r'(?:Effect|Event|Signal)$')
+# Inputs are journaled and replayed, so a lambda in an Intent or a Fact is exactly the effect
+# problem one step earlier: a recorded input that carries behaviour cannot be replayed at all.
+EFFECT_SUFFIX = re.compile(r'(?:Effect|Event|Signal|Intent|Fact)$')
 SEALED_DECLARATION = re.compile(r'^[ \t]*(?:(?:public|internal|private|expect|actual|abstract|open)\s+)*'
                                 r'sealed\s+(?:interface|class)\s+(\w+)', re.M)
 DECLARATION = re.compile(r'^[ \t]*(?:(?:public|internal|private|expect|actual|abstract|open|sealed|data'
@@ -609,6 +611,16 @@ if '--self-test' in sys.argv:
         assert not violations(root), violations(root)
         branch.write_text('package another\ndata class Answer(val callback: () -> Unit) : QuestionEffect\n')
         assert not violations(root), 'unrelated packages do not share a sealed hierarchy'
+        # An input is replayed from the journal, so it owes the same rule as an effect.
+        source.write_text('package fixture\nsealed interface QuestionIntent\nsealed interface QuestionFact\n')
+        branch.write_text('package fixture\ndata class Answer(val onDone: () -> Unit) : QuestionIntent\n')
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 1 and 'Answer.onDone' in found[0], found
+        branch.write_text('package fixture\ndata class Delivered(val ack: (Long) -> Unit) : QuestionFact\n')
+        found = [error for error in violations(root) if 'declares a function type' in error]
+        assert len(found) == 1 and 'Delivered.ack' in found[0], found
+        branch.write_text('package fixture\ndata class Delivered(val at: Long) : QuestionFact\n')
+        assert not violations(root), violations(root)
 
 if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory
