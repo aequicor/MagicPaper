@@ -35,6 +35,27 @@ class BackendAgentCatalogTest {
         assertContains(failure.message.orEmpty(), "approval")
         assertTrue(invalid.closed)
     }
+    @Test fun declaredModelCatalogWithoutImplementationIsRejected() = environment { env ->
+        val invalid = FakeAgent(descriptor.copy(capabilities = setOf(BackendAgentCapability.NATIVE_MODEL_CATALOG)))
+        val failure = assertFailsWith<IllegalArgumentException> {
+            catalog(listOf(contribution(invalid.descriptor) { invalid })).create { _, _ -> env }
+        }
+        assertContains(failure.message.orEmpty(), "model catalog")
+        assertTrue(invalid.closed)
+    }
+    @Test fun modelCatalogWithoutDeclaredCapabilityIsRejected() = environment { env ->
+        val invalid = FakeAgent(descriptor, models = NativeModelCatalog { emptyList() })
+        val failure = assertFailsWith<IllegalArgumentException> {
+            catalog(listOf(contribution(invalid.descriptor) { invalid })).create { _, _ -> env }
+        }
+        assertContains(failure.message.orEmpty(), "model catalog")
+        assertTrue(invalid.closed)
+    }
+    @Test fun onlyCodexDeclaresANativeModelCatalog() {
+        val declared = createBackendAgentCatalog().descriptors
+            .filter { BackendAgentCapability.NATIVE_MODEL_CATALOG in it.capabilities }.map { it.engine }
+        assertEquals(listOf(CodingEngine.CODEX), declared)
+    }
     @Test fun constructionFailureClosesEarlierInstancesAndPreservesCleanupCause() = environment { env ->
         val primary = IllegalStateException("construction")
         val cleanup = IllegalStateException("cleanup")
@@ -61,7 +82,11 @@ class BackendAgentCatalogTest {
         second.close()
     }
 
-    private class FakeAgent(override val descriptor: BackendAgentDescriptor, val closeFailure: Throwable? = null) : BackendAgent {
+    private class FakeAgent(
+        override val descriptor: BackendAgentDescriptor,
+        val closeFailure: Throwable? = null,
+        override val models: NativeModelCatalog? = null,
+    ) : BackendAgent {
         val aborted = mutableListOf<String>()
         var closed = false
         override val rootPath = "fixture"

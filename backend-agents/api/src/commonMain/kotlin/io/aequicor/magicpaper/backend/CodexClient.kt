@@ -46,6 +46,8 @@ interface CodexClient : AutoCloseable {
     suspend fun cancelLogin(loginId: String)
     suspend fun logout()
     suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel>
+    /** Каталог `model/list` без эвристик [ModelDefaults]: уровни и умолчание — как объявил Codex. */
+    suspend fun codingModels(): List<CodingModel>
     suspend fun runtimeStatus(): NativeRuntimeStatus
     suspend fun subscriptionAccessToken(): String
     fun withCachedContextWindow(profile: LlmProfile): LlmProfile

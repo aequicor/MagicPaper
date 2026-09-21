@@ -60,6 +60,9 @@ internal class GenericNativeRuntime(
     override val rootPath get() = agent.rootPath
     override val questionnaires = registry.requests
     override val approvals = agent.approvals?.requests ?: MutableStateFlow(emptyList())
+    override val modelSources: Map<CodingEngine, CodingModelSource> = agent.models
+        ?.let { catalog -> mapOf(agent.descriptor.engine to CodingModelSource { catalog.models() }) }
+        ?: emptyMap()
     override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) = registry.respond(id, answers)
     override suspend fun respondApproval(id: String, decision: CodingApprovalDecision) =
         checkNotNull(agent.approvals) { "Native approvals are not supported" }.respond(id, decision)

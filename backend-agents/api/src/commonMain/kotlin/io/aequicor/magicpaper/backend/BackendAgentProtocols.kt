@@ -14,6 +14,8 @@ enum class BackendAgentCapability {
     EXTERNAL_INSTALLATION,
     NATIVE_APPROVALS,
     NATIVE_TOOL_HISTORY,
+    /** Движок сам перечисляет свои модели и их уровни thinking: [NativeAgentAdapter.models] задан. */
+    NATIVE_MODEL_CATALOG,
     DISABLE_NATIVE_SKILL_LOADING,
 }
 

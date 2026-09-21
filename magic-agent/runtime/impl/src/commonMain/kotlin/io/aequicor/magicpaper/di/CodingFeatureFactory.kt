@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.data.coding.PersistedCodingModelCatalog
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.plugins.builtin.CodingPlanningPlugin
@@ -45,6 +46,8 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         override val projects: CodingProjectRepository = projects
         override val planning: PlanningRepository = graph.planningStore
         override val runtime: CodingRuntime = runtime
+        override val models: CodingModelCatalog =
+            PersistedCodingModelCatalog(deps.store, deps.json, runtime.modelSources)
         override val service: CodingService = service
         override val componentFactory: CodingComponent.Factory =
             DefaultCodingComponentFactory(service, deps.filePicker, deps.projectSkills)

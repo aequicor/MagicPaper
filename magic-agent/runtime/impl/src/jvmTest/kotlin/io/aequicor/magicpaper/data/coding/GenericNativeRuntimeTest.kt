@@ -37,6 +37,17 @@ class GenericNativeRuntimeTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun runtimeOffersTheNativeModelCatalogUnderTheAgentsOwnEngineOnlyWhenItHasOne() = runBlocking<Unit> {
+        val listed = listOf(CodingModel("openai", "gpt-fixture", levels = listOf("low", "ultra"), defaultLevel = "low"))
+        val withCatalog = object : BackendAgent by Agent() { override val models = NativeModelCatalog { listed } }
+        fun runtime(agent: BackendAgent) = GenericNativeRuntime(agent, Library, {}, { it }, null,
+            testQuestionnaireFactory().create("fixture", null), testBrowserSessions, testCommandChecks)
+        val sources = runtime(withCatalog).modelSources
+        assertEquals(setOf(withCatalog.descriptor.engine), sources.keys)
+        assertEquals(listed, sources.getValue(withCatalog.descriptor.engine).fetch())
+        assertTrue(runtime(Agent()).modelSources.isEmpty())
+    }
+
     @Test fun noDispatchProofDecisionAndConsumptionKeepExactNativeIdentityAcrossDesktopTransport() = runBlocking<Unit> {
         val root = Files.createTempDirectory("generic-native-no-dispatch").toFile()
         try {

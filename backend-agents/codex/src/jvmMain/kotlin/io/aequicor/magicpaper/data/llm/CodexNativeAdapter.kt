@@ -21,7 +21,7 @@ class CodexNativeAdapter : CodexNativeProtocol {
         CodingEngine.CODEX,
         "Codex",
         setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_APPROVALS,
-            BackendAgentCapability.NATIVE_TOOL_HISTORY),
+            BackendAgentCapability.NATIVE_TOOL_HISTORY, BackendAgentCapability.NATIVE_MODEL_CATALOG),
         "Codex · работа с файлами, командами и подтверждениями доступа",
         "Подписка ChatGPT и API-провайдеры.",
         "Нативные навыки и плагины Codex определяются его конфигурацией при запуске; список ниже относится к пакетам MagicPaper.",

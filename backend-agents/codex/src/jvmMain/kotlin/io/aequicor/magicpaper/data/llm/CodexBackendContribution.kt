@@ -40,6 +40,7 @@ internal class CodexBackendAgent(
     }
     override val history = NativeToolHistory { id, calls -> control.readCodingToolResults(id, calls) }
     override val removal: NativeRemoval? = null
+    override val models = NativeModelCatalog { control.codingModels() }
 
     override suspend fun status() = control.runtimeStatus().let {
         NativeInstallationStatus(if (it.ready) NativeInstallationPhase.READY else NativeInstallationPhase.ERROR, it.detail)

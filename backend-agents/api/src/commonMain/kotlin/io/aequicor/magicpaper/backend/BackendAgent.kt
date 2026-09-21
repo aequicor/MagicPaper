@@ -83,6 +83,9 @@ fun interface NativeToolHistory {
 
 fun interface NativeRemoval { suspend fun remove() }
 
+/** Каталог моделей как его объявляет сам движок, без эвристик приложения. Ошибку опроса пробрасывает. */
+fun interface NativeModelCatalog { suspend fun models(): List<CodingModel> }
+
 /** One native engine instance. Native-specific connection/attempt state stays behind this boundary. */
 interface NativeAgentAdapter : AutoCloseable {
     val descriptor: BackendAgentDescriptor
@@ -90,6 +93,8 @@ interface NativeAgentAdapter : AutoCloseable {
     val approvals: NativeApprovalRequests?
     val history: NativeToolHistory?
     val removal: NativeRemoval?
+    /** Задан ровно тогда, когда у дескриптора есть [BackendAgentCapability.NATIVE_MODEL_CATALOG]. */
+    val models: NativeModelCatalog? get() = null
     suspend fun status(): NativeInstallationStatus
     fun prepare(): Flow<NativeInstallationStatus>
     /** Pure native model policy, resolved before the host builds provider controls and enrichment. */
