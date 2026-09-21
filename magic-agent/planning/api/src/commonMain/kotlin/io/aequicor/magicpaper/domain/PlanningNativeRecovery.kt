@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.domain
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Journal-owned correlation. Logical attempt/turn identities never double as a transport request. */
@@ -105,11 +106,11 @@ internal fun planningNativeReleased(state: PlanningMachine.State, releases: List
 }
 
 @Serializable sealed interface PlanningNativeFact {
-    @Serializable data class ReleaseAuthorized(val releases: List<PlanningNativeRecoveryRelease>) : PlanningNativeFact
-    @Serializable data class RequestAdmitted(val request: PlanningNativeRequest) : PlanningNativeFact
-    @Serializable data class Acknowledged(val requestId: String, val decisionId: String,
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningNativeFact.ReleaseAuthorized") data class ReleaseAuthorized(val releases: List<PlanningNativeRecoveryRelease>) : PlanningNativeFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningNativeFact.RequestAdmitted") data class RequestAdmitted(val request: PlanningNativeRequest) : PlanningNativeFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningNativeFact.Acknowledged") data class Acknowledged(val requestId: String, val decisionId: String,
         val acknowledgement: PlanningNativeAcknowledgement) : PlanningNativeFact
-    @Serializable data class ConsumptionObserved(val requestId: String,
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningNativeFact.ConsumptionObserved") data class ConsumptionObserved(val requestId: String,
         val consumption: NativeRunRecoveryConsumption) : PlanningNativeFact
 }
 

@@ -128,6 +128,67 @@ def machine_violations(relative, code, module_tests, catalogue):
             errors.append(f'{relative}: {name} is missing from the catalogue in {STATE_SPACE_DOCUMENT}')
     return errors
 
+# A journaled input is found again by its polymorphic discriminator. Without @SerialName that is the full
+# name of the class with its nesting, so moving or renaming the branch, or splitting its parent, orphans every
+# record written under the old name. The rule is on the declaration, not on the body of Intent or Fact: a
+# branch can be declared elsewhere in the package, and a supertype named OrchestrationIntent is one too.
+BRANCH_SUPERTYPE = re.compile(r'(?:^|\.)\w*(?:Intent|Fact)$')
+CLASS_DECLARATION = re.compile(
+    r'((?:@[\w.]+(?:\((?:[^()]|\([^()]*\))*\))?\s+)*)'
+    r'(?:(?:public|internal|private|protected|data|enum|value|sealed|abstract|open|inner|annotation|fun|companion)\s+)*'
+    r'(?:class|object)\s+(\w+)')
+CONSTRUCTOR_MODIFIER = re.compile(r'\s*(?:(?:public|internal|private|protected)\s+)?constructor\b')
+
+def balanced(code, position, opening, closing):
+    depth = 0
+    while True:
+        depth += (code[position] == opening) - (code[position] == closing)
+        position += 1
+        if depth == 0:
+            return position
+
+def declared_supertypes(code, position):
+    """Supertypes of the declaration whose name ends at position, past type parameters and the constructor."""
+    while code[position:position + 1].isspace():
+        position += 1
+    if code[position:position + 1] == '<':
+        position = balanced(code, position, '<', '>')
+    constructor = CONSTRUCTOR_MODIFIER.match(code, position)
+    if constructor:
+        position = constructor.end()
+    probe = position
+    while code[probe:probe + 1].isspace():
+        probe += 1
+    if code[probe:probe + 1] == '(':
+        position = balanced(code, probe, '(', ')')
+    probe = position
+    while code[probe:probe + 1].isspace():
+        probe += 1
+    if code[probe:probe + 1] != ':':
+        return []
+    end = probe + 1
+    while True:
+        while end < len(code) and code[end] not in '{=\n':
+            end += 1
+        if code[probe + 1:end].rstrip().endswith(',') and end < len(code) and code[end] == '\n':
+            end += 1
+            continue
+        break
+    return [re.sub(r'<.*', '', part.strip()).replace('()', '').strip()
+            for part in code[probe + 1:end].split(',') if part.strip()]
+
+def unpinned_branches(code):
+    """(name, supertype) of every @Serializable class or object that extends an Intent or a Fact without @SerialName."""
+    found = []
+    for declaration in CLASS_DECLARATION.finditer(code):
+        annotations, name = declaration.group(1), declaration.group(2)
+        if '@Serializable' not in annotations or '@SerialName' in annotations:
+            continue
+        supertypes = [t for t in declared_supertypes(code, declaration.end()) if BRANCH_SUPERTYPE.search(t)]
+        if supertypes:
+            found.append((name, supertypes[0]))
+    return found
+
 def is_retired_module(name):
     return name == ':shared' or name.startswith(':shared:')
 
@@ -516,6 +577,9 @@ def violations(root):
                 tests_by_module[module] = [kotlin_code(test.read_text(encoding="utf-8")) for test in sources.rglob('*.kt')
                                            if test.relative_to(sources).parts[0].endswith('Test')]
             errors.extend(machine_violations(relative, code, tests_by_module[module], catalogue))
+        for branch, supertype in unpinned_branches(code):
+            errors.append(f'{relative}: {branch} is a serializable branch of {supertype} without @SerialName; its stored '
+                          f'name would be the class path, and the branch could never move ({STATE_SPACE_DOCUMENT})')
         for owner, member in effect_function_members(code, planning, effect_roots.get((module, package.group(1), planning), ()) if package else ()):
             errors.append(f'{relative}: {owner}.{member} declares a function type; '
                           f'an effect carries data, not behaviour')
@@ -750,6 +814,68 @@ if '--self-test' in sys.argv:
         assert any('ExtraMachine' in error and 'runs verifyStateSpace' in error for error in errors), errors
         assert any('ExtraMachine' in error and 'missing from the catalogue' in error for error in errors), errors
         assert not any('BrowserMachine ' in error for error in errors), errors
+
+    # A serializable branch of an Intent or a Fact is journaled, so its stored name has to be pinned. Each way
+    # of writing the declaration is checked apart: a rule that misses the odd shape lets the branch back in.
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        source = root / 'magic-agent/planning/api/src/commonMain/kotlin/Branches.kt'
+        source.parent.mkdir(parents=True)
+        def unpinned(text):
+            source.write_text('package fixture\n' + text + '\n')
+            return [error for error in violations(root) if 'without @SerialName' in error]
+        missing = {
+            'plain data class': ('@Serializable data class A(val x: Int) : Fact', 'A'),
+            'data object': ('@Serializable data object B : Intent', 'B'),
+            'constructor over several lines': ('@Serializable data class C(\n    val a: Int,\n    val b: String,\n) : Fact', 'C'),
+            'another annotation and an internal constructor':
+                ('@Serializable @ConsistentCopyVisibility data class D internal constructor(val a: Int) : Fact', 'D'),
+            'colon on the next line': ('@Serializable data class E(val a: Int)\n    : Intent', 'E'),
+            'several supertypes': ('@Serializable data class F(val a: Int) : Marker, Fact', 'F'),
+            'qualified supertype': ('@Serializable data class G(val a: Int) : Machine.Input.Fact', 'G'),
+            'prefixed supertype': ('@Serializable data class H(val a: Int) : OrchestrationIntent', 'H'),
+            'supertype list over two lines': ('@Serializable data class I(val a: Int) : Marker,\n    Fact', 'I'),
+            'annotation on its own line': ('@Serializable\ndata class J(val a: Int) : Fact', 'J'),
+            'the pin named only in a default value': ('@Serializable data class K(val s: String = "@SerialName") : Fact', 'K'),
+            'the pin named only in a comment': ('// @SerialName("x")\n@Serializable data class L(val a: Int) : Fact', 'L'),
+        }
+        for label, (declaration, name) in missing.items():
+            errors = unpinned(declaration)
+            assert len(errors) == 1 and f': {name} is a serializable branch' in errors[0].replace('Branches.kt: ', ': '), (label, errors)
+        pinned = {
+            'after Serializable': '@Serializable @SerialName("x.A") data class A(val x: Int) : Fact',
+            'before Serializable': '@SerialName("x.A") @Serializable data class A(val x: Int) : Fact',
+            'on its own line': '@Serializable\n@SerialName("x.A")\ndata class A(val x: Int) : Fact',
+            'on an object': '@Serializable @SerialName("x.B") data object B : Intent',
+        }
+        for label, declaration in pinned.items():
+            assert not unpinned(declaration), (label, unpinned(declaration))
+        # Only a serializable branch of an Intent or a Fact is journaled: everything else is left alone.
+        for label, declaration in {
+            'not serializable': 'data class A(val x: Int) : Fact',
+            'another supertype': '@Serializable data class A(val x: Int) : Effect',
+            'a look-alike that is not a Fact': '@Serializable data class A(val x: Int) : Artifact',
+            'a factory': '@Serializable data class A(val x: Int) : Factory',
+            'no supertype, a Fact only as a field': '@Serializable data class A(val fact: Fact)',
+            'a Fact only inside the body': '@Serializable data class A(val x: Int) { val f: Fact? = null }',
+        }.items():
+            assert not unpinned(declaration), (label, unpinned(declaration))
+        # One unpinned branch beside a pinned one is one error, and it names the branch that lacks the pin.
+        errors = unpinned('@Serializable sealed interface Fact : Input {\n'
+                          '    @Serializable @SerialName("x.P") data class P(val a: Int) : Fact\n'
+                          '    @Serializable data class Q(val a: Int) : Fact\n}')
+        assert len(errors) == 1 and ': Q is a serializable branch' in errors[0].replace('Branches.kt: ', ': '), errors
+        # The rule covers every production module and no test source set.
+        source.unlink()
+        other = root / 'feature/skills/impl/src/commonMain/kotlin/Skill.kt'
+        other.parent.mkdir(parents=True)
+        other.write_text('package fixture\n@Serializable data class A(val x: Int) : Fact\n')
+        assert len([error for error in violations(root) if 'without @SerialName' in error]) == 1, violations(root)
+        other.unlink()
+        test = root / 'feature/skills/impl/src/commonTest/kotlin/SkillTest.kt'
+        test.parent.mkdir(parents=True)
+        test.write_text('package fixture\n@Serializable data class A(val x: Int) : Fact\n')
+        assert not [error for error in violations(root) if 'without @SerialName' in error], violations(root)
 
 if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory
