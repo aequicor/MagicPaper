@@ -1,6 +1,9 @@
 package io.aequicor.magicpaper.domain.planning
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
@@ -11,37 +14,51 @@ import kotlinx.serialization.SerialName
  * written under — the full class name with its nesting. That is not a style choice: the names are stored
  * data, and renaming or moving a branch without keeping its old name would orphan every record written
  * before. `OrchestrationEventWireFormatTest` pins the encoded form of each one.
+ *
+ * The branches are split into [OrchestrationIntent] and [OrchestrationFact] by where they come from: an intent
+ * asks the orchestrator for something and may be refused, a fact reports what the service already observed,
+ * decided or recorded. The family is a supertype only — every branch keeps its name and its place under
+ * [OrchestrationEvent], so neither a call site nor a stored record changes.
  */
 @Serializable sealed interface OrchestrationEvent {
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.Restore") data object Restore : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputSubmitted") data class InputSubmitted(val input: OrchestrationInput) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputEnqueued") data class InputEnqueued(val input: OrchestrationInput) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.UnsavedInputsRecovered") data class UnsavedInputsRecovered(val inputs: List<OrchestrationInput>) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.ScheduledRunsObserved") data class ScheduledRunsObserved(val plans: List<Plan>) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputClaimRequested") data class InputClaimRequested(val plans: List<Plan>) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputWithdrawn") data class InputWithdrawn(val id: String) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputRetried") data class InputRetried(val id: String, val clarification: String = "", val clearResumeAfter: Boolean = false) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputStatusRecorded") data class InputStatusRecorded(val id: String, val status: OrchestrationInputStatus, val error: String = "") : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputDecisionRecorded") data class InputDecisionRecorded(val id: String, val decision: UserTurnDecision) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.LegacyRequestImported") data class LegacyRequestImported(val plan: Plan) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.PlanSelected") data class PlanSelected(val id: String) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.WorkPaused") data class WorkPaused(val id: String, val pause: OrchestrationPause, val mergeStages: Boolean = false) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.WorkPauseNeedsUser") data class WorkPauseNeedsUser(val id: String) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.WorkPauseFinished") data class WorkPauseFinished(val plan: Plan, val id: String) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.ProposalConfirmed") data class ProposalConfirmed(val planId: String, val proposalId: String?) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.PlanResumed") data class PlanResumed(val plan: Plan) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionRegistered") data class QuestionRegistered(val question: OrchestrationQuestion) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionAnswered") data class QuestionAnswered(val plan: Plan, val input: OrchestrationInput, val decision: UserTurnDecision, val at: Long) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionResolved") data class QuestionResolved(val id: String, val pauseId: String, val pause: OrchestrationPause?) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.RequirementsQueued") data class RequirementsQueued(val input: OrchestrationInput, val pause: OrchestrationPause) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionsImported") data class QuestionsImported(val plan: Plan, val messages: List<CodingMessage>) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.AnswerEventsRecorded") data class AnswerEventsRecorded(val events: List<MessageEvent>) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.StageNumbersRequested") data class StageNumbersRequested(val planId: String, val stageIds: List<String>) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandRegistered") data class SessionCommandRegistered(val command: SessionCommand) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandRejected") data class SessionCommandRejected(val id: String, val error: String) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandApplied") data class SessionCommandApplied(val id: String) : OrchestrationEvent
-    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandDiscarded") data class SessionCommandDiscarded(val id: String) : OrchestrationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.Restore") data object Restore : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputSubmitted") data class InputSubmitted(val input: OrchestrationInput) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputEnqueued") data class InputEnqueued(val input: OrchestrationInput) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.UnsavedInputsRecovered") data class UnsavedInputsRecovered(val inputs: List<OrchestrationInput>) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.ScheduledRunsObserved") data class ScheduledRunsObserved(val plans: List<Plan>) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputClaimRequested") data class InputClaimRequested(val plans: List<Plan>) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputWithdrawn") data class InputWithdrawn(val id: String) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputRetried") data class InputRetried(val id: String, val clarification: String = "", val clearResumeAfter: Boolean = false) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputStatusRecorded") data class InputStatusRecorded(val id: String, val status: OrchestrationInputStatus, val error: String = "") : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.InputDecisionRecorded") data class InputDecisionRecorded(val id: String, val decision: UserTurnDecision) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.LegacyRequestImported") data class LegacyRequestImported(val plan: Plan) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.PlanSelected") data class PlanSelected(val id: String) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.WorkPaused") data class WorkPaused(val id: String, val pause: OrchestrationPause, val mergeStages: Boolean = false) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.WorkPauseNeedsUser") data class WorkPauseNeedsUser(val id: String) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.WorkPauseFinished") data class WorkPauseFinished(val plan: Plan, val id: String) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.ProposalConfirmed") data class ProposalConfirmed(val planId: String, val proposalId: String?) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.PlanResumed") data class PlanResumed(val plan: Plan) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionRegistered") data class QuestionRegistered(val question: OrchestrationQuestion) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionAnswered") data class QuestionAnswered(val plan: Plan, val input: OrchestrationInput, val decision: UserTurnDecision, val at: Long) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionResolved") data class QuestionResolved(val id: String, val pauseId: String, val pause: OrchestrationPause?) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.RequirementsQueued") data class RequirementsQueued(val input: OrchestrationInput, val pause: OrchestrationPause) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.QuestionsImported") data class QuestionsImported(val plan: Plan, val messages: List<CodingMessage>) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.AnswerEventsRecorded") data class AnswerEventsRecorded(val events: List<MessageEvent>) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.StageNumbersRequested") data class StageNumbersRequested(val planId: String, val stageIds: List<String>) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandRegistered") data class SessionCommandRegistered(val command: SessionCommand) : OrchestrationIntent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandRejected") data class SessionCommandRejected(val id: String, val error: String) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandApplied") data class SessionCommandApplied(val id: String) : OrchestrationFact
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.OrchestrationEvent.SessionCommandDiscarded") data class SessionCommandDiscarded(val id: String) : OrchestrationFact
 }
+
+/**
+ * A request that comes in from outside the orchestrator — a user or an agent asking for something — and may
+ * be refused.
+ */
+@Serializable sealed interface OrchestrationIntent : OrchestrationEvent
+
+/** Something the service observed, decided or recorded, applied as it is. */
+@Serializable sealed interface OrchestrationFact : OrchestrationEvent
 
 sealed interface OrchestrationEffect {
     data class ProcessInput(val input: OrchestrationInput) : OrchestrationEffect
@@ -58,6 +75,34 @@ data class OrchestrationAnswer(
 data class OrchestrationTransition(val state: OrchestrationState, val effects: List<OrchestrationEffect> = emptyList()) {
     val claimedInput: OrchestrationInput? get() = effects.filterIsInstance<OrchestrationEffect.ProcessInput>().singleOrNull()?.input
     val answer: OrchestrationAnswer? get() = effects.filterIsInstance<OrchestrationEffect.PublishAnswer>().singleOrNull()?.answer
+}
+
+/**
+ * The orchestrator's rules seen as a machine, so their state space can be declared and read.
+ *
+ * A view, not a second reducer: [step] calls [reduce] and changes nothing about it, its transition type or
+ * a single caller. The rules have no refusal effect — an event the orchestrator cannot take fails a `require`
+ * or an `error` — so [step] shows exactly those two kinds of failure, an `IllegalArgumentException` and an
+ * `IllegalStateException`, as an [Effect.Reject] the harness can recognise; any other exception is a defect
+ * and is left to escape. The effects stay [OrchestrationEffect]s, wrapped in [Effect.Emit], so a refusal has a
+ * place beside them without adding a case to a hierarchy the service matches on.
+ */
+object OrchestrationMachine : Machine<OrchestrationState, OrchestrationEvent, OrchestrationMachine.Effect> {
+    override val id = MachineId("orchestration")
+    override val space get() = OrchestrationSpace
+
+    sealed interface Effect {
+        data class Emit(val effect: OrchestrationEffect) : Effect
+        data class Reject(val reason: String) : Effect
+    }
+
+    override fun step(state: OrchestrationState, input: OrchestrationEvent): Step<OrchestrationState, Effect> = try {
+        reduce(state, input).let { Step(it.state, it.effects.map(Effect::Emit)) }
+    } catch (refusal: IllegalArgumentException) {
+        Step(state, listOf(Effect.Reject(refusal.message ?: "Событие не применимо к состоянию")))
+    } catch (refusal: IllegalStateException) {
+        Step(state, listOf(Effect.Reject(refusal.message ?: "Событие не применимо к состоянию")))
+    }
 }
 
 /** Pure state transition. The service commits the record before executing any returned effect. */
