@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** One notebook owns its questions, ordered requests and history. UI/configuration/drafts are projections or child owners. */
-object ChatMachine {
+object ChatMachine : Machine<ChatMachine.State, ChatMachine.Input, ChatMachine.Effect> {
+    override val id = MachineId("chat")
+    override val space get() = ChatSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable enum class Phase { RUNNING, STOPPING, INTERRUPTED, UNKNOWN, RECOVERING }
     @Serializable enum class Failure { MODEL, RESEARCH, PERSISTENCE, MISSING_BACKEND, UNKNOWN_OUTCOME }
     @Serializable data class RunRef(val sessionId: String, val runId: String, val generation: Long,
