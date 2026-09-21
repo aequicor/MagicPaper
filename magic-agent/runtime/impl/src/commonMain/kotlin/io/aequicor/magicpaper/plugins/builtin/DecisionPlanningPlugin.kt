@@ -405,7 +405,7 @@ class CodingPlanningPlugin(
                 Box {
                     PaperAction(onClick = { menu = true }) { PaperText("Выбрать модель", role = PaperTextRole.LABEL) }
                     PaperMenuHost(menu, { menu = false }) {
-                    nativeCatalog?.let { snapshot -> profiles.firstOrNull { it.isNativeConnectionFor(snapshot.engine) }?.let { connection ->
+                    nativeCatalog?.let { snapshot -> profiles.nativeConnectionFor(snapshot.engine)?.let { connection ->
                         snapshot.models.forEach { model ->
                             PaperMenuAction(label = "${connection.name} · ${model.name} · каталог движка", onClick = {
                                 updateStage { it.copy(agentProfileId = connection.id, agentModelId = model.id,

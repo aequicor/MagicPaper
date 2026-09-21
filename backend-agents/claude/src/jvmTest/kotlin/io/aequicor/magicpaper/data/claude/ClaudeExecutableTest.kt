@@ -39,6 +39,38 @@ class ClaudeExecutableTest {
         } finally { home.deleteRecursively() }
     }
 
+    @Test fun desktopAppBundleIsTheLastResortAndTheNewestVersionWins() {
+        val home = Files.createTempDirectory("claude-locate").toFile()
+        try {
+            fun bundled(version: String) = script(home.resolve("Library/Application Support/Claude/claude-code/$version/claude.app/Contents/MacOS")
+                .apply { mkdirs() }, "true")
+            val old = bundled("2.1.9"); val newest = bundled("2.1.10")
+            val finder = ClaudeExecutable(null, { null }, home.path, windows = false, mac = true)
+            assertEquals(newest, finder.find())
+            assertEquals(listOf(newest, old), finder.candidates().filter { it.path.contains("claude-code") })
+            val standalone = script(home.resolve(".local/bin").apply { mkdirs() }, "true")
+            assertEquals(standalone, finder.find())
+            assertTrue(ClaudeExecutable(null, { null }, home.path, windows = false, mac = false).candidates().none { it.path.contains("claude-code") })
+        } finally { home.deleteRecursively() }
+    }
+
+    @Test fun signedOutInstallationIsReadyButTellsHowToSignIn() = runBlocking {
+        if (windows) return@runBlocking
+        val home = Files.createTempDirectory("claude-status").toFile()
+        try {
+            val binary = script(home, "case \"\$1\" in --version) echo '2.1.275 (Claude Code)';; auth) echo '{ \"loggedIn\": false }'; exit 1;; esac")
+            val status = ClaudeExecutable(binary.path).status()
+            assertEquals(NativeInstallationPhase.READY, status.phase)
+            assertContains(status.detail, "auth login")
+            assertEquals("2.1.275", status.version)
+            val signedIn = script(home, "case \"\$1\" in --version) echo '2.1.275 (Claude Code)';; auth) echo '{ \"loggedIn\": true }';; esac", "claude2")
+            assertFalse("auth login" in ClaudeExecutable(signedIn.path).status().detail)
+            val old = script(home, "case \"\$1\" in --version) echo '1.0.0 (Claude Code)';; *) exit 1;; esac", "claude3")
+            assertEquals(NativeInstallationPhase.READY, ClaudeExecutable(old.path).status().phase)
+            assertFalse("auth login" in ClaudeExecutable(old.path).status().detail)
+        } finally { home.deleteRecursively() }
+    }
+
     @Test fun readyStatusCarriesTheInstalledVersion() = runBlocking {
         if (windows) return@runBlocking
         val home = Files.createTempDirectory("claude-status").toFile()

@@ -33,6 +33,7 @@ internal class ClaudeBackendAgent(
     override val approvals: NativeApprovalRequests? = null
     override val history: NativeToolHistory? = null
     override val removal: NativeRemoval? = null
+    override val models = NativeModelCatalog { ClaudeModelCatalog.models }
 
     override suspend fun status() = executable.status()
     override fun prepare() = flow { emit(status()) }

@@ -19,6 +19,37 @@ class ProfileResolverTest {
     private fun native(level: String? = null, engine: CodingEngine = CodingEngine.CODEX) =
         codexSession.copy(codingModel = CodingModelSelection(engine, "openai", "gpt-6-astra", level))
 
+    private val claudeSession = CodingSession("s", "p", "n", 1, engine = CodingEngine.CLAUDE_CODE,
+        codingModel = CodingModelSelection(CodingEngine.CLAUDE_CODE, "anthropic", "opus", "high"))
+
+    @Test
+    fun claudeCodeRunsOnItsOwnSignInWhenNoAnthropicProfileExists() {
+        val resolved = ProfileResolver.coding(claudeSession, null, AppSettings(), listOf(configured, subscription))
+        assertEquals(ProviderType.ANTHROPIC, resolved?.provider)
+        assertEquals("opus", resolved?.modelId)
+        assertEquals(ReasoningEffort.HIGH, resolved?.effort?.level)
+        assertEquals("", resolved?.apiKey, "the engine's own sign-in carries no secret of the application")
+        assertNotNull(resolved?.takeIf { it.configured })
+    }
+
+    @Test
+    fun claudeCodePrefersAnAnthropicProfileOverItsOwnConnection() {
+        val anthropic = LlmProfile("claude", "Anthropic", "https://api.anthropic.com", "sk-1", ProviderType.ANTHROPIC, modelId = "profile-default")
+        val resolved = ProfileResolver.coding(claudeSession, null, AppSettings(), listOf(configured, anthropic))
+        assertEquals("claude", resolved?.id)
+        assertEquals("sk-1", resolved?.apiKey)
+        assertEquals("opus", resolved?.modelId)
+        assertEquals("claude", listOf(anthropic).nativeConnectionFor(CodingEngine.CLAUDE_CODE)?.id)
+        assertEquals(CodingEngine.CLAUDE_CODE.ownConnection()?.id, emptyList<LlmProfile>().nativeConnectionFor(CodingEngine.CLAUDE_CODE)?.id)
+    }
+
+    @Test
+    fun onlyAnEngineThatSignsInItselfHasAConnectionWithoutAProfile() {
+        assertNull(CodingEngine.CODEX.ownConnection())
+        assertNull(CodingEngine.PI.ownConnection())
+        assertNull(emptyList<LlmProfile>().nativeConnectionFor(CodingEngine.CODEX))
+    }
+
     @Test
     fun nativeCodexChoiceRunsThroughTheSubscriptionWithTheCatalogModel() {
         val resolved = ProfileResolver.coding(native("high"), null, AppSettings(), listOf(configured, subscription))

@@ -51,10 +51,10 @@ class BackendAgentCatalogTest {
         assertContains(failure.message.orEmpty(), "model catalog")
         assertTrue(invalid.closed)
     }
-    @Test fun onlyCodexDeclaresANativeModelCatalog() {
+    @Test fun onlyEnginesWithTheirOwnModelListsDeclareANativeModelCatalog() {
         val declared = createBackendAgentCatalog().descriptors
             .filter { BackendAgentCapability.NATIVE_MODEL_CATALOG in it.capabilities }.map { it.engine }
-        assertEquals(listOf(CodingEngine.CODEX), declared)
+        assertEquals(setOf(CodingEngine.CODEX, CodingEngine.CLAUDE_CODE), declared.toSet())
     }
     @Test fun constructionFailureClosesEarlierInstancesAndPreservesCleanupCause() = environment { env ->
         val primary = IllegalStateException("construction")

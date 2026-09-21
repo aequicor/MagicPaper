@@ -156,6 +156,16 @@ exit 1""")
         }
     }
 
+    @Test fun catalogDeclaresTheModelFamiliesWithTheLevelsTheCliAccepts() = kotlinx.coroutines.runBlocking {
+        fixture().use { f ->
+            val models = checkNotNull(f.agent().use { it.models }).models()
+            assertEquals(listOf("fable", "opus", "sonnet", "haiku"), models.map { it.id })
+            assertTrue(models.all { it.provider == "anthropic" })
+            assertEquals(listOf("low", "medium", "high"), models.single { it.id == "sonnet" }.levels)
+            assertFalse(models.single { it.id == "haiku" }.supportsLevels)
+        }
+    }
+
     @Test fun missingInstallationIsReportedAsAFailure() {
         fixture().use { f ->
             val events = run(f, f.request())

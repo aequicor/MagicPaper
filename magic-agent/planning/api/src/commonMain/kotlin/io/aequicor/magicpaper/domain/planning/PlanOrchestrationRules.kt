@@ -219,7 +219,6 @@ private fun recoverNative(assignment: StageAssignment, native: CodingModelSelect
     roster: List<LlmProfile>, catalog: CodingModelSnapshot?): StageAssignment {
     val choice = parent?.codingModel?.takeIf { it.engine == native.engine && catalog?.resolve(it) is CodingModelResolution.Available }
     val model = choice?.let { catalog?.find(it.provider, it.modelId) } ?: return assignment
-    val connection = roster.firstOrNull { it.id == assignment.profileId && it.isNativeConnectionFor(native.engine) }
-        ?: roster.firstOrNull { it.isNativeConnectionFor(native.engine) } ?: return assignment
+    val connection = roster.nativeConnectionFor(native.engine, assignment.profileId) ?: return assignment
     return nativeStageAssignment(connection, choice.engine, model, choice.level, assignment.explanation, assignment.manual)
 }

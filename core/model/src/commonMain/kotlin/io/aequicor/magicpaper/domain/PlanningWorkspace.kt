@@ -37,7 +37,7 @@ fun StageAssignment.executionProfile(profiles: List<LlmProfile>, catalog: Coding
 }
 
 private fun StageAssignment.nativeExecutionProfile(choice: CodingModelSelection, profiles: List<LlmProfile>, catalog: CodingModelSnapshot?): LlmProfile {
-    val connection = profiles.firstOrNull { it.id == profileId && it.isNativeConnectionFor(choice.engine) }
+    val connection = profiles.nativeConnectionFor(choice.engine, profileId)?.takeIf { it.id == profileId }
         ?: error("Источник этапа недоступен: $profileId")
     if (catalog != null) when (val resolved = catalog.resolve(choice)) {
         is CodingModelResolution.Available -> Unit

@@ -89,11 +89,34 @@ fun CodingModelSelection.displayEffort(): EffortSelection =
     level?.let(ReasoningEffort::fromWire)?.let(EffortSelection::of) ?: EffortSelection.Default
 
 /**
- * Подключение, через которое движок запускает модели своего каталога. Пока нативный каталог есть
- * только у Codex, чьи модели принадлежат подписке ChatGPT.
+ * Подключение, через которое движок запускает модели своего каталога: у Codex это подписка ChatGPT,
+ * у Claude Code — профиль Anthropic (ключ либо собственный вход движка). У pi каталога нет.
  */
-fun LlmProfile.isNativeConnectionFor(engine: CodingEngine): Boolean =
-    engine == CodingEngine.CODEX && provider == ProviderType.OPENAI_SUBSCRIPTION && operational
+fun LlmProfile.isNativeConnectionFor(engine: CodingEngine): Boolean = operational && when (engine) {
+    CodingEngine.CODEX -> provider == ProviderType.OPENAI_SUBSCRIPTION
+    CodingEngine.CLAUDE_CODE -> provider == ProviderType.ANTHROPIC
+    CodingEngine.PI -> false
+}
+
+/**
+ * Подключение, которое движок держит сам: он входит в аккаунт своими средствами, и профиль приложения
+ * для запуска не нужен. Значение не сохраняется в списке профилей и не несёт секретов; `null` — движку
+ * нужен профиль.
+ */
+fun CodingEngine.ownConnection(): LlmProfile? = when (this) {
+    CodingEngine.CLAUDE_CODE -> LlmProfile("engine:claude-code", title, "https://api.anthropic.com",
+        provider = ProviderType.ANTHROPIC, authType = LlmAuthType.X_API_KEY)
+    CodingEngine.PI, CodingEngine.CODEX -> null
+}
+
+/**
+ * Подключение движка: профиль приложения ([preferredId] в приоритете), а без него — собственное
+ * подключение движка. [preferredId] собственного подключения выбирает его же.
+ */
+fun List<LlmProfile>.nativeConnectionFor(engine: CodingEngine, preferredId: String? = null): LlmProfile? {
+    val connections = filter { it.isNativeConnectionFor(engine) }
+    return connections.firstOrNull { it.id == preferredId } ?: connections.firstOrNull() ?: engine.ownConnection()
+}
 
 /**
  * Уровень модели, ближайший к желаемому по шкале приложения; при равенстве берётся меньший.

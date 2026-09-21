@@ -17,6 +17,7 @@ internal class ClaudeExecutable(
     private val environment: (String) -> String? = System::getenv,
     private val home: String = System.getProperty("user.home").orEmpty(),
     private val windows: Boolean = System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true),
+    private val mac: Boolean = System.getProperty("os.name").orEmpty().startsWith("Mac", ignoreCase = true),
     /** The probe's failure is shown as a status; the owner of diagnostics records its cause. */
     private val report: (Throwable) -> Unit = {},
 ) {
@@ -34,35 +35,62 @@ internal class ClaudeExecutable(
             add(File(home, ".local/bin/$name")); add(File(home, ".claude/local/$name")); add(File(home, ".bun/bin/$name"))
             if (!windows) { add(File("/opt/homebrew/bin/$name")); add(File("/usr/local/bin/$name")); add(File(home, ".npm-global/bin/$name")) }
         }
-        return onPath + known
+        return onPath + known + desktopBundled()
     }
+
+    /**
+     * Claude Code shipped inside the Claude desktop app, newest version first. It is a fallback: a separate
+     * installation is preferred because it keeps its own sign-in, while the bundled one starts signed out.
+     */
+    private fun desktopBundled(): List<File> {
+        if (!mac) return emptyList()
+        val root = File(home, "Library/Application Support/Claude/claude-code")
+        return root.listFiles { it.isDirectory }.orEmpty().sortedWith(compareByDescending(::versionKey))
+            .map { File(it, "claude.app/Contents/MacOS/claude") }
+    }
+
+    private fun versionKey(directory: File): Long =
+        directory.name.split('.').take(4).fold(0L) { total, part -> total * 10_000 + (part.toLongOrNull() ?: 0L) }
 
     suspend fun status(): NativeInstallationStatus = withContext(Dispatchers.IO) {
         val file = find() ?: return@withContext NativeInstallationStatus(NativeInstallationPhase.ERROR,
             if (override != null || environment(OVERRIDE_VARIABLE) != null) "Указанный путь к Claude Code недоступен."
             else "Claude Code не найден. Установите его (claude.com/claude-code) или задайте MAGICPAPER_CLAUDE_PATH.")
         val version = try { version(file) } catch (failure: java.io.IOException) { report(failure); null }
-        if (version == null) NativeInstallationStatus(NativeInstallationPhase.ERROR, "Claude Code не отвечает на проверку версии: ${file.path}")
-        else NativeInstallationStatus(NativeInstallationPhase.READY, "Claude Code установлен: ${file.path}", version)
+        if (version == null) return@withContext NativeInstallationStatus(NativeInstallationPhase.ERROR, "Claude Code не отвечает на проверку версии: ${file.path}")
+        val signedIn = try { signedIn(file) } catch (failure: java.io.IOException) { report(failure); null }
+        val detail = if (signedIn == false)
+            "Claude Code найден: ${file.path}. Вход не выполнен: выполните \"${file.path}\" auth login или укажите ключ API в подключении Anthropic."
+        else "Claude Code установлен: ${file.path}"
+        NativeInstallationStatus(NativeInstallationPhase.READY, detail, version)
     }
 
-    private fun version(file: File): String? {
-        val process = ProcessBuilder(file.path, "--version").redirectErrorStream(true).start()
+    /** `claude auth status` prints JSON and exits 1 when signed out; an older CLI without it leaves the answer unknown. */
+    private fun signedIn(file: File): Boolean? = probe(file, "auth", "status")?.let { (_, text) ->
+        Regex("\"loggedIn\"\\s*:\\s*(true|false)").find(text)?.groupValues?.get(1)?.toBooleanStrict()
+    }
+
+    private fun version(file: File): String? = probe(file, "--version")?.takeIf { (exit, _) -> exit == 0 }?.second
+        ?.trim()?.substringBefore(' ')?.takeIf { it.isNotEmpty() }
+
+    /** Exit code and output of a short probe, or null when it does not finish in time. */
+    private fun probe(file: File, vararg arguments: String): Pair<Int, String>? {
+        val process = ProcessBuilder(file.path, *arguments).redirectErrorStream(true).start()
         process.outputStream.close()
         // Reading blocks until the child closes stdout; the deadline below is enforced by killing it.
         val output = StringBuilder()
         val reader = Thread { runCatching { process.inputStream.bufferedReader().use { output.append(it.readText().take(2000)) } } }
             .apply { isDaemon = true; start() }
-        if (!process.waitFor(VERSION_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+        if (!process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
             process.destroyForcibly()
             return null
         }
         reader.join(1000)
-        return output.toString().trim().takeIf { process.exitValue() == 0 && it.isNotEmpty() }?.substringBefore(' ')
+        return process.exitValue() to output.toString()
     }
 
     companion object {
         const val OVERRIDE_VARIABLE = "MAGICPAPER_CLAUDE_PATH"
-        private const val VERSION_TIMEOUT_SECONDS = 15L
+        private const val PROBE_TIMEOUT_SECONDS = 15L
     }
 }
