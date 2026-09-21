@@ -47,6 +47,6 @@ data class NavigationJournal(
         )
 }
 
-internal fun newNavigationId(): String = buildString {
+fun newNavigationId(): String = buildString {
     repeat(4) { append(Random.nextLong().toULong().toString(16).padStart(16, '0')) }
 }

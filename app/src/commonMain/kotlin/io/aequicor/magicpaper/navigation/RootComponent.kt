@@ -15,6 +15,7 @@ import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import io.aequicor.magicpaper.data.storage.NavigationSnapshotStore
+import io.aequicor.magicpaper.data.storage.StorageException
 import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -35,9 +36,7 @@ fun interface FeatureComponentFactory<C : Any> {
     fun create(visit: Visit, context: ComponentContext, presentation: String?): C
 }
 
-/** Only dialog identity lives here; form and questionnaire contents belong to feature draft stores. */
-data class DialogRoute(val kind: String, val entityId: String? = null)
-
+/** Rendered projection of [NavigationMachine.State]; the machine remains the only writer. */
 data class RootNavigationState(
     val journal: NavigationJournal,
     val loaded: Boolean = false,
@@ -73,8 +72,9 @@ interface RootComponent<C : Any> {
 }
 
 /**
- * Sole navigation command coordinator. StateKeeper must not restore a second routing snapshot:
- * the Decompose stack is always the active prefix of the durable journal.
+ * Sole executor of [NavigationMachine]. StateKeeper must not restore a second routing snapshot:
+ * the Decompose stack is always the active prefix of the durable journal. Every decision belongs
+ * to the machine; this class constructs components, mirrors the dialog slot and writes snapshots.
  */
 class DefaultRootComponent<C : Any>(
     componentContext: ComponentContext,
@@ -93,23 +93,21 @@ class DefaultRootComponent<C : Any>(
     private val saves = Channel<SaveRequest>(Channel.CONFLATED)
     private var saveSequence = 0L
     private val completedSave = MutableStateFlow(0L)
-    private var journal = NavigationJournal()
-    private var persistenceBlocked = false
-    private var restoreError: String? = null
-    private val mutableState = MutableStateFlow(RootNavigationState(journal = journal,
-        welcomeRequired = initialWelcomeRequired ?: false, welcomeResolved = initialWelcomeRequired != null))
+    private var state = NavigationMachine.initial(newNavigationId(), newNavigationId(),
+        welcomeRequired = initialWelcomeRequired)
+    private val mutableState = MutableStateFlow(projection())
     override val navigationState = mutableState.asStateFlow()
     private val navigation = StackNavigation<Visit>()
     private val dialogs = SlotNavigation<DialogRoute>()
 
-    private var constructionJournal = journal
+    private var constructionJournal = state.journal
     // Decompose's Relay permanently rejects events after a child factory throws.
     // Contain construction failures inside the router, then roll back before
     // exposing or persisting the candidate transition.
     private val routerStack: Value<ChildStack<Visit, ChildCreation<C>>> = childStack(
         source = navigation,
         serializer = null,
-        initialStack = { journal.activePrefix },
+        initialStack = { state.journal.activePrefix },
         handleBackButton = false,
         childFactory = { visit, context ->
             try { ChildCreation(factory.create(visit, context, constructionJournal.presentation[visit.id]), null) }
@@ -135,11 +133,14 @@ class DefaultRootComponent<C : Any>(
             for (request in saves) {
                 try {
                     withContext(persistenceDispatcher) { store.save(json.encodeToString(request.journal)) }
+                    dispatch(NavigationMachine.Fact.Saved(request.journal.id))
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (failure: Exception) {
+                    // A committed record whose replaced state was not removed is not a lost write.
+                    val committed = (failure as? StorageException)?.committed == true
                     AppLog.error("navigation", "save_failed", failure, mapOf("visitId" to request.journal.current.id,
-                        "result" to "memory_retained"))
-                    if (request.journal.id == journal.id) publish(error = "Не удалось сохранить историю переходов.")
+                        "result" to if (committed) "committed_cleanup_unknown" else "memory_retained"))
+                    dispatch(NavigationMachine.Fact.SaveFailed(request.journal.id, committed))
                 }
                 completedSave.value = request.sequence
             }
@@ -147,24 +148,13 @@ class DefaultRootComponent<C : Any>(
         scope.launch {
             val restored = runCatching { store.load()?.let { json.decodeFromString<NavigationJournal>(it) } }
             (restored.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
-            persistenceBlocked = restored.isFailure
-            restoreError = restored.exceptionOrNull()?.let { "Не удалось восстановить историю переходов." }
             restored.exceptionOrNull()?.let { AppLog.error("navigation", "restore_failed", it, mapOf("result" to "writes_blocked")) }
-            restored.getOrNull()?.let { candidate ->
-                try { project(candidate); journal = candidate }
-                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (failure: Exception) {
-                    persistenceBlocked = true
-                    restoreError = "Не удалось восстановить историю переходов."
-                    AppLog.error("navigation", "restore_component_failed", failure, mapOf("result" to "writes_blocked"))
-                }
-            }
-            AppLog.info("navigation", "restored", mapOf("visitId" to journal.current.id,
-                "route" to journal.current.route.logKind(), "count" to journal.visits.size.toString(),
-                "result" to if (persistenceBlocked) "failed" else "ready"))
-            publish(error = restoreError, loaded = true)
+            dispatch(NavigationMachine.Fact.Restored(restored.getOrNull(), restored.isFailure))
+            AppLog.info("navigation", "restored", mapOf("visitId" to state.journal.current.id,
+                "route" to state.journal.current.route.logKind(), "count" to state.journal.visits.size.toString(),
+                "result" to if (state.persistenceBlocked) "failed" else "ready"))
             initialDeepLink?.let { processSafely(Command.Link(it)) }
-            if (mutableState.value.welcomeResolved && !mutableState.value.welcomeRequired) processSafely(Command.Welcome(false))
+            if (state.welcomeResolved && !state.welcomeRequired) processSafely(Command.Welcome(false))
             for (command in commands) processSafely(command)
         }
     }
@@ -197,67 +187,40 @@ class DefaultRootComponent<C : Any>(
     private suspend fun processSafely(command: Command) {
         try { process(command) }
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (failure: Exception) { navigationFailure(failure) }
-    }
-
-    private fun navigationFailure(failure: Exception) {
-        if (failure is kotlinx.coroutines.CancellationException) throw failure
-        AppLog.error("navigation", "transition_failed", failure, mapOf("visitId" to journal.current.id, "route" to journal.current.route.logKind()))
-        publish(error = "Не удалось открыть раздел. Повторите переход.")
+        catch (failure: Exception) {
+            AppLog.error("navigation", "transition_failed", failure, mapOf("visitId" to state.journal.current.id,
+                "route" to state.journal.current.route.logKind()))
+            dispatch(NavigationMachine.Intent.Report(NavigationMachine.TRANSITION_FAILED))
+        }
     }
 
     private suspend fun process(command: Command) {
         when (command) {
-            is Command.Navigate -> navigateOrQueue(command.route)
-            is Command.Resolve -> update(journal.resolveCurrent(command.route))
-            is Command.Reset -> {
-                persistenceBlocked = false
-                restoreError = null
-                mutableState.value = mutableState.value.copy(error = null)
-                dialogs.dismiss()
-                update(NavigationJournal(visits = listOf(Visit(newNavigationId(), command.route))))
-                refreshBack()
+            is Command.Navigate -> dispatch(NavigationMachine.Intent.Navigate(command.route, newNavigationId()))
+            is Command.Resolve -> dispatch(NavigationMachine.Intent.Resolve(command.route))
+            is Command.Reset -> dispatch(NavigationMachine.Intent.Reset(command.route, newNavigationId(), newNavigationId()))
+            Command.Back -> {
+                if (state.dialog != null) AppLog.info("navigation", "back", mapOf("result" to "dialog_dismissed"))
+                dispatch(NavigationMachine.Intent.Back)
             }
-            Command.Back -> if (dialogSlot.value.child != null) { AppLog.info("navigation", "back", mapOf("result" to "dialog_dismissed")); dialogs.dismiss(); refreshBack() }
-                else if (!mutableState.value.welcomeRequired) update(journal.moveTo(journal.cursor - 1))
-            Command.Forward -> if (dialogSlot.value.child != null) { dialogs.dismiss(); refreshBack() }
-                else if (!mutableState.value.welcomeRequired) update(journal.moveTo(journal.cursor + 1))
-            is Command.Link -> acceptLink(command.uri)
-            is Command.BrowserVisit -> {
-                dialogs.dismiss()
-                if (command.journalId == journal.id) {
-                    val index = journal.visits.indexOfFirst { it.id == command.visitId }
-                    if (index >= 0) update(journal.moveTo(index))
-                    else publish(error = "Этот переход больше недоступен.")
-                } else publish(error = "История переходов этого окна недоступна.")
-                refreshBack()
+            Command.Forward -> dispatch(NavigationMachine.Intent.Forward)
+            is Command.Link -> {
+                val route = AppRouteCodec.parseDeepLink(command.uri) ?: AppRouteCodec.parsePath(command.uri)
+                if (route == null) AppLog.info("navigation", "link_rejected", mapOf("reason" to "unsupported_route"))
+                else AppLog.info("navigation", "link_received", mapOf("route" to route.logKind()))
+                dispatch(NavigationMachine.Intent.Link(command.uri, newNavigationId()))
             }
-            is Command.Welcome -> {
-                mutableState.value = mutableState.value.copy(welcomeRequired = command.required, welcomeResolved = true)
-                if (!command.required) drainPendingRoutes()
-                refreshBack()
-            }
-            is Command.Dialog -> {
-                if (command.route == null) dialogs.dismiss() else dialogs.activate(command.route)
-                refreshBack()
-            }
-            is Command.DismissDialog -> {
-                if (command.expected == null || dialogSlot.value.child?.configuration === command.expected) dialogs.dismiss()
-                refreshBack()
-            }
-            is Command.Presentation -> if (journal.visits.any { it.id == command.visitId }) {
-                if (journal.presentation[command.visitId] != command.snapshot) update(journal.copy(
-                    presentation = journal.presentation + (command.visitId to command.snapshot), revision = journal.revision + 1,
-                ), projectStack = false)
-            }
-            is Command.PresentationEntry -> if (journal.visits.any { it.id == command.visitId }) {
-                val snapshot = withPresentationEntry(journal.presentation[command.visitId], command.key, command.snapshot)
-                if (journal.presentation[command.visitId] != snapshot) update(journal.copy(
-                    presentation = journal.presentation + (command.visitId to snapshot), revision = journal.revision + 1,
-                ), projectStack = false)
-            }
-            Command.ClearError -> publish(error = null)
-            is Command.Error -> publish(error = command.message)
+            is Command.BrowserVisit -> dispatch(NavigationMachine.Intent.BrowserVisit(command.journalId, command.visitId))
+            is Command.Welcome -> dispatch(NavigationMachine.Intent.Welcome(command.required,
+                state.journal.pendingRoutes.map { newNavigationId() }))
+            is Command.Dialog -> dispatch(command.route?.let { NavigationMachine.Intent.ShowDialog(it) }
+                ?: NavigationMachine.Intent.DismissDialog(null))
+            is Command.DismissDialog -> dispatch(NavigationMachine.Intent.DismissDialog(command.expected))
+            is Command.Presentation -> dispatch(NavigationMachine.Intent.Presentation(command.visitId, command.snapshot))
+            is Command.PresentationEntry -> dispatch(NavigationMachine.Intent.Presentation(command.visitId,
+                withPresentationEntry(state.journal.presentation[command.visitId], command.key, command.snapshot)))
+            Command.ClearError -> dispatch(NavigationMachine.Intent.ClearError)
+            is Command.Error -> dispatch(NavigationMachine.Intent.Report(command.message))
             is Command.Barrier -> {
                 val target = saveSequence
                 // Flush waits for the writer without holding up later UI commands.
@@ -269,53 +232,41 @@ class DefaultRootComponent<C : Any>(
         }
     }
 
-    private suspend fun acceptLink(uri: String) {
-        val route = AppRouteCodec.parseDeepLink(uri) ?: AppRouteCodec.parsePath(uri)
-        if (route == null) {
-            AppLog.info("navigation", "link_rejected", mapOf("reason" to "unsupported_route"))
-            publish(error = "Ссылка не поддерживается.")
-        } else {
-            AppLog.info("navigation", "link_received", mapOf("route" to route.logKind()))
-            navigateOrQueue(route)
-        }
-    }
-
-    private suspend fun navigateOrQueue(route: AppRoute) {
-        if (!mutableState.value.welcomeResolved || mutableState.value.welcomeRequired) {
-            AppLog.debug("navigation", "route_deferred", mapOf("reason" to "welcome", "route" to route.logKind()))
-            if (journal.pendingRoutes.lastOrNull() != route) update(journal.copy(
-                pendingRoutes = journal.pendingRoutes + route, revision = journal.revision + 1,
-            ), projectStack = false)
-        } else {
-            dialogs.dismiss()
-            update(journal.navigate(route))
-            refreshBack()
-        }
-    }
-
-    private suspend fun drainPendingRoutes() {
-        val pending = journal.pendingRoutes
-        if (pending.isEmpty()) return
-        var next = journal.copy(pendingRoutes = emptyList(), revision = journal.revision + 1)
-        pending.forEach { next = next.navigate(it) }
-        update(next)
-    }
-
-    private suspend fun update(next: NavigationJournal, projectStack: Boolean = true) {
-        if (next == journal) return
-        val previous = journal
-        if (projectStack) project(next)
-        journal = next
-        if (projectStack) AppLog.info("navigation", "visit_changed", mapOf("visitId" to journal.current.id,
-            "from" to previous.current.route.logKind(), "to" to journal.current.route.logKind(),
-            "count" to journal.visits.size.toString()))
+    private fun dispatch(input: NavigationMachine.Input) {
+        val transition = NavigationMachine.reduce(state, input)
+        val previous = state
+        state = transition.state
         publish()
-        if (persistenceBlocked) return
-        check(saves.trySend(SaveRequest(++saveSequence, journal)).isSuccess)
+        transition.effects.forEach { effect -> perform(previous, effect) }
     }
 
-    private fun project(candidate: NavigationJournal) {
-        val previous = journal
+    private fun perform(previous: NavigationMachine.State, effect: NavigationMachine.Effect) {
+        when (effect) {
+            is NavigationMachine.Effect.Reject ->
+                AppLog.debug("navigation", "command_rejected", mapOf("reason" to effect.reason))
+            is NavigationMachine.Effect.Project -> {
+                val restoring = state.pending?.restoring == true
+                try {
+                    project(effect.journal, previous.journal)
+                    if (!restoring) AppLog.info("navigation", "visit_changed", mapOf(
+                        "visitId" to effect.journal.current.id, "from" to previous.journal.current.route.logKind(),
+                        "to" to effect.journal.current.route.logKind(), "count" to effect.journal.visits.size.toString()))
+                    dispatch(NavigationMachine.Fact.Projected)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    AppLog.error("navigation", if (restoring) "restore_component_failed" else "transition_failed",
+                        failure, mapOf("result" to if (restoring) "writes_blocked" else "rolled_back"))
+                    dispatch(NavigationMachine.Fact.ProjectionFailed)
+                }
+            }
+            is NavigationMachine.Effect.Persist ->
+                check(saves.trySend(SaveRequest(++saveSequence, effect.journal)).isSuccess)
+            is NavigationMachine.Effect.ShowDialog -> dialogs.activate(effect.route)
+            NavigationMachine.Effect.DismissDialog -> dialogs.dismiss()
+        }
+    }
+
+    private fun project(candidate: NavigationJournal, previous: NavigationJournal) {
         constructionJournal = candidate
         navigation.navigate(transformer = { candidate.activePrefix }, onComplete = { _, _ -> })
         val failure = routerStack.value.items.firstNotNullOfOrNull { it.instance.failure }
@@ -339,14 +290,12 @@ class DefaultRootComponent<C : Any>(
     private data class ChildCreation<C : Any>(val component: C?, val failure: Exception?)
     private data class SaveRequest(val sequence: Long, val journal: NavigationJournal)
 
-    private fun publish(error: String? = mutableState.value.error, loaded: Boolean = mutableState.value.loaded) {
-        mutableState.value = mutableState.value.copy(journal = journal, loaded = loaded, error = restoreError ?: error)
-        refreshBack()
-    }
+    private fun projection() = RootNavigationState(journal = state.journal, loaded = state.loaded,
+        welcomeRequired = state.welcomeRequired, welcomeResolved = state.welcomeResolved, error = state.message)
 
-    private fun refreshBack() {
-        backCallback.isEnabled = dialogSlot.value.child != null ||
-            (mutableState.value.ready && !mutableState.value.welcomeRequired && journal.canGoBack)
+    private fun publish() {
+        mutableState.value = projection()
+        backCallback.isEnabled = state.backEnabled
     }
 
     private sealed interface Command {

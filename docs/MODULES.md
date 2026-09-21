@@ -26,6 +26,7 @@ Kotlin-пакеты моделей сохранены при переносе, �
 | `:magic-agent:runtime:api` / `impl` | **Только jvm.** Проектные сессии: планирование, оркестрация, организмы, worktree и подготовка ресурсов для capability-driven backend catalog |
 | `:magic-agent:browser:api` / `impl` | **Только jvm.** Машина браузерного запуска, журнал действий, Playwright/HTML validator и ручное чтение источника через порт чата |
 | `:magic-agent:computer:api` / `impl` | **Только jvm.** Машина доступа, журнал OS-действий, leases и нативные computer/application адаптеры |
+| `:magic-common:navigation:api` | Маршруты, журнал визитов и `NavigationMachine`: переходы, шлюз приветствия, диалог и блокировка записи после нечитаемой истории. Исполнитель — оболочка `:app` |
 | `:magic-common:media:api` / `impl` | API-машина и журнал генерации медиа, проверка подключения, восстановление существующих provider jobs |
 | `:magic-common:request-pins:api` / `impl` | API-машина и журнал анализа закреплённых запросов обоих типов сессий |
 | `:magic-common:prompts` | Чистая сборка общих системных инструкций, контекста, навыков и read-only режимов; без процессов и состояния |

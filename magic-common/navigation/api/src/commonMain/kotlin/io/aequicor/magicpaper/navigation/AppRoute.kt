@@ -107,7 +107,7 @@ object AppRouteCodec {
 }
 
 /** Diagnostics contain only the screen category, never a raw path or external URI. */
-internal fun AppRoute.logKind(): String = when (this) {
+fun AppRoute.logKind(): String = when (this) {
     is AppRoute.Chat -> "chat"
     is AppRoute.Projects -> "projects"
     is AppRoute.Settings -> "settings"

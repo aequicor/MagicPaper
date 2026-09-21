@@ -29,6 +29,7 @@ kotlin {
             api(project(":core:model"))
             api(project(":core:platform"))
             api(project(":core:storage:api"))
+            api(project(":magic-common:navigation:api"))
             api(project(":core:ai:api"))
             implementation(project(":core:storage:impl"))
             implementation(project(":core:ai:impl"))
