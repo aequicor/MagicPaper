@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -31,7 +34,12 @@ data class SettingsProfileRecord(val value: LlmProfile, val credential: String? 
     val next: SettingsRecord, val phase: SettingsChangePhase = SettingsChangePhase.PREPARING, val unknown: Boolean = false)
 
 /** One configuration authority. Provider completions carry the identity captured before dispatch. */
-object SettingsMachine {
+object SettingsMachine : Machine<SettingsMachine.State, SettingsMachine.Input, SettingsMachine.Effect> {
+    override val id = MachineId("settings")
+    override val space get() = SettingsSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(
         val initialized: Boolean = false,
