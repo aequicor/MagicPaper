@@ -3937,30 +3937,6 @@
     "kind": "surface"
   },
   {
-    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MissingSettingsPage.kt",
-    "symbol": "MissingSettingsPage",
-    "annotationLine": 1,
-    "targets": [
-      "PaperText",
-      "PaperButton"
-    ],
-    "stage": "5",
-    "kind": "surface"
-  },
-  {
-    "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/MissingSettingsPage.kt",
-    "symbol": "MissingSettingsPagePreview",
-    "annotationLine": 1,
-    "targets": [
-      "PaperTheme",
-      "PaperSurface",
-      "PaperText",
-      "PaperButton"
-    ],
-    "stage": "5",
-    "kind": "surface"
-  },
-  {
     "path": "feature/settings/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/SettingsScreen.kt",
     "symbol": "SubscriptionAccountContent",
     "annotationLine": 1,
@@ -4039,30 +4015,6 @@
     ],
     "stage": "5",
     "kind": "composition-helper"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnavailableAppSection.kt",
-    "symbol": "UnavailableAppSection",
-    "annotationLine": 4,
-    "targets": [
-      "PaperText",
-      "PaperButton"
-    ],
-    "stage": "5",
-    "kind": "surface"
-  },
-  {
-    "path": "app/src/commonMain/kotlin/io/aequicor/magicpaper/ui/screens/UnavailableAppSection.kt",
-    "symbol": "UnavailableAppSectionPreview",
-    "annotationLine": 5,
-    "targets": [
-      "PaperTheme",
-      "PaperSurface",
-      "PaperText",
-      "PaperButton"
-    ],
-    "stage": "5",
-    "kind": "surface"
   },
   {
     "path": "app/src/jvmMain/kotlin/io/aequicor/magicpaper/ui/NativeAppContributions.kt",

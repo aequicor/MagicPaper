@@ -46,6 +46,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -164,9 +165,10 @@ class AppShellRenderTest {
                 root.showDialog(DialogRoute(RootDialogLifecycle.FEATURE_MODAL_KIND, "editor")); root.awaitIdle(); draw()
                 assertFalse(scene.hasText("Раздел недоступен"), "A feature modal must not raise the unavailable-section dialog")
                 root.dismissDialog(); root.awaitIdle()
+                // A kind no contribution draws never reaches the slot, so no screen says "unavailable".
                 root.showDialog(DialogRoute("unregistered-kind")); root.awaitIdle(); draw()
-                assertTrue(scene.hasText("Раздел недоступен"), "An unknown dialog kind keeps the fallback")
-                root.dismissDialog(); root.awaitIdle()
+                assertFalse(scene.hasText("Раздел недоступен"))
+                assertNull(root.dialogSlot.value.child)
             } finally { onUi { scene.close() } }
             root.awaitIdle()
             val persisted = Json.parseToJsonElement(requireNotNull(runtime.koin.get<PersistenceStores>().navigation.load())).jsonObject

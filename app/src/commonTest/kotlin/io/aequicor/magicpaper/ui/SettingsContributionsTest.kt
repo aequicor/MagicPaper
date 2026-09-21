@@ -38,7 +38,8 @@ class SettingsContributionsTest {
             val factory = DefaultSettingsComponentFactory(service, plugins, fixture.draftRepository, fixture.draftBlobs, contributions)
             val context = DefaultComponentContext(lifecycle)
             assertIs<DefaultSettingsComponent>(factory.create(context, SettingsInput()) {})
-            assertIs<DefaultSettingsComponent>(factory.create(context, SettingsInput(SettingsPage.COMPUTER)) {})
+            // No page stands in for one a host contributes: the machine never admits its route.
+            assertFailsWith<IllegalArgumentException> { factory.create(context, SettingsInput(SettingsPage.COMPUTER)) {} }
             assertEquals(0, creations)
             assertSame(nativePage, factory.create(context, SettingsInput(SettingsPage.ENGINES)) {})
             assertEquals(1, creations)

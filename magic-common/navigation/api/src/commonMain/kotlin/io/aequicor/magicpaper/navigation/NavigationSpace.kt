@@ -15,6 +15,15 @@ import io.aequicor.magicpaper.machine.acceptance
  * test stays exactly as it is. What is added here is what it could not state: that the declared
  * positions are closed under every input, and that four inputs it never tabulated — `Report`,
  * `ClearError`, `Restored` and `ProjectionFailed` — have a column at all.
+ *
+ * Which destinations exist is a value on the state ([RouteAvailability]), not a position, so the
+ * matrix cannot carry it; `NavigationAvailabilityTest` pins it instead. The promise is that a
+ * route the host cannot build never enters the journal, by any door:
+ * - `Navigate`, `Resolve`, `Reset` and `ShowDialog` refuse it with `Reject`, state unchanged;
+ * - `Link` names it in a notice, because an external link is the one way a user reaches it;
+ * - `Restored` trims it from the journal it projects and says so in a notice, because a saved
+ *   journal outlives the build that wrote it.
+ * The screen that said "unavailable" is gone: nothing is left to render for such a route.
  */
 object NavigationSpace : StateSpace<NavigationMachine.State, NavigationMachine.Input, NavigationMachine.Effect> {
     val OPENING = PhaseId("opening")

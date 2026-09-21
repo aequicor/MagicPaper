@@ -30,6 +30,8 @@ object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.In
     const val LINK_UNSUPPORTED = "Ссылка не поддерживается."
     const val VISIT_UNAVAILABLE = "Этот переход больше недоступен."
     const val JOURNAL_UNAVAILABLE = "История переходов этого окна недоступна."
+    const val SECTION_UNAVAILABLE = "Этот раздел недоступен на этом устройстве."
+    const val ROUTE_UNAVAILABLE = "Раздел не входит в состав этого приложения"
 
     /** A candidate transition whose destination components are still being constructed. */
     data class Pending(val journal: NavigationJournal, val restoring: Boolean)
@@ -52,6 +54,8 @@ object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.In
          * and only an acknowledged write clears it, because only that write collects the orphans.
          */
         val unacknowledgedCleanup: Boolean = false,
+        /** What this host can build; constant for the life of the machine, see [RouteAvailability]. */
+        val availability: RouteAvailability = RouteAvailability.All,
     ) {
         val ready: Boolean get() = loaded && welcomeResolved
         val route: AppRoute get() = journal.current.route
@@ -99,19 +103,24 @@ object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.In
 
     data class Transition(val state: State, val effects: List<Effect> = emptyList())
 
-    fun initial(journalId: String, visitId: String, route: AppRoute = AppRoute.Chat(), welcomeRequired: Boolean? = null) =
+    fun initial(journalId: String, visitId: String, route: AppRoute = AppRoute.Chat(), welcomeRequired: Boolean? = null,
+                availability: RouteAvailability = RouteAvailability.All) =
         State(journal = NavigationJournal(id = journalId, visits = listOf(Visit(visitId, route))),
-            welcomeRequired = welcomeRequired ?: false, welcomeResolved = welcomeRequired != null)
+            welcomeRequired = welcomeRequired ?: false, welcomeResolved = welcomeRequired != null, availability = availability)
 
     fun reduce(state: State, input: Input): Transition {
         fun reject(reason: String) = Transition(state, listOf(Effect.Reject(reason)))
+        // A host refuses what it cannot build where the journal is written, so no visit is saved
+        // that this host could not open again.
+        fun admitted(route: AppRoute, then: () -> Transition) =
+            if (state.availability.admits(route)) then() else reject(ROUTE_UNAVAILABLE)
         if (state.pending != null && input !is Fact.Projected && input !is Fact.ProjectionFailed) {
             return reject("Переход уже выполняется")
         }
         return when (input) {
-            is Intent.Navigate -> navigateOrQueue(state, input.route, input.visitId)
-            is Intent.Resolve -> advance(state, state.journal.resolveCurrent(input.route))
-            is Intent.Reset -> {
+            is Intent.Navigate -> admitted(input.route) { navigateOrQueue(state, input.route, input.visitId) }
+            is Intent.Resolve -> admitted(input.route) { advance(state, state.journal.resolveCurrent(input.route)) }
+            is Intent.Reset -> admitted(input.route) {
                 val dismissed = dismissDialog(state)
                 // An explicit reset is the one acknowledgement that the unreadable journal is gone.
                 val cleared = dismissed.state.copy(error = null, restoreError = null, persistenceBlocked = false)
@@ -130,8 +139,12 @@ object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.In
             }
             is Intent.Link -> {
                 val route = AppRouteCodec.parseDeepLink(input.uri) ?: AppRouteCodec.parsePath(input.uri)
-                if (route == null) Transition(state.copy(error = LINK_UNSUPPORTED))
-                else navigateOrQueue(state, route, input.visitId)
+                when {
+                    route == null -> Transition(state.copy(error = LINK_UNSUPPORTED))
+                    // An external link is the one way a user names a destination without a button.
+                    !state.availability.admits(route) -> Transition(state.copy(error = SECTION_UNAVAILABLE))
+                    else -> navigateOrQueue(state, route, input.visitId)
+                }
             }
             is Intent.BrowserVisit -> {
                 val dismissed = dismissDialog(state)
@@ -148,7 +161,9 @@ object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.In
                 val resolved = state.copy(welcomeRequired = input.required, welcomeResolved = true)
                 if (input.required) Transition(resolved) else release(resolved, input.visitIds)
             }
-            is Intent.ShowDialog -> Transition(state.copy(dialog = input.route), listOf(Effect.ShowDialog(input.route)))
+            is Intent.ShowDialog ->
+                if (!state.availability.admits(input.route)) reject(ROUTE_UNAVAILABLE)
+                else Transition(state.copy(dialog = input.route), listOf(Effect.ShowDialog(input.route)))
             // Reference identity, not equality: a completed modal must not dismiss the equal route
             // its successor reopened, and the shell keeps one route instance per live modal.
             is Intent.DismissDialog ->
@@ -166,8 +181,13 @@ object NavigationMachine : Machine<NavigationMachine.State, NavigationMachine.In
                 val observed = state.copy(persistenceBlocked = input.failed,
                     restoreError = if (input.failed) RESTORE_FAILED else null)
                 if (input.journal == null) Transition(observed.copy(loaded = true))
-                else Transition(observed.copy(pending = Pending(input.journal, restoring = true)),
-                    listOf(Effect.Project(input.journal)))
+                else {
+                    // A saved journal outlives the build that wrote it: project only what this host opens.
+                    val journal = state.availability.restrict(input.journal)
+                    Transition(observed.copy(pending = Pending(journal, restoring = true),
+                        error = if (journal != input.journal) SECTION_UNAVAILABLE else observed.error),
+                        listOf(Effect.Project(journal)))
+                }
             }
             Fact.Projected -> {
                 val pending = state.pending ?: return reject("Нет перехода в работе")

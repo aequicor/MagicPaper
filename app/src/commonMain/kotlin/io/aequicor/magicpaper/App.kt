@@ -12,7 +12,6 @@ import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import io.aequicor.magicpaper.di.*
 import io.aequicor.magicpaper.domain.*
-import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.navigation.*
 import io.aequicor.magicpaper.ui.*
@@ -189,19 +188,10 @@ private fun AppShellContent(
                     }
                     // A feature modal is drawn by its owner; the slot entry only serves back navigation.
                     RootDialogLifecycle.FEATURE_MODAL_KIND -> Unit
-                    else -> {
-                        val contribution = contributions.dialogs.firstOrNull { it.kind == dialog.kind }
-                        if (contribution != null) contribution.Content(dialog, root)
-                        else {
-                            LaunchedEffect(dialog.kind) {
-                                AppLog.error("shell", "dialog.unavailable", mapOf("kind" to dialog.kind))
-                            }
-                            PaperDialog("Раздел недоступен", { root.dismissDialog(dialog) },
-                                confirmLabel = "Закрыть", onConfirm = { root.dismissDialog(dialog) }) {
-                                PaperText("Этот раздел недоступен на этом устройстве.")
-                            }
-                        }
-                    }
+                    // The machine shows only kinds a contribution draws, so a missing one is wiring.
+                    else -> checkNotNull(contributions.dialogs.firstOrNull { it.kind == dialog.kind }) {
+                        "No contribution draws the admitted dialog ${dialog.kind}"
+                    }.Content(dialog, root)
                 }
             }
             }

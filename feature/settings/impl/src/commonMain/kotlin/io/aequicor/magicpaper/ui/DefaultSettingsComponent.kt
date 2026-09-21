@@ -43,6 +43,9 @@ class DefaultSettingsComponent(
     internal fun saveVariantDraft(profile: LlmProfile, model: String, onSaved: () -> Unit) = service.saveVariantDraft(profile, model, onSaved)
     internal fun saveDescriptionDraft(dossier: ModelDossier, onSaved: () -> Unit) = service.saveDescriptionDraft(dossier, onSaved)
     init {
+        require(input.page != SettingsPage.ENGINES && input.page != SettingsPage.COMPUTER) {
+            "${input.page} is contributed by a host and none registered it"
+        }
         context.lifecycle.doOnResume { if (input.page == SettingsPage.PROFILE) service.prepareProfileEditor() }
         context.lifecycle.doOnDestroy { scope.cancel() }
     }
@@ -70,7 +73,8 @@ class DefaultSettingsComponent(
         when(input.page) {
             SettingsPage.OVERVIEW -> SettingsScreen(this, current)
             SettingsPage.MODELS -> ModelsSettings(this, current)
-            SettingsPage.ENGINES, SettingsPage.COMPUTER -> MissingSettingsPage { onOutput(SettingsOutput.Overview) }
+            // Rejected at construction: a host contributes these pages and no page stands in for one.
+            SettingsPage.ENGINES, SettingsPage.COMPUTER -> Unit
             SettingsPage.WELCOME -> WelcomeScreen(this, current)
             SettingsPage.PROFILE -> {
                 var restored by remember(input.profileId) { mutableStateOf<LlmProfile?>(null) }

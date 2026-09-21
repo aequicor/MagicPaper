@@ -119,12 +119,12 @@ fun createAppRoot(runtime: MagicPaperRuntime, componentContext: ComponentContext
                         render
                     }
                     is AppRoute.Projects -> {
-                        val contribution = koin.get<AppContributions>().routes.firstOrNull { it.kind == route.logKind() }
-                        val component = contribution?.create(attemptContext, route, events)
-                        val render: @Composable () -> Unit = {
-                            if (component != null) component.Content()
-                            else io.aequicor.magicpaper.ui.screens.UnavailableAppSection { events.navigate(AppRoute.Chat()) }
+                        // The machine admits only what the contributions offer, so a missing one is wiring.
+                        val contribution = checkNotNull(koin.get<AppContributions>().routes.firstOrNull { it.kind == route.logKind() }) {
+                            "No contribution builds the admitted route ${route.logKind()}"
                         }
+                        val component = contribution.create(attemptContext, route, events)
+                        val render: @Composable () -> Unit = { component.Content() }
                         render
                     }
                     is AppRoute.Settings -> {
@@ -171,7 +171,8 @@ fun createAppRoot(runtime: MagicPaperRuntime, componentContext: ComponentContext
                     }
                 }
             }
-        }, initialDeepLink = runtime.navigationSession.initialDeepLink)
+        }, initialDeepLink = runtime.navigationSession.initialDeepLink,
+        availability = routeAvailability(koin.get<AppContributions>(), koin.get<SettingsContributions>()))
     rootReference = root
     pendingRootActions.toList().forEach { it(root) }
     pendingRootActions.clear()
@@ -232,3 +233,20 @@ internal fun NavigationEvents.settingsOutput(output: SettingsOutput) {
         is SettingsOutput.Profile -> navigate(AppRoute.Settings(SettingsSection.PROFILE, output.id))
     }
 }
+
+/**
+ * What this host can open, read from what it contributes: a destination exists here because
+ * something builds it, not because a screen says otherwise. The platform boundary is compile-time
+ * (only the JVM build contributes coding), so this follows the target without a runtime check.
+ */
+internal fun routeAvailability(app: AppContributions, settings: SettingsContributions) = RouteAvailability.Base.with(
+    kinds = app.routes.map { it.kind }.toSet(),
+    settingsSections = settings.pages.mapNotNull { registration ->
+        when (registration.page) {
+            SettingsPage.ENGINES -> SettingsSection.ENGINES
+            SettingsPage.COMPUTER -> SettingsSection.COMPUTER
+            SettingsPage.OVERVIEW, SettingsPage.MODELS, SettingsPage.PROFILE, SettingsPage.WELCOME -> null
+        }
+    }.toSet(),
+    dialogKinds = app.dialogs.map { it.kind }.toSet(),
+)

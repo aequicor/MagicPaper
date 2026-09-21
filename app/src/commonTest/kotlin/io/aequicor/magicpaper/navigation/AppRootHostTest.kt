@@ -5,6 +5,8 @@ import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arkivanov.essenty.lifecycle.destroy
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.di.*
+import io.aequicor.magicpaper.ui.AppContributions
+import io.aequicor.magicpaper.ui.SettingsContributions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
@@ -26,7 +28,7 @@ class AppRootHostTest {
         val runtime = MagicPaperRuntime(
             navigationSession = NavigationSessionConfig(initialDeepLink = "magicpaper://docs/guide"),
             onPlatformStarted = {}, onPlatformClosed = {},
-            definitions = { module { single { persistence }; single { events } } },
+            definitions = { module { single { persistence }; single { events }; single { AppContributions() }; single { SettingsContributions() } } },
         )
         val lifecycle = LifecycleRegistry()
         try {

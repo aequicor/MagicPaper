@@ -84,6 +84,8 @@ class DefaultRootComponent<C : Any>(
     initialWelcomeRequired: Boolean? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val persistenceDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /** What this host contributes; the machine refuses and trims everything else. */
+    availability: RouteAvailability = RouteAvailability.All,
 ) : RootComponent<C>, ComponentContext by componentContext {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -94,7 +96,7 @@ class DefaultRootComponent<C : Any>(
     private var saveSequence = 0L
     private val completedSave = MutableStateFlow(0L)
     private var state = NavigationMachine.initial(newNavigationId(), newNavigationId(),
-        welcomeRequired = initialWelcomeRequired)
+        welcomeRequired = initialWelcomeRequired, availability = availability)
     private val mutableState = MutableStateFlow(projection())
     override val navigationState = mutableState.asStateFlow()
     private val navigation = StackNavigation<Visit>()
@@ -152,6 +154,7 @@ class DefaultRootComponent<C : Any>(
             dispatch(NavigationMachine.Fact.Restored(restored.getOrNull(), restored.isFailure))
             AppLog.info("navigation", "restored", mapOf("visitId" to state.journal.current.id,
                 "route" to state.journal.current.route.logKind(), "count" to state.journal.visits.size.toString(),
+                "trimmed" to (state.message == NavigationMachine.SECTION_UNAVAILABLE).toString(),
                 "result" to if (state.persistenceBlocked) "failed" else "ready"))
             initialDeepLink?.let { processSafely(Command.Link(it)) }
             if (state.welcomeResolved && !state.welcomeRequired) processSafely(Command.Welcome(false))
@@ -207,6 +210,8 @@ class DefaultRootComponent<C : Any>(
             is Command.Link -> {
                 val route = AppRouteCodec.parseDeepLink(command.uri) ?: AppRouteCodec.parsePath(command.uri)
                 if (route == null) AppLog.info("navigation", "link_rejected", mapOf("reason" to "unsupported_route"))
+                else if (!state.availability.admits(route)) AppLog.info("navigation", "link_rejected",
+                    mapOf("reason" to "unavailable_route", "route" to route.logKind()))
                 else AppLog.info("navigation", "link_received", mapOf("route" to route.logKind()))
                 dispatch(NavigationMachine.Intent.Link(command.uri, newNavigationId()))
             }
@@ -242,8 +247,12 @@ class DefaultRootComponent<C : Any>(
 
     private fun perform(previous: NavigationMachine.State, effect: NavigationMachine.Effect) {
         when (effect) {
+            // Only a host that offers a control for a destination it cannot open gets here, and a
+            // control that leads nowhere is a defect to find, not a routine refusal.
             is NavigationMachine.Effect.Reject ->
-                AppLog.debug("navigation", "command_rejected", mapOf("reason" to effect.reason))
+                if (effect.reason == NavigationMachine.ROUTE_UNAVAILABLE) AppLog.error("navigation", "route_unavailable",
+                    mapOf("consequence" to "command_dropped", "visitId" to previous.journal.current.id))
+                else AppLog.debug("navigation", "command_rejected", mapOf("reason" to effect.reason))
             is NavigationMachine.Effect.Project -> {
                 val restoring = state.pending?.restoring == true
                 try {
