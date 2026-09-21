@@ -27,6 +27,8 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
     private var probeVerified = false
     @Volatile private var accepting = true
     @Volatile private var closed = false
+    /** A failed probe marks checks unavailable but does not abort the owning runtime restore. */
+    @Volatile private var probeFailure: Throwable? = null
     override val progress = MutableSharedFlow<CheckProgress>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     override suspend fun run(command: CheckCommand): CheckResult {
@@ -74,6 +76,8 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 // A lookup never starts a probe. Do not hold the target lock while probing: its
                 // canonical workspace can equal the probe workspace. Actual admission is checked again below.
                 if (normalized.policy in setOf(CheckPolicy.PROTECTED_PROJECT, CheckPolicy.GIT_READ_ONLY)) ensureProbe()
+                // A prior probe failure marks all sandbox-dependent checks unavailable without aborting the runtime.
+                probeFailure?.let { throw CheckOutcomeUnknown(it) }
                 entry.lock.withLock {
                     currentCoroutineContext().ensureActive()
                     check(accepting && !closed) { "Проверки временно остановлены" }
@@ -321,7 +325,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
     }
     override suspend fun resumeAfterReset() {
         entries.values.forEach { entry -> entry.lock.withLock { } }
-        admission.withLock { entries.clear(); probeVerified = false; if (!closed) accepting = true }
+        admission.withLock { entries.clear(); probeVerified = false; probeFailure = null; if (!closed) accepting = true }
     }
     override suspend fun close() {
         val pending = admission.withLock { closed = true; accepting = false; completions.values.toList() }
@@ -361,9 +365,12 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         AppLog.error("checks", "lifecycle.cleanup.failed", mapOf("causeType" to primary.javaClass.simpleName))
         throw primary
     }
-    /** The real OS probe is another journaled command in a fixed owned workspace, with the same lifecycle proofs. */
+    /** The real OS probe is another journaled command in a fixed owned workspace, with the same lifecycle proofs.
+     *  A probe failure marks checks unavailable for this runtime visit; it does not throw into the caller,
+     *  so session restore and other startup work can proceed without sandbox-protected checks. */
     private suspend fun ensureProbe() = probeLock.withLock {
         if (probeVerified) return@withLock
+        if (probeFailure != null) return@withLock
         val workspace = driver.probeWorkspace() ?: return@withLock
         val entry = admission.withLock {
             check(accepting && !closed) { "Проверки временно остановлены" }
@@ -371,7 +378,10 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         }
         entry.lock.withLock {
             entry.journal.initialize()
-            if (entry.journal.state.unknown) throw CheckOutcomeUnknown()
+            if (entry.journal.state.unknown) {
+                probeFailure = CheckOutcomeUnknown()
+                return@withLock
+            }
             check(accepting && !closed) { "Проверки временно остановлены" }
             val ref = CheckRef(CheckScope("sandbox-probe", "sandbox-probe", UUID.randomUUID().toString(), 0), "probe")
             val probe = driver.createProbe(ref)
@@ -386,7 +396,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             } catch (failure: Throwable) {
                 AppLog.error("checks", "sandbox.probe.failed", mapOf("causeType" to failure.javaClass.simpleName))
                 if (failure is CancellationException) throw failure
-                throw IllegalStateException("ОС не подтвердила защиту исходников. Проверка недоступна", failure)
+                probeFailure = IllegalStateException("ОС не подтвердила защиту исходников. Проверка недоступна", failure)
             } finally { running.remove(ref, job) }
         }
     }

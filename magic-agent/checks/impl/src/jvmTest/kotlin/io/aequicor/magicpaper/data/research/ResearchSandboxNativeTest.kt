@@ -81,8 +81,13 @@ class ResearchSandboxNativeTest {
         try {
             val project = Files.createDirectory(root.resolve("project"))
             val runner = NativeCheckFixture(root.resolve("runtime"), sandbox = { throw NativeCheckUnavailable("sandbox missing") })
-            val failure = assertFailsWith<IllegalStateException> { runner.run(project, "s", shell("touch created.txt", "Set-Content created.txt no")) }
-            assertEquals("ОС не подтвердила защиту исходников. Проверка недоступна", failure.message)
+            val failure = assertFailsWith<CheckOutcomeUnknown> { runner.run(project, "s", shell("touch created.txt", "Set-Content created.txt no")) }
+            // A probe failure marks sandbox-dependent checks unavailable for this visit without
+            // aborting the runtime. The probe refusal stays reachable in the cause chain of the
+            // reported outcome; verify() may re-enter run(), so the wrapping depth is a detail.
+            val chain = generateSequence<Throwable>(failure) { it.cause }.toList()
+            assertTrue(chain.any { it !is CheckOutcomeUnknown && it.message == "ОС не подтвердила защиту исходников. Проверка недоступна" },
+                "Probe refusal must remain in the cause chain: " + chain.joinToString(" -> ") { it.javaClass.simpleName })
             assertFalse(Files.exists(project.resolve("created.txt")))
         } finally { root.toFile().deleteRecursively() }
     }
