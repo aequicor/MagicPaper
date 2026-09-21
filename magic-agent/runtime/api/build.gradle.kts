@@ -16,6 +16,7 @@ kotlin {
             api(project(":magic-agent:organism:api"))
             api(project(":magic-agent:planning:api"))
             api(project(":core:storage:api"))
+            api(project(":core:state-machine:api"))
             api(project(":feature:skills:api"))
             api(project(":feature:plugins:api"))
             api(project(":feature:settings:api"))
@@ -28,6 +29,7 @@ kotlin {
             api(libs.compose.foundation)
             api(libs.decompose)
         }
+        commonTest { kotlin.srcDir(rootProject.file("testSupport/statemachine")) }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutinesTest)
