@@ -1144,7 +1144,7 @@ class DefaultCodingService(
             repo.dispatch(projectId, CodingMachine.Intent.CreateSession(session))
             // The entity now exists. A later cleanup/presentation failure must not invite another create.
             _state.update { it.copy(coding = it.coding.copy(
-                sessions = listOf(CodingSessionUi(session = session)) + it.coding.sessions,
+                sessions = it.coding.sessions.withSessionFirst(CodingSessionUi(session = session)),
                 currentSessionId = session.id)) }
             try {
                 val saved = settingsCommands.selectDefaultCodingEngine(point.value)
@@ -1785,7 +1785,7 @@ class DefaultCodingService(
             .map { it.withGeneratedMedia(mediaGeneration?.operations?.value.orEmpty()).forFork(fork.id) }
         // Publish the new session only after its complete independent log exists.
         repo.dispatch(fork.projectId, CodingMachine.Intent.CreateSession(fork, messages))
-        _state.update { it.copy(coding = it.coding.copy(sessions = listOf(CodingSessionUi(fork, messages)) + it.coding.sessions)) }
+        _state.update { it.copy(coding = it.coding.copy(sessions = it.coding.sessions.withSessionFirst(CodingSessionUi(fork, messages)))) }
         onOpenSession(fork.projectId, fork.id)
         fork.id
     }

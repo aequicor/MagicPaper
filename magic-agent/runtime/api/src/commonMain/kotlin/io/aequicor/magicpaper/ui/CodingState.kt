@@ -13,6 +13,14 @@ import io.aequicor.magicpaper.domain.aggregateCodingStatus
 import io.aequicor.magicpaper.domain.ExecutionIntent
 import io.aequicor.magicpaper.domain.interruptedCodingRequest
 
+/**
+ * Puts [ui] first, replacing any entry for the same session. The journal observer can already
+ * have projected a session that its creator is about to publish; a second row would reuse the
+ * session's sidebar key and crash the lazy list.
+ */
+fun List<CodingSessionUi>.withSessionFirst(ui: CodingSessionUi): List<CodingSessionUi> =
+    listOf(ui) + filterNot { it.session.id == ui.session.id }
+
 /** Кодинг-сессия в UI: журнал плюс живой прогон и статус для индикатора. */
 data class CodingSessionUi(
     val session: CodingSession,

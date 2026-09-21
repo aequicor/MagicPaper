@@ -30,7 +30,8 @@ internal fun rememberNativeSidebarItems(
     }
     val codingItems = remember(coding.sessions, coding.projects, coding.organisms, immunityByZygote, recencyTracker) {
         // Все сессии (включая архивные) для построения дерева; видимые фильтруются ниже.
-        val allSessions = coding.sessions
+        // A repeated session would repeat its lazy-list key, which Compose rejects.
+        val allSessions = coding.sessions.distinctBy { it.session.id }
         val sessionById = allSessions.associateBy { it.session.id }
         // Группируем участников по организмам.
         val organismMemberIds = mutableMapOf<String, MutableSet<String>>()
