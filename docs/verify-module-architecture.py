@@ -38,6 +38,12 @@ BACKEND_PUBLIC = {':backend-agents:api', ':backend-agents:factory'}
 # contract a lifecycle machine implements. Nothing else in :core qualifies — storage, logging and the
 # implementations stay out — so this list is a deliberate short one, not a category.
 BACKEND_FOUNDATION = {':core:model', ':core:state-machine:api'}
+# The two modules everything else stands on carry no project dependency. The one exception is the machine
+# contract, a leaf: because it has no project dependency of its own, either of them can take it without
+# a cycle, and a machine that lives in :core:model can implement it. The leaf is held to the same rule it
+# is exempt in, so it cannot grow a dependency of its own and quietly close a loop.
+FOUNDATIONAL = {':core:model', ':core:logging'}
+FOUNDATION_LEAVES = {':core:state-machine:api'}
 # Private lifecycle infrastructure is not an installable engine contribution.
 BACKEND_INFRASTRUCTURE = {':backend-agents:lifecycle:impl'}
 BACKEND_CONSUMER = ':magic-agent:runtime:impl'
@@ -390,8 +396,11 @@ def violations(root):
                 errors.append(f'{name}: consume the API of {dependency}')
             if dependency == ':app' and name not in HOSTS:
                 errors.append(f'{name}: only platform applications may depend on :app')
-            if name in {':core:model', ':core:logging'} and dependency:
-                errors.append(f'{name}: foundational module must not depend on project {dependency}')
+            if name in FOUNDATIONAL and dependency not in FOUNDATION_LEAVES:
+                errors.append(f'{name}: foundational module must not depend on project {dependency}; '
+                              f'only the leaf {", ".join(sorted(FOUNDATION_LEAVES))} is allowed')
+            if name in FOUNDATION_LEAVES and dependency:
+                errors.append(f'{name}: a foundation leaf must not depend on project {dependency}')
             if name == ':designSystem' and is_application_module(dependency):
                 errors.append(f'{name}: Paper must remain independent of application modules')
         if architecture_group(name) in {'magic-common', 'magic-chat'} and re.search(r'magicpaper\.jvm(?:-compose)?-library', raw):
@@ -646,6 +655,33 @@ if '--self-test' in sys.argv:
         branch.write_text('package fixture\ndata class Delivered(val at: Long) : QuestionFact\n')
         assert not violations(root), violations(root)
 
+if '--self-test' in sys.argv:
+    from tempfile import TemporaryDirectory
+    # The foundation modules carry no project dependency, save the machine contract, which is a leaf.
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        for foundation in ('core/model', 'core/logging'):
+            build = root / foundation / 'build.gradle.kts'
+            build.parent.mkdir(parents=True)
+            build.write_text('commonMain.dependencies { api(project(":core:state-machine:api")) }')
+            assert not violations(root), (foundation, violations(root))
+            for dependency in (':core:storage:api', ':core:ai:api', ':core:state-machine:impl', ':designSystem', ':app'):
+                build.write_text(f'commonMain.dependencies {{ implementation(project("{dependency}")) }}')
+                assert any('foundational module must not depend' in error for error in violations(root)), (foundation, dependency)
+            # A test dependency is not part of the production graph and stays allowed, as it always was.
+            build.write_text('commonTest.dependencies { implementation(project(":core:ai:api")) }')
+            assert not violations(root), violations(root)
+        # The leaf may take nothing, or the exemption would let a loop in through it.
+        leaf = root / 'core/state-machine/api/build.gradle.kts'
+        leaf.parent.mkdir(parents=True)
+        leaf.write_text('')
+        assert not violations(root), violations(root)
+        for dependency in (':core:model', ':core:logging'):
+            leaf.write_text(f'commonMain.dependencies {{ api(project("{dependency}")) }}')
+            assert any('a foundation leaf must not depend' in error for error in violations(root)), dependency
+        leaf.write_text('')
+        (root / 'core/model/build.gradle.kts').write_text('commonMain.dependencies { api(project(":core:state-machine:api")) }')
+        assert not violations(root), violations(root)
 if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory
     with TemporaryDirectory() as folder:
