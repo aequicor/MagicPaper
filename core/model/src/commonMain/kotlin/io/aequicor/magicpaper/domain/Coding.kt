@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class CodingEngine(val title: String) { PI("pi"), CODEX("Codex") }
+enum class CodingEngine(val title: String) { PI("pi"), CODEX("Codex"), CLAUDE_CODE("Claude Code") }
 
 /** Used only when migrating sessions created before engine selection existed. */
 fun legacyCodingEngine(profile: LlmProfile?): CodingEngine =

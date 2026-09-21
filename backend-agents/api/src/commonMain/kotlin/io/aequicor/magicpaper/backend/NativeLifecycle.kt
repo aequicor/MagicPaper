@@ -13,7 +13,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class NativeProcessIdentity(val receiptId: String, val pid: Long, val startedAt: Long)
 @Serializable enum class NativeOutcome { NOT_DISPATCHED, UNKNOWN, SUCCEEDED, FAILED }
 @Serializable enum class NativeTermination { NOT_STARTED, LIVE, STOPPED, UNKNOWN }
-@Serializable enum class NativeDelivery { PI_STDIN, CODEX_THREAD, CODEX_TURN, PROVIDER_STDIN }
+@Serializable enum class NativeDelivery { PI_STDIN, CODEX_THREAD, CODEX_TURN, PROVIDER_STDIN, CLAUDE_STDIN }
 @Serializable data class NativeRecoveryAcknowledgement(val id: String, val predecessor: NativeAttemptRef, val parentDecisionId: String)
 /** Proves that a recorded run admitted no task launch; it makes no claim about other resource owners. */
 @Serializable data class NativeNoDispatchProof(val run: NativeRunRef, val proofId: String, val journalGeneration: String)

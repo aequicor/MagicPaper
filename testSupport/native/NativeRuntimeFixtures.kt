@@ -14,6 +14,9 @@ val testBrowserSessions = object : BrowserSessions {
     }
 }
 
+/** The engines the fixture below composes. An engine added to the catalog is not part of it, so loops name this list. */
+val historicalFixtureEngines = listOf(CodingEngine.PI, CodingEngine.CODEX)
+
 /** Historical integration setups still select their two real isolated processes explicitly. */
 fun DesktopCodingRuntime(
     pi: PiCodingRuntime,

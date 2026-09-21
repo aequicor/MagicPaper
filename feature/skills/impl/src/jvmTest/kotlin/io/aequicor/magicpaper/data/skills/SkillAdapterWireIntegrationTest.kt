@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.skills
 
 import io.aequicor.magicpaper.data.coding.DesktopCodingRuntime
+import io.aequicor.magicpaper.data.coding.historicalFixtureEngines
 import io.aequicor.magicpaper.data.coding.PiCodingRuntime
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.domain.*
@@ -137,7 +138,7 @@ class SkillAdapterWireIntegrationTest {
                     skillSelection = repository::projectCodingSelection,
                     recordSkillRun = { repository.recordCodingRun(it) })
                 try {
-                    for (engine in CodingEngine.entries) {
+                    for (engine in historicalFixtureEngines) {
                         val checkpoint = CodingRunCheckpoint("request", "RECOVERY-TASK")
                         val session = CodingSession(engine.name, "project", "Session", 0, piSessionId = "old-history",
                             engine = engine, pendingRun = checkpoint)

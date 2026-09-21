@@ -38,7 +38,7 @@ class SessionContextRuntimeTest {
                 assertTrue("повышение прав и управление компьютером отключены" in research)
                 assertTrue("EXACT SKILL TEXT" in research)
             }
-            assertEquals(6, reads)
+            assertEquals(CodingEngine.entries.size * 3, reads)
         } finally {
             client.close()
             root.toFile().deleteRecursively()

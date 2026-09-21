@@ -220,7 +220,7 @@ class ProjectSkillsTest {
             install(r, "2.0.0", reviewed = false)
             val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()), CodexAppServerOpenAiSubscription(Json, root.resolve("codex"), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()), skillSnapshot = r::projectInstructions)
             for (provider in listOf(ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENAI_SUBSCRIPTION)) {
-                for (engine in CodingEngine.entries) {
+                for (engine in historicalFixtureEngines) {
                     for (resume in listOf("", "previous-engine-session")) {
                         val events = runtime.run(CodingProject("A", "A", root.toString(), 0), CodingSession("chat", "A", "Chat", 0, piSessionId = resume, engine = engine), "task", LlmProfile("p", "Profile", provider = provider), emptyList()).toList()
                         val receipt = events.filterIsInstance<CodingEvent.Notice>().single().message
@@ -269,7 +269,7 @@ class ProjectSkillsTest {
             assertTrue(r.projectCodingSelection("B").instructions.isEmpty())
             val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()), CodexAppServerOpenAiSubscription(Json, root.resolve("codex"), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
                 skillSelection = r::projectCodingSelection, recordSkillRun = { r.recordCodingRun(it) })
-            for (engine in CodingEngine.entries) {
+            for (engine in historicalFixtureEngines) {
                 val events = runtime.run(CodingProject("A", "A", root.toString(), 0), CodingSession("chat-${engine.name}", "A", "Chat", 0, piSessionId = "old-context", engine = engine), "TASK-SECRET", LlmProfile("p", "Unconfigured"), emptyList()).toList()
                 assertEquals(1, events.filterIsInstance<CodingEvent.Failed>().size)
                 assertFalse(events.any { it is CodingEvent.SessionStarted })
@@ -301,7 +301,7 @@ class ProjectSkillsTest {
     @Test fun crossProjectStartAndResumeRejectBeforeSnapshotOrTransport() = test { root ->
         var reads = 0
         val runtime = DesktopCodingRuntime(PiCodingRuntime(root.resolve("pi").toFile(), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()), CodexAppServerOpenAiSubscription(Json, root.resolve("codex"), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()), skillSnapshot = { reads++; emptyList() })
-        for (engine in CodingEngine.entries) {
+        for (engine in historicalFixtureEngines) {
             for (resume in listOf("", "previous-engine-session")) {
                 val events = runtime.run(CodingProject("B", "B", root.toString(), 0), CodingSession("chat", "A", "Chat", 0, piSessionId = resume, engine = engine), "task", LlmProfile("p", "Profile"), emptyList()).toList()
                 assertContains(events.filterIsInstance<CodingEvent.Failed>().single().message, "другому проекту")

@@ -11,7 +11,7 @@ Neither backend implementation depends on features, application tools, storage,
 AI services, Compose, or DI. Their only project dependency is `:backend-agents:api`,
 whose shared values come from `:core:model`.
 
-The implemented engines are Pi and Codex. The target architecture's reference to
+The implemented engines are Pi, Codex and Claude Code. The target architecture's reference to
 five engines has no counterpart in the current source; three empty adapters are
 not created.
 
@@ -40,6 +40,13 @@ extension paths, environment values and tool names. It never resolves a
 The runtime reaches an engine's own account (login, model list, one plain completion)
 through `NativeSubscriptionAccess`, created by `createNativeSubscriptionAccess` from the
 engine's `BackendAgentContribution`; an engine without an account returns none.
+
+Claude Code (`:claude`) is an externally installed CLI run once per request as
+`claude -p --output-format stream-json`. It owns command construction (`ClaudeCommand`), the
+stream parser, and the child process; the prompt goes through stdin, the system instruction and MCP
+configuration through per-attempt files that never reach argv. It declares no native approvals: a
+read-only run is limited to `Read`, `Grep`, `Glob` and application tools, a coding run skips permission
+prompts. Its journaled delivery stage is `CLAUDE_STDIN`.
 
 Codex owns sandbox/approval policy, native start/resume/turn payload construction,
 web-item labels, terminal evidence, account/login/model RPC, native approvals and
@@ -129,7 +136,7 @@ saved engine identities, skill adapter names or provider IDs change.
 Checks:
 
 ```sh
-./gradlew :backend-agents:api:jvmTest :backend-agents:lifecycle:impl:jvmTest :backend-agents:pi:jvmTest :backend-agents:codex:jvmTest :backend-agents:factory:jvmTest :backend-agents:pi:nodeProtocolTest
+./gradlew :backend-agents:api:jvmTest :backend-agents:lifecycle:impl:jvmTest :backend-agents:pi:jvmTest :backend-agents:codex:jvmTest :backend-agents:claude:jvmTest :backend-agents:factory:jvmTest :backend-agents:pi:nodeProtocolTest
 python3 docs/verify-module-architecture.py --self-test
 ```
 

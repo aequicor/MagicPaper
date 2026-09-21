@@ -6,7 +6,7 @@ import kotlin.test.*
 class BackendAgentFactoryTest {
     @Test fun factoryConnectsOnlyImplementedEnginesAndTheirCapabilities() {
         val catalog = createBackendAgentCatalog()
-        assertEquals(setOf(CodingEngine.PI, CodingEngine.CODEX), catalog.descriptors.map { it.engine }.toSet())
+        assertEquals(setOf(CodingEngine.PI, CodingEngine.CODEX, CodingEngine.CLAUDE_CODE), catalog.descriptors.map { it.engine }.toSet())
         assertEquals(catalog.descriptors.size, catalog.descriptors.map { it.engine }.distinct().size)
         val pi = catalog.descriptor(CodingEngine.PI)
         assertEquals("Pi", pi.adapterName)
@@ -16,11 +16,15 @@ class BackendAgentFactoryTest {
         assertContains(codex.capabilities, BackendAgentCapability.EXTERNAL_INSTALLATION)
         assertContains(codex.capabilities, BackendAgentCapability.NATIVE_TOOL_HISTORY)
         assertFalse(BackendAgentCapability.MANAGED_INSTALLATION in codex.capabilities)
+        val claude = catalog.descriptor(CodingEngine.CLAUDE_CODE)
+        assertEquals("Claude Code", claude.adapterName)
+        assertEquals(setOf(BackendAgentCapability.EXTERNAL_INSTALLATION), claude.capabilities)
     }
 
     @Test fun onlyAnEngineWithItsOwnAccountOffersSubscriptionAccess() {
         assertNotNull(subscriptionAccess(CodingEngine.CODEX))
         assertNull(subscriptionAccess(CodingEngine.PI))
+        assertNull(subscriptionAccess(CodingEngine.CLAUDE_CODE))
     }
 
     private fun subscriptionAccess(engine: CodingEngine): NativeSubscriptionAccess? {

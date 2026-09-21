@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.data.skills
 
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.data.coding.DesktopCodingRuntime
+import io.aequicor.magicpaper.data.coding.historicalFixtureEngines
 import io.aequicor.magicpaper.data.coding.PiCodingRuntime
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import kotlinx.coroutines.*
@@ -34,7 +35,7 @@ class SkillRunCompletionTest {
                 CodexAppServerOpenAiSubscription(SkillPackageFormat.json, root.resolve("codex"), browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = testQuestionnaireFactory()),
                 skillSnapshot = { throw CancellationException("private transport detail") }, runObserver = skillExperienceObserver({ j }, passed))
             val project = CodingProject("project-private", "private name", root.toString(), 0)
-            for (engine in CodingEngine.entries) {
+            for (engine in historicalFixtureEngines) {
                 val request = CodingRunCheckpoint("request-$engine", "private prompt")
                 val session = CodingSession("session-private", project.id, "private title", 0, engine = engine, pendingRun = request)
                 repeat(2) {

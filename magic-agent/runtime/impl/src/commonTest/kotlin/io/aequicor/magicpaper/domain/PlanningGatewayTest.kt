@@ -38,7 +38,7 @@ class PlanningGatewayTest {
         for (engine in CodingEngine.entries) gateway.completeWithActivity(project, engine, "request", profile, messages, activity::add)
         assertEquals(CodingEngine.entries, runtime.calls.map { it.second.engine })
         assertTrue(runtime.calls.all { it.first == project && it.second.piSessionId.isEmpty() })
-        assertEquals(2, runtime.calls.map { it.second.id }.distinct().size)
+        assertEquals(CodingEngine.entries.size, runtime.calls.map { it.second.id }.distinct().size)
         assertTrue(runtime.profiles.all { it.modelId == "planner" && it.codingModelId == "executor" })
         assertTrue(activity.any { it.tool == "read" && it.result == "observed content" && !it.running })
         assertTrue(activity.any { it.kind == CodingStepKind.ANSWER && it.title == "Нашёл реализацию" })

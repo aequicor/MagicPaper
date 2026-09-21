@@ -124,8 +124,14 @@ class CodingSystemPromptsTest {
             val prompt = codingSystemPrompt(engine, planning = false, override = "PROJECT RULES")
             assertTrue(CODING_FILE_TOOL_INSTRUCTIONS in prompt)
             assertTrue("PROJECT RULES" in prompt)
-            assertTrue(if (engine == CodingEngine.CODEX) "apply_patch" in prompt else "read" in prompt && "edit" in prompt && "write" in prompt)
-            assertFalse(if (engine == CodingEngine.CODEX) PI_CODING_INSTRUCTIONS in prompt else CODEX_FILE_TOOL_INSTRUCTIONS in prompt)
+            val tools = when (engine) {
+                CodingEngine.PI -> listOf("read", "edit", "write")
+                CodingEngine.CODEX -> listOf("apply_patch")
+                CodingEngine.CLAUDE_CODE -> listOf("Read", "Edit", "Write")
+            }
+            assertTrue(tools.all { it in prompt })
+            for (other in CodingEngine.entries - engine)
+                assertFalse(backendCatalog.descriptor(other).fileToolInstructions in prompt)
         }
     }
 

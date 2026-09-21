@@ -351,7 +351,8 @@ object NativeLifecycleSpace : StateSpace<NativeLifecycleMachine.State, NativeLif
         // The representatives have sent `PI_STDIN`, so it stands for a stage already sent.
         is NativeLifecycleMachine.Fact.DeliveryRequested -> when (input.stage) {
             NativeDelivery.PI_STDIN -> DELIVERY_REQUESTED
-            NativeDelivery.CODEX_THREAD, NativeDelivery.CODEX_TURN, NativeDelivery.PROVIDER_STDIN -> DELIVERY_REQUESTED_OTHER_STAGE
+            NativeDelivery.CODEX_THREAD, NativeDelivery.CODEX_TURN, NativeDelivery.PROVIDER_STDIN, NativeDelivery.CLAUDE_STDIN ->
+                DELIVERY_REQUESTED_OTHER_STAGE
         }
         is NativeLifecycleMachine.Fact.Accepted -> ACCEPTED
         // Both final outcomes are accepted alike and land apart; an outcome that is not final is refused.

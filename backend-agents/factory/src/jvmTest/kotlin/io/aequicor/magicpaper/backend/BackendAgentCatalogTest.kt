@@ -18,7 +18,7 @@ class BackendAgentCatalogTest {
 
     @Test fun serviceLoaderFindsEveryInstalledEngineWithoutHostRegistration() {
         val catalog = createBackendAgentCatalog()
-        assertEquals(setOf(CodingEngine.PI, CodingEngine.CODEX), catalog.descriptors.map { it.engine }.toSet())
+        assertEquals(setOf(CodingEngine.PI, CodingEngine.CODEX, CodingEngine.CLAUDE_CODE), catalog.descriptors.map { it.engine }.toSet())
         assertEquals(catalog.descriptors.size, catalog.descriptors.distinctBy { it.engine }.size)
     }
     @Test fun duplicateIdentityIsRejectedBeforeAnEnvironmentCanBeRequested() {
