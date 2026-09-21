@@ -1,6 +1,5 @@
 package io.aequicor.magicpaper.data.coding
 
-import io.aequicor.magicpaper.backend.PiLaunchRequest
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit

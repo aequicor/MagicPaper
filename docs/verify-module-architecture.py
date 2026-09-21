@@ -441,6 +441,11 @@ def violations(root):
                 errors.append(f'{relative}: enumerate the installed backend descriptors, not CodingEngine identities')
             if re.search(r'(?:==|!=)\s*CodingEngine\.\w+|\bCodingEngine\.\w+\s*(?:==|!=|->)', code):
                 errors.append(f'{relative}: branch on backend capabilities, not CodingEngine identities')
+        if module_name == ':backend-agents:api':
+            for declaration in DECLARATION.finditer(code):
+                if re.match(r'(?:Pi|Codex)[A-Z]', declaration.group(1)):
+                    errors.append(f'{relative}: {declaration.group(1)} belongs to one engine; declare it in that engine\'s '
+                                  f'module, and keep :backend-agents:api engine-neutral')
         if re.search(r'\b(?:class|object|typealias)\s+ToolHost\b', code):
             errors.append(f'{relative}: ToolHost is retired; inject the owning tool ports through constructors')
         if re.search(r'\b(?:class|object|typealias)\s+(?:UnavailableCoding\w*|UnsupportedCodingComponentFactory|NoopCodingRuntime)\b', code):
@@ -582,6 +587,20 @@ if '--self-test' in sys.argv:
         fixture.parent.mkdir(parents=True)
         fixture.write_text('package fixture\nobject NoopCodingRuntime\n')
         assert not violations(root), violations(root)
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        leak = root / 'backend-agents/api/src/commonMain/kotlin/Leak.kt'
+        leak.parent.mkdir(parents=True)
+        for declaration in ('class PiLaunchRequest', 'interface CodexClient', 'object PiInstallation'):
+            leak.write_text('package fixture\n' + declaration + '\n')
+            assert any('belongs to one engine' in error for error in violations(root)), declaration
+        leak.write_text('package fixture\nclass NativeAgentRequest\ninterface Pillow\n')
+        assert not any('belongs to one engine' in error for error in violations(root)), violations(root)
+        leak.unlink()
+        engine = root / 'backend-agents/pi/src/jvmMain/kotlin/PiLaunchRequest.kt'
+        engine.parent.mkdir(parents=True)
+        engine.write_text('package fixture\nclass PiLaunchRequest\n')
+        assert not any('belongs to one engine' in error for error in violations(root)), violations(root)
     with TemporaryDirectory() as folder:
         root = Path(folder)
         module = root / 'magic-chat/impl/build.gradle.kts'

@@ -21,8 +21,7 @@ class PiCodingRuntime private constructor(
         checks: CommandChecks,
         questionnaireFactory: RuntimeQuestionnaireFactory,
         journal: io.aequicor.magicpaper.data.storage.EventJournal,
-        nativeInstallation: PiInstallation? = null,
-    ) : this(create(rootDir, computerUse, subscriptionToken, browser, checks, questionnaireFactory, journal, nativeInstallation))
+    ) : this(create(rootDir, computerUse, subscriptionToken, browser, checks, questionnaireFactory, journal))
 
     override fun close() {
         var failure: Throwable? = null
@@ -32,15 +31,15 @@ class PiCodingRuntime private constructor(
     }
     companion object {
         private fun create(root: File, computer: NativeComputerUse?, token: (suspend () -> String)?,
-            browser: BrowserSessions, checks: CommandChecks, questionnaires: RuntimeQuestionnaireFactory, journal: io.aequicor.magicpaper.data.storage.EventJournal, installation: PiInstallation?)
+            browser: BrowserSessions, checks: CommandChecks, questionnaires: RuntimeQuestionnaireFactory, journal: io.aequicor.magicpaper.data.storage.EventJournal)
             : Pair<NativeRuntimeBinding, NativeProviderLibrary> {
             val library = createNativeProviderLibrary(root.absolutePath, nativeResources,
-                OwnedCodingProcess(File(root, "provider-processes")), nativeDiagnostics, NativeLifecycleJournalAdapter(journal, File(root, "provider-processes").absolutePath), installation)
+                OwnedCodingProcess(File(root, "provider-processes")), nativeDiagnostics, NativeLifecycleJournalAdapter(journal, File(root, "provider-processes").absolutePath))
             try {
                 val tokens = NativeAuthTokens { checkNotNull(token) { "Subscription token provider is unavailable" }.invoke() }
                 val host = NativeHostEnvironment(Json, journal, root.absoluteFile.parentFile, library, computer, browser, checks,
                     questionnaires, NativeAuthTokens { null }, tokens, { tokens.readAccessToken() }, rootOverride = root)
-                return host.create(backendProtocols.pi.descriptor.engine) to library
+                return host.create(backendCatalog.descriptor(io.aequicor.magicpaper.domain.CodingEngine.PI).engine) to library
             } catch (failure: Throwable) {
                 try { library.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }; throw failure
             }

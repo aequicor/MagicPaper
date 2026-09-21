@@ -9,7 +9,7 @@ import kotlin.test.*
 class CodexLiveMessageTest {
     private class Stream : AutoCloseable {
         private val home = Files.createTempDirectory("codex-live-test-")
-        private val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
+        private val service = codexTestClient(Json, home)
         val recorder = CodingRunRecorder()
         val planning = mutableListOf<CodingStep>()
         private val type = nativeAccumulatorType(service)

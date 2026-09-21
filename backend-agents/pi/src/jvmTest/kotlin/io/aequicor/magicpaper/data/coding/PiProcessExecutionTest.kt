@@ -1,8 +1,6 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.backend.*
-import io.aequicor.magicpaper.backend.PiExecutionRequest
-import io.aequicor.magicpaper.backend.PiLaunchRequest
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred

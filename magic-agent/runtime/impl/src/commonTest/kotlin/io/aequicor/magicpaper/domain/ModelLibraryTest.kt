@@ -1,7 +1,6 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.data.coding.ProviderControls
-import io.aequicor.magicpaper.data.coding.backendProtocols
 import io.aequicor.magicpaper.data.llm.LlmPayloads
 import kotlinx.serialization.json.*
 import kotlin.test.*
@@ -41,7 +40,6 @@ class ModelLibraryTest {
         assertEquals(custom.options, request.advanced)
         assertEquals(request, request.forCoding())
         assertEquals(setOf(ReasoningEffort.LOW, ReasoningEffort.HIGH), ModelDefaults.capability(request).selectableLevels.toSet())
-        assertEquals(16384, backendProtocols.pi.modelConfiguration(request).maxTokens, "Registry advertises provider capacity; per-request options carry the user limit")
         assertEquals(7000, ProviderControls.parameters(request)["max_tokens"]?.jsonPrimitive?.int)
         assertEquals(ReasoningEffort.HIGH, request.effortSelectionFor().level)
         assertEquals(.9, p.forModel("m").advanced.temperature)
@@ -100,7 +98,6 @@ class ModelLibraryTest {
     @Test fun codingAdaptersUseNativeProviderFormats() {
         for ((provider, api) in listOf(ProviderType.ANTHROPIC to "anthropic-messages", ProviderType.GOOGLE to "google-generative-ai", ProviderType.OPENROUTER to "openai-completions")) {
             val request = source.copy(provider = provider).forModel("m", EffortSelection.of(ReasoningEffort.HIGH))
-            assertEquals(api, backendProtocols.pi.modelConfiguration(request).root["providers"]!!.jsonObject["magicpaper"]!!.jsonObject["api"]!!.jsonPrimitive.content)
             val params = ProviderControls.parameters(request)
             assertFalse("messages" in params)
             assertFalse("model" in params)

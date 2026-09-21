@@ -12,6 +12,9 @@ class CodexBackendContribution : BackendAgentContribution {
     override val descriptor = CodexNativeAdapter().descriptor
     override val paths = NativeBackendPaths("codex", "coding-processes", "codex/questionnaires", "native-codex")
     override fun create(environment: NativeBackendEnvironment): NativeAgentAdapter = CodexBackendAgent(environment, descriptor)
+    override fun createSubscription(environment: NativeSubscriptionEnvironment): NativeSubscriptionAccess =
+        CodexNativeAdapter().client(environment.json, environment.home, environment.commandOverride, environment.processes,
+            environment.accessTokens, environment.questionnaires, environment.diagnostics, environment.toolPresentation)
 }
 
 internal class CodexBackendAgent(

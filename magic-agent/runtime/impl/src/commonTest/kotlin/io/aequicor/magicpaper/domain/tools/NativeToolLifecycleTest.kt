@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
 import io.aequicor.magicpaper.domain.CodingEvent
 import io.aequicor.magicpaper.domain.CodingInteractionMode
 import io.aequicor.magicpaper.domain.CodingRunRecorder
+import io.aequicor.magicpaper.domain.CodingStepKind
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -168,6 +169,28 @@ class NativeToolLifecycleTest {
                 assertFailsWith<IllegalArgumentException> { store.save(confirmed.copy(native = false)) }
                 assertEquals(confirmed, store.get(receipt.id))
             }
+        }
+    }
+
+    /** The events are what a native command with one recognized action produces; the engine's own tests pin that shape. */
+    @Test fun nativeCommandActionsUseExistingLocalizedCardsAndPreserveTheCommand() = runTest {
+        for ((nativeTool, id) in listOf("read" to "file.read", "grep" to "file.search", "ls" to "file.list", "command" to "shell.exec")) {
+            val raw = listOf(
+                CodingEvent.ToolStarted(nativeTool, "cat source.kt", "c", isExec = true),
+                CodingEvent.ToolProgress(nativeTool, "c", "output"),
+                CodingEvent.ToolFinished(nativeTool, false, "c", "output", ToolPhase.SUCCEEDED),
+            )
+            val tools = testToolSessions(MemoryToolReceiptStore()).session(ToolExecutionContext(
+                "project", "session", "session", "request", ToolRole.WORKER, CodingInteractionMode.CODE))
+            val recorder = CodingRunRecorder()
+            flowOf(*raw.toTypedArray()).withTools(tools).toList().forEach { recorder.apply(it) }
+            val step = recorder.timeline().single()
+            assertEquals(id, step.tool)
+            assertEquals("⚒ ${toolDisplayName(id)} · cat source.kt", step.title)
+            assertEquals(if (id == "shell.exec") CodingStepKind.EXEC else CodingStepKind.TOOL, step.kind)
+            assertFalse(step.running)
+            assertTrue(step.ok)
+            assertEquals("output", step.result)
         }
     }
 }

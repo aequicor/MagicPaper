@@ -9,23 +9,20 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import java.util.zip.ZipException
 
 class CodingResourceTest {
-    @Test fun `native installation reads the packaged search tools through host resources`() {
-        val root = createTempDirectory("coding-packaged-tools").toFile()
-        try {
-            if (javaClass.getResource("/coding/tools/target.txt") == null) return
-            val installation = backendProtocols.pi.installation(root.absolutePath,
-                io.aequicor.magicpaper.backend.NativeResources { name -> javaClass.getResource(name)?.let(::readCodingResource) },
-                io.aequicor.magicpaper.backend.NativeDiagnostics { _, _, cause, _ -> throw AssertionError(cause) })
-            installation.prepareBundledTools()
-            val suffix = if (System.getProperty("os.name").lowercase().contains("win")) ".exe" else ""
-            for (name in listOf("fd", "rg")) assertTrue(File(root, "bin/$name$suffix").length() > 1_000_000)
-            assertTrue(File(root, "bin/THIRD-PARTY-NOTICES.txt").isFile)
-        } finally { root.deleteRecursively() }
+    /** The engine places these bytes itself (see its own tests); the host only has to serve them. */
+    @Test fun `host resources serve the packaged search tools`() {
+        val target = nativeResources.read("/coding/tools/target.txt")?.decodeToString()?.trim() ?: return
+        val suffix = if (System.getProperty("os.name").lowercase().contains("win")) ".exe" else ""
+        for (name in listOf("fd", "rg")) {
+            assertTrue(checkNotNull(nativeResources.read("/coding/tools/$target/$name$suffix")).size > 1_000_000, name)
+        }
+        assertNotNull(nativeResources.read("/coding/tools/$target/THIRD-PARTY-NOTICES.txt"))
     }
     @Test
     fun `reads rebuilt jar without retaining old entry offsets`() {

@@ -293,7 +293,7 @@ class CodexNativeClient(
         emptyMap()
     }
 
-    override suspend fun complete(request: CodexCompletionRequest, onActivity: (CodingStep) -> Unit,
+    override suspend fun complete(request: NativeCompletionRequest, onActivity: (CodingStep) -> Unit,
         onUsage: (UsageCallResult) -> Unit): String {
         check(account().signedIn) { "Сначала войдите в ChatGPT в настройках источника." }
         val thread = request(

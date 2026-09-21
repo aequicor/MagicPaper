@@ -6,7 +6,7 @@ import androidx.compose.runtime.getValue
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import io.aequicor.magicpaper.domain.*
-import io.aequicor.magicpaper.data.coding.backendProtocols
+import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.data.coding.backendCatalog
 import io.aequicor.magicpaper.ui.components.SubscriptionAccountPresentation
 import io.aequicor.magicpaper.ui.screens.ComputerSettings

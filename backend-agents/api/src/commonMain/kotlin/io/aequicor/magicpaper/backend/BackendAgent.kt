@@ -11,6 +11,8 @@ interface BackendAgentContribution {
     val descriptor: BackendAgentDescriptor
     val paths: NativeBackendPaths
     fun create(environment: NativeBackendEnvironment): NativeAgentAdapter
+    /** Account access is optional: an engine without its own account offers none. The caller closes the result. */
+    fun createSubscription(environment: NativeSubscriptionEnvironment): NativeSubscriptionAccess? = null
 }
 
 /** Relative to the existing application home. These are migration-sensitive, not display names. */
@@ -125,7 +127,6 @@ interface NativeProviderLibrary : AutoCloseable {
     suspend fun shutdown()
     suspend fun prepareForReset()
     suspend fun resumeAfterReset()
-    val installation: PiInstallation
     fun prepare(): Flow<NativeInstallationStatus>
     suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
         exchanges: List<LlmToolExchange>, accessToken: String, onUsage: (UsageCallResult) -> Unit): LlmToolTurn

@@ -265,7 +265,6 @@ class GenericNativeRuntimeTest {
         override suspend fun shutdown() = close()
         override suspend fun prepareForReset() = Unit
         override suspend fun resumeAfterReset() = Unit
-        override val installation: PiInstallation get() = error("Direct native adapter must not request provider installation")
         override fun prepare(): Flow<NativeInstallationStatus> = error("Direct adapter does not need a proxy")
         override suspend fun turn(profile: LlmProfile, messages: List<LlmMessage>, tools: List<LlmToolDefinition>,
             exchanges: List<LlmToolExchange>, accessToken: String, onUsage: (UsageCallResult) -> Unit): LlmToolTurn = error("Unexpected provider turn")

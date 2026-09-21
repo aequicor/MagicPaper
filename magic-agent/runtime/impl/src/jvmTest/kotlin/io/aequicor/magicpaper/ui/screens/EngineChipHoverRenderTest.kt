@@ -42,7 +42,7 @@ class EngineChipHoverRenderTest {
             MagicPaperTheme {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primaryContainer).padding(8.dp)) {
                     if (dialog) NewCodingSessionDialog(selected.value, { selected.value = it }, {}, {}, {})
-                    else NativeEngineChoices(io.aequicor.magicpaper.data.coding.backendProtocols.descriptors, selected.value) { selected.value = it }
+                    else NativeEngineChoices(io.aequicor.magicpaper.data.coding.backendCatalog.descriptors, selected.value) { selected.value = it }
                 }
             }
         }.use { scene ->

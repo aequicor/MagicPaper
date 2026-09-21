@@ -42,11 +42,4 @@ class CodingEnginePersistenceTest {
         repo.saveSession(CodingSession("b", "p", "B", 2, engine = CodingEngine.CODEX))
         assertEquals(mapOf("a" to CodingEngine.PI, "b" to CodingEngine.CODEX), repo.sessions("p").associate { it.id to it.engine })
     }
-    @Test fun subscriptionUsesNativePiProtocolWithoutPersistingTokens() {
-        val profile = LlmProfile("s", "ChatGPT", provider = ProviderType.OPENAI_SUBSCRIPTION, modelId = "gpt-test", apiKey = "must-not-be-copied")
-        val config = backendProtocols.pi.modelConfiguration(profile).root.toString()
-        assertContains(config, "openai-codex-responses")
-        assertContains(config, "https://chatgpt.com/backend-api")
-        assertFalse(config.contains(profile.apiKey))
-    }
 }

@@ -15,6 +15,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 
+/** The installation that model-only requests and the Pi agent share, so their preparation cannot race. */
+interface PiInstallationSource { val installation: PiInstallation }
+
 /** The provider dependency is shared by native agents and model-only requests, never by tool executors. */
 class PiNativeProviderLibrary(
     private val root: File,
@@ -23,7 +26,7 @@ class PiNativeProviderLibrary(
     private val diagnostics: NativeDiagnostics,
     private val lifecycle: NativeExecutionLifecycle,
     installationOverride: PiInstallation? = null,
-) : NativeProviderLibrary {
+) : NativeProviderLibrary, PiInstallationSource {
     override val installation: PiInstallation = installationOverride ?: PiNativeInstallation(root, resources, diagnostics)
     private val turns = PiProviderTurnExecution(ownership, diagnostics)
     private val bridges = ConcurrentHashMap<String, Bridge>()

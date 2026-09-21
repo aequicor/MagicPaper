@@ -40,7 +40,6 @@ internal fun nativeTestEnvironment(home: Path, sessionId: String) = NativeBacken
     }, diagnostics = NativeDiagnostics { _, _, cause, _ -> throw AssertionError(cause) },
     toolPresentation = NativeToolPresentationResolver { _, _, _ -> error("No tools") },
     providerLibrary = object : NativeProviderLibrary {
-        override val installation: PiInstallation get() = error("No provider installation")
         override suspend fun shutdown() = Unit
         override suspend fun prepareForReset() = Unit
         override suspend fun resumeAfterReset() = Unit

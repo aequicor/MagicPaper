@@ -85,8 +85,8 @@ class NativeRuntimeDispatchTest {
 
     private fun coordinator(first: CodingRuntime, second: CodingRuntime) = DesktopCodingRuntime(
         listOf(
-            NativeRuntimeBinding(backendProtocols.pi.descriptor.copy(capabilities = setOf(BackendAgentCapability.NATIVE_TOOL_HISTORY)), first),
-            NativeRuntimeBinding(backendProtocols.codex.descriptor.copy(capabilities = setOf(BackendAgentCapability.MANAGED_INSTALLATION)), second),
+            NativeRuntimeBinding(backendCatalog.descriptor(io.aequicor.magicpaper.domain.CodingEngine.PI).copy(capabilities = setOf(BackendAgentCapability.NATIVE_TOOL_HISTORY)), first),
+            NativeRuntimeBinding(backendCatalog.descriptor(io.aequicor.magicpaper.domain.CodingEngine.CODEX).copy(capabilities = setOf(BackendAgentCapability.MANAGED_INSTALLATION)), second),
         ), null, { CodingSkillSelection(emptyList()) }, testCommandChecks,
     )
 

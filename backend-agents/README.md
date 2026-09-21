@@ -1,9 +1,12 @@
 # Native backend boundary
 
-This group has JVM targets only. `:api` contains native protocol ports, immutable
-launch/configuration values and capability descriptors. `:factory` is its only
-construction entry point; it returns API types and hides both implementation
-modules from consumers. Only `:magic-agent:runtime:impl` consumes the factory.
+This group has JVM targets only. `:api` is engine-neutral: the descriptor and
+capabilities that configure an engine, the adapter and lifecycle contracts, and the host
+ports an engine is given. It declares nothing named after one engine; `Pi*` and `Codex*`
+types (`PiLaunchRequest`, `PiInstallation`, `CodexRunRequest`, `CodexClient` and the like)
+live in `:pi` and `:codex`, and `docs/verify-module-architecture.py` rejects one in `:api`.
+`:factory` is its only construction entry point; it returns API types and hides both
+implementation modules from consumers. Only `:magic-agent:runtime:impl` consumes the factory.
 Neither backend implementation depends on features, application tools, storage,
 AI services, Compose, or DI. Their only project dependency is `:backend-agents:api`,
 whose shared values come from `:core:model`.
@@ -16,7 +19,8 @@ The extracted Pi adapter owns model configuration, wire-event/usage parsing,
 isolated Node/npm/MinGit installation, bundled search tools and each process
 attempt: command construction, stdin, tolerant UTF-8 stdout,
 cancellation, exit and process-tree cleanup. The runtime passes a fully prepared
-`PiExecutionRequest` and a durable ownership port; ownership is recorded before
+`NativeAgentRequest` and a durable ownership port, from which the adapter builds its own
+`PiExecutionRequest`; ownership is recorded before
 stdin can deliver a prompt and is only cleared after shutdown is confirmed.
 Cancellation remains control flow. Launch errors preserve their original cause,
 and failed cleanup cannot be returned as success.
@@ -32,6 +36,10 @@ the whole run, including auto-continuations, releases partial acquisitions on
 failure and attempts all cleanup in reverse order. The backend receives only
 extension paths, environment values and tool names. It never resolves a
 `ToolSession`, starts an application bridge or reads application state.
+
+The runtime reaches an engine's own account (login, model list, one plain completion)
+through `NativeSubscriptionAccess`, created by `createNativeSubscriptionAccess` from the
+engine's `BackendAgentContribution`; an engine without an account returns none.
 
 Codex owns sandbox/approval policy, native start/resume/turn payload construction,
 web-item labels, terminal evidence, account/login/model RPC, native approvals and
@@ -126,7 +134,10 @@ python3 docs/verify-module-architecture.py --self-test
 ```
 
 Protocol tests cover model limits, reasoning, usage and malformed wire events;
-Codex tests cover permission boundaries and exact terminal evidence. A local Java
+Codex tests cover permission boundaries and exact terminal evidence, and drive the
+client's event handling, approval routing and process-tree recovery against local
+fakes of the host ports (`CodexTestSupport.kt`). The application's durable receipts and
+questionnaire journal are covered by their owners. A local Java
 process fixture checks Pi argument boundaries, child-only environment, ownership
 before prompt delivery, malformed UTF-8, cancellation of silent children, abort
 before launch, consumer failure and cleanup failure without installing an agent

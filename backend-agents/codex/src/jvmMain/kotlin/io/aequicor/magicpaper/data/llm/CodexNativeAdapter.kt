@@ -6,18 +6,18 @@ import java.nio.file.Paths
 import java.io.File
 import kotlinx.serialization.json.*
 
-/** Public only for the group's factory; native extensions are composed by the host. */
-class CodexNativeAdapter : CodexNativeProtocol {
-    override fun client(json: Json, home: String, command: String?, ownership: NativeProcessRecovery,
+/** Codex app-server protocol: policy, run payloads, terminal evidence and the connection itself. */
+class CodexNativeAdapter {
+    fun client(json: Json, home: String, command: String?, ownership: NativeProcessRecovery,
         tokens: NativeAuthTokens, questionnaires: NativeQuestionnaires, diagnostics: NativeDiagnostics,
         toolPresentation: NativeToolPresentationResolver): CodexClient =
         CodexNativeClient(json, Paths.get(home), command, ownership, tokens, questionnaires, diagnostics, toolPresentation)
 
-    override fun questionnaireBroker(scope: kotlinx.coroutines.CoroutineScope, questionnaires: NativeQuestionnaires,
+    fun questionnaireBroker(scope: kotlinx.coroutines.CoroutineScope, questionnaires: NativeQuestionnaires,
         notice: (String, String) -> Unit, failed: (String, Throwable) -> Unit): NativeQuestionnaireBroker =
         CodexQuestionnaireBroker(scope, questionnaires, notice, failed)
 
-    override val descriptor = BackendAgentDescriptor(
+    val descriptor = BackendAgentDescriptor(
         CodingEngine.CODEX,
         "Codex",
         setOf(BackendAgentCapability.EXTERNAL_INSTALLATION, BackendAgentCapability.NATIVE_APPROVALS,
@@ -28,16 +28,16 @@ class CodexNativeAdapter : CodexNativeProtocol {
         CODEX_FILE_TOOL_INSTRUCTIONS,
         CODEX_CODING_INSTRUCTIONS,
     )
-    override fun codingAccessPolicy(projectPath: String): CodexAccessPolicy {
+    fun codingAccessPolicy(projectPath: String): CodexAccessPolicy {
         val permissions = CodexCodingPermissions(Paths.get(projectPath))
         return CodexAccessPolicy(buildJsonObject { with(permissions) { approvals() } },
             permissions.sandboxPolicy(), permissions.threadConfig())
     }
-    override fun readOnlyAccessPolicy() = CodexAccessPolicy(
+    fun readOnlyAccessPolicy() = CodexAccessPolicy(
         buildJsonObject { with(CodexPlanningPermissions) { approvals() } },
         CodexPlanningPermissions.sandboxPolicy(), CodexPlanningPermissions.threadConfig(),
     )
-    override fun prepareRun(request: CodexRunRequest): CodexRunPayloads {
+    fun prepareRun(request: CodexRunRequest): CodexRunPayloads {
         val restricted = request.mode != io.aequicor.magicpaper.domain.CodingInteractionMode.CODE
         val permissions = if (restricted) readOnlyAccessPolicy() else codingAccessPolicy(request.workingDirectory)
         // Read-only restrictions win even when the prepared provider configuration names conflicting settings.
@@ -85,9 +85,9 @@ class CodexNativeAdapter : CodexNativeProtocol {
             })
         }
     }
-    override fun webTitle(item: JsonObject) = codexWebTitle(item)
-    override fun terminalToolResult(item: JsonObject) = CodexNativeToolResults.terminal(item)
-    override fun readToolResults(response: JsonObject, threadId: String, callIds: Set<String>) =
+    fun webTitle(item: JsonObject) = codexWebTitle(item)
+    fun terminalToolResult(item: JsonObject) = CodexNativeToolResults.terminal(item)
+    fun readToolResults(response: JsonObject, threadId: String, callIds: Set<String>) =
         CodexNativeToolResults.read(response, threadId, callIds)
     internal fun launch(commandPath: String, homeDirectory: String): Process =
         ProcessBuilder(commandPath, "app-server").directory(File(homeDirectory))

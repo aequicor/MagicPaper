@@ -5,7 +5,6 @@ import io.aequicor.magicpaper.data.coding.*
 import io.aequicor.magicpaper.domain.browser.BrowserSessions
 import io.aequicor.magicpaper.domain.checks.CommandChecks
 import io.aequicor.magicpaper.data.coding.OwnedCodingProcess
-import io.aequicor.magicpaper.data.coding.backendProtocols
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.ToolSession
 import io.aequicor.magicpaper.logging.AppLog
@@ -33,43 +32,35 @@ class CodexAppServerOpenAiSubscription(
     internal val checks: CommandChecks,
     private val questionnaireFactory: RuntimeQuestionnaireFactory,
     private val journal: io.aequicor.magicpaper.data.storage.EventJournal,
-    nativeInstallation: PiInstallation? = null,
     sharedProviderLibrary: NativeProviderLibrary? = null,
 ) : OpenAiSubscriptionService, AutoCloseable {
     private val ownsProviderLibrary = sharedProviderLibrary == null
     internal val providerLibrary = sharedProviderLibrary ?: createNativeProviderLibrary(appHome.resolveSibling("coding").toString(),
         nativeResources, OwnedCodingProcess(appHome.resolveSibling("coding").resolve("provider-processes").toFile()), nativeDiagnostics,
-        NativeLifecycleJournalAdapter(journal, appHome.resolveSibling("coding").resolve("provider-processes").toString()), nativeInstallation)
-    internal val providerInstallation get() = providerLibrary.installation
+        NativeLifecycleJournalAdapter(journal, appHome.resolveSibling("coding").resolve("provider-processes").toString()))
     private val authSecrets = io.aequicor.magicpaper.data.storage.CodexAuthSecretStore(secretStore, appHome.resolve("auth.json").toFile())
     internal val questionnaireRegistry = sharedQuestionnaires ?: questionnaireFactory.create("native-codex:${appHome.resolve("questionnaires").toAbsolutePath()}",
         io.aequicor.magicpaper.data.coding.FileRuntimeQuestionnaireStore(appHome.resolve("questionnaires").toFile()))
-    private val native = backendProtocols.codex.client(json, appHome.toAbsolutePath().toString(), commandOverride,
-        ownership = OwnedCodingProcess(appHome.resolve("coding-processes").toFile()),
-        tokens = NativeAuthTokens { cachedAccessToken() },
-        questionnaires = questionnaireRegistry.asNativeQuestionnaires(),
-        diagnostics = NativeDiagnostics { component, event, cause, fields -> AppLog.error(component, event, cause, fields) },
-        toolPresentation = NativeToolPresentationResolver { server, tool, arguments ->
-            if (server == "magicpaper_computer") NativeToolPresentation("computer",
-                io.aequicor.magicpaper.data.computer.ComputerTool.label((arguments as? JsonObject)?.get("action")?.jsonPrimitive?.contentOrNull.orEmpty()))
-            else NativeToolPresentation("$server:$tool", "$tool · ${arguments ?: ""}".take(1500))
-        })
+    private val native: NativeSubscriptionAccess = checkNotNull(createNativeSubscriptionAccess(CodingEngine.CODEX,
+        NativeSubscriptionEnvironment(json, appHome.toAbsolutePath().toString(), commandOverride,
+            processes = OwnedCodingProcess(appHome.resolve("coding-processes").toFile()),
+            accessTokens = NativeAuthTokens { cachedAccessToken() },
+            questionnaires = questionnaireRegistry.asNativeQuestionnaires(),
+            diagnostics = NativeDiagnostics { component, event, cause, fields -> AppLog.error(component, event, cause, fields) },
+            toolPresentation = NativeToolPresentationResolver { server, tool, arguments ->
+                if (server == "magicpaper_computer") NativeToolPresentation("computer",
+                    io.aequicor.magicpaper.data.computer.ComputerTool.label((arguments as? JsonObject)?.get("action")?.jsonPrimitive?.contentOrNull.orEmpty()))
+                else NativeToolPresentation("$server:$tool", "$tool · ${arguments ?: ""}".take(1500))
+            }))) { "Codex не установлен в этой сборке" }
 
-    val codingApprovals get() = native.codingApprovals
     val codingQuestionnaires = questionnaireRegistry.requests
     suspend fun respondCodingQuestionnaire(id: String, answers: List<PlanningAnswer>) = questionnaireRegistry.respond(id, answers)
-    suspend fun respondCodingApproval(id: String, decision: CodingApprovalDecision) = native.respondCodingApproval(id, decision)
-    suspend fun reconcileCoding(sessionId: String) = native.reconcileCoding(sessionId)
-    internal suspend fun readCodingToolResults(threadId: String, callIds: Set<String>) = native.readCodingToolResults(threadId, callIds)
     internal suspend fun subscriptionAccessToken() = native.subscriptionAccessToken()
     internal fun withCachedContextWindow(profile: LlmProfile) = native.withCachedContextWindow(profile)
-    suspend fun runtimeStatus(): RuntimeStatus = native.runtimeStatus().let {
-        RuntimeStatus(if (it.ready) RuntimePhase.READY else RuntimePhase.ERROR, it.detail)
-    }
     internal fun newCodingClient() = CodexAppServerOpenAiSubscription(json, appHome, commandOverride, computerUse,
         ownsComputerUse = false, sharedQuestionnaires = questionnaireRegistry, secretStore = secretStore,
         browser = browser, checks = checks, questionnaireFactory = questionnaireFactory, journal = journal,
-        nativeInstallation = providerInstallation, sharedProviderLibrary = providerLibrary)
+        sharedProviderLibrary = providerLibrary)
 
     override suspend fun account(refreshToken: Boolean) = native.account(refreshToken)
     override suspend fun startLogin() = native.startLogin()
@@ -86,7 +77,7 @@ class CodexAppServerOpenAiSubscription(
         val system = messages.filter { it.role == LlmChatRole.SYSTEM }.joinToString("\n\n") { it.content }
             .ifBlank { profile.advanced.systemPromptOverride }
         val usage = currentCoroutineContext()[UsageCall]
-        return native.complete(CodexCompletionRequest(profile.modelId, system, CHAT_INSTRUCTIONS,
+        return native.complete(NativeCompletionRequest(profile.modelId, system, CHAT_INSTRUCTIONS,
             buildTurnInput(messages, profile.advanced.contextMessages), profile.resolveEffort(ModelDefaults.capability(profile)).level?.wire,
             profile.advanced.safeTimeoutSeconds), onActivity) { usage?.result?.value = it }
     }
@@ -98,7 +89,7 @@ class CodexAppServerOpenAiSubscription(
         NativeHostEnvironment(json, journal, appHome.toAbsolutePath().parent.toFile(), providerLibrary, computerUse, browser, checks,
             questionnaireFactory, NativeAuthTokens { cachedAccessToken() }, NativeAuthTokens { subscriptionAccessToken() },
             { check(account().signedIn) { "Войдите в ChatGPT в настройках движков" } }, ::withCachedContextWindow,
-            rootOverride = appHome.toFile(), commandOverride = commandOverride).create(backendProtocols.codex.descriptor.engine)
+            rootOverride = appHome.toFile(), commandOverride = commandOverride).create(CodingEngine.CODEX)
     }
     val binding get() = codingBinding.value
     fun runCoding(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile,
@@ -110,13 +101,11 @@ class CodexAppServerOpenAiSubscription(
         checks.abort(sessionId)
         computerUse?.disable(sessionId)
         if (codingBinding.isInitialized()) binding.runtime.abort(sessionId)
-        native.abortCoding(sessionId)
     }
     fun abortAllCoding() {
         checks.abortAll()
         computerUse?.disable()
         if (codingBinding.isInitialized()) binding.runtime.abortAll()
-        native.abortAllCoding()
     }
     override fun close() {
         var failure: Throwable? = null

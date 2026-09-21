@@ -1,9 +1,6 @@
 package io.aequicor.magicpaper.data.coding
 
 import io.aequicor.magicpaper.backend.*
-import io.aequicor.magicpaper.backend.PiExecutionRequest
-import io.aequicor.magicpaper.backend.PiExecutionResult
-import io.aequicor.magicpaper.backend.PiNativeExecution
 import java.io.BufferedReader
 import java.io.File
 import java.io.IOException

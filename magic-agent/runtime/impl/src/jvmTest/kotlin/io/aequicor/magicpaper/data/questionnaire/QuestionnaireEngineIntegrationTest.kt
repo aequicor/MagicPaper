@@ -1,7 +1,6 @@
 package io.aequicor.magicpaper.data.questionnaire
 
 import com.sun.net.httpserver.HttpServer
-import io.aequicor.magicpaper.data.coding.backendProtocols
 import io.aequicor.magicpaper.data.llm.runFixtureCoding
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
 import io.aequicor.magicpaper.domain.*
@@ -67,12 +66,15 @@ class QuestionnaireEngineIntegrationTest {
         val registry = io.aequicor.magicpaper.domain.testQuestionnaires()
         try {
             val home = root.resolve("home").apply { mkdirs() }
-            home.resolve("models.json").writeText(backendProtocols.pi.modelConfiguration(LlmProfile("local", "Local", modelId = "mock-model", baseUrl = "http://127.0.0.1:${model.address.port}/v1", apiKey = "local-test")).root.toString())
+            // The engine's own model file for a local OpenAI-compatible endpoint; this test exercises the extension, not the generator.
+            home.resolve("models.json").writeText("""{"providers":{"magicpaper":{"baseUrl":"http://127.0.0.1:${model.address.port}/v1","api":"openai-completions",""" +
+                """"apiKey":"local-test","compat":{"supportsDeveloperRole":false,"supportsReasoningEffort":false},""" +
+                """"models":[{"id":"mock-model","name":"mock-model","reasoning":false,"contextWindow":128000,"maxTokens":8192}]}}}""")
             home.resolve("settings.json").writeText("""{"defaultProjectTrust":"never","telemetry":false}""")
             val extension = home.resolve("questionnaire.mjs").apply { writeText(PiQuestionnaireExtension.source) }
             QuestionnaireBridge(registry, CodingSession("s", "p", "Session", 0)).use { bridge ->
                 val output = root.resolve("output.txt")
-                val process = ProcessBuilder(node, cli, "--mode", "json", "--provider", backendProtocols.pi.providerId,
+                val process = ProcessBuilder(node, cli, "--mode", "json", "--provider", "magicpaper",
                     "--model", "mock-model", "--thinking", "off", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve",
                     "--extension", extension.absolutePath).directory(root).apply {
                     environment()["PI_CODING_AGENT_DIR"] = home.absolutePath; environment()["PI_OFFLINE"] = "1"

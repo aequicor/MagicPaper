@@ -8,7 +8,7 @@ import kotlin.test.*
 
 class BackendAgentCatalogTest {
     private fun catalog(entries: List<BackendAgentContribution>) = BackendAgentCatalog(entries, BackendAgentConstructor { contribution, env -> contribution.create(env) as BackendAgent })
-    private val descriptor = createBackendAgentProtocols().pi.descriptor.copy(capabilities = emptySet())
+    private val descriptor = createBackendAgentCatalog().descriptor(CodingEngine.PI).copy(capabilities = emptySet())
     private fun contribution(value: BackendAgentDescriptor = descriptor, create: () -> BackendAgent = { FakeAgent(value) }) =
         object : BackendAgentContribution {
             override val descriptor = value

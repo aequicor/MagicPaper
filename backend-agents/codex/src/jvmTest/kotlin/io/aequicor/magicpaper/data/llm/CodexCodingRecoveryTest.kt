@@ -1,7 +1,5 @@
 package io.aequicor.magicpaper.data.llm
 
-import io.aequicor.magicpaper.data.coding.OwnedCodingProcess
-import io.aequicor.magicpaper.data.coding.ProcessLifetimeFixture
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
@@ -15,23 +13,18 @@ import kotlin.test.*
 
 /** Exercises protocol completion and durable ownership using an idle local process, no provider. */
 class CodexCodingRecoveryTest {
-    private fun helper(): Process {
-        val cp = listOf(ProcessLifetimeFixture::class.java.protectionDomain.codeSource.location,
-            Unit::class.java.protectionDomain.codeSource.location).joinToString(File.pathSeparator) { File(it.toURI()).path }
-        return ProcessBuilder(File(System.getProperty("java.home"), "bin/java").path, "-cp", cp, ProcessLifetimeFixture::class.java.name, "parent").start()
-    }
     private fun field(owner: Any, name: String) = owner.javaClass.getDeclaredField(name).apply { isAccessible = true }
-    private fun accumulator(service: io.aequicor.magicpaper.backend.CodexClient): Any = nativeAccumulatorType(service)
+    private fun accumulator(service: CodexNativeClient): Any = nativeAccumulatorType(service)
         .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
 
     @Suppress("UNCHECKED_CAST")
     @Test fun confirmedInterruptedTurnReleasesOnlyItsOwnSession() = runBlocking {
         val home = Files.createTempDirectory("codex-recovery-test-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
-        val process = helper()
+        val ownership = InMemoryProcessOwnership()
+        val service = codexTestClient(Json, home, ownership)
+        val process = startProcessTreeParent(home)
         try {
             field(service, "process").set(service, process)
-            val ownership = OwnedCodingProcess(home.resolve("coding-processes").toFile())
             ownership.record("session", process)
             val sessions = field(service, "codingSessions").get(service) as MutableMap<String, String>
             val runs = field(service, "codingRuns").get(service) as MutableMap<String, Any>
@@ -50,11 +43,11 @@ class CodexCodingRecoveryTest {
     @Suppress("UNCHECKED_CAST")
     @Test fun brokenConnectionDoesNotConfirmThatExecutorStopped() = runBlocking {
         val home = Files.createTempDirectory("codex-disconnect-test-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
-        val process = helper()
+        val ownership = InMemoryProcessOwnership()
+        val service = codexTestClient(Json, home, ownership)
+        val process = startProcessTreeParent(home)
         try {
             field(service, "process").set(service, process)
-            val ownership = OwnedCodingProcess(home.resolve("coding-processes").toFile())
             ownership.record("session", process)
             (field(service, "codingSessions").get(service) as MutableMap<String, String>)["session"] = "thread"
             val run = accumulator(service)
@@ -70,15 +63,14 @@ class CodexCodingRecoveryTest {
     @Suppress("UNCHECKED_CAST")
     @Test fun failedInterruptKeepsDurableOwnershipAndExposesUnknownOutcome() = runBlocking {
         val home = Files.createTempDirectory("codex-interrupt-test-")
-        val service = CodexAppServerOpenAiSubscription(Json, home,
-            browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
-        val process = helper()
+        val ownership = InMemoryProcessOwnership()
+        val service = codexTestClient(Json, home, ownership)
+        val process = startProcessTreeParent(home)
         try {
             field(service, "process").set(service, process)
             field(service, "writer").set(service, object : BufferedWriter(StringWriter()) {
                 override fun flush(): Unit = throw IOException("fixture broken pipe")
             })
-            val ownership = OwnedCodingProcess(home.resolve("coding-processes").toFile())
             ownership.record("session", process)
             (field(service, "codingSessions").get(service) as MutableMap<String, String>)["session"] = "thread"
             val run = accumulator(service)

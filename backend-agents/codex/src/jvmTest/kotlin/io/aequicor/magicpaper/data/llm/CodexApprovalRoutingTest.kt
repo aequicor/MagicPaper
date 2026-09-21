@@ -10,12 +10,12 @@ import kotlin.test.*
 /** Tests transport ownership and cleanup without calling a model or executing a command. */
 class CodexApprovalRoutingTest {
     private fun field(owner: Any, name: String) = owner.javaClass.getDeclaredField(name).apply { isAccessible = true }
-    private fun accumulator(service: io.aequicor.magicpaper.backend.CodexClient): Any = nativeAccumulatorType(service)
+    private fun accumulator(service: CodexNativeClient): Any = nativeAccumulatorType(service)
         .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
 
     private class Fixture {
         val home = Files.createTempDirectory("codex-approvals-")
-        val service = CodexAppServerOpenAiSubscription(Json, home, browser = io.aequicor.magicpaper.data.coding.testBrowserSessions, checks = io.aequicor.magicpaper.data.coding.testCommandChecks, journal = io.aequicor.magicpaper.data.storage.InMemoryEventJournal(), questionnaireFactory = io.aequicor.magicpaper.domain.testQuestionnaireFactory()).nativeForTest()
+        val service = codexTestClient(Json, home)
         val output = StringWriter()
         val params = buildJsonObject { put("threadId", "thread"); put("turnId", "turn"); put("itemId", "item"); put("command", "echo approved") }
     }
