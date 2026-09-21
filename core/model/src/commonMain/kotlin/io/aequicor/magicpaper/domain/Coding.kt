@@ -32,6 +32,8 @@ data class CodingProject(
      */
     val piSessionId: String = "",
     val modelSelection: ModelSelection? = null,
+    /** Нативный выбор из каталога движка; null — проект ещё на [modelSelection]. */
+    val codingModel: CodingModelSelection? = null,
 )
 
 /**
@@ -53,6 +55,8 @@ data class CodingSession(
      */
     val llmProfileId: String? = null,
     val modelSelection: ModelSelection? = null,
+    /** Нативный выбор из каталога движка; null — сессия ещё на [modelSelection] и [llmProfileId]. */
+    val codingModel: CodingModelSelection? = null,
     val planId: String? = null,
     val parentSessionId: String? = null,
     val stageId: String? = null,
