@@ -617,4 +617,46 @@ class SessionOrganismSpaceTest {
         assertEquals(sortedSetOf(SessionOrganismSpace.FINISH_STOP.name, SessionOrganismSpace.FINISH_IMMUNITY_INTERVENTION.name,
             SessionOrganismSpace.PERSISTENCE_UNKNOWN_FACT.name), changes)
     }
+
+    /**
+     * Nothing confirmed how a run whose outcome is unknown ended, and the writers that ask for a stop disagree about whether asking is
+     * a confirmation. A stop the user or a parent asks for moves the run to `stopping`, and then a report of completion settles it
+     * with nothing unknown left; a stop the application raises on failure, and a stop that carries a quarantine, keep it unknown
+     * until the runtime reports it stopped. `observe` says an ordinary completion must not clear an unknown outcome, and the first
+     * kind of writer removes the mark it relies on. It is not a decision anyone made: the sequence needs a run that is unknown, which
+     * means its process is gone, to report a completion, and changing it would stop journals that recorded one from replaying. It is
+     * listed among the debts of `STUDIO-ARCHITECTURE.md`, and pinned here so that neither side moves unnoticed.
+     */
+    @Test fun aStopRequestClearsAnUnknownRunOnlyWhereNoQuarantineAndNoFailureKeepsIt() {
+        fun observed(state: SessionOrganismMachine.State?, id: String) = state?.organism?.sessions?.get(id)?.let { "${it.observed}/${it.desired}" } ?: "refused"
+        fun line(what: String, state: SessionOrganismMachine.State?, id: String): String {
+            val late = state?.let { step(it, Fact.Observe(stamp(), "root", id, it.organism!!.sessions.getValue(id).generation, SessionObservedState.COMPLETED)) }
+            return "$what: ${observed(state, id)}, unknown=${state?.let(SessionOrganismSpace::unknown)}; a late completion: ${observed(late, id)}, unknown=${late?.let(SessionOrganismSpace::unknown)}"
+        }
+        fun attempt(state: SessionOrganismMachine.State, input: SessionOrganismMachine.Input) =
+            try { SessionOrganismMachine.reduce(state, input).takeIf { it.reject == null }?.state } catch (_: NoSuchElementException) { null }
+        val child = "session-make-child"
+        fun command(action: OrganismAction) = Intent.Command(stamp(), scope, "pin-${action.name}", OrganismCommand(action, child), "fp-pin-${action.name}")
+        val signalled = step(step(immunityRunning, Fact.Restored(stamp(), "root")),
+            Intent.Command(stamp(), scope, "signal", OrganismCommand(OrganismAction.SIGNAL, "root", reason = "Stuck"), "fp-signal"))
+        assertEquals(listOf(
+            "user stop of a child: STOPPING/STOP, unknown=false; a late completion: STOPPED/STOP, unknown=false",
+            "stop of a child: STOPPING/STOP, unknown=false; a late completion: STOPPED/STOP, unknown=false",
+            "pause of a child: STOPPING/PAUSE, unknown=false; a late completion: STOPPED/PAUSE, unknown=false",
+            "archive of a child: STOPPING/STOP, unknown=false; a late completion: STOPPED/STOP, unknown=false",
+            "user stop of the root: STOPPING/STOP, unknown=false; a late completion: STOPPED/STOP, unknown=false",
+            "quarantine of a child: STOPPING/QUARANTINE, unknown=true; a late completion: UNKNOWN/QUARANTINE, unknown=true",
+            "diagnosis of an unknown root: STOPPING/QUARANTINE, unknown=true; a late completion: UNKNOWN/QUARANTINE, unknown=true",
+            "failure stop: UNKNOWN/STOP, unknown=true; a late completion: UNKNOWN/STOP, unknown=true",
+        ), listOf(
+            line("user stop of a child", attempt(unknownBranch, Intent.RequestUserStop(stamp(), "root", child, "pin-user-stop", false)), child),
+            line("stop of a child", attempt(unknownBranch, command(OrganismAction.STOP)), child),
+            line("pause of a child", attempt(unknownBranch, command(OrganismAction.PAUSE)), child),
+            line("archive of a child", attempt(unknownBranch, command(OrganismAction.ARCHIVE)), child),
+            line("user stop of the root", attempt(unknown, Intent.RequestUserStop(stamp(), "root", "root", "pin-user-stop-root", false)), "root"),
+            line("quarantine of a child", attempt(unknownBranch, command(OrganismAction.QUARANTINE)), child),
+            line("diagnosis of an unknown root", attempt(signalled, Intent.InspectSignals(stamp(), "root")), "root"),
+            line("failure stop", attempt(unknownBranch, Fact.RequestFailureStop(stamp(), "root", "root", 1, "failed")), child),
+        ))
+    }
 }

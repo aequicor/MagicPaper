@@ -77,6 +77,12 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    root that is stopping or archived is `unknown`, which is read off a root whose own run is unknown: `ReconcileInterruptedRun`
  *    (it addresses the root), `ObserveSettled` (the child is not settled) and, under an archived root, `CommandSignal` and
  *    `ResolveSessionQuarantine` differ from the row, and `Charge` and `RecordResult` are accepted where it refuses them;
+ *  - who clears an unknown run. Asking for a stop does not confirm one, and the writers disagree about it: a stop the user or a
+ *    parent asks for (`RequestUserStop`, `CommandStop`, `CommandPause`, `CommandArchive`) moves the run to `stopping`, after which a
+ *    report of completion settles it and `unknown()` is false; a stop the application raises on failure, and one that carries a
+ *    quarantine, keep it unknown until the runtime reports it stopped. The position after a stop is `stopping` either way, so the
+ *    row cannot show the difference. It is a recorded debt, not a decision, and is pinned by
+ *    `aStopRequestClearsAnUnknownRunOnlyWhereNoQuarantineAndNoFailureKeepsIt`;
  *  - the immunity session. Every organism that belongs to a plan, a stage or planning has one, and the representatives are built
  *    on such a root wherever a diagnosis is needed, and on one that has none everywhere else. It never starts in practice, and
  *    `DeleteHistoryByUser` counts it as settled for that reason, as `RequestUserStop` does; one that is running is not, and
