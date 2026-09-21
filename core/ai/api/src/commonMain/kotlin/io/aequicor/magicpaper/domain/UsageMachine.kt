@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 
 /** An accounting capture fences late observations; it never authorizes a provider call. */
@@ -9,7 +12,19 @@ import kotlinx.serialization.Serializable
 }
 
 /** One authority for usage records, replacement identities, context snapshots and native counters. */
-object UsageMachine {
+object UsageMachine : Machine<UsageMachine.State, UsageMachine.Input, UsageMachine.Effect> {
+    override val id = MachineId("usage")
+    override val space get() = UsageSpace
+    /**
+     * This owner has never emitted effects: [Transition] carries a refusal as a message and nothing
+     * else. The contract wants a refusal to be a value the harness can recognise, so [step] shows it as
+     * one; [Transition], [reduce] and every call site keep the message and stay as they are.
+     */
+    sealed interface Effect { data class Reject(val reason: String) : Effect }
+    override fun step(state: State, input: Input) = reduce(state, input).let { transition ->
+        Step(transition.state, listOfNotNull(transition.rejection?.let(Effect::Reject)))
+    }
+
     @Serializable data class Stamp(val id: String, val at: Long)
     @Serializable data class CumulativeProof(val key: String, val fingerprint: String, val total: TokenUsage,
         val last: TokenUsage, val record: UsageRecord)

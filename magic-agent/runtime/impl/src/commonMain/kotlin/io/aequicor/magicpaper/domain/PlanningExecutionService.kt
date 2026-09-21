@@ -123,7 +123,13 @@ class PlanningExecutionService(
         store.command(projectId, PlanningMachine.Intent.Pause(stamp()))
     }
     suspend fun stop(projectId: String) {
-        val plan = store.command(projectId, PlanningMachine.Intent.Stop(stamp()))
+        val requested = store.dispatch(projectId, PlanningMachine.Intent.Stop(stamp()))
+        val refusal = requested.rejection
+        // A finished plan has nothing to stop, and archiving or deleting its session asks for it all the same.
+        // Only that refusal is absorbed: a fenced or deleted owner still refuses for its own reason.
+        if (refusal != null && requested.state.let { !it.persistenceUnknown && !it.deleted && it.plan?.phase == ExecutionPhase.COMPLETE }) return
+        if (refusal != null) throw IllegalArgumentException(refusal.reason)
+        val plan = checkNotNull(requested.state.plan)
         // A broken transport must not prevent coroutine cancellation of the rest of the subtree.
         val signalErrors = runtimeSessionIds(plan).mapNotNull { sessionId ->
             try { runtime.abort(sessionId); null } catch (e: Exception) { safeText(e.message.orEmpty()) }

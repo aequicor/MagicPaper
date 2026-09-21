@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.domain.planning.*
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 
 /** One plan owns its durable admission and all accepted checkpoints. Replaying never admits work. */
-object PlanningMachine {
+object PlanningMachine : Machine<PlanningMachine.State, PlanningMachine.Input, PlanningMachine.Effect> {
+    override val id = MachineId("planning")
+    override val space get() = PlanningSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable data class Stamp(val id: String, val at: Long)
     @Serializable data class RunRef(val planId: String, val runId: String, val admissionId: String, val generation: Long)
     @Serializable data class AttemptRef(val id: String, val sessionId: String, val sessionGeneration: Long,
@@ -109,7 +117,12 @@ object PlanningMachine {
         val rejection get() = effects.filterIsInstance<Effect.Reject>().singleOrNull()
     }
     fun initial(id: String): State { require(id.isNotBlank()); return State(id) }
-    fun reduce(state: State, input: Input): Transition = try {
+    /**
+     * [replay] is set only while a journal is replayed, and lifts only the refusals written with `requireLive`.
+     * Those were added after journals began: an input they refuse now was accepted when it was written, and a plan
+     * whose history holds one would stop loading. A live command always meets them.
+     */
+    fun reduce(state: State, input: Input, replay: Boolean = false): Transition = try {
         require(input.stamp.id.isNotBlank() && input.stamp.at >= 0) { "Некорректная запись планирования" }
         if (input is Fact.PersistenceUnknown) return Transition(state.copy(persistenceUnknown = true,
             run = state.run?.copy(phase = RunPhase.UNKNOWN)))
@@ -134,6 +147,10 @@ object PlanningMachine {
             require(ref.planId == state.id && ref.runId == plan.runId && state.run?.ref == ref &&
                 state.run.phase != RunPhase.COMPLETE) { "Разрешение запуска устарело или исход неизвестен" }
         }
+        fun requireLive(value: Boolean, message: () -> String) = require(replay || value, message)
+        fun finished() = plan.phase == ExecutionPhase.COMPLETE || run?.phase == RunPhase.COMPLETE
+        fun milestone(stageId: String, source: Plan = plan) = requireNotNull(source.milestones.singleOrNull { it.id == stageId }) { "Этап не найден" }
+        fun lastAttempt(stageId: String, source: Plan = plan) = requireNotNull(milestone(stageId, source).attempts.lastOrNull()) { "У этапа нет попытки" }
         fun admit(runId: String, rules: PlanningRulesSnapshot) {
             require(pending.isEmpty() && run?.phase != RunPhase.UNKNOWN) { "Исход операции неизвестен; повтор запрещён" }
             require(run?.phase != RunPhase.RUNNING) { "Запуск уже разрешён" }
@@ -157,7 +174,7 @@ object PlanningMachine {
             return value.applyTo(attempt)
         }
         fun recordStage(stageId: String, value: StageAttempt) {
-            val stage = next.milestones.single { it.id == stageId }
+            val stage = milestone(stageId, next)
             require(stage.attempts.lastOrNull()?.id.let { it == null || it == value.id }) { "Попытка этапа изменилась" }
             val attempt = value.copy(updatedAt = input.stamp.at)
             val marker = attempt.takeIf { it.phase == AttemptPhase.COMPLETE && it.sessionGeneration > 0 }?.let { "${it.id}:${it.sessionGeneration}" }
@@ -222,8 +239,14 @@ object PlanningMachine {
                 run = requireNotNull(run).copy(phase = RunPhase.RUNNING)
                 effects += Effect.RunRequested(input.ref)
             }
-            is Intent.Pause -> { require(!plan.stopping && run?.phase != RunPhase.UNKNOWN) { "Исход остановки ещё не подтверждён" }; next = plan.copy(intent = ExecutionIntent.PAUSE); run = run?.copy(phase = RunPhase.PAUSED) }
-            is Intent.Stop -> { stopId = input.stamp.id; next = plan.copy(intent = ExecutionIntent.STOP, stopping = true); run = run?.copy(phase = RunPhase.STOPPING); note(PlanJournalOperation.STOP_INTENT); effects += Effect.StopRequested(run?.ref) }
+            is Intent.Pause -> {
+                require(!plan.stopping && run?.phase != RunPhase.UNKNOWN) { "Исход остановки ещё не подтверждён" }
+                requireLive(!finished()) { "План уже завершён" }
+                // A stopped run is only started again by a new admission; pausing it would hand its old one back to Resume.
+                requireLive(run?.phase != RunPhase.STOPPED) { "Запуск остановлен; продолжить можно только новым запуском" }
+                next = plan.copy(intent = ExecutionIntent.PAUSE); run = run?.copy(phase = RunPhase.PAUSED)
+            }
+            is Intent.Stop -> { requireLive(!finished()) { "План уже завершён" }; stopId = input.stamp.id; next = plan.copy(intent = ExecutionIntent.STOP, stopping = true); run = run?.copy(phase = RunPhase.STOPPING); note(PlanJournalOperation.STOP_INTENT); effects += Effect.StopRequested(run?.ref) }
             is Intent.Retry -> {
                 require(plan == input.expected) { "Состояние плана изменилось; повторите действие" }
                 require(plan.blockingIssues(emptyList()).none { it.issue.retryBlocked }) { "Повтор не устраняет причину остановки" }
@@ -299,7 +322,7 @@ object PlanningMachine {
             is Fact.OperationUnknown -> { require(input.intentSeq > 0); pending = pending + input.intentSeq; run = run?.copy(phase = RunPhase.UNKNOWN) }
             is Fact.StrategySelected -> { require(input.selection.strategy == selectPlanStrategy(plan, input.selection.cause, input.selection.status, input.retryLimit)); next = applyPlanStrategy(plan, input.selection) }
             is Fact.SkippedVerificationRestored -> { requireRun(input.ref); next = plan.restoreSkippedVerification() }
-            is Fact.VerificationObserved -> { requireRun(input.ref); require(plan.milestones.single { it.id == input.stageId }.attempts.lastOrNull()?.let(AttemptRef::from) == input.expected) { "Проверяемая попытка изменилась" }; next = plan.copy(
+            is Fact.VerificationObserved -> { requireRun(input.ref); require(milestone(input.stageId).attempts.lastOrNull()?.let(AttemptRef::from) == input.expected) { "Проверяемая попытка изменилась" }; next = plan.copy(
                 milestones = plan.milestones.map { if(it.id == input.stageId) it.copy(checkNote = input.note) else it },
                 coordination = plan.coordination.map { if(it.id == "${input.expected.id}-turn-${input.expected.turnIndex - 1}") it.copy(verification = StageVerification(input.passed, input.note)) else it }) }
             is Fact.RulesBound -> next = plan.copy(planningRulesSnapshot = plan.planningRulesSnapshot ?: input.rules)
@@ -343,19 +366,19 @@ object PlanningMachine {
             is Fact.StageCreated -> {
                 requireRun(input.ref)
                 require(run?.phase == RunPhase.RUNNING && pending.isEmpty()) { "Создание попытки не разрешено" }
-                require(plan.milestones.single { it.id == input.stageId }.attempts.isEmpty() && input.id.isNotBlank() && input.sessionId.isNotBlank()) { "Попытка уже существует" }
+                require(milestone(input.stageId).attempts.isEmpty() && input.id.isNotBlank() && input.sessionId.isNotBlank()) { "Попытка уже существует" }
                 require(plan.milestones.flatMap { it.attempts }.none { it.id == input.id || it.sessionId == input.sessionId }) { "Идентификатор попытки занят" }
                 recordStage(input.stageId, StageAttempt(input.id, input.sessionId, input.assignment, startedAt = input.startedAt))
             }
             is Fact.StageProgressObserved -> {
                 requireRun(input.ref)
-                val attempt = plan.milestones.single { it.id == input.stageId }.attempts.last()
+                val attempt = lastAttempt(input.stageId)
                 require(AttemptRef.from(attempt) == input.expected && attempt.phase != AttemptPhase.COMPLETE) { "Результат попытки устарел" }
                 recordStage(input.stageId, progress(attempt, input.progress))
             }
             is Fact.StageTransitioned -> {
                 requireRun(input.ref)
-                val attempt = plan.milestones.single { it.id == input.stageId }.attempts.last()
+                val attempt = lastAttempt(input.stageId)
                 require(AttemptRef.from(attempt) == input.expected) { "Попытка этапа изменилась" }
                 require(attempt.phase != AttemptPhase.COMPLETE || input.mutation is StageEvent.Interrupted) { "Этап уже завершён" }
                 val live = input.progress?.takeIf { it != StageProgress.from(attempt) }?.let { progress(attempt, it) } ?: attempt
@@ -364,7 +387,7 @@ object PlanningMachine {
                     is StageEvent.EngineResolved -> require(attempt.engine == null) { "Движок уже выбран" }
                     is StageEvent.WorkspacePrepared -> require(event.prepared == live.copy(path = event.prepared.path, baseCommit = event.prepared.baseCommit)) { "Рабочая папка изменила полномочия попытки" }
                     is StageEvent.WorkerAdmitted -> require(event.admitted == live.copy(sessionGeneration = event.admitted.sessionGeneration) && event.admitted.sessionGeneration >= live.sessionGeneration) { "Допуск изменил попытку" }
-                    is StageEvent.AcceptanceRecorded -> require(event.record.runId == plan.runId && event.record.attemptId == attempt.id && event.record.criteria == plan.milestones.single { it.id == input.stageId }.criteria()) { "Проверка принадлежит другой попытке" }
+                    is StageEvent.AcceptanceRecorded -> require(event.record.runId == plan.runId && event.record.attemptId == attempt.id && event.record.criteria == milestone(input.stageId).criteria()) { "Проверка принадлежит другой попытке" }
                     is StageEvent.Captured -> require(attempt.phase == AttemptPhase.VERIFYING && attempt.acceptanceRecord?.permitsProgress == true) { "Приёмка этапа не подтверждена" }
                     StageEvent.Completed -> require(attempt.phase == AttemptPhase.INTEGRATING) { "Объединение этапа не подтверждено" }
                     else -> Unit
@@ -375,11 +398,11 @@ object PlanningMachine {
                 require(!beginsWorker || (run?.phase == RunPhase.RUNNING && pending.isEmpty())) { "Новый ход не разрешён" }
                 require(!beginsCompletion || (run?.phase in setOf(RunPhase.RUNNING, RunPhase.PAUSED) && pending.isEmpty())) { "Продолжение проверки не разрешено" }
                 recordStage(input.stageId, transition.state.attempt)
-                effects += Effect.StageDecision(input.stageId, transition.copy(state = next.milestones.single { it.id == input.stageId }.attempts.last().toState()))
+                effects += Effect.StageDecision(input.stageId, transition.copy(state = lastAttempt(input.stageId, next).toState()))
             }
             is Fact.AttemptRecorded -> {
                 requireRun(input.ref)
-                val previous = if (input.stageId == null) plan.finalAttempt else plan.milestones.single { it.id == input.stageId }.attempts.lastOrNull()
+                val previous = if (input.stageId == null) plan.finalAttempt else milestone(input.stageId).attempts.lastOrNull()
                 previous?.let { require(it.id == input.attempt.id && it.sessionId == input.attempt.sessionId && it.turnIndex <= input.attempt.turnIndex &&
                     it.sessionGeneration <= input.attempt.sessionGeneration && (it.phase != AttemptPhase.COMPLETE || it == input.attempt)) { "Checkpoint попытки устарел" } }
                 val attempt = input.attempt.copy(updatedAt = input.stamp.at)

@@ -1,9 +1,17 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 
 /** Git authority is independent of the native attempt and of the parent session cache. */
-object TaskWorktreeMachine {
+object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMachine.Input, TaskWorktreeMachine.Effect> {
+    override val id = MachineId("task-worktree")
+    override val space get() = TaskWorktreeSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable
     enum class Operation { OPEN, REFRESH, CAPTURE, INTEGRATE, VERIFY, DELIVER }
 

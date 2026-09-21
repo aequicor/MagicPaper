@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Authority and native-call outcomes have one owner. Pixels, typed text and native references stay ephemeral. */
-object ComputerMachine {
+object ComputerMachine : Machine<ComputerMachine.State, ComputerMachine.Input, ComputerMachine.Effect> {
+    override val id = MachineId("computer")
+    override val space get() = ComputerSpace
+    /** Bridge to the live reducer, [reduce]. [replay] restores accepted history and stays outside the contract. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable enum class Tool { DESKTOP, APPLICATION }
     @Serializable enum class Action(val tool: Tool, val wireName: String, val mutating: Boolean = false) {
         DISPLAYS(Tool.DESKTOP, "displays"), SCREENSHOT(Tool.DESKTOP, "screenshot"), WAIT(Tool.DESKTOP, "wait"),

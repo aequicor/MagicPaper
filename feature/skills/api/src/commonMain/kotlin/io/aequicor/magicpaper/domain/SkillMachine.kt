@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -9,7 +12,12 @@ import kotlinx.serialization.Serializable
     val existing: SkillRef?, val nameVersion: Long?)
 
 /** Catalog and installed skill state have one owner; renderers never replace its snapshot. */
-object SkillMachine {
+object SkillMachine : Machine<SkillMachine.State, SkillMachine.Input, SkillMachine.Effect> {
+    override val id = MachineId("skill")
+    override val space get() = SkillSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(
         val initialized: Boolean = false,

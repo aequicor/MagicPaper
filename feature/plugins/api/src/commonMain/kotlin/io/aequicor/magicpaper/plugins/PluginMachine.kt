@@ -1,11 +1,19 @@
 package io.aequicor.magicpaper.plugins
 
 import io.aequicor.magicpaper.domain.PluginState
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Preferences belong to this owner; renderers and importers submit intentions only. */
-object PluginMachine {
+object PluginMachine : Machine<PluginMachine.State, PluginMachine.Input, PluginMachine.Effect> {
+    override val id = MachineId("plugin")
+    override val space get() = PluginSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(
         val initialized: Boolean = false,

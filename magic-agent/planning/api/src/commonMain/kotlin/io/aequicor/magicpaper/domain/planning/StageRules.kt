@@ -2,6 +2,9 @@ package io.aequicor.magicpaper.domain.planning
 
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.ToolPhase
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 
 /**
@@ -77,6 +80,37 @@ sealed interface StageEffect {
 data class StageTransition(val state: StageState, val effects: List<StageEffect> = emptyList()) {
     fun has(effect: StageEffect): Boolean = effect in effects
     val issue: PlanningIssue? get() = effects.filterIsInstance<StageEffect.Block>().singleOrNull()?.issue
+}
+
+/**
+ * The stage rules seen as a machine, so their state space can be declared and read.
+ *
+ * This is a view, not a second reducer: [step] calls [reduce] and changes nothing about it, its
+ * transition type or a single caller. Two things differ from the other owners, both by necessity.
+ * The rules have no refusal — they take any event in any state — so a refusal exists here only where
+ * the reducer cannot apply an event: `WorkerAdmitted` that changes the attempt's identity fails a
+ * `require`, and `WorkerTurnEnded` before any turn started has no turn to end. [step] shows those two
+ * kinds of failure — an `IllegalArgumentException` from a `require` and a `NoSuchElementException` from
+ * a turn that does not exist — as a [Effect.Reject] the harness can recognise; any other exception is a
+ * defect and is left to escape. And the effects are [StageEffect]s, wrapped in [Effect.Emit] so a
+ * rejection has a place beside them without adding a case to a sealed hierarchy the executors match on.
+ */
+object StageMachine : Machine<StageState, StageEvent, StageMachine.Effect> {
+    override val id = MachineId("stage")
+    override val space get() = StageSpace
+
+    sealed interface Effect {
+        data class Emit(val effect: StageEffect) : Effect
+        data class Reject(val reason: String) : Effect
+    }
+
+    override fun step(state: StageState, input: StageEvent): Step<StageState, Effect> = try {
+        reduce(state, input).let { Step(it.state, it.effects.map(Effect::Emit)) }
+    } catch (refusal: IllegalArgumentException) {
+        Step(state, listOf(Effect.Reject(refusal.message ?: "Событие не применимо к попытке")))
+    } catch (missing: NoSuchElementException) {
+        Step(state, listOf(Effect.Reject("У попытки нет хода, который можно завершить")))
+    }
 }
 
 /** Closed dispatch; helpers below own the individual rules and preserve their checkpoint order. */

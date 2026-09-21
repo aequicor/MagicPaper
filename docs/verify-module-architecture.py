@@ -33,6 +33,11 @@ DESKTOP_ONLY = {':feature:coding:impl'}
 JVM_SOURCE_SETS = {'jvmMain', 'jvmTest'}
 ARCHITECTURE_GROUPS = {'magic-common', 'magic-chat', 'magic-agent', 'backend-agents'}
 BACKEND_PUBLIC = {':backend-agents:api', ':backend-agents:factory'}
+# What a backend engine may take from outside its own group. `:core:model` carries the values it
+# speaks in; `:core:state-machine:api` is a leaf with no project dependency of its own, and it is the
+# contract a lifecycle machine implements. Nothing else in :core qualifies — storage, logging and the
+# implementations stay out — so this list is a deliberate short one, not a category.
+BACKEND_FOUNDATION = {':core:model', ':core:state-machine:api'}
 # Private lifecycle infrastructure is not an installable engine contribution.
 BACKEND_INFRASTRUCTURE = {':backend-agents:lifecycle:impl'}
 BACKEND_CONSUMER = ':magic-agent:runtime:impl'
@@ -60,8 +65,9 @@ def group_edge_violations(name, dependency):
         errors.append(f'{name}: magic-common must not depend on {dependency}')
     if owner == 'magic-chat' and target in {'magic-agent', 'backend-agents'}:
         errors.append(f'{name}: chat must not depend on native agent {dependency}')
-    if owner == 'backend-agents' and target != 'backend-agents' and dependency != ':core:model':
-        errors.append(f'{name}: backend agents may depend only on their group and :core:model, not {dependency}')
+    if owner == 'backend-agents' and target != 'backend-agents' and dependency not in BACKEND_FOUNDATION:
+        errors.append(f'{name}: backend agents may depend only on their group, :core:model and '
+                      f':core:state-machine:api, not {dependency}')
     if target == 'backend-agents' and owner != 'backend-agents':
         if dependency not in BACKEND_PUBLIC:
             errors.append(f'{name}: backend engine implementation {dependency} is private to its factory')
@@ -653,9 +659,25 @@ if '--self-test' in sys.argv:
         assert not violations(root), violations(root)
         native = root / 'backend-agents/pi/build.gradle.kts'
         native.parent.mkdir(parents=True)
-        for dependency in (':core:storage:api', ':magic-common:tools:api', ':magic-chat:api', ':magic-agent:runtime:api'):
+        for dependency in (':core:storage:api', ':core:logging', ':core:state-machine:impl', ':magic-common:tools:api',
+                           ':magic-chat:api', ':magic-agent:runtime:api'):
             native.write_text(f'commonMain.dependencies {{ implementation(project("{dependency}")) }}')
             assert any('backend agents may depend only' in error for error in violations(root)), dependency
+        native.write_text('commonMain.dependencies { api(project(":backend-agents:api")) }')
+        assert not violations(root), violations(root)
+        # The machine contract is the one foundation module besides :core:model a backend may take, and
+        # only its api: the implementation renders diagrams and is not a leaf.
+        for dependency in (':core:model', ':core:state-machine:api'):
+            native.write_text(f'commonMain.dependencies {{ api(project("{dependency}")) }}')
+            assert not violations(root), (dependency, violations(root))
+        # The same holds for the group's own api module, where the lifecycle machine actually lives.
+        lifecycle = root / 'backend-agents/api/build.gradle.kts'
+        lifecycle.parent.mkdir(parents=True)
+        lifecycle.write_text('commonMain.dependencies { api(project(":core:model")); api(project(":core:state-machine:api")) }')
+        assert not violations(root), violations(root)
+        lifecycle.write_text('commonMain.dependencies { api(project(":core:state-machine:api")); api(project(":core:storage:api")) }')
+        assert any('backend agents may depend only' in error and ':core:storage:api' in error for error in violations(root)), violations(root)
+        lifecycle.unlink()
         native.write_text('commonMain.dependencies { api(project(":backend-agents:api")) }')
         assert not violations(root), violations(root)
         consumer.write_text('')

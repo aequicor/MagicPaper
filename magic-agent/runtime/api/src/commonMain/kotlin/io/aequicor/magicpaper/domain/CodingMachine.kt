@@ -3,11 +3,19 @@ package io.aequicor.magicpaper.domain
 import io.aequicor.magicpaper.domain.planning.OrchestrationEvent
 import io.aequicor.magicpaper.domain.planning.OrchestrationTransition
 import io.aequicor.magicpaper.domain.planning.reduce
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Project/session/history authority. Child journals retain process, organism and workspace authority. */
-object CodingMachine {
+object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingMachine.Effect> {
+    override val id = MachineId("coding")
+    override val space get() = CodingSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable data class SessionRef(val id: String, val generation: Long)
     @Serializable data class RunRef(val session: SessionRef, val requestId: String, val generation: Long,
         val messageId: String, val responseId: String, val timelineId: String)
@@ -200,7 +208,7 @@ object CodingMachine {
             }
             is Intent.QueuedClarified -> {
                 val session = requireSession(state, input.session)
-                val request = session.queuedPrompts.single { it.runId == input.requestId }
+                val request = requireNotNull(session.queuedPrompts.singleOrNull { it.runId == input.requestId }) { "Запрос уже не в очереди" }
                 require(input.requestId !in state.startedRequests && input.note.role == CodingRole.USER && input.note.id.isNotBlank())
                 val reserved = state.histories[session.id].orEmpty().map { it.id } + state.removedMessages[session.id].orEmpty() +
                     session.queuedPrompts.flatMap { listOf(it.messageId, it.responseId, it.responseTimelineId) }

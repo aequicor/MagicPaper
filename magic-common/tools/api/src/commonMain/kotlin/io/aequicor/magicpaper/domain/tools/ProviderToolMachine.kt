@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain.tools
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** The common tool owner has one workflow machine; receipts prove individual external outcomes. */
-object ProviderToolMachine {
+object ProviderToolMachine : Machine<ProviderToolMachine.State, ProviderToolMachine.Input, ProviderToolMachine.Effect> {
+    override val id = MachineId("provider-tool")
+    override val space get() = ProviderToolSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable enum class Phase { NEW, MODEL_READY, MODEL_PENDING, TOOLS_READY, TOOL_PENDING, OUTPUT_PENDING, OUTPUT_WRITING, SUCCEEDED, FAILED, CANCELLED, INTERRUPTED, UNKNOWN }
     @Serializable data class Call(val id: String, val name: String, val fingerprint: String)
     @Serializable data class OutputRef(val runId: String, val attempt: String, val identity: String, val digest: String)
