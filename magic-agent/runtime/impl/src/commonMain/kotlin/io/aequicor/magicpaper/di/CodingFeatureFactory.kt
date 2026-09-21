@@ -20,6 +20,8 @@ import io.aequicor.magicpaper.ui.components.DefaultCodingPresentation
  */
 fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
     val projects = codingProjectRepository(deps.store, deps.json, deps.settings, deps.profiles, deps.events)
+    // The graph wraps the runtime for metering and tools, but forwards the same engine sources.
+    val models = PersistedCodingModelCatalog(deps.store, deps.json, deps.codingRuntime.modelSources)
     val graph = CodingRuntimeGraph(deps.store, deps.json, deps.settings, deps.profiles, projects, deps.codingRuntime,
         deps.planningWorkspace, deps.integrationChecks, deps.usage, deps.gateway, deps.search,
         draftRepository = deps.drafts, events = deps.events, taskWorkspace = deps.taskWorkspace,
@@ -29,9 +31,9 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         toolReceipts = deps.toolReceipts, toolSessionFactory = deps.toolSessionFactory,
         mediaToolFactory = deps.mediaToolFactory, mediaToolReceipts = deps.mediaToolReceipts, questionnaireToolFactory = deps.questionnaireToolFactory, organismStoreFactory = deps.organismStoreFactory,
         taskWorktreeOwner = deps.taskWorktreeOwner, planningStoreFactory = deps.planningStoreFactory,
-        modelDossiers = deps.modelDossiers, settingsCommands = deps.settingsCommands)
+        modelDossiers = deps.modelDossiers, settingsCommands = deps.settingsCommands,
+        nativeModels = NativeModelSnapshots { engine -> engine?.let { models.snapshots.value[it] } })
     val runtime = graph.runtime
-    val models = PersistedCodingModelCatalog(deps.store, deps.json, runtime.modelSources)
     val service = DefaultCodingService(deps.settings, deps.profiles, deps.store, deps.json, runtime, projects,
         deps.dirPicker, deps.gateway, graph.planningChat, deps.requestPins, deps.usage,
         onOpenSession = deps.onOpenSession,
@@ -42,7 +44,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         settingsCommands = deps.settingsCommands, models = models)
     val plugin = CodingPlanningPlugin(graph.planningStore, graph.planComposer, deps.dossier,
         graph.planningExecution, runtime, projects, deps.profiles, deps.settings,
-        draftRepository = deps.drafts, applicationScope = deps.applicationScope, modelDossiers = deps.modelDossiers)
+        draftRepository = deps.drafts, applicationScope = deps.applicationScope, modelDossiers = deps.modelDossiers, models = models)
     return object : CodingFeature {
         override val projects: CodingProjectRepository = projects
         override val planning: PlanningRepository = graph.planningStore

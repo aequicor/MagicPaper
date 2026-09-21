@@ -48,11 +48,9 @@ object ProfileResolver {
      * Уровень в профиле нужен лишь показу: движок получает строку выбора как есть.
      */
     private fun nativeCoding(choice: CodingModelSelection, session: CodingSession, profiles: List<LlmProfile>): LlmProfile? {
-        if (choice.engine != CodingEngine.CODEX) return null
-        val subscriptions = profiles.filter { it.provider == ProviderType.OPENAI_SUBSCRIPTION && it.operational }
-        val connection = subscriptions.firstOrNull { it.id == session.llmProfileId } ?: subscriptions.firstOrNull() ?: return null
-        val shown = choice.level?.let(ReasoningEffort::fromWire)?.let(EffortSelection::of) ?: EffortSelection.Default
-        return connection.forModel(choice.modelId, shown)
+        val connections = profiles.filter { it.isNativeConnectionFor(choice.engine) }
+        val connection = connections.firstOrNull { it.id == session.llmProfileId } ?: connections.firstOrNull() ?: return null
+        return connection.forModel(choice.modelId, choice.displayEffort())
     }
 
     fun coding(session: CodingSession, project: CodingProject?, settings: AppSettings, profiles: List<LlmProfile>, plan: Plan? = null): LlmProfile? {
@@ -64,6 +62,11 @@ object ProfileResolver {
         val assignment = (if (attempt?.mergeProgress?.started == true) attempt.mergeAssignment else null)
             ?: attempt?.assignment ?: stage?.assignment
         if (assignment != null) {
+            assignment.native?.let { choice ->
+                return profiles.firstOrNull { it.id == assignment.profileId && it.isNativeConnectionFor(choice.engine) }
+                    ?.forModel(choice.modelId, choice.displayEffort())
+                    ?.let { if (assignment.options != null) it.copy(advanced = assignment.options) else it }
+            }
             return selection(ModelSelection(assignment.profileId, assignment.modelId, assignment.effort), profiles)
                 ?.takeIf { it.supportsCoding }
                 ?.let { if (assignment.options != null) it.copy(advanced = assignment.options) else it }

@@ -37,6 +37,46 @@ class DecisionPlannerTest {
     ))
     private fun response(p: Plan) = """{"reply":"Evaluated alternatives","tree":${Json.encodeToString(ListSerializer(DecisionNode.serializer()), p.tree)},"milestones":${Json.encodeToString(ListSerializer(Milestone.serializer()), p.milestones)}}"""
 
+    private val subscription = LlmProfile("chatgpt", "ChatGPT", provider = ProviderType.OPENAI_SUBSCRIPTION, modelId = "x", favoriteModels = listOf("old-favorite"))
+    private val astra = CodingModel("openai", "gpt-6-astra", "GPT-6 Astra", levels = listOf("low", "medium", "high", "xhigh", "max", "ultra"), defaultLevel = "medium")
+    private val luna = CodingModel("openai", "gpt-luna", "Luna", levels = listOf("low", "high"))
+    private val codex = CodingModelSnapshot(CodingEngine.CODEX, listOf(astra, luna), 1)
+    private fun codexPlanner(snapshot: CodingModelSnapshot?, p: Plan) = DecisionPlanner(
+        completePlanning = { _, _, _, _ -> response(p) }, nativeRecommendations = NativeModelSnapshots { snapshot })
+
+    @Test fun codexPlanRecommendsFromTheEnginesCatalogAndOnlyWithLevelsItDeclares() = runTest {
+        val p = plan().copy(engine = CodingEngine.CODEX)
+        val result = codexPlanner(codex, p).refine(p, "Refine", profile, listOf(subscription), emptyList())
+        result.milestones.forEach { stage ->
+            val assignment = checkNotNull(stage.assignment)
+            val native = checkNotNull(assignment.native)
+            val model = checkNotNull(codex.find(native.provider, native.modelId)) { "recommended a model outside the catalog: ${native.modelId}" }
+            assertEquals("chatgpt", assignment.profileId)
+            assertTrue(native.level == null || native.level in model.levels, "level ${native.level} is not declared by ${model.id}")
+            assertEquals(model.name, assignment.displayName)
+        }
+    }
+
+    @Test fun withoutACatalogTheRosterKeepsItsFavoritesAndAssignmentsStayLegacy() = runTest {
+        val p = plan().copy(engine = CodingEngine.CODEX)
+        val result = codexPlanner(null, p).refine(p, "Refine", profile, listOf(subscription), emptyList())
+        result.milestones.forEach { stage ->
+            assertNull(stage.assignment?.native)
+            assertEquals("old-favorite", stage.assignment?.modelId)
+        }
+    }
+
+    @Test fun manualNativeAssignmentAndAnAlreadyChosenLevelSurviveARefinement() = runTest {
+        val manual = nativeStageAssignment(subscription, CodingEngine.CODEX, luna, "high", manual = true)
+        val kept = nativeStageAssignment(subscription, CodingEngine.CODEX, astra, "max")
+        val original = plan().copy(engine = CodingEngine.CODEX).let { p ->
+            p.copy(milestones = p.milestones.map { if (it.id == "a") it.copy(assignment = manual) else it.copy(assignment = kept) })
+        }
+        val result = codexPlanner(codex, original).refine(original, "Refine", profile, listOf(subscription), emptyList())
+        assertEquals(manual, result.milestones.first { it.id == "a" }.assignment)
+        assertEquals("max", result.milestones.first { it.id == "b" }.assignment?.native?.level, "the model is kept, so is its level: no re-guess")
+    }
+
     @Test fun prioritiesChangeRecommendationAndManualChoiceIsPreserved() {
         val planner = DecisionPlanner()
         val p = plan()

@@ -35,6 +35,8 @@ class PlanningExecutionService(
     private val taskWorktrees: TaskWorktreeService? = null,
     private val journalRecovery: PlanningJournalRecovery = PlanningJournalRecovery(store, runtime, projects),
     private val strategyClassifier: PlanStrategyClassifier? = null,
+    /** Снимки каталогов движков: новая попытка с нативным назначением допускается только по ним. */
+    private val nativeModels: NativeModelSnapshots = NativeModelSnapshots.None,
     private val attemptAuthority: PlanningAttemptAuthority,
     private val chatHooksProvider: () -> PlanningExecutionHooks?,
 ) {
@@ -638,6 +640,7 @@ class PlanningExecutionService(
                             val activityHistory = attempt.steps.filter { it.isVisibleActivity }
                             val activityRecorder = CodingRunRecorder()
                             monitoredRun(record, PlanningMachine.AttemptRef.from(attempt), project.copy(path = conflict.workingPath), CodingSession(sessionId, project.id, "Конфликт переноса", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                                codingModel = (attempt.mergeAssignment ?: attempt.assignment).native,
                                 planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
                                 pendingRun = CodingRunCheckpoint("${attempt.id}-delivery", "")),
                                 "Разреши Git merge-конфликт, сохрани пользовательские изменения и результат плана. Цель: ${plan.goal}. Если изменения уже объединены, продолжи проверки. Добавь разрешённые файлы в индекс, выполни подходящие тесты и сообщи фактические результаты. Не изменяй исходную папку вне этой рабочей копии. Предыдущий отчёт: ${attempt.mergeReport}",
@@ -720,7 +723,7 @@ class PlanningExecutionService(
                     val activityRecorder = CodingRunRecorder()
                     monitoredRun(record, PlanningMachine.AttemptRef.from(attempt), project.copy(path = workspace.integrationPath),
                         CodingSession(attempt.sessionId, project.id, "Итоговая проверка", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
-                            planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
+                            codingModel = attempt.assignment.native, planId = plan.id, parentSessionId = plan.parentSessionId, planningRulesSnapshot = plan.planningRulesSnapshot,
                             pendingRun = CodingRunCheckpoint("${attempt.id}-verification", "")),
                         "Проверь объединённый результат проекта. Цель: ${plan.goal}. Критерии:\n$criteria\nЗапусти подходящие тесты и проверки. ${verificationGuidance()} Не изменяй исходный код. Отчитайся о командах и их фактических результатах. При продолжении сначала проверь предыдущие результаты: ${attempt.report}",
                         attempt.assignment.executionProfile(profiles.load())).collect { event ->
@@ -798,9 +801,15 @@ class PlanningExecutionService(
             saved.issue == null && saved.finalAttempt?.acceptanceRecord?.permitsProgress == true
     }
 
-    private fun assignment(m: Milestone, roster: List<LlmProfile>): StageAssignment {
+    /**
+     * Назначение новой попытки. Нативное назначение сверяется со снимком каталога движка: модель,
+     * которой там больше нет, и неподдерживаемый уровень отклоняются по имени, а не кламятся.
+     * Уже принятая попытка эту функцию не вызывает: её назначение заморожено.
+     */
+    private suspend fun assignment(m: Milestone, roster: List<LlmProfile>): StageAssignment {
         m.assignment?.let {
-            val request = it.executionProfile(roster)
+            val request = it.executionProfile(roster, it.native?.let { choice -> nativeModels.snapshot(choice.engine) })
+            if (it.native != null) return it.copy(options = it.options ?: request.advanced)
             val resolved = ModelDefaults.capability(request).resolveEffort(it.effort)
             return it.copy(effectiveEffort = EffortSelection.ofOrNull(resolved.level), options = it.options ?: request.advanced)
         }
@@ -905,6 +914,7 @@ class PlanningExecutionService(
                     var outputPendingSave = false
                     var outputPendingDisplay = false
                     val session = CodingSession(attempt.sessionId, project.id, "План: ${stage.title}", attempt.startedAt, attempt.engineSessionId, engine = attempt.engine,
+                        codingModel = attempt.assignment.native,
                         planId = plan.id, stageId = stage.id, parentSessionId = plan.parentSessionId.takeIf { it.isNotBlank() },
                         role = CodingSessionRole.WORKER,
                         runtimeGeneration = attempt.sessionGeneration,
@@ -1055,6 +1065,7 @@ class PlanningExecutionService(
                             attemptAuthority.requireRuntimePolicyReady()
                             store.withJournaledIntent(id, PlanJournalOperation.CONFLICT_AGENT_INTENT, stageId, attempt.id) {
                                 val mergeSession = CodingSession("${attempt.sessionId}-merge", project.id, "Объединение: ${stage.title}", attempt.startedAt, attempt.mergeEngineSessionId, engine = attempt.engine ?: store.planFor(id)!!.engine ?: legacyCodingEngine(attempt.assignment.executionProfile(profiles.load())),
+                                    codingModel = (attempt.mergeAssignment ?: attempt.assignment).native,
                                     planId = id, stageId = stageId, parentSessionId = latest.parentSessionId,
                                     planningRulesSnapshot = latest.planningRulesSnapshot,
                                     pendingRun = CodingRunCheckpoint("${attempt.id}-merge", ""))

@@ -12,13 +12,16 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
     private val completePlanning: suspend (Plan, LlmProfile, List<LlmMessage>, (CodingStep) -> Unit) -> String = { _, _, _, _ -> error("Планировщик проекта не подключён.") },
     private val acceptanceChecks: AcceptanceChecks = AcceptanceChecks(),
     private val retryLimit: suspend () -> Int? = { null },
+    /** Каталог движка плана, если рекомендации должны идти из него; иначе `None` и прежний состав профилей. */
+    private val nativeRecommendations: NativeModelSnapshots = NativeModelSnapshots.None,
 ) {
     @Serializable private data class Proposal(
         val isolatedWorkspace: Boolean? = null, val reply: String = "", val questions: List<PlanningQuestion> = emptyList(), val tree: List<DecisionNode> = emptyList(), val milestones: List<Milestone> = emptyList(), val questionStageIds: List<String> = emptyList(),
     )
     suspend fun refine(plan: Plan, message: String, planner: LlmProfile?, profiles: List<LlmProfile>, dossiers: List<ModelDossier>, searchContext: String = "", onActivity: (CodingStep) -> Unit = {}): Plan {
         require(planner?.configured == true) { "Подключите модель для автоматического планирования. Дерево можно редактировать вручную." }
-        val roster = profiles.filter { it.operational && it.supportsCoding }
+        val native = nativeRecommendations.snapshot(plan.engine)
+        val roster = profiles.filter { it.operational && it.supportsCoding }.let { eligible -> native?.let(eligible::withNativeCatalog) ?: eligible }
         val messages = mutableListOf(
             LlmMessage(LlmChatRole.SYSTEM, """
                 Ты рабочая сессия, составляющая дерево решений проекта. Методика задана зафиксированными правилами запуска.
@@ -78,7 +81,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 val start = raw.indexOf('{'); val end = raw.lastIndexOf('}')
                 require(start >= 0 && end > start) { "Ожидается JSON объект" }
                 val proposal = json.decodeFromString<Proposal>(raw.substring(start, end + 1))
-                return proposalResult(plan, proposal, message, roster, dossiers)
+                return proposalResult(plan, proposal, message, roster, dossiers, native)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 lastError = e.message.orEmpty()
@@ -99,7 +102,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
         proposalResult(plan, json.decodeFromJsonElement<Proposal>(args), "", emptyList(), emptyList())
     }
 
-    private fun proposalResult(plan: Plan, proposal: Proposal, message: String, roster: List<LlmProfile>, dossiers: List<ModelDossier>): Plan {
+    private fun proposalResult(plan: Plan, proposal: Proposal, message: String, roster: List<LlmProfile>, dossiers: List<ModelDossier>, native: CodingModelSnapshot? = null): Plan {
         require(proposal.questions.size <= 3 && proposal.questions.map { it.id }.distinct().size == proposal.questions.size) { "Допустимо до трёх вопросов с разными id" }
         require(proposal.questions.all { q -> q.id.isNotBlank() && q.title.isNotBlank() && (q.kind == QuestionKind.TEXT || q.options.size >= 2) && q.options.all { it.id.isNotBlank() && it.label.isNotBlank() } && q.options.map { it.id }.distinct().size == q.options.size }) { "Некорректные варианты уточняющих вопросов" }
         require(proposal.questionStageIds.all { id -> (plan.milestones + proposal.milestones).any { it.id == id } }) { "Неизвестный этап уточнения" }
@@ -115,7 +118,7 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
                 complexityPoints = stage.complexityPoints ?: old?.complexityPoints,
                 isFinalization = stage.isFinalization || old?.isFinalization == true,
                 displayNumber = old?.displayNumber, displayName = old?.displayName, continuationOf = stage.continuationOf ?: old?.continuationOf,
-                assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities))
+                assignment = old?.assignment?.takeIf { it.manual } ?: recommend(stage, roster, dossiers, plan.priorities, native))
         }
         val nodes = proposal.tree.map { n ->
             plan.tree.firstOrNull { it.id == n.id && it.manualSelection }?.let { old ->
@@ -144,7 +147,8 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
             n.copy(selectedOptionId = best?.id)
         }
     })
-    private fun recommend(stage: Milestone, profiles: List<LlmProfile>, dossiers: List<ModelDossier>, priorities: PlanningPriorities): StageAssignment? {
+    private fun recommend(stage: Milestone, profiles: List<LlmProfile>, dossiers: List<ModelDossier>, priorities: PlanningPriorities,
+        native: CodingModelSnapshot? = null): StageAssignment? {
         val candidates = profiles.flatMap { p -> p.displayModels.map { p.copy(modelId = it, codingModelId = it) } }
         val proposed = stage.assignment
         val requestedProfile = proposed?.profileId ?: stage.agentProfileId
@@ -162,10 +166,19 @@ class DecisionPlanner(private val json: Json = Json { ignoreUnknownKeys = true; 
             priorities.quality + priorities.safety > priorities.economy + priorities.speed -> ReasoningEffort.HIGH
             else -> ReasoningEffort.MEDIUM
         }
+        val explanation = proposed?.explanation?.takeIf { it.isNotBlank() }
+            ?: "Рекомендация по описаниям, приоритетам, сложности и доступным уровням effort. Неизвестные свойства не оценивались. ${stage.assessment.explanation}"
+        val nativeModel = native?.takeIf { profile.isNativeConnectionFor(it.engine) }?.let { snapshot -> snapshot.models.firstOrNull { it.id == model } }
+        if (native != null && nativeModel != null) {
+            // Levels come from the engine's own declaration; an already chosen native level of the same model is kept.
+            val kept = proposed?.native?.takeIf { profile.id == proposed.profileId && model == proposed.modelId }
+            val level = if (kept != null) kept.level else nativeModel.nearestLevel(requested)
+            return nativeStageAssignment(profile, native.engine, nativeModel, level, explanation, manual = false)
+        }
         val capability = ModelDefaults.capability(profile.copy(modelId = model))
         val choice = if (profile.id == proposed?.profileId && model == proposed.modelId) proposed.effort else EffortSelection.of(requested)
         val effective = capability.resolveEffort(choice)
         return StageAssignment(profile.id, model, EffortSelection.ofOrNull(effective.level), EffortSelection.ofOrNull(effective.level),
-            proposed?.explanation?.takeIf { it.isNotBlank() } ?: "Рекомендация по описаниям, приоритетам, сложности и доступным уровням effort. Неизвестные свойства не оценивались. ${stage.assessment.explanation}", displayName = profile.modelName(model))
+            explanation, displayName = profile.modelName(model))
     }
 }

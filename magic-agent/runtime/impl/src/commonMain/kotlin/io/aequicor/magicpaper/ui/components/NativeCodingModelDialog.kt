@@ -86,7 +86,7 @@ fun NativeCodingModelDialog(
 /** Уровни ровно те, что объявил движок для модели; первый чип — его собственное умолчание. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NativeLevelControl(model: CodingModel, level: String?, onSelect: (String?) -> Unit) {
+internal fun NativeLevelControl(model: CodingModel, level: String?, onSelect: (String?) -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         PaperText("Уровень: ${model.levelLabel(level)}", role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {

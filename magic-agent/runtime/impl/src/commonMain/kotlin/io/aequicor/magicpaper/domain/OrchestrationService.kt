@@ -32,6 +32,7 @@ class OrchestrationService(
     private val sessionTree: SessionTreeRuntime? = null,
     draftRepository: DraftRepository = InMemoryDraftRepository(),
     private val modelDossiers: ModelDossierRepository,
+    private val nativeModels: NativeModelSnapshots = NativeModelSnapshots.None,
 ) : PlanningExecutionHooks, PlanningToolAccess {
     private val scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     internal val forms = CodingFormDrafts(draftRepository, this.scope)
@@ -1699,7 +1700,7 @@ class OrchestrationService(
         if (plan.runId != observed.runId) return plan
         val roster = toolProfiles()
         val sessions = projects.sessions(plan.projectId)
-        val next = plan.recoveredAssignments(roster, sessions)
+        val next = plan.recoveredAssignments(roster, sessions, nativeModels.snapshot(plan.engine))
         if (next == plan) return plan
         fun attemptChange(stageId: String?, before: StageAttempt, after: StageAttempt?): AttemptAssignmentChange? {
             if (after == null || before.assignment == after.assignment && before.mergeAssignment == after.mergeAssignment) return null
