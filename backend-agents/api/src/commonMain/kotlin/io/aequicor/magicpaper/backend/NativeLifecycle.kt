@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.backend
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.serialization.Serializable
@@ -63,7 +66,12 @@ class NativeAttemptContext(val run: NativeRunRef, val events: NativeAttemptEvent
 }
 
 /** One owner of admission, external outcome and cleanup evidence. Resource handles are not state. */
-object NativeLifecycleMachine {
+object NativeLifecycleMachine : Machine<NativeLifecycleMachine.State, NativeLifecycleMachine.Input, NativeLifecycleMachine.Effect> {
+    override val id = MachineId("native-lifecycle")
+    override val space get() = NativeLifecycleSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(val runs: Map<NativeRunRef, Run> = emptyMap(), val closing: Boolean = false,
         val closed: Boolean = false, val persistenceUnknown: Boolean = false)
