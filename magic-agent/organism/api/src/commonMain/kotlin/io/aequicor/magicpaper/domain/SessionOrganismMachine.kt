@@ -2,12 +2,32 @@ package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.domain.tools.requireTool
 import io.aequicor.magicpaper.domain.tools.ToolRole
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** One organism admission decision atomically changes nodes, receipts, audit, outbox and allocations. */
-object SessionOrganismMachine {
+object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrganismMachine.Input, SessionOrganismMachine.Effect> {
+    override val id = MachineId("session-organism")
+    override val space get() = SessionOrganismSpace
+
+    /**
+     * What [step] reports to the shared contract. This machine's own [Transition] keeps its outputs and its refusal
+     * apart, because a refusal is not an output; the contract has one effect list, so both travel in it, and
+     * [SessionOrganismSpace.rejected] tells them apart. [Transition], [reduce] and every caller are unchanged.
+     */
+    sealed interface Effect {
+        data class Emit(val output: Output) : Effect
+        data class Reject(val reject: SessionOrganismMachine.Reject) : Effect
+    }
+
+    override fun step(state: State, input: Input): Step<State, Effect> = reduce(state, input).let { transition ->
+        Step(transition.state, transition.outputs.map(Effect::Emit) + listOfNotNull(transition.reject?.let(Effect::Reject)))
+    }
+
     @Serializable data class Stamp(val id: String, val at: Long)
     @ConsistentCopyVisibility data class State internal constructor(val id: String,
         val organism: SessionOrganism? = null, val persistenceUnknown: Boolean = false)
