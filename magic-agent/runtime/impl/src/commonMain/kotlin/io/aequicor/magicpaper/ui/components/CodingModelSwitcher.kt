@@ -13,6 +13,23 @@ import io.aequicor.magicpaper.designsystem.*
 fun CodingModelSwitcherDialog(vm: DefaultCodingComponent, sessionId: String, profiles: List<LlmProfile>, activeProfileId: String, sessionProfileId: String?, onDismiss: () -> Unit) {
     val state by vm.state.collectAsState()
     val session = state.coding.sessions.firstOrNull { it.session.id == sessionId }?.session
+    val nativeEngine = session?.engine?.takeIf {
+        state.coding.usesNativeModels(session, session.featureFlags.resolve(state.settings.featureFlags))
+    }
+    if (session != null && nativeEngine != null) {
+        // The catalog is asked when the dialog opens; the last good snapshot is shown meanwhile.
+        LaunchedEffect(nativeEngine) { vm.refreshCodingModels(nativeEngine) }
+        NativeCodingModelDialog(nativeEngine, state.coding.modelCatalogs[nativeEngine], session.codingModel,
+            refreshing = nativeEngine in state.coding.refreshingModels,
+            onSelect = { vm.selectNativeCodingModel(sessionId, it) },
+            onRefresh = { vm.refreshCodingModels(nativeEngine) }, onDismiss = onDismiss,
+            footer = {
+                session.codingModel?.let { chosen ->
+                    PaperAction(onClick = { vm.selectNativeCodingModel(sessionId, chosen, forProject = true) }) { PaperText("Использовать в новых сессиях проекта") }
+                }
+            })
+        return
+    }
     val plans = vm.planningChat?.store?.plans?.collectAsState()?.value.orEmpty()
     val resolved = session?.let { vm.codingProfileOf(it, plans.firstOrNull { plan -> plan.id == it.planId }) }
     val selected = resolved?.let { ModelSelection(it.id, it.selectionKey, it.effortSelectionFor()) } ?: session?.modelSelection

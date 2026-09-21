@@ -56,6 +56,13 @@ class CodingModelsTest {
         assertEquals(CodingModelResolution.WrongEngine(CodingEngine.PI), resolved)
     }
 
+    @Test fun levelLabelShowsTheEnginesRealDefaultInsteadOfABareDefault() {
+        assertEquals("по умолчанию: medium", qwen.levelLabel(null))
+        assertEquals("xhigh", qwen.levelLabel("xhigh"))
+        assertEquals("по умолчанию", qwen.copy(defaultLevel = null).levelLabel(null))
+        assertNull(plain.levelLabel(null), "a model without thinking has no level to show")
+    }
+
     @Test fun sessionsAndProjectsSavedBeforeNativeSelectionStillDecode() {
         val json = Json { ignoreUnknownKeys = true }
         val session = json.decodeFromString<CodingSession>("""{"id":"s","projectId":"p","name":"old","createdAt":1}""")

@@ -92,6 +92,7 @@ class DefaultCodingService(
     private val archiveTicks: Flow<Unit> = sessionArchiveTicks(),
     override val mediaGeneration: MediaGenerationService? = null,
     private val settingsCommands: SettingsCommands,
+    private val models: CodingModelCatalog? = null,
 ) : CodingService {
     private val _state = MutableStateFlow(CodingState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->
@@ -412,7 +413,8 @@ class DefaultCodingService(
         val profiles = profileRepo.load()
         val projects = codingProjects?.all().orEmpty()
         _state.update { it.copy(settings = settings, llmProfiles = profiles,
-            coding = it.coding.copy(projects = projects, sessions = loadCodingSessions(projects), projectStatuses = codingStatusSnapshot(projects))) }
+            coding = it.coding.copy(projects = projects, sessions = loadCodingSessions(projects), projectStatuses = codingStatusSnapshot(projects),
+                nativeModelEngines = codingRuntime?.modelSources?.keys.orEmpty())) }
         when (val policy = settingsCommands.runtimePolicy()) {
             is SettingsRuntimePolicy.Confirmed -> codingRuntime?.computerUse?.configure(policy.settings.computerAccess, policy.settings.applicationAccess)
             SettingsRuntimePolicy.Unconfirmed -> {
@@ -525,6 +527,9 @@ class DefaultCodingService(
         scope.launch { usage.state.collect { archive ->
             _state.update { it.copy(coding = it.coding.copy(usageContexts = archive.contexts)) }
         } }
+        models?.let { catalog -> scope.launch { catalog.snapshots.collect { snapshots ->
+            _state.update { it.copy(coding = it.coding.copy(modelCatalogs = snapshots)) }
+        } } }
         requestPins?.let { pins -> scope.launch { pins.groups.collect { groups ->
             _state.update { it.copy(coding = it.coding.copy(requestPins = groups)) }
         } } }
@@ -858,6 +863,54 @@ class DefaultCodingService(
         }
     }
 
+    override fun selectNativeCodingModel(sessionId: String, selection: CodingModelSelection, forProject: Boolean) {
+        val coding = _state.value.coding
+        val ui = coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
+        val flags = ui.session.featureFlags.resolve(_state.value.settings.featureFlags)
+        if (!coding.usesNativeModels(ui.session, flags) || ui.session.engine != selection.engine) return
+        when (val resolved = coding.modelCatalogs[selection.engine]?.resolve(selection)) {
+            is CodingModelResolution.Available -> Unit
+            is CodingModelResolution.LevelUnsupported -> {
+                AppLog.info("coding", "model.native.rejected", mapOf("sessionId" to sessionId, "reason" to "level-unsupported"))
+                _state.update { it.copy(notice = "Модель ${resolved.model.name} не поддерживает уровень ${resolved.level}. Выберите другой уровень.") }
+                return
+            }
+            else -> {
+                AppLog.info("coding", "model.native.rejected", mapOf("sessionId" to sessionId, "reason" to "not-in-catalog"))
+                _state.update { it.copy(notice = "Этой модели нет в каталоге движка. Обновите список моделей и выберите снова.") }
+                return
+            }
+        }
+        val updated = ui.session.copy(codingModel = selection)
+        updateCodingSession(sessionId) { it.copy(session = updated) }
+        AppLog.info("coding", "model.native.selected", mapOf("sessionId" to sessionId, "engine" to selection.engine.name, "forProject" to forProject.toString()))
+        scope.launch { acceptCodingSession(ui.session, CodingMachine.Intent.SetSessionCodingModel(CodingMachine.ref(ui.session), selection)) }
+        if (forProject) {
+            val project = _state.value.coding.projects.firstOrNull { it.id == updated.projectId } ?: return
+            val next = project.copy(codingModel = selection)
+            _state.update { st -> st.copy(coding = st.coding.copy(projects = st.coding.projects.map { if (it.id == next.id) next else it }, current = st.coding.current?.let { if (it.id == next.id) next else it })) }
+            scope.launch { codingProjects?.dispatch(next.id, CodingMachine.Intent.SetProjectCodingModel(selection)) }
+        }
+    }
+
+    override fun refreshCodingModels(engine: CodingEngine) {
+        val catalog = models ?: return
+        if (engine in _state.value.coding.refreshingModels) return
+        _state.update { it.copy(coding = it.coding.copy(refreshingModels = it.coding.refreshingModels + engine)) }
+        scope.launch {
+            try {
+                val outcome = catalog.refresh(engine)
+                if (outcome is CodingModelRefresh.Failed) _state.update { it.copy(notice = when (outcome.reason) {
+                    CodingModelRefreshFailure.UNAVAILABLE -> "Каталог моделей недоступен на этой платформе."
+                    CodingModelRefreshFailure.EMPTY -> "Движок не вернул ни одной модели. Проверьте вход в аккаунт."
+                    CodingModelRefreshFailure.FAILED -> "Не удалось получить список моделей. Повторите попытку."
+                } + if (outcome.retained != null) " Показан прежний список." else "") }
+            } finally {
+                _state.update { it.copy(coding = it.coding.copy(refreshingModels = it.coding.refreshingModels - engine)) }
+            }
+        }
+    }
+
     override fun prepareCodingRuntime(engine: CodingEngine) {
         val runtime = codingRuntime ?: return
         if (engine in _state.value.coding.preparingEngines) return
@@ -1139,6 +1192,7 @@ class DefaultCodingService(
             check(project != null && projectId !in deletingCodingProjects.value) { "Project unavailable" }
             val session = CodingSession(id = Id.new(), projectId = projectId, name = "Новая сессия",
                 engine = point.value, createdAt = Id.now(),
+                codingModel = project.codingModel?.takeIf { it.engine == point.value },
                 modelSelection = project.modelSelection ?: ProfileResolver.favoriteDefault(
                     _state.value.settings, _state.value.availableLlmProfiles, coding = true))
             repo.dispatch(projectId, CodingMachine.Intent.CreateSession(session))
@@ -1817,12 +1871,18 @@ class DefaultCodingService(
 
     private fun validateInput(session: CodingSession, attachments: List<Attachment>, requestId: String): Boolean {
         if (attachments.any { it.kind == AttachmentKind.IMAGE }) {
-            val profile = codingProfileOf(session)?.forCoding()
-            if (profile != null && !ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision) {
+            val declared = session.codingModel?.let { choice -> _state.value.coding.modelCatalogs[choice.engine]?.find(choice.provider, choice.modelId) }
+            // A model the engine itself declared is judged by its declaration, not by the name heuristic.
+            val (modelName, vision) = if (declared != null) declared.name to declared.acceptsImages else {
+                val profile = codingProfileOf(session)?.forCoding()
+                if (profile == null) return true
+                profile.modelId to ModelCapabilities.resolve(profile.provider, profile.modelId, profile.baseUrl).vision
+            }
+            if (!vision) {
                 AppLog.info("coding", "run.input.rejected", mapOf(
                     "sessionId" to session.id, "requestId" to requestId,
-                    "model" to profile.modelId, "reason" to "image-input-unsupported"))
-                _state.update { it.copy(notice = "Модель ${profile.modelId} не поддерживает изображения. Выберите модель с поддержкой изображений и повторите отправку.") }
+                    "model" to modelName, "reason" to "image-input-unsupported"))
+                _state.update { it.copy(notice = "Модель $modelName не поддерживает изображения. Выберите модель с поддержкой изображений и повторите отправку.") }
                 return false
             }
         }

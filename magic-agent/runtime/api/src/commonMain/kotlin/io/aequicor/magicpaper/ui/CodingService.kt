@@ -30,6 +30,14 @@ interface CodingService {
     fun refreshCodingEngines()
     fun selectDefaultCodingEngine(engine: CodingEngine)
     fun selectCodingModel(sessionId: String, selection: ModelSelection, forProject: Boolean = false)
+    /**
+     * Выбор из каталога движка сессии. Модель и уровень сверяются со снимком каталога: пропавшую
+     * модель и неподдерживаемый уровень сервис отклоняет с пояснением, а не подменяет соседним.
+     * [forProject] делает выбор умолчанием для новых сессий проекта того же движка.
+     */
+    fun selectNativeCodingModel(sessionId: String, selection: CodingModelSelection, forProject: Boolean = false)
+    /** Опрашивает движок и обновляет каталог; результат приходит через [CodingUi.modelCatalogs]. */
+    fun refreshCodingModels(engine: CodingEngine)
     fun selectCodingSearchProvider(sessionId: String, provider: SearchProvider)
     fun prepareCodingRuntime(engine: CodingEngine = CodingEngine.PI)
     fun uninstallCodingRuntime(engine: CodingEngine = CodingEngine.PI)

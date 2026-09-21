@@ -22,6 +22,32 @@ class CodingMachineTest {
         assertIs<CodingMachine.Effect.Reject>(result.effects.single())
     }
 
+    @Test fun nativeModelChoiceIsStoredBesideTheLegacySelectionAndNeverReplacesIt() {
+        val legacy = ModelSelection("profile", "legacy-model")
+        val withLegacy = apply(ready(), CodingMachine.Intent.SetSessionModel(CodingMachine.ref(session), legacy))
+        val native = CodingModelSelection(CodingEngine.PI, "qwen-token-plan", "qwen3.8-max", "xhigh")
+        val chosen = apply(withLegacy, CodingMachine.Intent.SetSessionCodingModel(CodingMachine.ref(session), native))
+        assertEquals(native, chosen.sessions.getValue(session.id).codingModel)
+        assertEquals(legacy, chosen.sessions.getValue(session.id).modelSelection)
+        val cleared = apply(chosen, CodingMachine.Intent.SetSessionCodingModel(CodingMachine.ref(session), null))
+        assertNull(cleared.sessions.getValue(session.id).codingModel)
+    }
+
+    @Test fun nativeModelOfAnotherEngineIsRejectedAndTheSessionKeepsItsChoice() {
+        val own = CodingModelSelection(CodingEngine.PI, "qwen-token-plan", "qwen3.8-max")
+        val chosen = apply(ready(), CodingMachine.Intent.SetSessionCodingModel(CodingMachine.ref(session), own))
+        rejected(chosen, CodingMachine.Intent.SetSessionCodingModel(CodingMachine.ref(session),
+            CodingModelSelection(CodingEngine.CODEX, "openai", "gpt-6-astra")))
+        assertEquals(own, chosen.sessions.getValue(session.id).codingModel)
+    }
+
+    @Test fun projectKeepsANativeDefaultForNewSessions() {
+        val native = CodingModelSelection(CodingEngine.CODEX, "openai", "gpt-6-astra", "max")
+        val state = apply(ready(), CodingMachine.Intent.SetProjectCodingModel(native))
+        assertEquals(native, state.project?.codingModel)
+        assertNull(apply(state, CodingMachine.Intent.SetProjectCodingModel(null)).project?.codingModel)
+    }
+
     @Test fun onlyAcceptedFreshRequestsProduceExecutionEffects() {
         val state = ready()
         val queued = apply(state, CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request()))

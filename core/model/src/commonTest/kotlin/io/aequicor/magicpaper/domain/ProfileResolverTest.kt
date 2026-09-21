@@ -14,6 +14,36 @@ class ProfileResolverTest {
 
     private fun session(id: String) = ChatSession(id = "s", title = "t", createdAt = 1, updatedAt = 1)
 
+    private val subscription = LlmProfile(id = "chatgpt", name = "ChatGPT", provider = ProviderType.OPENAI_SUBSCRIPTION, modelId = "profile-default")
+    private val codexSession = CodingSession("s", "p", "n", 1, engine = CodingEngine.CODEX)
+    private fun native(level: String? = null, engine: CodingEngine = CodingEngine.CODEX) =
+        codexSession.copy(codingModel = CodingModelSelection(engine, "openai", "gpt-6-astra", level))
+
+    @Test
+    fun nativeCodexChoiceRunsThroughTheSubscriptionWithTheCatalogModel() {
+        val resolved = ProfileResolver.coding(native("high"), null, AppSettings(), listOf(configured, subscription))
+        assertEquals("chatgpt", resolved?.id)
+        assertEquals("gpt-6-astra", resolved?.modelId)
+        assertEquals("gpt-6-astra", resolved?.forCoding()?.modelId, "the coding contour must not fall back to the profile's own model")
+    }
+
+    @Test
+    fun nativeChoiceWinsOverTheLegacyModelSelectionOfTheSession() {
+        val session = native().copy(modelSelection = ModelSelection("a", "m"), llmProfileId = "a")
+        assertEquals("gpt-6-astra", ProfileResolver.coding(session, null, AppSettings(), listOf(configured, subscription))?.modelId)
+    }
+
+    @Test
+    fun nativeChoiceWithoutAWorkingSubscriptionHasNoConnectionInsteadOfAForeignOne() {
+        assertNull(ProfileResolver.coding(native(), null, AppSettings(), listOf(configured)))
+        assertNull(ProfileResolver.coding(native(), null, AppSettings(), listOf(subscription.copy(enabled = false), configured)))
+    }
+
+    @Test
+    fun nativeChoiceOfAnEngineWithoutANativeConnectionIsNotGuessed() {
+        assertNull(ProfileResolver.coding(native(engine = CodingEngine.PI), null, AppSettings(), listOf(configured, subscription)))
+    }
+
     @Test
     fun sessionOverrideWinsOverGlobal() {
         val settings = AppSettings(activeLlmProfileId = "a")

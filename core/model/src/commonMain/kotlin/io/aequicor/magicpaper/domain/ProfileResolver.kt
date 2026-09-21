@@ -40,6 +40,21 @@ object ProfileResolver {
         return ModelSelection(first.id, first.displayModels.first())
     }
 
+    /**
+     * Подключение, через которое движок запускает модель из собственного каталога, с моделью и
+     * уровнем выбора. Модель каталога не ищется среди избранных профиля: каталог — источник.
+     * Пока нативный выбор есть только у Codex, чьи модели принадлежат подписке ChatGPT; нет
+     * рабочего профиля подписки — нет и подключения (`null`), запуск честно откажет.
+     * Уровень в профиле нужен лишь показу: движок получает строку выбора как есть.
+     */
+    private fun nativeCoding(choice: CodingModelSelection, session: CodingSession, profiles: List<LlmProfile>): LlmProfile? {
+        if (choice.engine != CodingEngine.CODEX) return null
+        val subscriptions = profiles.filter { it.provider == ProviderType.OPENAI_SUBSCRIPTION && it.operational }
+        val connection = subscriptions.firstOrNull { it.id == session.llmProfileId } ?: subscriptions.firstOrNull() ?: return null
+        val shown = choice.level?.let(ReasoningEffort::fromWire)?.let(EffortSelection::of) ?: EffortSelection.Default
+        return connection.forModel(choice.modelId, shown)
+    }
+
     fun coding(session: CodingSession, project: CodingProject?, settings: AppSettings, profiles: List<LlmProfile>, plan: Plan? = null): LlmProfile? {
         val stage = plan?.takeIf { it.id == session.planId && it.projectId == session.projectId }
             ?.milestones?.firstOrNull { it.id == session.stageId }
@@ -59,6 +74,7 @@ object ProfileResolver {
             val model = stage.agentModelId.ifBlank { profile.codingModel }
             return selection(ModelSelection(profile.id, model, profile.effortSelectionFor(model)), profiles)
         }
+        session.codingModel?.let { return nativeCoding(it, session, profiles) }
         val choice = session.modelSelection ?: project?.modelSelection
         if (choice != null) return selection(choice, profiles)?.takeIf { it.supportsCoding }
         val profile = profiles.firstOrNull { it.id == session.llmProfileId && it.operational }

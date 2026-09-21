@@ -205,7 +205,24 @@ data class CodingUi(
     val immunityActions: Set<String> = emptySet(),
     val quarantineRecovery: QuarantineRecoveryState = QuarantineRecoveryState(),
     val questionnaireDrafts: Map<String, QuestionnaireDraft> = emptyMap(),
+    /** Движки, которые сами перечисляют свои модели; остальные остаются на прежнем выборе. */
+    val nativeModelEngines: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
+    /** Последние удачные снимки каталогов; движок без снимка ещё не опрашивался или не ответил. */
+    val modelCatalogs: Map<io.aequicor.magicpaper.domain.CodingEngine, io.aequicor.magicpaper.domain.CodingModelSnapshot> = emptyMap(),
+    val refreshingModels: Set<io.aequicor.magicpaper.domain.CodingEngine> = emptySet(),
 ) {
+    /**
+     * Выбирает ли сессия модель из каталога своего движка. Этапы плана и планирование остаются на
+     * прежнем выборе: их назначение замораживается вместе с попыткой и переезжает позже. Выбор,
+     * уже сохранённый в сессии, остаётся нативным и при выключенном флаге: запуск его исполняет.
+     */
+    fun usesNativeModels(session: io.aequicor.magicpaper.domain.CodingSession,
+        flags: io.aequicor.magicpaper.domain.FeatureFlagState): Boolean {
+        val engine = session.engine ?: return false
+        if (engine !in nativeModelEngines || session.stageId != null || session.planningMode) return false
+        return session.codingModel != null || flags.isEnabled(io.aequicor.magicpaper.domain.FeatureFlag.NATIVE_CODING_MODELS)
+    }
+
     val currentSession: CodingSessionUi?
         get() = sessions.firstOrNull { it.session.id == currentSessionId } ?: sessions.firstOrNull()
 

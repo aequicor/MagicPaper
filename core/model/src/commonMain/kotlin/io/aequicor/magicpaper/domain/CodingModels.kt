@@ -26,6 +26,17 @@ data class CodingModel(
     val acceptsImages: Boolean = false,
 ) {
     val supportsLevels: Boolean get() = levels.isNotEmpty()
+
+    /**
+     * Подпись уровня для чипа и диалога: выбранный уровень либо реальное умолчание движка
+     * («по умолчанию: medium»), а не безликое `default`. `null` — у модели нет thinking.
+     */
+    fun levelLabel(level: String?): String? = when {
+        !supportsLevels -> null
+        level != null -> level
+        defaultLevel != null -> "по умолчанию: $defaultLevel"
+        else -> "по умолчанию"
+    }
 }
 
 /**

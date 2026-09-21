@@ -31,6 +31,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         taskWorktreeOwner = deps.taskWorktreeOwner, planningStoreFactory = deps.planningStoreFactory,
         modelDossiers = deps.modelDossiers, settingsCommands = deps.settingsCommands)
     val runtime = graph.runtime
+    val models = PersistedCodingModelCatalog(deps.store, deps.json, runtime.modelSources)
     val service = DefaultCodingService(deps.settings, deps.profiles, deps.store, deps.json, runtime, projects,
         deps.dirPicker, deps.gateway, graph.planningChat, deps.requestPins, deps.usage,
         onOpenSession = deps.onOpenSession,
@@ -38,7 +39,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         taskWorktrees = graph.taskWorktrees,
         mediaGeneration = deps.media,
         removePluginDrafts = deps.removePluginDrafts,
-        settingsCommands = deps.settingsCommands)
+        settingsCommands = deps.settingsCommands, models = models)
     val plugin = CodingPlanningPlugin(graph.planningStore, graph.planComposer, deps.dossier,
         graph.planningExecution, runtime, projects, deps.profiles, deps.settings,
         draftRepository = deps.drafts, applicationScope = deps.applicationScope, modelDossiers = deps.modelDossiers)
@@ -46,8 +47,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         override val projects: CodingProjectRepository = projects
         override val planning: PlanningRepository = graph.planningStore
         override val runtime: CodingRuntime = runtime
-        override val models: CodingModelCatalog =
-            PersistedCodingModelCatalog(deps.store, deps.json, runtime.modelSources)
+        override val models: CodingModelCatalog = models
         override val service: CodingService = service
         override val componentFactory: CodingComponent.Factory =
             DefaultCodingComponentFactory(service, deps.filePicker, deps.projectSkills)
