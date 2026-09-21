@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain
 
 import io.aequicor.magicpaper.domain.planning.*
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 
 /** One plan owns its durable admission and all accepted checkpoints. Replaying never admits work. */
-object PlanningMachine {
+object PlanningMachine : Machine<PlanningMachine.State, PlanningMachine.Input, PlanningMachine.Effect> {
+    override val id = MachineId("planning")
+    override val space get() = PlanningSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @Serializable data class Stamp(val id: String, val at: Long)
     @Serializable data class RunRef(val planId: String, val runId: String, val admissionId: String, val generation: Long)
     @Serializable data class AttemptRef(val id: String, val sessionId: String, val sessionGeneration: Long,
