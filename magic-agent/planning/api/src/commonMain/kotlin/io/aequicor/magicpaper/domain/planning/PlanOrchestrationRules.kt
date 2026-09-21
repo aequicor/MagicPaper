@@ -1,30 +1,31 @@
 package io.aequicor.magicpaper.domain.planning
 
 import io.aequicor.magicpaper.domain.*
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Orchestration owns these Plan writes; persistence still owns revision allocation and CAS. */
 @Serializable sealed interface PlanEvent
 
 @Serializable sealed interface PlanRevisionEvent : PlanEvent {
-    @Serializable data class RequestStarted(val id: String, val text: String, val nodeId: String?) : PlanRevisionEvent
-    @Serializable data class RequestCleared(val requestId: String) : PlanRevisionEvent
-    @Serializable data class DialogueAppended(val messages: List<PlanningMessage>) : PlanRevisionEvent
-    @Serializable data class ProposalDeclined(val expectedRevision: Long, val proposalId: String) : PlanRevisionEvent
-    @Serializable data class ProposalPrepared(val base: Plan, val effective: Plan, val result: Plan, val assistant: PlanningMessage) : PlanRevisionEvent
-    @Serializable data class ProposalApplied(val base: Plan, val result: Plan) : PlanRevisionEvent
-    @Serializable data class RefinementFinished(val base: Plan, val result: Plan, val selection: ModelSelection?, val search: SearchProvider, val at: Long) : PlanRevisionEvent
-    @Serializable data class ProposalApproved(val proposal: PlanProposal, val expectedRevision: Long?, val openQuestions: Boolean,
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.RequestStarted") data class RequestStarted(val id: String, val text: String, val nodeId: String?) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.RequestCleared") data class RequestCleared(val requestId: String) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.DialogueAppended") data class DialogueAppended(val messages: List<PlanningMessage>) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.ProposalDeclined") data class ProposalDeclined(val expectedRevision: Long, val proposalId: String) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.ProposalPrepared") data class ProposalPrepared(val base: Plan, val effective: Plan, val result: Plan, val assistant: PlanningMessage) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.ProposalApplied") data class ProposalApplied(val base: Plan, val result: Plan) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.RefinementFinished") data class RefinementFinished(val base: Plan, val result: Plan, val selection: ModelSelection?, val search: SearchProvider, val at: Long) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.ProposalApproved") data class ProposalApproved(val proposal: PlanProposal, val expectedRevision: Long?, val openQuestions: Boolean,
         val pausedStages: Set<String>, val newRunId: String, val worktreeEnabled: Boolean, val at: Long) : PlanRevisionEvent
-    @Serializable data class InitialConfirmed(val expectedRevision: Long?, val openQuestions: Boolean, val newRunId: String, val at: Long) : PlanRevisionEvent
-    @Serializable data class AssignmentsRecovered(val base: Plan, val candidate: Plan) : PlanRevisionEvent
-    @Serializable data class StageNumbersBound(val numbers: Map<String, Int>) : PlanRevisionEvent
-    @Serializable data class StageRenamed(val id: String?, val name: String) : PlanRevisionEvent
-    @Serializable data class LegacyLinked(val parent: String, val at: Long) : PlanRevisionEvent
-    @Serializable data class LegacyQuestionsObserved(val questions: List<OrchestrationQuestion>) : PlanRevisionEvent
-    @Serializable data class LegacyPeersObserved(val peers: List<Plan>, val admitted: Map<String, SessionLegacyAttempt>) : PlanRevisionEvent
-    @Serializable data class EngineRestored(val engine: CodingEngine) : PlanRevisionEvent
-    @Serializable data class QuestionDelivered(val stages: List<String>) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.InitialConfirmed") data class InitialConfirmed(val expectedRevision: Long?, val openQuestions: Boolean, val newRunId: String, val at: Long) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.AssignmentsRecovered") data class AssignmentsRecovered(val base: Plan, val candidate: Plan) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.StageNumbersBound") data class StageNumbersBound(val numbers: Map<String, Int>) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.StageRenamed") data class StageRenamed(val id: String?, val name: String) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.LegacyLinked") data class LegacyLinked(val parent: String, val at: Long) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.LegacyQuestionsObserved") data class LegacyQuestionsObserved(val questions: List<OrchestrationQuestion>) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.LegacyPeersObserved") data class LegacyPeersObserved(val peers: List<Plan>, val admitted: Map<String, SessionLegacyAttempt>) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.EngineRestored") data class EngineRestored(val engine: CodingEngine) : PlanRevisionEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.PlanRevisionEvent.QuestionDelivered") data class QuestionDelivered(val stages: List<String>) : PlanRevisionEvent
 }
 
 fun reduce(plan: Plan, event: PlanEvent): Plan = when (event) {

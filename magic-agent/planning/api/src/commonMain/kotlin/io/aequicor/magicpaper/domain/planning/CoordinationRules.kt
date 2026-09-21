@@ -1,21 +1,22 @@
 package io.aequicor.magicpaper.domain.planning
 
 import io.aequicor.magicpaper.domain.*
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Plan-side receipts for communication with workers. Scheduling and native execution stay external. */
 @Serializable sealed interface CoordinationEvent : PlanEvent {
-    @Serializable data class InboxPrepared(val stageId: String, val attemptId: String, val turnIndex: Int) : CoordinationEvent
-    @Serializable data class InboxDelivered(val attemptId: String, val turnIndex: Int) : CoordinationEvent
-    @Serializable data class InboxAnswered(val attemptId: String, val turnIndex: Int) : CoordinationEvent
-    @Serializable data class HandoffRecorded(val record: CoordinationRecord) : CoordinationEvent
-    @Serializable data class HandoffSubmitted(val record: CoordinationRecord) : CoordinationEvent
-    @Serializable data class ScheduledDeliveryRequested(val rule: ScheduledMessage, val parent: String) : CoordinationEvent
-    @Serializable data class HandoffStatusRecorded(val id: String, val status: HandoffStatus, val text: String) : CoordinationEvent
-    @Serializable data class DecisionRecorded(val id: String, val decision: CoordinatorReply, val activity: List<CodingStep>, val replacesResult: Boolean) : CoordinationEvent
-    @Serializable data class DeliveryRequested(val delivery: PlanDelivery, val finalizationId: String, val retryCheckpoint: Plan? = null) : CoordinationEvent
-    @Serializable data class LateDeliveryObserved(val id: String, val finalizationId: String) : CoordinationEvent
-    @Serializable data class QuestionsObserved(val events: List<MessageEvent>, val ids: Set<String>) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.InboxPrepared") data class InboxPrepared(val stageId: String, val attemptId: String, val turnIndex: Int) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.InboxDelivered") data class InboxDelivered(val attemptId: String, val turnIndex: Int) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.InboxAnswered") data class InboxAnswered(val attemptId: String, val turnIndex: Int) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.HandoffRecorded") data class HandoffRecorded(val record: CoordinationRecord) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.HandoffSubmitted") data class HandoffSubmitted(val record: CoordinationRecord) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.ScheduledDeliveryRequested") data class ScheduledDeliveryRequested(val rule: ScheduledMessage, val parent: String) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.HandoffStatusRecorded") data class HandoffStatusRecorded(val id: String, val status: HandoffStatus, val text: String) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.DecisionRecorded") data class DecisionRecorded(val id: String, val decision: CoordinatorReply, val activity: List<CodingStep>, val replacesResult: Boolean) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.DeliveryRequested") data class DeliveryRequested(val delivery: PlanDelivery, val finalizationId: String, val retryCheckpoint: Plan? = null) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.LateDeliveryObserved") data class LateDeliveryObserved(val id: String, val finalizationId: String) : CoordinationEvent
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.CoordinationEvent.QuestionsObserved") data class QuestionsObserved(val events: List<MessageEvent>, val ids: Set<String>) : CoordinationEvent
 }
 
 /** No new persistence shape: these transitions still produce the existing Plan checkpoint. */

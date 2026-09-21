@@ -5,6 +5,7 @@ import io.aequicor.magicpaper.domain.tools.ToolPhase
 import io.aequicor.magicpaper.machine.Machine
 import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -24,31 +25,31 @@ data class StageRetryInputs(val limit: Int?, val now: Long, val jitter: Long)
 
 sealed interface StageEvent {
     data object InspectPreparation : StageEvent
-    @Serializable data class EngineResolved(val engine: CodingEngine) : StageMutation
-    @Serializable data class WorkspacePrepared(val prepared: StageAttempt) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.EngineResolved") data class EngineResolved(val engine: CodingEngine) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.WorkspacePrepared") data class WorkspacePrepared(val prepared: StageAttempt) : StageMutation
     data class EngineOutput(val event: CodingEvent, val track: StageRunTrack, val steps: List<CodingStep>) : StageEvent
     data object Inspect : StageEvent
-    @Serializable data class Reconciled(val journalUnsettled: Boolean) : StageMutation
-    @Serializable data class TurnRequested(val coordinatorAvailable: Boolean, val coordinationRecorded: Boolean) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.Reconciled") data class Reconciled(val journalUnsettled: Boolean) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.TurnRequested") data class TurnRequested(val coordinatorAvailable: Boolean, val coordinationRecorded: Boolean) : StageMutation
     data class CheckpointObserved(val drift: CheckpointDrift) : StageEvent
-    @Serializable data class WorkerStarting(val prompt: String, val at: Long) : StageMutation
-    @Serializable data class WorkerAdmitted(val admitted: StageAttempt) : StageMutation
-    @Serializable data class WorkerTurnEnded(val at: Long, val submittedReport: String?) : StageMutation
-    @Serializable data class WorkerAccepted(val snapshot: String?, val coordinatorAvailable: Boolean) : StageMutation
-    @Serializable data class PlannerDecided(val decision: StageTurnDecision?, val restored: Boolean = false) : StageMutation
-    @Serializable data object UserAnswered : StageMutation
-    @Serializable data object EventFired : StageMutation
-    @Serializable data class AcceptanceRecorded(val record: AcceptanceRecord) : StageMutation
-    @Serializable data class VerificationDecided(val verdict: Verdict, val retry: StageRetryInputs) : StageMutation
-    @Serializable data class Captured(val commit: String) : StageMutation
-    @Serializable data class MergeStarted(val integrated: Boolean) : StageMutation
-    @Serializable data class ConflictRequested(val path: String, val retryLimit: Int?) : StageMutation
-    @Serializable data object ConflictStarted : StageMutation
-    @Serializable data object ConflictTurnEnded : StageMutation
-    @Serializable data class MergeFinished(val merged: Boolean) : StageMutation
-    @Serializable data object Completed : StageMutation
-    @Serializable data class TransportFailed(val issue: PlanningIssue, val retry: StageRetryInputs, val workerFailed: Boolean = false) : StageMutation
-    @Serializable data class Interrupted(val live: StageAttempt, val waiting: Boolean, val at: Long) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.WorkerStarting") data class WorkerStarting(val prompt: String, val at: Long) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.WorkerAdmitted") data class WorkerAdmitted(val admitted: StageAttempt) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.WorkerTurnEnded") data class WorkerTurnEnded(val at: Long, val submittedReport: String?) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.WorkerAccepted") data class WorkerAccepted(val snapshot: String?, val coordinatorAvailable: Boolean) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.PlannerDecided") data class PlannerDecided(val decision: StageTurnDecision?, val restored: Boolean = false) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.UserAnswered") data object UserAnswered : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.EventFired") data object EventFired : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.AcceptanceRecorded") data class AcceptanceRecorded(val record: AcceptanceRecord) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.VerificationDecided") data class VerificationDecided(val verdict: Verdict, val retry: StageRetryInputs) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.Captured") data class Captured(val commit: String) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.MergeStarted") data class MergeStarted(val integrated: Boolean) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.ConflictRequested") data class ConflictRequested(val path: String, val retryLimit: Int?) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.ConflictStarted") data object ConflictStarted : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.ConflictTurnEnded") data object ConflictTurnEnded : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.MergeFinished") data class MergeFinished(val merged: Boolean) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.Completed") data object Completed : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.TransportFailed") data class TransportFailed(val issue: PlanningIssue, val retry: StageRetryInputs, val workerFailed: Boolean = false) : StageMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.StageEvent.Interrupted") data class Interrupted(val live: StageAttempt, val waiting: Boolean, val at: Long) : StageMutation
 }
 
 /** Durable stage facts; inspection and streamed display-only events are not journal inputs. */

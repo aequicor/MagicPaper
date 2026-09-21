@@ -1,26 +1,27 @@
 package io.aequicor.magicpaper.domain.planning
 
 import io.aequicor.magicpaper.domain.*
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Facts for final review and delivery; none can replace an attempt or its execution identity. */
 @Serializable
 sealed interface FinalAttemptMutation {
-    @Serializable data class EngineResolved(val engine: CodingEngine) : FinalAttemptMutation
-    @Serializable data object LegacyReviewReopened : FinalAttemptMutation
-    @Serializable data object WaiversApplied : FinalAttemptMutation
-    @Serializable data class VerificationPrepared(val snapshot: String) : FinalAttemptMutation
-    @Serializable data object VerificationStarted : FinalAttemptMutation
-    @Serializable data object VerificationTurnEnded : FinalAttemptMutation
-    @Serializable data class AcceptanceRecorded(val record: AcceptanceRecord) : FinalAttemptMutation
-    @Serializable data object Accepted : FinalAttemptMutation
-    @Serializable data class Failed(val issue: PlanningIssue, val retry: StageRetryInputs, val delivery: Boolean = false) : FinalAttemptMutation
-    @Serializable data class DeliveryRequested(val path: String, val retryLimit: Int?) : FinalAttemptMutation
-    @Serializable data class DeliveryStarted(val path: String) : FinalAttemptMutation
-    @Serializable data class DeliveryTurnEnded(val snapshot: String?) : FinalAttemptMutation
-    @Serializable data class DeliveryReviewed(val record: AcceptanceRecord) : FinalAttemptMutation
-    @Serializable data class DeliveryFinished(val valid: Boolean) : FinalAttemptMutation
-    @Serializable data class ProgressObserved(val progress: StageProgress, val delivery: Boolean = false) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.EngineResolved") data class EngineResolved(val engine: CodingEngine) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.LegacyReviewReopened") data object LegacyReviewReopened : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.WaiversApplied") data object WaiversApplied : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.VerificationPrepared") data class VerificationPrepared(val snapshot: String) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.VerificationStarted") data object VerificationStarted : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.VerificationTurnEnded") data object VerificationTurnEnded : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.AcceptanceRecorded") data class AcceptanceRecorded(val record: AcceptanceRecord) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.Accepted") data object Accepted : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.Failed") data class Failed(val issue: PlanningIssue, val retry: StageRetryInputs, val delivery: Boolean = false) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.DeliveryRequested") data class DeliveryRequested(val path: String, val retryLimit: Int?) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.DeliveryStarted") data class DeliveryStarted(val path: String) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.DeliveryTurnEnded") data class DeliveryTurnEnded(val snapshot: String?) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.DeliveryReviewed") data class DeliveryReviewed(val record: AcceptanceRecord) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.DeliveryFinished") data class DeliveryFinished(val valid: Boolean) : FinalAttemptMutation
+    @Serializable @SerialName("io.aequicor.magicpaper.domain.planning.FinalAttemptMutation.ProgressObserved") data class ProgressObserved(val progress: StageProgress, val delivery: Boolean = false) : FinalAttemptMutation
 }
 
 data class FinalAttemptChange(val attempt: StageAttempt, val phase: ExecutionPhase)
