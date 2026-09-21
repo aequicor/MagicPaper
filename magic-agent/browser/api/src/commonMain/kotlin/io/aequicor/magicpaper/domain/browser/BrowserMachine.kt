@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain.browser
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** One explicit native run owns the handles. The journal contains identities, never page/input bytes. */
-object BrowserMachine {
+object BrowserMachine : Machine<BrowserMachine.State, BrowserMachine.Input, BrowserMachine.Effect> {
+    override val id = MachineId("browser")
+    override val space get() = BrowserSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     enum class Stage { NEW, READY, EXECUTING, UNKNOWN, CLOSING, CLOSED }
     @Serializable enum class Action(val observesOnly: Boolean) {
         OPEN(false), SEARCH(false), SNAPSHOT(true), CLICK(false), FILL(false), PRESS(false), EVALUATE(false),

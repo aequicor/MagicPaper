@@ -1,9 +1,17 @@
 package io.aequicor.magicpaper.domain.checks
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 
 /** One workspace owns admission, process identity, cleanup and attested output as a single aggregate. */
-object CommandCheckMachine {
+object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMachine.Input, CommandCheckMachine.Effect> {
+    override val id = MachineId("command-check")
+    override val space get() = CommandCheckSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     enum class Phase { PREPARING, PREPARED, RUNNING, STOPPING, ATTESTING, UNKNOWN, FINISHED }
     @ConsistentCopyVisibility
     data class Check internal constructor(
