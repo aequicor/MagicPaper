@@ -1,5 +1,8 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -20,7 +23,12 @@ import kotlinx.serialization.Serializable
 )
 
 /** One operation owns submission, observation and local download. Replaying inputs executes no effects. */
-object MediaGenerationMachine {
+object MediaGenerationMachine : Machine<MediaGenerationMachine.State, MediaGenerationMachine.Input, MediaGenerationMachine.Effect> {
+    override val id = MachineId("media-generation")
+    override val space get() = MediaGenerationSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     enum class Stage { NEW, CREATED, SUBMITTING, WAITING, POLLING, OUTPUT_AVAILABLE, DOWNLOADING, READY, FAILED, UNKNOWN, DELETED }
     @ConsistentCopyVisibility data class State internal constructor(
         val operation: MediaOperationData? = null,

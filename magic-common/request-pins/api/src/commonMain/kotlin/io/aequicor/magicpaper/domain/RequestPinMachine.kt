@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** One conversation owns its ordered summaries. Model calls are never replayed from a journal. */
-object RequestPinMachine {
+object RequestPinMachine : Machine<RequestPinMachine.State, RequestPinMachine.Input, RequestPinMachine.Effect> {
+    override val id = MachineId("request-pin")
+    override val space get() = RequestPinSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(
         val initialized: Boolean = false,
