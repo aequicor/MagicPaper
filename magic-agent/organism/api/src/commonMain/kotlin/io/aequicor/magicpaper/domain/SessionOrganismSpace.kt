@@ -8,7 +8,7 @@ import io.aequicor.magicpaper.machine.PhaseId
 import io.aequicor.magicpaper.machine.StateSpace
 
 /**
- * The state space of [SessionOrganismMachine], declared so it can be read without running anything: eighteen positions,
+ * The state space of [SessionOrganismMachine], declared so it can be read without running anything: twenty-one positions,
  * fifty-three inputs and six effects.
  *
  * The state is an aggregate — one organism holding sessions, results, deliveries, operations, integrations, auxiliary
@@ -21,7 +21,12 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    one and the persistence fact);
  *  - an intervention the immunity session proposed or the user accepted (`proposed`, `intervening`). Both stand on a
  *    diagnosis, and a diagnosis always leaves a quarantine behind it;
- *  - a quarantine nobody has confirmed (`quarantined`), and a session whose run is unknown (`unknown`);
+ *  - a quarantine nobody has confirmed, which outranks the root wherever it is held and is named by what the root can still do:
+ *    `quarantined-unknown` when the root's own run is unknown (its next turn is refused with a quarantine, which is what opens the
+ *    recovery dialog, and a stop cannot be finished), `quarantined-branch` when a child holds it and the root goes on working, and
+ *    `quarantined` when the root's run has ended. Then a session whose run is unknown, named the same way: `unknown-branch`
+ *    when a child's run is unknown and the root goes on working, and `unknown` when the root's own run is unknown or the root cannot
+ *    work;
  *  - the lifecycle of the root session, which is what `actor()` checks before anything else: an archived root, a root that
  *    is stopping, a root that finished (`finished`, desired state RUN) and one that was stopped (`stopped`). These refuse
  *    the inputs that need a root that accepts work, and differ in what they accept beside that: an archived root can be
@@ -40,7 +45,8 @@ import io.aequicor.magicpaper.machine.StateSpace
  *
  * "Accepted" means not refused, and several inputs are accepted as no-ops: archiving a session that is not ready, resolving
  * a quarantine nobody holds, proposing an intervention with no diagnosis behind it, adopting an organism that is already
- * adopted. The matrix does not say that the state changed.
+ * adopted, and a limit change, a stop or a dismissal addressed to an organism whose history was deleted. The matrix does not
+ * say that the state changed.
  *
  * What the declaration cannot express, and leaves to the tests around it:
  *  - identity. Every input names an organism, a session and usually a generation, and the matrix speaks about the one
@@ -61,11 +67,20 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    archived the organism is named by the root, and the record's own inputs (an acknowledgement, a result, a review) read as
  *    refused, because the representative of that position holds no record; the reducer would accept some of them. A root
  *    waiting on the user reads as `running`, which the reducer treats alike;
- *  - the authority the intervention positions stand on. `proposed`, `intervening` and, in its representative, `quarantined`
- *    need a diagnosis, and a diagnosis needs an immunity session, which only a PLANNING root has. The representatives carry
- *    a CODE authority, so every input that carries one is refused there for its mode. That is invisible for most of them,
- *    which the position refuses anyway, and wrong for `CommandSignal`: a CODE root with an unconfirmed quarantine is
- *    `quarantined` too, and takes a signal that the row refuses;
+ *  - the deleted organism. Deleting history moves every session's generation on, so its row is read off an organism that every
+ *    input carrying the old generation is refused by, for that reason and not for the position; the matrix cannot tell the two
+ *    apart. What it can say is pinned by a test that deletes an organism from every position: no input that carries no
+ *    generation changes it, except `FinishStop` (which replays a deletion that crashed half way), `FinishImmunityIntervention`
+ *    (which closes an intervention whose action was the deletion, and so runs after it) and the fence on unconfirmed persistence;
+ *  - the root beside a quarantine or an unknown run. A quarantine held while the root is stopping or archived is `quarantined`,
+ *    which is read off a root whose run ended, and `FinishStop` there differs from the row. An unknown run held by a child under a
+ *    root that is stopping or archived is `unknown`, which is read off a root whose own run is unknown: `ReconcileInterruptedRun`
+ *    (it addresses the root), `ObserveSettled` (the child is not settled) and, under an archived root, `CommandSignal` and
+ *    `ResolveSessionQuarantine` differ from the row, and `Charge` and `RecordResult` are accepted where it refuses them;
+ *  - the immunity session. Every organism that belongs to a plan, a stage or planning has one, and the representatives are built
+ *    on such a root wherever a diagnosis is needed, and on one that has none everywhere else. It never starts in practice, and
+ *    `DeleteHistoryByUser` counts it as settled for that reason, as `RequestUserStop` does; one that is running is not, and
+ *    refuses a deletion that the row accepts;
  *  - limits. The representatives set none (every ceiling is unbounded), so a session, depth, token, queue, retry, duration
  *    or context limit refuses admissions the matrix accepts, in every position;
  *  - the payload behind a name. A pending or completed report of a session that is not meant to run again is recorded as a
@@ -94,7 +109,10 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
     val INTERVENING = PhaseId("intervening")
     val PROPOSED = PhaseId("proposed")
     val QUARANTINED = PhaseId("quarantined")
+    val QUARANTINED_UNKNOWN = PhaseId("quarantined-unknown")
+    val QUARANTINED_BRANCH = PhaseId("quarantined-branch")
     val UNKNOWN = PhaseId("unknown")
+    val UNKNOWN_BRANCH = PhaseId("unknown-branch")
     val ARCHIVED = PhaseId("archived")
     val STOPPING = PhaseId("stopping")
     val FINISHED = PhaseId("finished")
@@ -162,8 +180,8 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
     val PERSISTENCE_UNKNOWN_FACT = InputId("PersistenceUnknown")
 
     override val phases = listOf(
-        EMPTY, PERSISTENCE_UNKNOWN, DELETED, INTERVENING, PROPOSED, QUARANTINED,
-        UNKNOWN, ARCHIVED, STOPPING, FINISHED, STOPPED, INTEGRATING,
+        EMPTY, PERSISTENCE_UNKNOWN, DELETED, INTERVENING, PROPOSED, QUARANTINED, QUARANTINED_UNKNOWN, QUARANTINED_BRANCH,
+        UNKNOWN, UNKNOWN_BRANCH, ARCHIVED, STOPPING, FINISHED, STOPPED, INTEGRATING,
         AUXILIARY, INTEGRABLE, RESULT, CHILD, RUNNING, PENDING,
     )
 
@@ -206,10 +224,10 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
     private val present = phases.toSet() - EMPTY - PERSISTENCE_UNKNOWN
 
     /** The root accepts work, so `actor()` lets an input that needs authority through. */
-    private val working = setOf(INTEGRATING, AUXILIARY, INTEGRABLE, RESULT, CHILD, RUNNING, PENDING)
+    private val working = setOf(INTEGRATING, AUXILIARY, INTEGRABLE, RESULT, CHILD, RUNNING, PENDING, QUARANTINED_BRANCH, UNKNOWN_BRANCH)
 
     /** A child exists that the root created and can address. */
-    private val holdsChild = setOf(INTEGRATING, INTEGRABLE, RESULT, CHILD)
+    private val holdsChild = setOf(INTEGRATING, INTEGRABLE, RESULT, CHILD, QUARANTINED_BRANCH, UNKNOWN_BRANCH)
 
     /**
      * By input rather than by position: fifty-three columns of flags cannot be read, and each line names what its input
@@ -224,7 +242,7 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
         AUTHORIZE_PLAN_RETRY to present,
         ADMIT_PLAN_WORKER to working,
         CHANGE_ROOT_MODE to setOf(INTERVENING, FINISHED, STOPPED, PENDING),
-        PREPARE_USER_TURN to present - DELETED,
+        PREPARE_USER_TURN to present - DELETED - QUARANTINED_UNKNOWN,
         BEGIN_RUN to working - AUXILIARY + FINISHED,
         REQUEST_USER_STOP to present,
         RESTORE_BY_USER to setOf(ARCHIVED),
@@ -239,9 +257,9 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
         COMMAND_ARCHIVE to holdsChild,
         COMMAND_RESTORE to setOf(RESULT),
         COMMAND_RENAME to holdsChild,
-        COMMAND_SIGNAL to working + setOf(UNKNOWN, STOPPING, FINISHED, STOPPED),
+        COMMAND_SIGNAL to working + setOf(INTERVENING, PROPOSED, QUARANTINED, QUARANTINED_UNKNOWN, UNKNOWN, STOPPING, FINISHED, STOPPED),
         BEGIN_AUXILIARY to working - AUXILIARY,
-        DELETE_HISTORY_BY_USER to setOf(DELETED, ARCHIVED, FINISHED, STOPPED),
+        DELETE_HISTORY_BY_USER to setOf(DELETED, INTERVENING, PROPOSED, QUARANTINED, ARCHIVED, FINISHED, STOPPED),
         PROPOSE_IMMUNITY_INTERVENTIONS to present,
         ACCEPT_IMMUNITY_INTERVENTION to setOf(INTERVENING, PROPOSED),
         DISMISS_IMMUNITY_INTERVENTION to setOf(PROPOSED),
@@ -256,7 +274,7 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
         RECONCILE_INTERRUPTED_RUN to setOf(UNKNOWN),
         FINISH_STOP to setOf(DELETED, INTERVENING, PROPOSED, QUARANTINED, ARCHIVED, FINISHED, STOPPED),
         OBSERVE_RUNNING to working,
-        OBSERVE_SETTLED to present - setOf(DELETED, AUXILIARY, CHILD),
+        OBSERVE_SETTLED to present - setOf(DELETED, AUXILIARY, CHILD, UNKNOWN_BRANCH),
         OBSERVE_OTHER to present - DELETED,
         ACKNOWLEDGE to setOf(INTEGRATING, INTEGRABLE, RESULT),
         CHARGE to working - PENDING + STOPPING,
@@ -283,8 +301,13 @@ object SessionOrganismSpace : StateSpace<SessionOrganismMachine.State, SessionOr
         return when {
             organism.interventions.any { it.state == ImmunityInterventionState.ACCEPTED || it.state == ImmunityInterventionState.UNKNOWN } -> INTERVENING
             organism.interventions.any { it.state == ImmunityInterventionState.PROPOSED } -> PROPOSED
-            organism.sessions.keys.any { organism.pendingQuarantines(it).isNotEmpty() } -> QUARANTINED
-            organism.sessions.values.any { it.observed == SessionObservedState.UNKNOWN } -> UNKNOWN
+            organism.sessions.keys.any { organism.pendingQuarantines(it).isNotEmpty() } -> when {
+                root.observed == SessionObservedState.UNKNOWN -> QUARANTINED_UNKNOWN
+                root.acceptsWork -> QUARANTINED_BRANCH
+                else -> QUARANTINED
+            }
+            organism.sessions.values.any { it.observed == SessionObservedState.UNKNOWN } ->
+                if (root.acceptsWork) UNKNOWN_BRANCH else UNKNOWN
             root.archived -> ARCHIVED
             root.observed == SessionObservedState.STOPPING -> STOPPING
             root.settled -> if (root.desired == SessionDesiredState.RUN) FINISHED else STOPPED

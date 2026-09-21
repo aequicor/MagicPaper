@@ -198,6 +198,9 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
                     setOf(sessionId), "Изменена видимость сессии в списке", clock())))
         }
     
+        /** An immunity session that was never started has nothing to stop, so a stop or a deletion counts it as settled. */
+        private fun SessionNode.neverStartedImmunity() = kind == SessionKind.IMMUNITY && observed == SessionObservedState.PENDING
+
         private fun Int?.allows(value: Int): Boolean = this == null || value <= this
         private fun Int?.hasRoom(occupied: Int): Boolean = this == null || occupied < this
         private fun String.takeConfigured(limit: Int?): String = if (limit == null) this else take(limit)
@@ -218,7 +221,9 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
         fun applyLimits(id: String, limits: OrganismLimits): SessionOrganism = run {
             limits.validate()
             val old = read(id)
-            if (old.limits == limits) return@run old
+            // Deleting history took every session's budget; a limit change must not give it back. Accepted as a no-op, never
+            // refused, because a journal that recorded one after a deletion has to replay.
+            if (old.limits == limits || old.deletedAt != null) return@run old
             val nodes = if (old.limits.tokens == limits.tokens) old.sessions else {
                 val available = limits.tokens?.let { (it - old.sessions.values.sumOf { node -> node.spentTokens }).coerceAtLeast(0) } ?: 0
                 val recovery = minOf(limits.recoveryTokens, available)
@@ -716,12 +721,13 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
         /** This entry point is called only by explicit UI controls, never by model tool arguments. */
         fun requestUserStop(id: String, target: String, operationId: String, archive: Boolean): SessionOrganism = run {
             val old = read(id)
+            if (old.deletedAt != null) return@run old
             old.operations[operationId]?.let { return@run old }
             val affected = old.subtree(target)
             val action = if (archive) OrganismAction.ARCHIVE else OrganismAction.STOP
             commit(old.copy(version = old.version + 1, sessions = old.sessions.mapValues { (sessionId, node) ->
                 if (sessionId !in affected) node else node.copy(desired = SessionDesiredState.STOP,
-                    observed = if (node.settled || (node.kind == SessionKind.IMMUNITY && node.observed == SessionObservedState.PENDING)) SessionObservedState.STOPPED else SessionObservedState.STOPPING,
+                    observed = if (node.settled || node.neverStartedImmunity()) SessionObservedState.STOPPED else SessionObservedState.STOPPING,
                     version = node.version + 1)
             }, operations = old.operations + (operationId to OrganismOperation(operationId, "USER:$action:$target", target, SessionOperationState.ACCEPTED)),
                 audit = old.audit + SessionAuditEvent(operationId, "USER", action.name, affected, "Действие пользователя", clock()),
@@ -1042,7 +1048,7 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
             val whole = target == null || target == old.zygoteId
             val affected = if (whole) old.sessions.keys else old.subtree(target!!)
             if (old.historyDeletedIds.containsAll(affected) && (!whole || old.deletedAt != null)) return@run old
-            require(affected.all { old.sessions.getValue(it).settled }) { "Сначала подтвердите завершение всех удаляемых сессий" }
+            require(affected.all { old.sessions.getValue(it).let { node -> node.settled || node.neverStartedImmunity() } }) { "Сначала подтвердите завершение всех удаляемых сессий" }
             require(old.auxiliaryRuns.values.none { it.ownerSessionId in affected && !it.settled }) { "Сначала подтвердите остановку вспомогательных запусков" }
             val operation = "delete-history-${target ?: old.zygoteId}-${old.version + 1}"
             commit(old.copy(version = old.version + 1,
@@ -1190,7 +1196,7 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
     
         fun dismissImmunityIntervention(id: String, proposalId: String): SessionOrganism = run {
             val old = read(id); val proposal = old.interventions.single { it.id == proposalId }
-            if (proposal.state == ImmunityInterventionState.REJECTED) return@run old
+            if (proposal.state == ImmunityInterventionState.REJECTED || old.deletedAt != null) return@run old
             require(proposal.state == ImmunityInterventionState.PROPOSED) { "Выполнение уже принято" }
             commit(old.copy(version = old.version + 1, interventions = old.interventions.map { if (it.id == proposalId) it.copy(state = ImmunityInterventionState.REJECTED) else it },
                 audit = old.audit + SessionAuditEvent("$proposalId-dismissed", "USER", "INTERVENTION_REJECTED", proposal.affected, "Предложение отклонено пользователем", clock())))

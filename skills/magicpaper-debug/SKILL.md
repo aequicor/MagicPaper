@@ -21,6 +21,13 @@ the cause is obvious from the error message.
 4. Fix the cause and rerun the reproducer, then affected-owner/consumer checks.
    Avoid catch-and-empty fallbacks, blind retries and timing increases that hide it.
 
+When the cause sits in behavior a state machine owns, the fix order is fixed:
+declaration first, logic second. Expand the machine's tree, name the gap or
+contradiction, change its `StateSpace` and get a red test, then change `reduce`, then
+its service. Do not guard the symptom in the service. Follow
+[STATE-SPACES.md](../../docs/STATE-SPACES.md#исправление-дефекта-машины) for the gap
+kinds, when a green harness proves nothing, and what the report must name.
+
 An `UNKNOWN` native result must not become success or a repeatable action merely
 to satisfy a test. A cancelled coroutine is not a storage error. A failed decode
 must not trigger a blank write over the original record.

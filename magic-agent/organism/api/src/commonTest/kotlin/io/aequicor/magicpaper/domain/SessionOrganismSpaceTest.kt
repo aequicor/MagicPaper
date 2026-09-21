@@ -28,9 +28,9 @@ import kotlin.test.assertTrue
  * values address it (or the records built around it) by the ids below; the deleted organism is the one exception, because
  * deleting history bumps the generation.
  *
- * Most positions stand on a root running under a CODE authority. The three that concern an immunity intervention cannot: an
- * intervention needs a diagnosis, a diagnosis needs an immunity session, and only a PLANNING root has one. They are built on a
- * PLANNING root, and an input that carries the CODE authority reads there as refused for its mode.
+ * Every position stands on a root running under a CODE authority. The ones that concern an intervention or a quarantine need a
+ * diagnosis, and a diagnosis needs an immunity session, which a root that belongs to a plan has whether or not it plans; they
+ * are built on such a root, so the authority the inputs carry is the one the root holds.
  */
 class SessionOrganismSpaceTest {
     private var sequence = 0
@@ -38,9 +38,8 @@ class SessionOrganismSpaceTest {
 
     private val rules = PlanningRulesSnapshot("1", "rules")
     private val rootSession = CodingSession("root", "project", "Root", 1, runtimeGeneration = 1, planningRulesSnapshot = rules)
-    private val planningSession = rootSession.copy(planningMode = true)
+    private val immunityOwner = rootSession.copy(planId = "plan")
     private val scope = SessionAuthority("project", "root", "root", 1, CodingInteractionMode.CODE)
-    private val planningScope = scope.copy(mode = CodingInteractionMode.PLANNING)
 
     private fun step(state: SessionOrganismMachine.State, vararg inputs: SessionOrganismMachine.Input) = inputs.fold(state) { current, input ->
         SessionOrganismMachine.reduce(current, input).also { assertEquals(null, it.reject, "$input was refused: ${it.reject}") }.state
@@ -93,15 +92,26 @@ class SessionOrganismSpaceTest {
     private val finished = step(running, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.COMPLETED))
     private val stopped = step(stopping, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.STOPPED))
     private val unknown = step(running, Fact.Restored(stamp(), "root"))
+    /** A child's run is unknown and the root goes on working: the same fact as `unknown`, held one level down. */
+    private val unknownBranch = step(running, create("make-child", "Child"), Intent.BeginRun(stamp(), "root", "session-make-child"),
+        Fact.Observe(stamp(), "root", "session-make-child", 1, SessionObservedState.UNKNOWN))
     private val archived = step(finished, Intent.SetArchiveVisibility(stamp(), "root", "root", 1, archived = true, stillReady = true))
     private val deleted = step(finished, Intent.DeleteHistoryByUser(stamp(), "root", null))
     private val persistenceUnknown = step(running, Fact.PersistenceUnknown(stamp()))
 
-    private val planningRunning = step(initial, Fact.Adopt(stamp(), "project", planningSession, emptyList(), OrganismLimits()),
+    private val immunityRunning = step(initial, Fact.Adopt(stamp(), "project", immunityOwner, emptyList(), OrganismLimits()),
         Intent.BeginRun(stamp(), "root", "root"))
-    private val quarantined = step(planningRunning, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.FAILED),
-        Intent.Command(stamp(), planningScope, "signal", OrganismCommand(OrganismAction.SIGNAL, "root", reason = "Stuck"), "fp-signal"),
+    private fun diagnosed(state: SessionOrganismMachine.State, target: String) = step(state,
+        Intent.Command(stamp(), scope, "signal", OrganismCommand(OrganismAction.SIGNAL, target, reason = "Stuck"), "fp-signal"),
         Intent.InspectSignals(stamp(), "root"))
+    /** The root's run ended and the diagnosis quarantined it; nothing about the run is unknown. */
+    private val quarantined = diagnosed(step(immunityRunning, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.FAILED)), "root")
+    /** The same quarantine, but the root's own run is reported unknown: the outcome the user's next turn has to resolve first. */
+    private val quarantinedUnknown = step(quarantined, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.UNKNOWN))
+    /** A child is quarantined and the root goes on working. */
+    private val quarantinedBranch = diagnosed(step(immunityRunning, create("make-child", "Child"),
+        Intent.BeginRun(stamp(), "root", "session-make-child"),
+        Fact.Observe(stamp(), "root", "session-make-child", 1, SessionObservedState.FAILED)), "session-make-child")
     private val proposed = step(quarantined, Intent.ProposeImmunityInterventions(stamp(), "root"))
     private val intervention = proposed.organism!!.interventions.single().id
     private val intervening = step(proposed, Intent.AcceptImmunityIntervention(stamp(), "root", intervention, ImmunityAction.STOP, null, null, false))
@@ -113,7 +123,10 @@ class SessionOrganismSpaceTest {
         SessionOrganismSpace.INTERVENING to intervening,
         SessionOrganismSpace.PROPOSED to proposed,
         SessionOrganismSpace.QUARANTINED to quarantined,
+        SessionOrganismSpace.QUARANTINED_UNKNOWN to quarantinedUnknown,
+        SessionOrganismSpace.QUARANTINED_BRANCH to quarantinedBranch,
         SessionOrganismSpace.UNKNOWN to unknown,
+        SessionOrganismSpace.UNKNOWN_BRANCH to unknownBranch,
         SessionOrganismSpace.ARCHIVED to archived,
         SessionOrganismSpace.STOPPING to stopping,
         SessionOrganismSpace.FINISHED to finished,
@@ -203,16 +216,18 @@ class SessionOrganismSpaceTest {
     init {
         // The values above address `root` under generation 1 and a CODE authority; a representative that stood elsewhere would be
         // refused for a reason the matrix does not describe.
-        val planning = setOf(SessionOrganismSpace.INTERVENING, SessionOrganismSpace.PROPOSED, SessionOrganismSpace.QUARANTINED)
         states.forEach { (phase, state) ->
             val root = state.organism?.sessions?.get("root") ?: return@forEach
             if (phase != SessionOrganismSpace.DELETED) assertEquals(1L, root.generation, "${phase.name} stands under another generation")
-            assertEquals(if (phase in planning) CodingInteractionMode.PLANNING else CodingInteractionMode.CODE, root.mode, "${phase.name} stands under another mode")
+            assertEquals(CodingInteractionMode.CODE, root.mode, "${phase.name} stands under another mode")
         }
-        val holders = listOf(SessionOrganismSpace.INTEGRATING, SessionOrganismSpace.INTEGRABLE, SessionOrganismSpace.RESULT, SessionOrganismSpace.CHILD)
+        val holders = listOf(SessionOrganismSpace.INTEGRATING, SessionOrganismSpace.INTEGRABLE, SessionOrganismSpace.RESULT, SessionOrganismSpace.CHILD,
+            SessionOrganismSpace.QUARANTINED_BRANCH, SessionOrganismSpace.UNKNOWN_BRANCH)
         holders.forEach { assertTrue("session-make-child" in states.getValue(it).organism!!.sessions, "${it.name} lacks the child the inputs address") }
         assertEquals(1, resulted.organism!!.outbox.size)
         assertEquals(setOf("diagnosis-signal"), quarantined.organism!!.pendingQuarantines("root").map { it.operationId }.toSet())
+        assertEquals(setOf("diagnosis-signal"), quarantinedUnknown.organism!!.pendingQuarantines("root").map { it.operationId }.toSet())
+        assertEquals(setOf("diagnosis-signal"), quarantinedBranch.organism!!.pendingQuarantines("session-make-child").map { it.operationId }.toSet())
     }
 
     /**
@@ -307,8 +322,11 @@ class SessionOrganismSpaceTest {
         Shape(SessionOrganismSpace.DELETED) { it.copy(deletedAt = 1) },
         Shape(SessionOrganismSpace.INTERVENING) { it.copy(interventions = it.interventions + proposal(ImmunityInterventionState.ACCEPTED)) },
         Shape(SessionOrganismSpace.PROPOSED) { it.copy(interventions = it.interventions + proposal(ImmunityInterventionState.PROPOSED)) },
-        Shape(SessionOrganismSpace.QUARANTINED) { it.copy(audit = it.audit + quarantineEvent) },
-        Shape(SessionOrganismSpace.UNKNOWN) { it.copy(sessions = it.sessions + ("lost" to node("lost", SessionObservedState.UNKNOWN))) },
+        Shape(SessionOrganismSpace.QUARANTINED) { organism -> organism.root { it.copy(observed = SessionObservedState.COMPLETED) }.copy(audit = organism.audit + quarantineEvent) },
+        Shape(SessionOrganismSpace.QUARANTINED_UNKNOWN) { organism -> organism.root { it.copy(observed = SessionObservedState.UNKNOWN) }.copy(audit = organism.audit + quarantineEvent) },
+        Shape(SessionOrganismSpace.QUARANTINED_BRANCH) { it.copy(sessions = it.sessions + ("child" to node("child")), audit = it.audit + quarantineEvent.copy(affected = setOf("child"))) },
+        Shape(SessionOrganismSpace.UNKNOWN) { organism -> organism.root { it.copy(observed = SessionObservedState.UNKNOWN) } },
+        Shape(SessionOrganismSpace.UNKNOWN_BRANCH) { it.copy(sessions = it.sessions + ("lost" to node("lost", SessionObservedState.UNKNOWN))) },
         Shape(SessionOrganismSpace.ARCHIVED) { organism -> organism.root { it.copy(archived = true) } },
         Shape(SessionOrganismSpace.STOPPING) { organism -> organism.root { it.copy(observed = SessionObservedState.STOPPING, desired = SessionDesiredState.STOP) } },
         Shape(SessionOrganismSpace.FINISHED) { organism -> organism.root { it.copy(observed = SessionObservedState.COMPLETED) } },
@@ -329,10 +347,20 @@ class SessionOrganismSpaceTest {
     @Test fun theMostPressingFactNamesThePositionWhateverElseTheOrganismHolds() {
         assertEquals(SessionOrganismSpace.PENDING, SessionOrganismSpace.label(imported(bare)))
         shapes.forEach { assertEquals(it.position, SessionOrganismSpace.label(imported(it.add(bare))), "${it.position.name} alone") }
-        // Three of these describe the same field of the root, so an organism cannot carry two of them.
-        val exclusive = setOf(SessionOrganismSpace.STOPPING, SessionOrganismSpace.FINISHED, SessionOrganismSpace.STOPPED, SessionOrganismSpace.RUNNING)
+        // Some shapes set the root's own state, and an organism cannot carry two that set it differently. A quarantine and an unknown
+        // run are named by what their root can still do, so the ones that need a root that works cannot be added to any shape that
+        // stops it, and each family (three quarantines, two unknown runs) is one fact held in one of several places.
+        val P = SessionOrganismSpace
+        val rootState = mapOf(P.STOPPING to "stopping", P.FINISHED to "completed", P.STOPPED to "stopped", P.RUNNING to "running",
+            P.QUARANTINED to "completed", P.QUARANTINED_UNKNOWN to "unknown", P.UNKNOWN to "unknown")
+        val needsWorkingRoot = setOf(P.QUARANTINED_BRANCH, P.UNKNOWN_BRANCH)
+        val stopsRoot = rootState.filterValues { it != "running" }.keys + P.ARCHIVED
+        val families = listOf(setOf(P.QUARANTINED, P.QUARANTINED_UNKNOWN, P.QUARANTINED_BRANCH), setOf(P.UNKNOWN, P.UNKNOWN_BRANCH))
         for ((index, higher) in shapes.withIndex()) for (lower in shapes.drop(index + 1)) {
-            if (higher.position in exclusive && lower.position in exclusive) continue
+            val (h, l) = higher.position to lower.position
+            if (rootState[h] != null && rootState[l] != null && rootState[h] != rootState[l]) continue
+            if (families.any { h in it && l in it }) continue
+            if (h in needsWorkingRoot && l in stopsRoot || l in needsWorkingRoot && h in stopsRoot) continue
             assertEquals(higher.position, SessionOrganismSpace.label(imported(lower.add(higher.add(bare)))), "${higher.position.name} over ${lower.position.name}")
             assertEquals(higher.position, SessionOrganismSpace.label(imported(higher.add(lower.add(bare)))), "${higher.position.name} over ${lower.position.name}, built the other way round")
         }
@@ -351,10 +379,23 @@ class SessionOrganismSpaceTest {
             assertEquals(SessionOrganismSpace.INTEGRATING, SessionOrganismSpace.label(imported(bare.copy(integrations = mapOf("integration" to SessionIntegration(integrationRequest, it))))), it.name)
         }
         assertEquals(SessionOrganismSpace.INTERVENING, SessionOrganismSpace.label(imported(bare.copy(interventions = listOf(proposal(ImmunityInterventionState.UNKNOWN))))))
-        // A quarantine or an unknown run anywhere in the organism outranks its root, not only one on the root itself.
+        // A quarantine or an unknown run anywhere in the organism outranks its root, not only one on the root itself; a quarantine is
+        // then named by what the root can still do: work (a child holds it), or nothing because its own run is unknown, or nothing
+        // because the run ended.
         val onChild = bare.copy(sessions = bare.sessions + ("child" to node("child")), audit = listOf(quarantineEvent.copy(affected = setOf("child"))))
-        assertEquals(SessionOrganismSpace.QUARANTINED, SessionOrganismSpace.label(imported(onChild)))
+        assertEquals(SessionOrganismSpace.QUARANTINED_BRANCH, SessionOrganismSpace.label(imported(onChild)))
         assertTrue(SessionOrganismSpace.unknown(imported(onChild)))
+        assertEquals(SessionOrganismSpace.QUARANTINED, SessionOrganismSpace.label(imported(onChild.root { it.copy(observed = SessionObservedState.STOPPED, desired = SessionDesiredState.STOP) })))
+        assertEquals(SessionOrganismSpace.QUARANTINED, SessionOrganismSpace.label(imported(onChild.root { it.copy(archived = true) })))
+        assertEquals(SessionOrganismSpace.QUARANTINED_UNKNOWN, SessionOrganismSpace.label(imported(onChild.root { it.copy(observed = SessionObservedState.UNKNOWN) })))
+        // A quarantine still outranks a root that is merely stopping, though the row read off a finished root is not quite its own.
+        assertEquals(SessionOrganismSpace.QUARANTINED, SessionOrganismSpace.label(imported(onChild.root { it.copy(observed = SessionObservedState.STOPPING, desired = SessionDesiredState.STOP) })))
+        // An unknown run is held the same way: `unknown-branch` while the root can work, `unknown` when it cannot or is unknown itself.
+        val lostChild = bare.copy(sessions = bare.sessions + ("lost" to node("lost", SessionObservedState.UNKNOWN)))
+        assertEquals(SessionOrganismSpace.UNKNOWN_BRANCH, SessionOrganismSpace.label(imported(lostChild)))
+        assertEquals(SessionOrganismSpace.UNKNOWN, SessionOrganismSpace.label(imported(lostChild.root { it.copy(archived = true) })))
+        assertEquals(SessionOrganismSpace.UNKNOWN, SessionOrganismSpace.label(imported(lostChild.root { it.copy(observed = SessionObservedState.STOPPING, desired = SessionDesiredState.STOP) })))
+        assertEquals(SessionOrganismSpace.UNKNOWN, SessionOrganismSpace.label(imported(lostChild.root { it.copy(observed = SessionObservedState.UNKNOWN) })))
         // A user stop of the whole organism is the same fence as a deletion, though only a legacy record carries one without the other.
         assertEquals(SessionOrganismSpace.DELETED, SessionOrganismSpace.label(imported(bare.copy(stoppedByUser = true))))
         // The fences outrank everything: unconfirmed persistence even a deleted organism, and an organism nobody has adopted yet.
@@ -423,13 +464,14 @@ class SessionOrganismSpaceTest {
         assertTrue(SessionOrganismSpace.unknown(integrationLost))
         // A root that was running and is restored is unknown; one that had an integration in flight is a quarantine instead.
         assertEquals(SessionOrganismSpace.UNKNOWN, SessionOrganismSpace.label(unknown))
-        assertEquals(SessionOrganismSpace.QUARANTINED, SessionOrganismSpace.label(step(integrating, Fact.Restored(stamp(), "root"))))
-        // The three intervention positions stand on a PLANNING root. A CODE root with a quarantine is `quarantined` as well, and takes a
-        // signal that the row, read off the PLANNING representative, refuses.
+        assertEquals(SessionOrganismSpace.QUARANTINED_UNKNOWN, SessionOrganismSpace.label(step(integrating, Fact.Restored(stamp(), "root"))))
+        // An unknown effect on a root that is running quarantines the root and leaves its run unknown; the user's next turn is then
+        // the blocked one the recovery dialog answers, which is why `quarantined-unknown` refuses it where `quarantined` does not.
         val codeQuarantine = step(running, Fact.Quarantine(stamp(), "root", "root", 1, "quarantine", "Unknown outcome"))
-        assertEquals(SessionOrganismSpace.QUARANTINED, SessionOrganismSpace.label(codeQuarantine))
-        assertEquals(null, SessionOrganismMachine.reduce(codeQuarantine, inputs.getValue(SessionOrganismSpace.COMMAND_SIGNAL)).reject)
-        assertFalse(SessionOrganismSpace.QUARANTINED in SessionOrganismSpace.accepts.getValue(SessionOrganismSpace.COMMAND_SIGNAL))
+        assertEquals(SessionOrganismSpace.QUARANTINED_UNKNOWN, SessionOrganismSpace.label(codeQuarantine))
+        assertEquals(SessionOrganismMachine.Rejection.QUARANTINE,
+            SessionOrganismMachine.reduce(codeQuarantine, inputs.getValue(SessionOrganismSpace.PREPARE_USER_TURN)).reject?.kind)
+        assertEquals(null, SessionOrganismMachine.reduce(quarantined, inputs.getValue(SessionOrganismSpace.PREPARE_USER_TURN)).reject)
         // A limit the representatives do not set refuses what the matrix accepts: a session cap of one refuses a second child.
         val capped = step(initial, SessionOrganismMachine.Fact.Adopt(stamp(), "project", rootSession, emptyList(), OrganismLimits(activeSessions = 1)))
         val cappedRunning = step(capped, Intent.BeginRun(stamp(), "root", "root"))
@@ -481,5 +523,98 @@ class SessionOrganismSpaceTest {
         assertEquals("""{"type":"io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.BeginRun","stamp":{"id":"input","at":5},"id":"root","sessionId":"session"}""",
             json.encodeToString(SessionOrganismMachine.Input.serializer(), run))
         assertEquals(run, json.decodeFromString(SessionOrganismMachine.Input.serializer(), json.encodeToString(SessionOrganismMachine.Input.serializer(), run)))
+    }
+
+    /**
+     * A position is one representative, so a second organism that carries the same name must answer like the first. Every state
+     * below is one the machine reaches in practice and names as an existing position; where the row read off the first
+     * representative disagrees with what the reducer does, the position hides a difference in what the organism owes. The first
+     * representatives own no immunity session and these do, which is the difference that once hid a refusal of `DeleteHistoryByUser`.
+     * A missing record counts as a refusal, as it does for the harness.
+     */
+    @Test fun anOrganismThatOwnsAnImmunitySessionAnswersLikeOneThatDoesNot() {
+        // Every organism that belongs to a plan, a stage or planning owns an immunity session, and the session never starts.
+        val immunityPending = step(initial, Fact.Adopt(stamp(), "project", immunityOwner, emptyList(), OrganismLimits()))
+        val immunityFinished = step(immunityRunning, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.COMPLETED))
+        val immunityStopping = step(immunityRunning, Intent.RequestUserStop(stamp(), "root", "root", "stop-immunity-root", false))
+        val alternatives = mapOf(
+            "pending root that owns an immunity session" to immunityPending,
+            "running root that owns an immunity session" to immunityRunning,
+            "finished root that owns an immunity session" to immunityFinished,
+            "stopping root that owns an immunity session" to immunityStopping,
+            "stopped root that owns an immunity session" to step(immunityStopping, Fact.Observe(stamp(), "root", "root", 1, SessionObservedState.STOPPED)),
+            "archived root that owns an immunity session" to step(immunityFinished, Intent.SetArchiveVisibility(stamp(), "root", "root", 1, archived = true, stillReady = true)),
+        )
+        assertEquals(emptyList(), disagreements(alternatives))
+    }
+
+    /** One line per state whose position answers some input differently from the row it is read off. */
+    private fun disagreements(alternatives: Map<String, SessionOrganismMachine.State>) = alternatives.mapNotNull { (what, state) ->
+        val position = SessionOrganismSpace.label(state)
+        val differing = inputs.mapNotNull { (name, input) ->
+            val declared = position in SessionOrganismSpace.accepts.getValue(name)
+            val actual = try { SessionOrganismMachine.reduce(state, input).reject == null } catch (_: NoSuchElementException) { false }
+            if (declared != actual) "${name.name}(declared=$declared, actual=$actual)" else null
+        }
+        if (differing.isEmpty()) null else "$what is ${position?.name}: $differing"
+    }
+
+    /**
+     * An unknown run outranks the root wherever it is held. `unknown-branch` names the one held by a child under a root that can
+     * still work; under a root that cannot, the organism is `unknown`, and the row is read off a root whose own run is unknown, so
+     * a few inputs differ. They are pinned here, and this test fails when a position is split for them or a guard is added.
+     */
+    @Test fun anUnknownRunBesideARootAnswersLikeItsRow() {
+        val lost = Fact.Observe(stamp(), "root", "session-make-child", 1, SessionObservedState.UNKNOWN)
+        val alternatives = mapOf(
+            "stopping root with a child whose run is unknown" to step(unknownBranch, Intent.RequestUserStop(stamp(), "root", "root", "stop-root", false), lost),
+            "archived root with a child whose run is unknown" to step(pending, create("make-child", "Child"), lost,
+                Intent.SetArchiveVisibility(stamp(), "root", "root", 1, archived = true, stillReady = true)),
+        )
+        assertEquals(listOf(
+            "stopping root with a child whose run is unknown is unknown: [ReconcileInterruptedRun(declared=true, actual=false), " +
+                "ObserveSettled(declared=true, actual=false), Charge(declared=false, actual=true), RecordResult(declared=false, actual=true)]",
+            "archived root with a child whose run is unknown is unknown: [CommandSignal(declared=true, actual=false), " +
+                "ResolveSessionQuarantine(declared=true, actual=false), ReconcileInterruptedRun(declared=true, actual=false), " +
+                "ObserveSettled(declared=true, actual=false), RecordResult(declared=false, actual=true)]",
+        ), disagreements(alternatives))
+    }
+
+    /** What deleting history does to an organism: every session is archived and stopped, its budget is gone and its generation moves on. */
+    private fun tombstone(organism: SessionOrganism) = organism.copy(deletedAt = 1, stoppedByUser = true,
+        historyDeletedIds = organism.historyDeletedIds + organism.sessions.keys,
+        sessions = organism.sessions.mapValues { (_, node) -> node.copy(archived = true, desired = SessionDesiredState.STOP,
+            observed = SessionObservedState.STOPPED, generation = node.generation + 1, remainingTokens = 0) },
+        outbox = organism.outbox.map { if (it.state != SessionDeliveryState.PROCESSED) it.copy(state = SessionDeliveryState.CANCELLED) else it },
+        waitEdges = emptyMap())
+
+    /**
+     * The row for `deleted` is read off an organism whose generation has moved, so every input that carries the old one is refused
+     * for that reason and the matrix cannot say whether a tombstone is otherwise closed. This says it: whatever the position an
+     * organism was deleted from, no input that does not carry a generation changes it, except the three that finish what deletion
+     * starts. A late report of a run, a quarantine or a workspace is refused by the generation, and only by it.
+     */
+    @Test fun aDeletedOrganismIsChangedOnlyByTheInputsThatFinishWhatDeletionStarted() {
+        // The model of a deletion used below is the deletion itself.
+        val real = deleted.organism!!.sessions.getValue("root")
+        val model = tombstone(finished.organism!!).sessions.getValue("root")
+        assertEquals(listOf(model.archived, model.desired, model.observed, model.generation, model.remainingTokens),
+            listOf(real.archived, real.desired, real.observed, real.generation, real.remainingTokens))
+        assertTrue(deleted.organism!!.stoppedByUser && deleted.organism!!.deletedAt != null)
+
+        val changes = sortedSetOf<String>()
+        for ((phase, state) in states) {
+            val organism = state.organism ?: continue
+            if (phase == SessionOrganismSpace.DELETED) continue
+            val tomb = imported(tombstone(organism))
+            for ((name, input) in inputs) {
+                val result = try { SessionOrganismMachine.reduce(tomb, input) } catch (_: NoSuchElementException) { continue }
+                if (result.reject == null && result.state != tomb) changes += name.name
+            }
+        }
+        // FinishStop replays a deletion that crashed half way; FinishImmunityIntervention closes an intervention whose action was the
+        // deletion, and so runs after it; the fence on unconfirmed persistence is the one every state accepts.
+        assertEquals(sortedSetOf(SessionOrganismSpace.FINISH_STOP.name, SessionOrganismSpace.FINISH_IMMUNITY_INTERVENTION.name,
+            SessionOrganismSpace.PERSISTENCE_UNKNOWN_FACT.name), changes)
     }
 }
