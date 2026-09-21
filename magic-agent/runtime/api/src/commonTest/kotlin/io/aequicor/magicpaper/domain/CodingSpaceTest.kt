@@ -94,6 +94,7 @@ class CodingSpaceTest {
         sessions = mapOf(session.id to SessionNode(session.id, SessionKind.ZYGOTE, session.name, generation = 0, mode = CodingInteractionMode.CODE)))
     private val response = CodingMessage(ref.responseId, CodingRole.AGENT, "Done", createdAt = 5)
     private val edited = request("edit")
+    private val codingModel = CodingModelSelection(CodingEngine.PI, "provider", "model")
 
     init {
         // Every input that addresses a run carries one reference, and `DeferRecovery` names the message
@@ -212,6 +213,7 @@ class CodingSpaceTest {
         inputs = mapOf(
             CodingSpace.CREATE_PROJECT to Intent.CreateProject(project),
             CodingSpace.SET_PROJECT_MODEL to Intent.SetProjectModel(null),
+            CodingSpace.SET_PROJECT_CODING_MODEL to Intent.SetProjectCodingModel(codingModel),
             CodingSpace.DELETE_PROJECT to Intent.DeleteProject,
             CodingSpace.CREATE_SESSION to Intent.CreateSession(session.copy(id = "created")),
             CodingSpace.DELETE_SESSION to Intent.DeleteSession(sessionRef),
@@ -219,6 +221,7 @@ class CodingSpaceTest {
             CodingSpace.ARCHIVE to Intent.ArchiveSession(sessionRef, archived = true),
             CodingSpace.UNARCHIVE to Intent.ArchiveSession(sessionRef, archived = false),
             CodingSpace.SET_SESSION_MODEL to Intent.SetSessionModel(sessionRef, null),
+            CodingSpace.SET_SESSION_CODING_MODEL to Intent.SetSessionCodingModel(sessionRef, codingModel),
             CodingSpace.SET_SEARCH_PROVIDER to Intent.SetSearchProvider(sessionRef, SearchProvider.WIKIPEDIA),
             CodingSpace.CHANGE_MODE to Intent.ChangeMode(sessionRef, CodingInteractionMode.RESEARCH),
             CodingSpace.SET_MEDIA_TOOL to Intent.SetMediaTool(sessionRef, MediaKind.IMAGE, enabled = false),
