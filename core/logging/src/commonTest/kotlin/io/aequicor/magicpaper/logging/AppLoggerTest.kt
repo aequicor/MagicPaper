@@ -73,6 +73,24 @@ class AppLoggerTest {
         }
     }
 
+    /** Every failure logged without an exception passes the class of its cause this way, so it is part of the record. */
+    @Test fun theClassOfACauseGivenAsAFieldIsKeptNotDropped() {
+        val log = AppLogger(sink = AppLogSink {})
+        log.error("checks", "output_unavailable", mapOf("causeType" to "IllegalStateException", "result" to "effects_blocked"))
+        val entry = log.history().single()
+        assertEquals("IllegalStateException", entry.fields["causeType"])
+        assertEquals("effects_blocked", entry.fields["result"])
+        assertTrue("\"causeType\":\"IllegalStateException\"" in entry.line(), entry.line())
+    }
+
+    @Test fun aCauseTypeThatIsNotAClassNameIsRefusedNotPublished() {
+        val log = AppLogger(sink = AppLogSink {})
+        log.error("checks", "output_unavailable", mapOf("causeType" to "the user typed secret words"))
+        log.error("checks", "output_unavailable", mapOf("causeType" to "https://example.com/?token=secret"))
+        log.history().forEach { assertEquals("[redacted]", it.fields["causeType"], it.line()) }
+        assertFalse(log.history().any { "secret" in it.line() || "example.com" in it.line() })
+    }
+
     @Test fun timingAndCounterMetricsKeepTheirNameWithoutListingEveryMetric() {
         val output = mutableListOf<AppLogEntry>()
         val log = AppLogger(sink = AppLogSink { output += it })

@@ -143,6 +143,16 @@ class RequestPinJournalTest {
         assertEquals(written, journal.read(stream).size, "An input that changes nothing and asks for nothing is not a record")
     }
 
+    @Test fun theFailureThatLostTheAppendOutcomeIsTheOneReportedNotAWrapper() = runTest {
+        val conversation = PinConversation("lostoutcome")
+        val service = DefaultRequestPinService(repository(), gateway { answer }, backgroundScope, unreadable(InMemoryEventJournal()), storageDispatcher = UnconfinedTestDispatcher(testScheduler))
+        val marker = AppLog.history().lastOrNull()
+        service.sync(conversation, listOf(source), profile); runCurrent()
+        val causes = reportedSince(marker).mapNotNull { it.fields["causeType"] }
+        assertTrue("StorageException" in causes, causes.toString())
+        assertFalse("JournalOutcomeUnknown" in causes, causes.toString())
+    }
+
     @Test fun anInputTheStateRefusesIsReportedAsAFailureNotDroppedInSilence() = runTest {
         val conversation = PinConversation("refusedinput")
         val service = DefaultRequestPinService(repository(), gateway { answer }, backgroundScope, unreadable(InMemoryEventJournal()), storageDispatcher = UnconfinedTestDispatcher(testScheduler))

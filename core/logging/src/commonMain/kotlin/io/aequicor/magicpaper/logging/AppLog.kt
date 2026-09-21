@@ -174,7 +174,8 @@ private val numericMetricSuffixes = listOf("Ms", "Tokens", "Calls", "Count", "Pe
 
 private fun isNumericKey(key: String): Boolean =
     key in numeric || (key.length <= 40 && numericMetricSuffixes.any { suffix -> key.endsWith(suffix) && key != suffix })
-private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure")
+/** `causeType` is the simple class name of the cause a caller without an exception in hand reports; it is not free text. */
+private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure", "causeType")
 private val machineCode by lazy { Regex("[A-Za-z0-9_./:+-]{1,160}") }
 private val eventCode by lazy { Regex("[A-Za-z][A-Za-z0-9_.-]{0,79}") }
 
