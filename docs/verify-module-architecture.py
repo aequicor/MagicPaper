@@ -102,6 +102,32 @@ IMPURE_PLANNING = re.compile(
     r'|\b(?:launch|async|withContext|runBlocking|coroutineScope|supervisorScope|delay'
     r'|flow|channelFlow|callbackFlow|produce)\s*[({]')
 
+# A machine declares its state space. `reduce` alone is an opaque function: nothing proves that a table
+# written about it is complete, so an owner adopts Machine<State, Input, Effect> and a StateSpace, and a
+# test runs verifyStateSpace over it (docs/STATE-SPACES.md). The two folds below are the exceptions the
+# design names: they turn a Plan document over its journal, hold no machine state and emit no effects,
+# so they are projections of the journal and not machines. A new fold has to be added here on purpose.
+PURE_FOLDS = {'CoordinationRules', 'PlanOrchestrationRules'}
+STATE_SPACE_DOCUMENT = 'docs/STATE-SPACES.md'
+# `object|class Name ... : Machine<`, stopping at the first body brace or the next declaration so the name
+# captured is the one that implements the contract.
+MACHINE_DECLARATION = re.compile(r'\b(?:object|class)\s+(\w+)\b(?:(?!\b(?:object|class)\b)[^{])*?\bMachine\s*<')
+
+def machine_violations(relative, code, module_tests, catalogue):
+    """Errors for one production file that defines a reducer but does not declare its state space."""
+    machines = MACHINE_DECLARATION.findall(code)
+    if not machines:
+        return [f'{relative}: a machine must implement Machine<State, Input, Effect> and declare a StateSpace '
+                f'({STATE_SPACE_DOCUMENT}); a pure fold of a document is named in PURE_FOLDS']
+    errors = []
+    for name in machines:
+        if not any(re.search(r'\bverifyStateSpace\s*\(', test) and re.search(rf'\b{name}\b', test) for test in module_tests):
+            errors.append(f'{relative}: {name} declares a state space but no test in its module runs '
+                          f'verifyStateSpace over it')
+        if not re.search(rf'^\|\s*`{name}`\s*\|', catalogue, re.M):
+            errors.append(f'{relative}: {name} is missing from the catalogue in {STATE_SPACE_DOCUMENT}')
+    return errors
+
 def is_retired_module(name):
     return name == ':shared' or name.startswith(':shared:')
 
@@ -439,6 +465,9 @@ def violations(root):
     # implementation file keeps the same package and basename after extraction.
     facades = {}
     has_backend_catalog = False
+    tests_by_module = {}
+    catalogue_file = root / STATE_SPACE_DOCUMENT
+    catalogue = catalogue_file.read_text(encoding="utf-8") if catalogue_file.is_file() else ''
     for source, relative, index, content, code, package in production_sources:
         module = relative.parts[:index]
         module_name = directories.get('/'.join(module), ':' + ':'.join(module))
@@ -475,6 +504,13 @@ def violations(root):
                 header = declaration.group(2).lstrip()
                 if not header.startswith('internal constructor'):
                     errors.append(f'{relative}: {declaration.group(1)} state requires an internal constructor')
+        machine_module = module_name.endswith(':api') or module_name == ':core:model'
+        if machine_module and re.search(r'\bfun\s+reduce\s*\(', code) and source.stem not in PURE_FOLDS:
+            if module not in tests_by_module:
+                sources = root.joinpath(*module) / 'src'
+                tests_by_module[module] = [kotlin_code(test.read_text(encoding="utf-8")) for test in sources.rglob('*.kt')
+                                           if test.relative_to(sources).parts[0].endswith('Test')]
+            errors.extend(machine_violations(relative, code, tests_by_module[module], catalogue))
         for owner, member in effect_function_members(code, planning, effect_roots.get((module, package.group(1), planning), ()) if package else ()):
             errors.append(f'{relative}: {owner}.{member} declares a function type; '
                           f'an effect carries data, not behaviour')
@@ -605,9 +641,96 @@ if '--self-test' in sys.argv:
         errors = violations(root)
         assert any('internal constructor' in error for error in errors), errors
         assert any('performs work inside a machine API' in error for error in errors), errors
-        machine.write_text('package fixture\nclass QuestionState internal constructor(val now: Long)\n'
-                           'fun reduce(state: QuestionState) = state.now\n')
+        # The fixture now also owes the state-space rule, so it declares a machine, a test and a catalogue row.
+        contract = ('package fixture\nclass QuestionState internal constructor(val now: Long)\n'
+                    'object QuestionMachine : Machine<QuestionState, Int, Int> {\n    fun reduce(state: QuestionState) = state.now\n}\n')
+        machine.write_text(contract)
+        test = root / 'magic-common/questionnaire/api/src/commonTest/kotlin/QuestionSpaceTest.kt'
+        test.parent.mkdir(parents=True)
+        test.write_text('package fixture\nclass QuestionSpaceTest { fun t() = verifyStateSpace(QuestionMachine, states, inputs) }\n')
+        catalogue = root / STATE_SPACE_DOCUMENT
+        catalogue.parent.mkdir(parents=True)
+        catalogue.write_text('| Машина | Модуль |\n| --- | --- |\n| `QuestionMachine` | `:magic-common:questionnaire:api` |\n')
         assert not violations(root), violations(root)
+
+    # A reducer is a machine only once it declares its state space, has a test that runs the harness over it,
+    # and is written down in the catalogue. Each of the three is checked apart, so no one of them hides another.
+    with TemporaryDirectory() as folder:
+        root = Path(folder)
+        machine = root / 'magic-agent/browser/api/src/commonMain/kotlin/BrowserMachine.kt'
+        machine.parent.mkdir(parents=True)
+        test = root / 'magic-agent/browser/api/src/commonTest/kotlin/BrowserSpaceTest.kt'
+        test.parent.mkdir(parents=True)
+        catalogue = root / STATE_SPACE_DOCUMENT
+        catalogue.parent.mkdir(parents=True)
+        declared = ('package fixture\nclass BrowserState internal constructor(val open: Boolean)\n'
+                    'object BrowserMachine : Machine<BrowserState, Int, Int> {\n    fun reduce(state: BrowserState) = state.open\n}\n')
+        tested = 'package fixture\nclass BrowserSpaceTest { fun t() = verifyStateSpace(BrowserMachine, states, inputs) }\n'
+        listed = '| `BrowserMachine` | `:magic-agent:browser:api` |\n'
+        def found(fragment):
+            return [error for error in violations(root) if fragment in error and 'BrowserMachine.kt' in error]
+
+        # No contract at all: the bare reducer of the old idiom.
+        machine.write_text('package fixture\nclass BrowserState internal constructor(val open: Boolean)\n'
+                           'object BrowserMachine {\n    fun reduce(state: BrowserState) = state.open\n}\n')
+        test.write_text(tested)
+        catalogue.write_text(listed)
+        assert len(found('must implement Machine<')) == 1, violations(root)
+        # A generic mention that is not a supertype must not pass for the contract.
+        machine.write_text('package fixture\nclass BrowserState internal constructor(val open: Boolean)\n'
+                           'object BrowserMachine {\n    fun reduce(state: BrowserState) = state.open\n    val tag: Machine<Int, Int, Int>? = null\n}\n')
+        assert len(found('must implement Machine<')) == 1, violations(root)
+        machine.write_text(declared)
+        assert not violations(root), violations(root)
+        # Declared, but nothing runs the harness over it: the test names another machine, mentions the
+        # harness only in a comment or a string, or is not a test source set at all.
+        for body in ('class BrowserSpaceTest { fun t() = verifyStateSpace(OtherMachine, states, inputs) }',
+                     'class BrowserSpaceTest { /* verifyStateSpace(BrowserMachine, states, inputs) */ }',
+                     'class BrowserSpaceTest { val note = "verifyStateSpace(BrowserMachine, states, inputs)" }',
+                     'class BrowserSpaceTest { fun t() = BrowserMachine.reduce(state) }'):
+            test.write_text('package fixture\n' + body + '\n')
+            assert len(found('runs verifyStateSpace')) == 1, (body, violations(root))
+        test.unlink()
+        assert len(found('runs verifyStateSpace')) == 1, violations(root)
+        (root / 'magic-agent/browser/api/src/commonMain/kotlin/BrowserSpaceTest.kt').write_text(tested)
+        assert len(found('runs verifyStateSpace')) == 1, 'a production file is not a test'
+        (root / 'magic-agent/browser/api/src/commonMain/kotlin/BrowserSpaceTest.kt').unlink()
+        # A harness call through a wrapper that names the machine is still a harness run over it.
+        test.write_text('package fixture\nclass BrowserSpaceTest {\n    private object Guarded : Machine<Int, Int, Int> { val inner = BrowserMachine }\n'
+                        '    fun t() = verifyStateSpace(Guarded, states, inputs)\n}\n')
+        assert not found('runs verifyStateSpace'), violations(root)
+        test.write_text(tested)
+        # A machine that is not in the catalogue, or only mentioned in prose, or listed by a look-alike name.
+        for text in ('', 'BrowserMachine is described elsewhere.\n', '| `BrowserMachineExtra` | `:magic-agent:browser:api` |\n',
+                     '| BrowserMachine | `:magic-agent:browser:api` |\n'):
+            catalogue.write_text(text)
+            assert len(found('missing from the catalogue')) == 1, (text, violations(root))
+        catalogue.write_text(listed)
+        assert not violations(root), violations(root)
+        catalogue.unlink()
+        assert len(found('missing from the catalogue')) == 1, 'an absent catalogue is not an empty exemption'
+        catalogue.write_text(listed)
+        # The pure folds are exempt by name, and only by name.
+        fold = machine.with_name('CoordinationRules.kt')
+        fold.write_text('package fixture\nfun reduce(plan: Plan, event: PlanEvent): Plan = plan\n')
+        assert not violations(root), violations(root)
+        fold.unlink()
+        fold = machine.with_name('ReplayRules.kt')
+        fold.write_text('package fixture\nfun reduce(plan: Plan, event: PlanEvent): Plan = plan\n')
+        assert any('ReplayRules.kt' in error and 'must implement Machine<' in error for error in violations(root)), violations(root)
+        fold.unlink()
+        # The rule reaches :core:model, whose machines are not in an :api module, and other machines of one file.
+        core = root / 'core/model/src/commonMain/kotlin/CoreMachine.kt'
+        core.parent.mkdir(parents=True)
+        core.write_text('package fixture\nobject CoreMachine : Machine<Int, Int, Int> {\n    fun reduce(state: Int) = state\n}\n')
+        assert any('CoreMachine.kt' in error and 'runs verifyStateSpace' in error for error in violations(root)), violations(root)
+        core.unlink()
+        # A second machine in the same file owes its own test and its own row.
+        machine.write_text(declared + 'object ExtraMachine : Machine<BrowserState, Int, Int> {\n    fun reduce(state: BrowserState) = state.open\n}\n')
+        errors = violations(root)
+        assert any('ExtraMachine' in error and 'runs verifyStateSpace' in error for error in errors), errors
+        assert any('ExtraMachine' in error and 'missing from the catalogue' in error for error in errors), errors
+        assert not any('BrowserMachine ' in error for error in errors), errors
 
 if '--self-test' in sys.argv:
     from tempfile import TemporaryDirectory

@@ -130,6 +130,11 @@ The target execution architecture — one deterministic state machine and an app
 event journal — is described in `docs/STUDIO-ARCHITECTURE.md`. Do not introduce its
 modules piecemeal.
 
+- A machine declares its state space: an owner's `reduce` implements `Machine<State, Input,
+  Effect>` from `:core:state-machine:api`, declares a `StateSpace`, and has a test running
+  `verifyStateSpace` over it. `docs/STATE-SPACES.md` says how and lists every machine;
+  `docs/verify-module-architecture.py` fails a reducer that has none of the three.
+
 ## Design patterns and code quality
 
 - Base design and implementation on established, time-tested patterns and idiomatic
