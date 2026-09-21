@@ -33,8 +33,10 @@ class TaskWorktreeJournalTest {
     private class Journal(val real: EventJournal = InMemoryEventJournal()) : EventJournal by real {
         var onAppend: suspend (JournalRevision, String, Long, String) -> JournalRecord? = { revision, operation, at, detail -> real.append(revision, operation, at, detail) }
         var onRead: suspend (String) -> JournalSnapshot = { real.snapshot(it) }
+        var onStreams: suspend () -> List<String> = { real.streams() }
         override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String) = onAppend(expected, operation, at, detail)
         override suspend fun snapshot(stream: String) = onRead(stream)
+        override suspend fun streams() = onStreams()
     }
     private class Fixture {
         val payloads = InMemoryKeyValueStore()
@@ -214,10 +216,16 @@ class TaskWorktreeJournalTest {
     @Test fun resetWaitsForAdmittedOperationAndReopensWithoutReplayingOldAuthority() = runTest {
         val f = Fixture(); val service = f.owner(); service.projection(owner, generation = 1)
         val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        // prepareForReset lists the journal only after it has stopped admission, still under the admission lock.
+        // Both calls hop to the owner's dispatcher, so without this signal the second accept can be admitted first,
+        // queue on the operation's lock and wait for a release that only this body can give.
+        val fenced = CompletableDeferred<Unit>()
+        f.events.onStreams = { fenced.complete(Unit); f.events.real.streams() }
         f.workspace.before = { entered.complete(Unit); release.await() }
         val operation = async(Dispatchers.Default) { service.acceptWithLeases(owner, Input.Intent.Prepare(record(), 1, "open")) }
         entered.await()
         val paused = async(start = CoroutineStart.UNDISPATCHED) { service.prepareForReset() }
+        fenced.await()
         assertFalse(paused.isCompleted)
         assertFailsWith<IllegalStateException> { service.acceptWithLeases(owner, Input.Intent.Prepare(record(), 1, "other")) }
         release.complete(Unit)
