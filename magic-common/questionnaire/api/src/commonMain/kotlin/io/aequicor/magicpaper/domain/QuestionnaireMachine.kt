@@ -1,10 +1,18 @@
 package io.aequicor.magicpaper.domain
 
+import io.aequicor.magicpaper.machine.Machine
+import io.aequicor.magicpaper.machine.MachineId
+import io.aequicor.magicpaper.machine.Step
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
 /** One pure owner for durable lifecycle and live attachments. The interpreter alone performs I/O. */
-object QuestionnaireMachine {
+object QuestionnaireMachine : Machine<QuestionnaireMachine.State, QuestionnaireMachine.Input, QuestionnaireMachine.Effect> {
+    override val id = MachineId("questionnaire")
+    override val space get() = QuestionnaireSpace
+    /** Bridge to the owner's own reducer: [Transition] and [reduce] keep every call site. */
+    override fun step(state: State, input: Input) = reduce(state, input).let { Step(it.state, it.effects) }
+
     @ConsistentCopyVisibility
     data class State internal constructor(
         val records: Map<String, RuntimeQuestionnaireRecord> = emptyMap(),
