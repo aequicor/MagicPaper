@@ -4,6 +4,7 @@ import io.aequicor.magicpaper.domain.planning.*
 import io.aequicor.magicpaper.machine.Machine
 import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** One plan owns its durable admission and all accepted checkpoints. Replaying never admits work. */
@@ -33,79 +34,79 @@ object PlanningMachine : Machine<PlanningMachine.State, PlanningMachine.Input, P
         val refinement: RefinementRequest? = null)
     @Serializable sealed interface Input { val stamp: Stamp }
     @Serializable sealed interface Intent : Input {
-        @Serializable data class ConfirmNativeRecovery(val value: PlanningNativeRecoveryDecision, override val stamp: Stamp) : Intent
-        @Serializable data class Create(val plan: Plan, override val stamp: Stamp) : Intent
-        @Serializable data class Edit(val expectedRevision: Long, val proposal: Plan, override val stamp: Stamp) : Intent
-        @Serializable data class Revise(val events: List<PlanEvent>, override val stamp: Stamp) : Intent
-        @Serializable data class Start(val runId: String, val rules: PlanningRulesSnapshot, override val stamp: Stamp) : Intent
-        @Serializable data class Resume(val ref: RunRef, override val stamp: Stamp) : Intent
-        @Serializable data class Pause(override val stamp: Stamp) : Intent
-        @Serializable data class Stop(override val stamp: Stamp) : Intent
-        @Serializable data class Retry(val expected: Plan, val authorizations: Map<String, PlanAttemptRetryAuthorization>,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.ConfirmNativeRecovery") data class ConfirmNativeRecovery(val value: PlanningNativeRecoveryDecision, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Create") data class Create(val plan: Plan, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Edit") data class Edit(val expectedRevision: Long, val proposal: Plan, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Revise") data class Revise(val events: List<PlanEvent>, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Start") data class Start(val runId: String, val rules: PlanningRulesSnapshot, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Resume") data class Resume(val ref: RunRef, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Pause") data class Pause(override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Stop") data class Stop(override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Retry") data class Retry(val expected: Plan, val authorizations: Map<String, PlanAttemptRetryAuthorization>,
             val runId: String, val rules: PlanningRulesSnapshot, override val stamp: Stamp) : Intent
-        @Serializable data class SkipVerification(val blockers: Set<String>, val runId: String,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.SkipVerification") data class SkipVerification(val blockers: Set<String>, val runId: String,
             val rules: PlanningRulesSnapshot, override val stamp: Stamp,
             val proofs: Set<PlanningSkipProof>? = null) : Intent
-        @Serializable data class AssignStage(val stageId: String, val assignment: StageAssignment, override val stamp: Stamp) : Intent
-        @Serializable data class Navigate(val step: PlanningStep, override val stamp: Stamp) : Intent
-        @Serializable data class RefineRequested(val message: PlanningMessage, override val stamp: Stamp) : Intent
-        @Serializable data class BeginRefinement(val message: PlanningMessage, val nodeId: String?,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.AssignStage") data class AssignStage(val stageId: String, val assignment: StageAssignment, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Navigate") data class Navigate(val step: PlanningStep, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.RefineRequested") data class RefineRequested(val message: PlanningMessage, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.BeginRefinement") data class BeginRefinement(val message: PlanningMessage, val nodeId: String?,
             val requireApproval: Boolean, val selection: ModelSelection?, val search: SearchProvider,
             override val stamp: Stamp) : Intent
-        @Serializable data class CancelRefinement(val ref: RefinementRef, override val stamp: Stamp) : Intent
-        @Serializable data class DiscardLegacyRefinement(val requestId: String, override val stamp: Stamp) : Intent
-        @Serializable data class RecoverAssignments(val recovery: AssignmentRecovery, override val stamp: Stamp) : Intent
-        @Serializable data class Schedule(val expectedRunId: String, val commands: List<ScheduleCommand>, val origin: String,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.CancelRefinement") data class CancelRefinement(val ref: RefinementRef, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.DiscardLegacyRefinement") data class DiscardLegacyRefinement(val requestId: String, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.RecoverAssignments") data class RecoverAssignments(val recovery: AssignmentRecovery, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Schedule") data class Schedule(val expectedRunId: String, val commands: List<ScheduleCommand>, val origin: String,
             val author: String, val questionIds: Set<String>, val waitingTask: String?, override val stamp: Stamp) : Intent
-        @Serializable data class Delete(override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Intent.Delete") data class Delete(override val stamp: Stamp) : Intent
     }
     @Serializable sealed interface Fact : Input {
-        @Serializable data class RefinementCompleted(val ref: RefinementRef, val result: RefinementResult,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.RefinementCompleted") data class RefinementCompleted(val ref: RefinementRef, val result: RefinementResult,
             override val stamp: Stamp) : Fact
-        @Serializable data class NativeObserved(val value: PlanningNativeFact, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.NativeObserved") data class NativeObserved(val value: PlanningNativeFact, override val stamp: Stamp) : Fact
         /** The version-one journal remains readable; this input is accepted only for an empty owner. */
-        @Serializable data class LegacyImported(val plan: Plan, val pending: Set<Long>, override val stamp: Stamp) : Fact
-        @Serializable data class LegacyCheckpoint(val plan: Plan, override val stamp: Stamp) : Fact
-        @Serializable data class Restored(override val stamp: Stamp) : Fact
-        @Serializable data class PersistenceUnknown(override val stamp: Stamp) : Fact
-        @Serializable data class RecoveryConfirmed(override val stamp: Stamp,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.LegacyImported") data class LegacyImported(val plan: Plan, val pending: Set<Long>, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.LegacyCheckpoint") data class LegacyCheckpoint(val plan: Plan, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.Restored") data class Restored(override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.PersistenceUnknown") data class PersistenceUnknown(override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.RecoveryConfirmed") data class RecoveryConfirmed(override val stamp: Stamp,
             val native: List<PlanningNativeRecoveryRelease> = emptyList()) : Fact
-        @Serializable data class EvidenceObserved(val pending: Set<Long>, override val stamp: Stamp) : Fact
-        @Serializable data class OperationUnknown(val intentSeq: Long, override val stamp: Stamp) : Fact
-        @Serializable data class StrategySelected(val selection: PlanStrategySelection, val retryLimit: Int?, override val stamp: Stamp) : Fact
-        @Serializable data class SkippedVerificationRestored(val ref: RunRef, override val stamp: Stamp) : Fact
-        @Serializable data class VerificationObserved(val ref: RunRef, val stageId: String, val expected: AttemptRef,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.EvidenceObserved") data class EvidenceObserved(val pending: Set<Long>, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.OperationUnknown") data class OperationUnknown(val intentSeq: Long, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.StrategySelected") data class StrategySelected(val selection: PlanStrategySelection, val retryLimit: Int?, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.SkippedVerificationRestored") data class SkippedVerificationRestored(val ref: RunRef, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.VerificationObserved") data class VerificationObserved(val ref: RunRef, val stageId: String, val expected: AttemptRef,
             val passed: Boolean, val note: String, override val stamp: Stamp) : Fact
-        @Serializable data class RulesBound(val rules: PlanningRulesSnapshot, override val stamp: Stamp) : Fact
-        @Serializable data class WorkspaceSelected(val ref: RunRef, val enabled: Boolean, override val stamp: Stamp) : Fact
-        @Serializable data class WorkspacePrepared(val ref: RunRef, val workspace: PlanWorkspace, override val stamp: Stamp) : Fact
-        @Serializable data class PhaseObserved(val ref: RunRef, val phase: ExecutionPhase, override val stamp: Stamp) : Fact
-        @Serializable data class IssueObserved(val ref: RunRef?, val issue: PlanningIssue?, val retries: Int? = null, override val stamp: Stamp) : Fact
-        @Serializable data class FinalAttemptCreated(val ref: RunRef, val id: String, val sessionId: String,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.RulesBound") data class RulesBound(val rules: PlanningRulesSnapshot, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.WorkspaceSelected") data class WorkspaceSelected(val ref: RunRef, val enabled: Boolean, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.WorkspacePrepared") data class WorkspacePrepared(val ref: RunRef, val workspace: PlanWorkspace, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.PhaseObserved") data class PhaseObserved(val ref: RunRef, val phase: ExecutionPhase, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.IssueObserved") data class IssueObserved(val ref: RunRef?, val issue: PlanningIssue?, val retries: Int? = null, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.FinalAttemptCreated") data class FinalAttemptCreated(val ref: RunRef, val id: String, val sessionId: String,
             val assignment: StageAssignment, val path: String, val engine: CodingEngine, val startedAt: Long, override val stamp: Stamp) : Fact
-        @Serializable data class FinalTransitioned(val ref: RunRef, val expected: AttemptRef,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.FinalTransitioned") data class FinalTransitioned(val ref: RunRef, val expected: AttemptRef,
             val mutation: FinalAttemptMutation, override val stamp: Stamp) : Fact
-        @Serializable data class StageCreated(val ref: RunRef, val stageId: String, val id: String, val sessionId: String,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.StageCreated") data class StageCreated(val ref: RunRef, val stageId: String, val id: String, val sessionId: String,
             val assignment: StageAssignment, val startedAt: Long, override val stamp: Stamp) : Fact
-        @Serializable data class StageTransitioned(val ref: RunRef, val stageId: String, val expected: AttemptRef,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.StageTransitioned") data class StageTransitioned(val ref: RunRef, val stageId: String, val expected: AttemptRef,
             val mutation: StageMutation, val progress: StageProgress? = null, override val stamp: Stamp) : Fact
-        @Serializable data class StageProgressObserved(val ref: RunRef, val stageId: String, val expected: AttemptRef,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.StageProgressObserved") data class StageProgressObserved(val ref: RunRef, val stageId: String, val expected: AttemptRef,
             val progress: StageProgress, override val stamp: Stamp) : Fact
-        @Serializable data class AttemptRecorded(val ref: RunRef, val stageId: String?, val attempt: StageAttempt,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.AttemptRecorded") data class AttemptRecorded(val ref: RunRef, val stageId: String?, val attempt: StageAttempt,
             val phase: ExecutionPhase? = null, override val stamp: Stamp) : Fact
-        @Serializable data class FinalAttemptCleared(val ref: RunRef, val expected: StageAttempt, override val stamp: Stamp) : Fact
-        @Serializable data class Applied(val ref: RunRef, val workspace: PlanWorkspace, override val stamp: Stamp) : Fact
-        @Serializable data class StopConfirmed(override val stamp: Stamp, val expectedStopId: String? = null) : Fact
-        @Serializable data class StopUnknown(override val stamp: Stamp, val expectedStopId: String? = null) : Fact
-        @Serializable data class AcceptanceRechecked(val ref: RunRef, val record: AcceptanceRecord, val snapshot: String?, override val stamp: Stamp) : Fact
-        @Serializable data class MergeAcceptanceRecorded(val ref: RunRef, val expected: AttemptRef, val record: AcceptanceRecord, override val stamp: Stamp) : Fact
-        @Serializable data class ProjectionConfirmed(val marker: String, override val stamp: Stamp) : Fact
-        @Serializable data class ProjectionFailed(val marker: String, val stageId: String, val attemptId: String, override val stamp: Stamp) : Fact
-        @Serializable data class JournalObserved(val operation: PlanJournalOperation, val stageId: String = "", val attemptId: String = "",
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.FinalAttemptCleared") data class FinalAttemptCleared(val ref: RunRef, val expected: StageAttempt, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.Applied") data class Applied(val ref: RunRef, val workspace: PlanWorkspace, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.StopConfirmed") data class StopConfirmed(override val stamp: Stamp, val expectedStopId: String? = null) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.StopUnknown") data class StopUnknown(override val stamp: Stamp, val expectedStopId: String? = null) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.AcceptanceRechecked") data class AcceptanceRechecked(val ref: RunRef, val record: AcceptanceRecord, val snapshot: String?, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.MergeAcceptanceRecorded") data class MergeAcceptanceRecorded(val ref: RunRef, val expected: AttemptRef, val record: AcceptanceRecord, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.ProjectionConfirmed") data class ProjectionConfirmed(val marker: String, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.ProjectionFailed") data class ProjectionFailed(val marker: String, val stageId: String, val attemptId: String, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.JournalObserved") data class JournalObserved(val operation: PlanJournalOperation, val stageId: String = "", val attemptId: String = "",
             val detail: String = "", val ref: RunRef? = null, override val stamp: Stamp) : Fact
-        @Serializable data class ScheduleAdvanced(val ref: RunRef, override val stamp: Stamp) : Fact
-        @Serializable data class ScheduleDelivered(val ref: RunRef, val ruleId: String, override val stamp: Stamp) : Fact
-        @Serializable data class ScheduleFailed(val ref: RunRef, val ruleId: String, val receiptExists: Boolean, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.ScheduleAdvanced") data class ScheduleAdvanced(val ref: RunRef, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.ScheduleDelivered") data class ScheduleDelivered(val ref: RunRef, val ruleId: String, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.PlanningMachine.Fact.ScheduleFailed") data class ScheduleFailed(val ref: RunRef, val ruleId: String, val receiptExists: Boolean, override val stamp: Stamp) : Fact
     }
     sealed interface Effect {
         data class RunRequested(val ref: RunRef) : Effect

@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.domain.checks
 import io.aequicor.magicpaper.machine.Machine
 import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** One workspace owns admission, process identity, cleanup and attested output as a single aggregate. */
@@ -32,29 +33,29 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
     @Serializable
     sealed interface Input {
         @Serializable sealed interface Intent : Input {
-            @Serializable data class Submit(val command: CheckCommand) : Intent
-            @Serializable data class Release(val ref: CheckRef, val receiptId: String) : Intent
-            @Serializable data class Stop(val ref: CheckRef) : Intent
-            @Serializable data class Inspect(val ref: CheckRef) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Intent.Submit") data class Submit(val command: CheckCommand) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Intent.Release") data class Release(val ref: CheckRef, val receiptId: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Intent.Stop") data class Stop(val ref: CheckRef) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Intent.Inspect") data class Inspect(val ref: CheckRef) : Intent
         }
         @Serializable sealed interface Fact : Input {
             /** Saved before any OS permission change; the referenced private receipt contains the old ACL. */
-            @Serializable data class AuthorityRecorded(val ref: CheckRef, val receipt: String) : Fact
-            @Serializable data class ProcessPrepared(val ref: CheckRef, val receipt: CheckProcessReceipt) : Fact
-            @Serializable data class Exited(val ref: CheckRef, val receiptId: String, val result: CheckResult) : Fact
-            @Serializable data class GroupStopped(val ref: CheckRef, val receiptId: String, val proof: String) : Fact
-            @Serializable data class AuthorityRestored(val ref: CheckRef, val receiptId: String, val proof: String) : Fact
-            @Serializable data class ArtifactsCommitted(val ref: CheckRef, val receiptId: String, val proof: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.AuthorityRecorded") data class AuthorityRecorded(val ref: CheckRef, val receipt: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.ProcessPrepared") data class ProcessPrepared(val ref: CheckRef, val receipt: CheckProcessReceipt) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.Exited") data class Exited(val ref: CheckRef, val receiptId: String, val result: CheckResult) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.GroupStopped") data class GroupStopped(val ref: CheckRef, val receiptId: String, val proof: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.AuthorityRestored") data class AuthorityRestored(val ref: CheckRef, val receiptId: String, val proof: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.ArtifactsCommitted") data class ArtifactsCommitted(val ref: CheckRef, val receiptId: String, val proof: String) : Fact
             /** Live interpreter rejected preparation before attempting this command's Submit. Never inferred during restore. */
-            @Serializable data class PreparationRejected(val command: CheckCommand, val result: CheckResult) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.PreparationRejected") data class PreparationRejected(val command: CheckCommand, val result: CheckResult) : Fact
             /** Executor proved no command was released and every acquired permission was restored. */
-            @Serializable data class NotDispatched(val ref: CheckRef, val authorityRestored: String?, val result: CheckResult) : Fact
-            @Serializable data class Failed(val ref: CheckRef) : Fact
-            @Serializable data class NeighbourMissing(val ref: CheckRef) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.NotDispatched") data class NotDispatched(val ref: CheckRef, val authorityRestored: String?, val result: CheckResult) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.Failed") data class Failed(val ref: CheckRef) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.NeighbourMissing") data class NeighbourMissing(val ref: CheckRef) : Fact
             /** Validated immutable completion, only in response to explicit inspection. */
-            @Serializable data class CompletionRecovered(val ref: CheckRef, val proof: CheckCompletionProof, val result: CheckResult) : Fact
-            @Serializable data object Restored : Fact
-            @Serializable data object PersistenceUnknown : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.CompletionRecovered") data class CompletionRecovered(val ref: CheckRef, val proof: CheckCompletionProof, val result: CheckResult) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.Restored") data object Restored : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.checks.CommandCheckMachine.Input.Fact.PersistenceUnknown") data object PersistenceUnknown : Fact
         }
     }
     sealed interface Effect {

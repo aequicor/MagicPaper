@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.domain
 import io.aequicor.magicpaper.machine.Machine
 import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** Git authority is independent of the native attempt and of the parent session cache. */
@@ -49,45 +50,45 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
     sealed interface Input {
         @Serializable
         sealed interface Intent : Input {
-            @Serializable data class Prepare(val record: TaskWorktree, val generation: Long, val operationId: String) : Intent
-            @Serializable data class BindRun(val taskId: String, val generation: Long) : Intent
-            @Serializable data class Handoff(val taskId: String, val generation: Long, val ready: Boolean,
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Prepare") data class Prepare(val record: TaskWorktree, val generation: Long, val operationId: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.BindRun") data class BindRun(val taskId: String, val generation: Long) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Handoff") data class Handoff(val taskId: String, val generation: Long, val ready: Boolean,
                 val checks: List<List<String>>) : Intent
-            @Serializable data class RevokeHandoff(val taskId: String, val generation: Long) : Intent
-            @Serializable data class ReturnForRepair(val taskId: String, val generation: Long) : Intent
-            @Serializable data class RetryVerification(val taskId: String, val generation: Long) : Intent
-            @Serializable data class AttachResponse(val taskId: String, val generation: Long, val response: CodingMessage) : Intent
-            @Serializable data class Refresh(val taskId: String, val generation: Long, val operationId: String) : Intent
-            @Serializable data class Capture(val taskId: String, val generation: Long, val operationId: String,
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.RevokeHandoff") data class RevokeHandoff(val taskId: String, val generation: Long) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.ReturnForRepair") data class ReturnForRepair(val taskId: String, val generation: Long) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.RetryVerification") data class RetryVerification(val taskId: String, val generation: Long) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.AttachResponse") data class AttachResponse(val taskId: String, val generation: Long, val response: CodingMessage) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Refresh") data class Refresh(val taskId: String, val generation: Long, val operationId: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Capture") data class Capture(val taskId: String, val generation: Long, val operationId: String,
                 val planAccepted: Boolean = false) : Intent
-            @Serializable data class Integrate(val taskId: String, val generation: Long, val operationId: String,
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Integrate") data class Integrate(val taskId: String, val generation: Long, val operationId: String,
                 val targetCommit: String, val planAccepted: Boolean = false) : Intent
-            @Serializable data class Verify(val taskId: String, val generation: Long, val operationId: String) : Intent
-            @Serializable data class AcceptMerge(val taskId: String, val generation: Long, val mergeCommit: String) : Intent
-            @Serializable data class Deliver(val taskId: String, val generation: Long, val operationId: String) : Intent
-            @Serializable data class Inspect(val taskId: String) : Intent
-            @Serializable data class NoteFailure(val taskId: String, val message: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Verify") data class Verify(val taskId: String, val generation: Long, val operationId: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.AcceptMerge") data class AcceptMerge(val taskId: String, val generation: Long, val mergeCommit: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Deliver") data class Deliver(val taskId: String, val generation: Long, val operationId: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Inspect") data class Inspect(val taskId: String) : Intent
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.NoteFailure") data class NoteFailure(val taskId: String, val message: String) : Intent
         }
 
         @Serializable
         sealed interface Fact : Input {
-            @Serializable data class Imported(val record: TaskWorktree?, val generation: Long) : Fact
-            @Serializable data class Opened(val operationId: String) : Fact
-            @Serializable data class Refreshed(val operationId: String, val behind: Int, val target: String,
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Imported") data class Imported(val record: TaskWorktree?, val generation: Long) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Opened") data class Opened(val operationId: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Refreshed") data class Refreshed(val operationId: String, val behind: Int, val target: String,
                 val updated: Boolean, val note: String?, val pendingTransfer: Boolean) : Fact
-            @Serializable data class Captured(val operationId: String, val commit: String) : Fact
-            @Serializable data class Integrated(val operationId: String, val commit: String?) : Fact
-            @Serializable data class Verified(val operationId: String) : Fact
-            @Serializable data class VerificationFailed(val operationId: String, val message: String) : Fact
-            @Serializable data class Delivered(val operationId: String) : Fact
-            @Serializable data class Failed(val operationId: String, val beforeEffect: Boolean) : Fact
-            @Serializable data class Inspected(val proof: TaskWorktreeProof) : Fact
-            @Serializable data class InspectionUnknown(val operationId: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Captured") data class Captured(val operationId: String, val commit: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Integrated") data class Integrated(val operationId: String, val commit: String?) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Verified") data class Verified(val operationId: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.VerificationFailed") data class VerificationFailed(val operationId: String, val message: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Delivered") data class Delivered(val operationId: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Failed") data class Failed(val operationId: String, val beforeEffect: Boolean) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Inspected") data class Inspected(val proof: TaskWorktreeProof) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectionUnknown") data class InspectionUnknown(val operationId: String) : Fact
             /** Exact immutable completion artifact observed by the executor, never a Git postcondition guess. */
-            @Serializable data class OutcomeRecovered(val outcome: Fact) : Fact
-            @Serializable data class NeighbourMissing(val taskId: String) : Fact
-            @Serializable data object Restored : Fact
-            @Serializable data object PersistenceUnknown : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.OutcomeRecovered") data class OutcomeRecovered(val outcome: Fact) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.NeighbourMissing") data class NeighbourMissing(val taskId: String) : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Restored") data object Restored : Fact
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.PersistenceUnknown") data object PersistenceUnknown : Fact
         }
     }
 

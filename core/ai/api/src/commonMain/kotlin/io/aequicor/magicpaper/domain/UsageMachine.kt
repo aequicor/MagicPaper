@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.domain
 import io.aequicor.magicpaper.machine.Machine
 import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /** An accounting capture fences late observations; it never authorizes a provider call. */
@@ -39,18 +40,18 @@ object UsageMachine : Machine<UsageMachine.State, UsageMachine.Input, UsageMachi
     )
     @Serializable sealed interface Input { val stamp: Stamp }
     @Serializable sealed interface Intent : Input {
-        @Serializable data class Import(val archive: UsageArchive, override val stamp: Stamp) : Intent
-        @Serializable data class Clear(override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Intent.Import") data class Import(val archive: UsageArchive, override val stamp: Stamp) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Intent.Clear") data class Clear(override val stamp: Stamp) : Intent
     }
     @Serializable sealed interface Fact : Input {
-        @Serializable data class Initialized(val archive: UsageArchive, override val stamp: Stamp) : Fact
-        @Serializable data class Recorded(val observation: UsageObservation.Captured, val record: UsageRecord,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Fact.Initialized") data class Initialized(val archive: UsageArchive, override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Fact.Recorded") data class Recorded(val observation: UsageObservation.Captured, val record: UsageRecord,
             val replacesId: String?, override val stamp: Stamp) : Fact
-        @Serializable data class ContextObserved(val observation: UsageObservation.Captured,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Fact.ContextObserved") data class ContextObserved(val observation: UsageObservation.Captured,
             val snapshot: ContextUsageSnapshot, override val stamp: Stamp) : Fact
-        @Serializable data class CumulativeObserved(val observation: UsageObservation.Captured,
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Fact.CumulativeObserved") data class CumulativeObserved(val observation: UsageObservation.Captured,
             val value: CumulativeProof, override val stamp: Stamp) : Fact
-        @Serializable data class PersistenceUnknown(override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.UsageMachine.Fact.PersistenceUnknown") data class PersistenceUnknown(override val stamp: Stamp) : Fact
     }
     data class Transition(val state: State, val rejection: String? = null)
     fun initial() = State()

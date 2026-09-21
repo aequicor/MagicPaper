@@ -5,6 +5,7 @@ import io.aequicor.magicpaper.domain.tools.ToolRole
 import io.aequicor.magicpaper.machine.Machine
 import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -33,48 +34,48 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
         val organism: SessionOrganism? = null, val persistenceUnknown: Boolean = false)
     @Serializable sealed interface Input { val stamp: Stamp }
     @Serializable sealed interface Intent : Input {
-        @Serializable data class SetArchiveVisibility(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val archived: Boolean, val stillReady: Boolean) : Intent
-        @Serializable data class ApplyLimits(override val stamp: Stamp, val id: String, val limits: OrganismLimits) : Intent
-        @Serializable data class AdmitIntegration(override val stamp: Stamp, val scope: SessionAuthority, val request: SessionIntegrationRequest, val fingerprint: String) : Intent
-        @Serializable data class RenameByUser(override val stamp: Stamp, val id: String, val target: String, val name: String, val operationId: String, val fingerprint: String) : Intent
-        @Serializable data class Check(override val stamp: Stamp, val scope: SessionAuthority) : Intent
-        @Serializable data class AuthorizePlanRetry(override val stamp: Stamp, val id: String, val sessionId: String, val binding: SessionLegacyAttempt, val continuationConfirmed: Boolean) : Intent
-        @Serializable data class AdmitPlanWorker(override val stamp: Stamp, val id: String, val session: CodingSession, val task: SessionTask, val binding: SessionLegacyAttempt, val rules: PlanningRulesSnapshot?, val unfinishedStageIds: Set<String>, val retryAuthorization: PlanAttemptRetryAuthorization?, val continuationConfirmed: Boolean) : Intent
-        @Serializable data class ChangeRootMode(override val stamp: Stamp, val id: String, val sessionId: String, val mode: CodingInteractionMode) : Intent
-        @Serializable data class PrepareUserTurn(override val stamp: Stamp, val id: String, val sessionId: String, val requestId: String) : Intent
-        @Serializable data class BeginRun(override val stamp: Stamp, val id: String, val sessionId: String) : Intent
-        @Serializable data class RequestUserStop(override val stamp: Stamp, val id: String, val target: String, val operationId: String, val archive: Boolean) : Intent
-        @Serializable data class RestoreByUser(override val stamp: Stamp, val id: String, val target: String, val operationId: String, val rules: PlanningRulesSnapshot, val sourceVersion: String?) : Intent
-        @Serializable data class Command(override val stamp: Stamp, val scope: SessionAuthority, val operationId: String, val request: OrganismCommand, val fingerprint: String) : Intent
-        @Serializable data class BeginAuxiliary(override val stamp: Stamp, val context: OrganismAuxiliaryAdmission) : Intent
-        @Serializable data class DeleteHistoryByUser(override val stamp: Stamp, val id: String, val target: String?) : Intent
-        @Serializable data class ProposeImmunityInterventions(override val stamp: Stamp, val id: String) : Intent
-        @Serializable data class AcceptImmunityIntervention(override val stamp: Stamp, val id: String, val proposalId: String, val action: ImmunityAction, val rules: PlanningRulesSnapshot?, val sourceVersion: String?, val reconciled: Boolean) : Intent
-        @Serializable data class DismissImmunityIntervention(override val stamp: Stamp, val id: String, val proposalId: String) : Intent
-        @Serializable data class InspectSignals(override val stamp: Stamp, val id: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.SetArchiveVisibility") data class SetArchiveVisibility(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val archived: Boolean, val stillReady: Boolean) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.ApplyLimits") data class ApplyLimits(override val stamp: Stamp, val id: String, val limits: OrganismLimits) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.AdmitIntegration") data class AdmitIntegration(override val stamp: Stamp, val scope: SessionAuthority, val request: SessionIntegrationRequest, val fingerprint: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.RenameByUser") data class RenameByUser(override val stamp: Stamp, val id: String, val target: String, val name: String, val operationId: String, val fingerprint: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.Check") data class Check(override val stamp: Stamp, val scope: SessionAuthority) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.AuthorizePlanRetry") data class AuthorizePlanRetry(override val stamp: Stamp, val id: String, val sessionId: String, val binding: SessionLegacyAttempt, val continuationConfirmed: Boolean) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.AdmitPlanWorker") data class AdmitPlanWorker(override val stamp: Stamp, val id: String, val session: CodingSession, val task: SessionTask, val binding: SessionLegacyAttempt, val rules: PlanningRulesSnapshot?, val unfinishedStageIds: Set<String>, val retryAuthorization: PlanAttemptRetryAuthorization?, val continuationConfirmed: Boolean) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.ChangeRootMode") data class ChangeRootMode(override val stamp: Stamp, val id: String, val sessionId: String, val mode: CodingInteractionMode) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.PrepareUserTurn") data class PrepareUserTurn(override val stamp: Stamp, val id: String, val sessionId: String, val requestId: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.BeginRun") data class BeginRun(override val stamp: Stamp, val id: String, val sessionId: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.RequestUserStop") data class RequestUserStop(override val stamp: Stamp, val id: String, val target: String, val operationId: String, val archive: Boolean) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.RestoreByUser") data class RestoreByUser(override val stamp: Stamp, val id: String, val target: String, val operationId: String, val rules: PlanningRulesSnapshot, val sourceVersion: String?) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.Command") data class Command(override val stamp: Stamp, val scope: SessionAuthority, val operationId: String, val request: OrganismCommand, val fingerprint: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.BeginAuxiliary") data class BeginAuxiliary(override val stamp: Stamp, val context: OrganismAuxiliaryAdmission) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.DeleteHistoryByUser") data class DeleteHistoryByUser(override val stamp: Stamp, val id: String, val target: String?) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.ProposeImmunityInterventions") data class ProposeImmunityInterventions(override val stamp: Stamp, val id: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.AcceptImmunityIntervention") data class AcceptImmunityIntervention(override val stamp: Stamp, val id: String, val proposalId: String, val action: ImmunityAction, val rules: PlanningRulesSnapshot?, val sourceVersion: String?, val reconciled: Boolean) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.DismissImmunityIntervention") data class DismissImmunityIntervention(override val stamp: Stamp, val id: String, val proposalId: String) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Intent.InspectSignals") data class InspectSignals(override val stamp: Stamp, val id: String) : Intent
     }
     @Serializable sealed interface Fact : Input {
-        @Serializable data class CheckpointIntegration(override val stamp: Stamp, val id: String, val record: SessionIntegration) : Fact
-        @Serializable data class Adopt(override val stamp: Stamp, val projectId: String, val root: CodingSession, val descendants: List<CodingSession>, val limits: OrganismLimits) : Fact
-        @Serializable data class RequestFailureStop(override val stamp: Stamp, val id: String, val rootId: String, val generation: Long, val reason: String) : Fact
-        @Serializable data class ReconcileAndAuthorizePlanRetry(override val stamp: Stamp, val id: String, val request: OrganismRetryRequest, val proof: PlanRetryRecoveryProof, val requestedBinding: SessionLegacyAttempt, val continuationConfirmed: Boolean) : Fact
-        @Serializable data class AcceptPlanResult(override val stamp: Stamp, val id: String, val binding: SessionLegacyAttempt, val result: SessionResult) : Fact
-        @Serializable data class RecordWorkspace(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val workspace: SessionCodingWorkspace) : Fact
-        @Serializable data class ResolveSessionQuarantine(override val stamp: Stamp, val id: String, val sessionId: String, val resolution: SessionQuarantineResolution) : Fact
-        @Serializable data class ReconcileInterruptedRun(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val version: Long) : Fact
-        @Serializable data class FinishStop(override val stamp: Stamp, val id: String, val sessionIds: Set<String>) : Fact
-        @Serializable data class Observe(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val observed: SessionObservedState) : Fact
-        @Serializable data class Acknowledge(override val stamp: Stamp, val id: String, val deliveryId: String, val recipient: String, val generation: Long, val processed: Boolean) : Fact
-        @Serializable data class Charge(override val stamp: Stamp, val scope: SessionAuthority, val tokens: Long) : Fact
-        @Serializable data class ChargeAuxiliary(override val stamp: Stamp, val organismId: String, val auxiliaryId: String, val sourceId: String, val totalTokens: Long) : Fact
-        @Serializable data class FinishAuxiliary(override val stamp: Stamp, val organismId: String, val auxiliaryId: String, val observed: SessionObservedState) : Fact
-        @Serializable data class Restored(override val stamp: Stamp, val id: String) : Fact
-        @Serializable data class RecordResult(override val stamp: Stamp, val id: String, val result: SessionResult) : Fact
-        @Serializable data class FinishImmunityIntervention(override val stamp: Stamp, val id: String, val proposalId: String, val error: String?) : Fact
-        @Serializable data class Quarantine(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val operationId: String, val reason: String) : Fact
-        @Serializable data class LegacyImported(override val stamp: Stamp, val organism: SessionOrganism) : Fact
-        @Serializable data class LimitPolicyMigrated(override val stamp: Stamp) : Fact
-        @Serializable data class PersistenceUnknown(override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.CheckpointIntegration") data class CheckpointIntegration(override val stamp: Stamp, val id: String, val record: SessionIntegration) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.Adopt") data class Adopt(override val stamp: Stamp, val projectId: String, val root: CodingSession, val descendants: List<CodingSession>, val limits: OrganismLimits) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.RequestFailureStop") data class RequestFailureStop(override val stamp: Stamp, val id: String, val rootId: String, val generation: Long, val reason: String) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.ReconcileAndAuthorizePlanRetry") data class ReconcileAndAuthorizePlanRetry(override val stamp: Stamp, val id: String, val request: OrganismRetryRequest, val proof: PlanRetryRecoveryProof, val requestedBinding: SessionLegacyAttempt, val continuationConfirmed: Boolean) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.AcceptPlanResult") data class AcceptPlanResult(override val stamp: Stamp, val id: String, val binding: SessionLegacyAttempt, val result: SessionResult) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.RecordWorkspace") data class RecordWorkspace(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val workspace: SessionCodingWorkspace) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.ResolveSessionQuarantine") data class ResolveSessionQuarantine(override val stamp: Stamp, val id: String, val sessionId: String, val resolution: SessionQuarantineResolution) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.ReconcileInterruptedRun") data class ReconcileInterruptedRun(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val version: Long) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.FinishStop") data class FinishStop(override val stamp: Stamp, val id: String, val sessionIds: Set<String>) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.Observe") data class Observe(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val observed: SessionObservedState) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.Acknowledge") data class Acknowledge(override val stamp: Stamp, val id: String, val deliveryId: String, val recipient: String, val generation: Long, val processed: Boolean) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.Charge") data class Charge(override val stamp: Stamp, val scope: SessionAuthority, val tokens: Long) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.ChargeAuxiliary") data class ChargeAuxiliary(override val stamp: Stamp, val organismId: String, val auxiliaryId: String, val sourceId: String, val totalTokens: Long) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.FinishAuxiliary") data class FinishAuxiliary(override val stamp: Stamp, val organismId: String, val auxiliaryId: String, val observed: SessionObservedState) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.Restored") data class Restored(override val stamp: Stamp, val id: String) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.RecordResult") data class RecordResult(override val stamp: Stamp, val id: String, val result: SessionResult) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.FinishImmunityIntervention") data class FinishImmunityIntervention(override val stamp: Stamp, val id: String, val proposalId: String, val error: String?) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.Quarantine") data class Quarantine(override val stamp: Stamp, val id: String, val sessionId: String, val generation: Long, val operationId: String, val reason: String) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.LegacyImported") data class LegacyImported(override val stamp: Stamp, val organism: SessionOrganism) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.LimitPolicyMigrated") data class LimitPolicyMigrated(override val stamp: Stamp) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.domain.SessionOrganismMachine.Fact.PersistenceUnknown") data class PersistenceUnknown(override val stamp: Stamp) : Fact
     }
     enum class Rejection { VERSION, QUARANTINE, VALIDATION, UNKNOWN }
     data class Reject(val kind: Rejection, val reason: String, val sessionId: String? = null)

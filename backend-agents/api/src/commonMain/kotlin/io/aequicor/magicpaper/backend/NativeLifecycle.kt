@@ -5,6 +5,7 @@ import io.aequicor.magicpaper.machine.MachineId
 import io.aequicor.magicpaper.machine.Step
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable data class NativeRunRef(val sessionId: String, val requestId: String)
@@ -88,29 +89,29 @@ object NativeLifecycleMachine : Machine<NativeLifecycleMachine.State, NativeLife
 
     @Serializable sealed interface Input
     @Serializable sealed interface Intent : Input {
-        @Serializable data class Begin(val run: NativeRunRef, val acknowledgement: NativeRecoveryAcknowledgement? = null,
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Intent.Begin") data class Begin(val run: NativeRunRef, val acknowledgement: NativeRecoveryAcknowledgement? = null,
             val noDispatchAcknowledgement: NativeNoDispatchAcknowledgement? = null) : Intent
-        @Serializable data class Cancel(val run: NativeRunRef) : Intent
-        @Serializable data class Stop(val attempt: NativeAttemptRef) : Intent
-        @Serializable data class Acknowledge(val acknowledgement: NativeRecoveryAcknowledgement) : Intent
-        @Serializable data class AcknowledgeNoDispatch(val acknowledgement: NativeNoDispatchAcknowledgement) : Intent
-        @Serializable data object Close : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Intent.Cancel") data class Cancel(val run: NativeRunRef) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Intent.Stop") data class Stop(val attempt: NativeAttemptRef) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Intent.Acknowledge") data class Acknowledge(val acknowledgement: NativeRecoveryAcknowledgement) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Intent.AcknowledgeNoDispatch") data class AcknowledgeNoDispatch(val acknowledgement: NativeNoDispatchAcknowledgement) : Intent
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Intent.Close") data object Close : Intent
     }
     @Serializable sealed interface Fact : Input {
-        @Serializable data class LaunchRequested(val run: NativeRunRef) : Fact
-        @Serializable data class Attached(val attempt: NativeAttemptRef, val process: NativeProcessIdentity) : Fact
-        @Serializable data class DeliveryRequested(val attempt: NativeAttemptRef, val stage: NativeDelivery) : Fact
-        @Serializable data class Accepted(val attempt: NativeAttemptRef, val threadId: String?, val turnId: String?) : Fact
-        @Serializable data class Terminal(val attempt: NativeAttemptRef, val outcome: NativeOutcome) : Fact
-        @Serializable data class Stopping(val attempt: NativeAttemptRef) : Fact
-        @Serializable data class Stopped(val attempt: NativeAttemptRef) : Fact
-        @Serializable data class Unavailable(val attempt: NativeAttemptRef) : Fact
-        @Serializable data class RunFinished(val run: NativeRunRef) : Fact
-        @Serializable data class NoDispatchConfirmed(val proof: NativeNoDispatchProof) : Fact
-        @Serializable data class NeighbourMissing(val run: NativeRunRef, val key: String) : Fact
-        @Serializable data object Closed : Fact
-        @Serializable data object Restored : Fact
-        @Serializable data object PersistenceUnknown : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.LaunchRequested") data class LaunchRequested(val run: NativeRunRef) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Attached") data class Attached(val attempt: NativeAttemptRef, val process: NativeProcessIdentity) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.DeliveryRequested") data class DeliveryRequested(val attempt: NativeAttemptRef, val stage: NativeDelivery) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Accepted") data class Accepted(val attempt: NativeAttemptRef, val threadId: String?, val turnId: String?) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Terminal") data class Terminal(val attempt: NativeAttemptRef, val outcome: NativeOutcome) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Stopping") data class Stopping(val attempt: NativeAttemptRef) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Stopped") data class Stopped(val attempt: NativeAttemptRef) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Unavailable") data class Unavailable(val attempt: NativeAttemptRef) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.RunFinished") data class RunFinished(val run: NativeRunRef) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.NoDispatchConfirmed") data class NoDispatchConfirmed(val proof: NativeNoDispatchProof) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.NeighbourMissing") data class NeighbourMissing(val run: NativeRunRef, val key: String) : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Closed") data object Closed : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.Restored") data object Restored : Fact
+        @Serializable @SerialName("io.aequicor.magicpaper.backend.NativeLifecycleMachine.Fact.PersistenceUnknown") data object PersistenceUnknown : Fact
     }
     sealed interface Effect {
         data class Execute(val run: NativeRunRef) : Effect
