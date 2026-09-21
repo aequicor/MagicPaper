@@ -31,6 +31,8 @@ import io.aequicor.magicpaper.di.buildRuntime
 import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.ProfileBridge
 import io.aequicor.magicpaper.navigation.AppRoute
+import io.aequicor.magicpaper.navigation.DialogRoute
+import io.aequicor.magicpaper.navigation.RootDialogLifecycle
 import io.aequicor.magicpaper.navigation.createAppRoot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -158,6 +160,13 @@ class AppShellRenderTest {
                     javax.imageio.ImageIO.write(pixels.getSubimage(0, 0, 480, 640), "png", File(directory, "computer-compact-chat.png"))
                     pixels.flush()
                 } }
+                // A feature modal is drawn by its owner; the slot entry must not add the shell fallback.
+                root.showDialog(DialogRoute(RootDialogLifecycle.FEATURE_MODAL_KIND, "editor")); root.awaitIdle(); draw()
+                assertFalse(scene.hasText("Раздел недоступен"), "A feature modal must not raise the unavailable-section dialog")
+                root.dismissDialog(); root.awaitIdle()
+                root.showDialog(DialogRoute("unregistered-kind")); root.awaitIdle(); draw()
+                assertTrue(scene.hasText("Раздел недоступен"), "An unknown dialog kind keeps the fallback")
+                root.dismissDialog(); root.awaitIdle()
             } finally { onUi { scene.close() } }
             root.awaitIdle()
             val persisted = Json.parseToJsonElement(requireNotNull(runtime.koin.get<PersistenceStores>().navigation.load())).jsonObject
