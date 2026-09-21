@@ -1463,6 +1463,19 @@
     "kind": "surface"
   },
   {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/plugins/builtin/DecisionPlanningPlugin.kt",
+    "symbol": "NodeEditor",
+    "annotationLine": 345,
+    "targets": [
+      "PaperDialog",
+      "PaperField",
+      "PaperChoice",
+      "PaperButton"
+    ],
+    "stage": "6",
+    "kind": "composition-helper"
+  },
+  {
     "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/DefaultCodingComponent.kt",
     "symbol": "Content",
     "annotationLine": 63,
@@ -3128,6 +3141,39 @@
       "PaperPanel",
       "PaperButton",
       "PaperDialog"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/NativeCodingModelDialog.kt",
+    "symbol": "NativeCodingModelDialog",
+    "annotationLine": 29,
+    "targets": [
+      "PaperDialog",
+      "PaperAction",
+      "PaperScrollColumn",
+      "PaperDivider"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/NativeCodingModelDialog.kt",
+    "symbol": "NativeCodingModelChip",
+    "annotationLine": 110,
+    "targets": [
+      "PaperAction"
+    ],
+    "stage": "6",
+    "kind": "surface"
+  },
+  {
+    "path": "magic-agent/runtime/impl/src/commonMain/kotlin/io/aequicor/magicpaper/ui/components/NativeCodingModelDialog.kt",
+    "symbol": "NativeLevelControl",
+    "annotationLine": 88,
+    "targets": [
+      "PaperChoice"
     ],
     "stage": "6",
     "kind": "surface"
