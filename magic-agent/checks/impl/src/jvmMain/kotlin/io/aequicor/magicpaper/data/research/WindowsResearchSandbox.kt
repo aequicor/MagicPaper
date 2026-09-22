@@ -16,6 +16,16 @@ import kotlinx.coroutines.withContext
 
 /** Native Windows runner. No Codex, PowerShell policy, chmod or changes to source ACLs. */
 internal object WindowsResearchSandbox : ResearchSandbox {
+    /**
+     * A token from `CreateRestrictedToken` with WRITE_RESTRICTED yields a child that dies with
+     * STATUS_DLL_INIT_FAILED before its first instruction here — reproduced with the run SID, the logon
+     * SID, Everyone and all of the caller's own groups in the restricting list, and with the run SID
+     * granted on both the window station and a dedicated desktop; the same preparation starts the child
+     * with an unrestricted token. So the run SID confines nothing today. Only exact read-only argument
+     * allowlists may run in that state; the sandbox probe keeps arbitrary protected commands refused
+     * rather than silently unprotected.
+     */
+    override val confinesWrites: Boolean get() = false
     private val kernel by lazy { NativeLibrary.getInstance("kernel32") }
     private val advapi by lazy { NativeLibrary.getInstance("advapi32") }
     private val user by lazy { NativeLibrary.getInstance("user32") }

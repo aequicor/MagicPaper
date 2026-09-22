@@ -4,6 +4,12 @@ import java.io.File
 import java.nio.file.Path
 
 internal interface ResearchSandbox {
+    /**
+     * False when this OS cannot confine a command's writes at all. Only commands whose arguments are an
+     * exact read-only allowlist may run then; anything that could write stays refused, because without
+     * confinement its protection would be an assumption rather than an enforced property.
+     */
+    val confinesWrites: Boolean get() = true
     fun prepare(command: List<String>, cwd: Path, environment: Map<String, String>, policy: ResearchWorkspacePolicy?,
         receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess
 

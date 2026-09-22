@@ -58,10 +58,18 @@ internal class WindowsCheckAuthority private constructor(
             // Parents first: propagation cannot overwrite a child's exact original ACL restored afterward.
             targets.forEach { target -> attempt { target.restore() } }
             targets.forEach { target -> attempt { check(target.current() == target.snapshot.sddl) { "Original check ACL was not restored exactly" } } }
-            // Newly created artifacts have no prior ACL. No run SID may remain on them, including protected DACLs.
-            roots.forEach { root -> attempt { paths(root).forEach { path -> Target.open(path).use { target ->
-                check(sidText !in target.current()) { "Check authority remains on an artifact" }
-            } } } }
+            // A path the command created inherited the run ACE and has no snapshot to return to. Its only
+            // correct state is the inheritance of its already restored parent, so the run ACE is revoked
+            // from it; without that step any artifact made the restoration proof unattainable.
+            val captured = targets.mapTo(HashSet()) { it.path }
+            val runSid = PointerByReference()
+            attempt { bool("ConvertStringSidToSidW", WString(sidText), runSid) }
+            try {
+                roots.forEach { root -> attempt { paths(root).forEach { path -> Target.open(path).use { target ->
+                    if (path !in captured && runSid.value != null) attempt { target.revoke(runSid.value) }
+                    check(sidText !in target.current()) { "Check authority remains on an artifact" }
+                } } } }
+            } finally { free(runSid.value) }
         }
         failure?.let { throw it }
         return "acl-restored:$receiptId"
@@ -79,6 +87,55 @@ internal class WindowsCheckAuthority private constructor(
             try { return block(descriptor.value, dacl.value) } finally { free(descriptor.value) }
         }
         fun current(): String = withDescriptor { descriptor, _ -> sddl(descriptor) }
+        /** Drops every ACE of one SID. Used for paths created during the run, which have no snapshot. */
+        fun revoke(sid: Pointer) = withDescriptor { descriptor, dacl ->
+            val rebuilt = withoutSid(checkNotNull(dacl) { "Check ACL is missing" }, sid)
+            if (rebuilt != null) try { write(descriptor, rebuilt) } finally { free(rebuilt) }
+        }
+        /** Rebuilds a DACL without any ACE of one SID, or returns null when it holds none.
+         *  `SetEntriesInAcl(REVOKE_ACCESS)` rewrites explicit entries only and silently leaves the inherited
+         *  run ACE an artifact picked up from its parent — exactly the ACE that must not survive. */
+        private fun withoutSid(acl: Pointer, sid: Pointer): Pointer? {
+            val info = Memory(ACL_SIZE_INFORMATION_BYTES.toLong()).also { it.clear() }
+            check(advapi.getFunction("GetAclInformation").invokeInt(arrayOf(acl, info, ACL_SIZE_INFORMATION_BYTES, ACL_SIZE_INFORMATION)) != 0) {
+                "Cannot size check ACL"
+            }
+            val revision = acl.getByte(0).toInt()
+            val ace = PointerByReference()
+            val kept = mutableListOf<Pair<Pointer, Int>>()
+            var removed = false
+            repeat(info.getInt(0)) { index ->
+                check(advapi.getFunction("GetAce").invokeInt(arrayOf(acl, index, ace)) != 0) { "Cannot read check ACL entry" }
+                val entry = checkNotNull(ace.value) { "Check ACL entry is missing" }
+                val size = entry.getShort(2).toInt() and 0xFFFF
+                if (advapi.getFunction("EqualSid").invokeInt(arrayOf(entry.share(ACE_SID_OFFSET), sid)) != 0) removed = true
+                else kept += entry to size
+            }
+            if (!removed) return null
+            val bytes = ACL_HEADER_BYTES + kept.sumOf { it.second }
+            val rebuilt = Memory(bytes.toLong()).also { it.clear() }
+            check(advapi.getFunction("InitializeAcl").invokeInt(arrayOf(rebuilt, bytes, revision)) != 0) { "Cannot rebuild check ACL" }
+            kept.forEach { (entry, size) ->
+                // MAXDWORD appends, so the surviving entries keep the order the original ACL had.
+                check(advapi.getFunction("AddAce").invokeInt(arrayOf(rebuilt, revision, -1, entry, size)) != 0) { "Cannot keep check ACL entry" }
+            }
+            return rebuilt
+        }
+        /** SetSecurityInfo would rebuild the descriptor and stamp SE_DACL_AUTO_INHERITED on it, so the merged
+         *  DACL goes into a fresh descriptor carrying this object's own control flags instead. */
+        private fun write(original: Pointer, dacl: Pointer) {
+            val descriptor = Memory(SECURITY_DESCRIPTOR_MIN_LENGTH).also { it.clear() }
+            check(advapi.getFunction("InitializeSecurityDescriptor").invokeInt(arrayOf(descriptor, 1)) != 0) { "Cannot initialize check ACL descriptor" }
+            Memory(2).use { control ->
+                check(advapi.getFunction("GetSecurityDescriptorControl").invokeInt(arrayOf(original, control, IntByReference())) != 0) { "Cannot read check ACL control" }
+                val retained = control.getShort(0).toInt() and CONTROL_MASK
+                check(advapi.getFunction("SetSecurityDescriptorControl").invokeInt(arrayOf(descriptor, CONTROL_MASK, retained)) != 0) { "Cannot carry over check ACL control" }
+            }
+            check(advapi.getFunction("SetSecurityDescriptorDacl").invokeInt(arrayOf(descriptor, true, dacl, false)) != 0) { "Cannot attach revoked check ACL" }
+            check(advapi.getFunction("SetKernelObjectSecurity").invokeInt(arrayOf(handle, DACL_SECURITY_INFORMATION, descriptor)) != 0) {
+                "Cannot write check ACL (${Native.getLastError()})"
+            }
+        }
         fun restore() {
             // Revoke on the retained original handle even if another process replaced its path.
             // The path is checked afterward and a replacement never yields restoration proof.
@@ -94,7 +151,7 @@ internal class WindowsCheckAuthority private constructor(
                 // back as "D:AI(...)" and restoration proof was refused forever. The descriptor parsed
                 // from the snapshot SDDL carries the whole SECURITY_DESCRIPTOR_CONTROL — protection and
                 // auto-inheritance included — so it is written back verbatim through the same handle.
-                check(advapi.getFunction("SetKernelObjectSecurity").invokeInt(arrayOf(handle, 4, descriptor.value)) != 0) {
+                check(advapi.getFunction("SetKernelObjectSecurity").invokeInt(arrayOf(handle, DACL_SECURITY_INFORMATION, descriptor.value)) != 0) {
                     "Cannot restore original check ACL (${Native.getLastError()})"
                 }
             } finally { free(descriptor.value) }
@@ -120,6 +177,18 @@ internal class WindowsCheckAuthority private constructor(
         }
     }
     companion object {
+        /** SECURITY_INFORMATION selecting only the DACL of a whole security descriptor. */
+        private const val DACL_SECURITY_INFORMATION = 4
+        /** GetAclInformation class returning ACE count and ACL byte usage: three DWORDs. */
+        private const val ACL_SIZE_INFORMATION = 2
+        private const val ACL_SIZE_INFORMATION_BYTES = 12
+        /** ACL header, and the offset of an ACE's SID behind its 4-byte header and 4-byte access mask. */
+        private const val ACL_HEADER_BYTES = 8
+        private const val ACE_SID_OFFSET = 8L
+        /** Fixed header size InitializeSecurityDescriptor fills in (SECURITY_DESCRIPTOR_MIN_LENGTH). */
+        private const val SECURITY_DESCRIPTOR_MIN_LENGTH = 64L
+        /** SE_DACL_PROTECTED and SE_DACL_AUTO_INHERITED: the DACL control flags an ACL write may change. */
+        private const val CONTROL_MASK = 0x1000 or 0x0400
         private val kernel by lazy { NativeLibrary.getInstance("kernel32") }
         private val advapi by lazy { NativeLibrary.getInstance("advapi32") }
         private fun bool(name: String, vararg args: Any?) { check(advapi.getFunction(name).invokeInt(args) != 0) { "Check ACL operation failed: $name (${Native.getLastError()})" } }

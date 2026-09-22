@@ -41,13 +41,30 @@ Codex получает `readOnly` и `approvalPolicy=never`; набор MCP со
 Сервис `ResearchCheckRunner` независим от установленного Codex. Перед первой проверкой
 он выполняет нативную пробу записи/удаления/переименования исходника, создания нового
 файла, записи Git и разрешённого артефакта. Если проба не подтверждает изоляцию,
-остаются только чтение и анализ. Резервного запуска без изоляции нет.
+остаются только чтение и анализ. Резервного запуска произвольной команды без изоляции нет.
+Проба доказывает ограничение записи, поэтому она нужна только произвольным командам:
+точный read-only allowlist Git несёт своё доказательство в аргументах и от пробы не зависит.
 
 | ОС | Защита |
 | --- | --- |
 | macOS | Seatbelt через системный `sandbox-exec`, запрет записи по умолчанию; отдельная группа процессов. Системные вызовы смены группы/сессии и `posix_spawn` запрещены, чтобы потомки не отделялись. Java использует поддерживаемый запуск `fork`. Инструменты, которым обязательно нужен `posix_spawn`, могут не работать; ограничение показывается в результате. |
 | Linux | `bubblewrap` (`/usr/bin/bwrap` или `/bin/bwrap`), корень только для чтения, отдельные user/PID/IPC/network namespaces, без capabilities и вложенных user namespaces. Нужны разрешённые ядром user namespaces и версия bwrap с `--disable-userns`. Сеть отключена. |
-| Windows | JNA, 64-битная Windows и NTFS. `CreateRestrictedToken` с уникальным restricting SID запуска, удалёнными привилегиями и `WRITE_RESTRICTED`; SID получает ACL только на результаты. Отдельный desktop, наследуются только stdio, Job Object с `KILL_ON_JOB_CLOSE`, без breakaway. |
+| Windows | JNA, 64-битная Windows и NTFS. `CreateRestrictedToken` с уникальным restricting SID запуска, удалёнными привилегиями и `WRITE_RESTRICTED`; SID получает ACL только на результаты. Отдельный desktop, наследуются только stdio, Job Object с `KILL_ON_JOB_CLOSE`, без breakaway. **Фактически не работает**: см. ниже. |
+
+**Текущее состояние Windows.** Процесс с токеном `WRITE_RESTRICTED` завершается
+`STATUS_DLL_INIT_FAILED` (`0xC0000142`) до первой инструкции. Воспроизведено с run SID,
+logon SID, `Everyone` и всеми группами самого токена в списке restricting SID, с выдачей
+run SID прав на `winsta0` и на отдельный desktop, с `CREATE_NO_WINDOW` и с `DETACHED_PROCESS`,
+для `powershell.exe` и для `cmd.exe`; та же подготовка с обычным токеном процесс запускает.
+`WindowsResearchSandbox.confinesWrites` сообщает об этом явно. Произвольные команды
+(`PROTECTED_PROJECT`) поэтому остаются отказанными: резервного запуска без изоляции нет.
+`GIT_READ_ONLY` и `METADATA_READ_ONLY` — точный allowlist аргументов, усиленный
+`--no-optional-locks`, пустым `core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`
+и `GIT_CONFIG_GLOBAL=NUL`, — больше не требуют пробы песочницы и на Windows выполняются без
+файловой политики, которую платформа всё равно не может обеспечить. Решение пользователя
+от 22 сентября 2026 года; на Linux и macOS эти команды по-прежнему идут в bwrap/Seatbelt
+с проектом только для чтения. Долг и требуемое решение механизма изоляции —
+в разделе «Долги» [STUDIO-ARCHITECTURE.md](STUDIO-ARCHITECTURE.md).
 
 Новые артефакты разрешены только в стандартных каталогах рядом с обнаруженными
 манифестами, включая модули:

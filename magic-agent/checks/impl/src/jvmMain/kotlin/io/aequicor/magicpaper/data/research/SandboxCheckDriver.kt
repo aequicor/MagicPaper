@@ -49,7 +49,11 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             val before = if (protected) artifacts.read(project) else null
             val isProbe = command.ref.scope.projectId == CommandCheckMachine.SANDBOX_PROBE_PROJECT && project == ownedRoot.resolve("sandbox-probe")
             val policy = when {
-                metadataRead -> ResearchWorkspacePolicy.metadataOnly(project, scratch)
+                // A read-only Git command is admitted by an exact argument allowlist and hardened by its git
+                // environment. On a platform that cannot confine writes, a filesystem policy would be an
+                // unenforced assumption, so it is not claimed: the command runs without one instead of
+                // pretending to be contained.
+                metadataRead -> if (sandbox().confinesWrites) ResearchWorkspacePolicy.metadataOnly(project, scratch) else null
                 isProbe -> ResearchWorkspacePolicy(project, listOf(project.resolve("build"), scratch), listOf(project.resolve(".git")), emptyList())
                 protected -> ResearchWorkspacePolicy.inspect(project, scratch, checkNotNull(before).files,
                     metadata?.let { saved ->

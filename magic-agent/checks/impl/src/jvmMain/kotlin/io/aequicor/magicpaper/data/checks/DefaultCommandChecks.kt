@@ -76,11 +76,17 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                     if (preview.effects.isEmpty()) checkNotNull(entry.journal.state.checks[normalized.ref]?.result) else null
                 }
                 if (saved != null) return@withContext saved
-                // A lookup never starts a probe. Do not hold the target lock while probing: its
-                // canonical workspace can equal the probe workspace. Actual admission is checked again below.
-                if (normalized.policy in setOf(CheckPolicy.PROTECTED_PROJECT, CheckPolicy.GIT_READ_ONLY)) ensureProbe()
-                // A prior probe failure marks all sandbox-dependent checks unavailable without aborting the runtime.
-                probeFailure?.let { throw CheckOutcomeUnknown(it) }
+                // The probe proves the OS write containment an arbitrary protected command depends on.
+                // A GIT_READ_ONLY command carries its admission proof in its exact allowlisted arguments and
+                // needs no write containment, so a broken sandbox must not disable repository reads with it:
+                // a project screen, a worktree wait and an agent resume all read Git before anything runs.
+                // A lookup never starts a probe. Do not hold the target lock while probing: its canonical
+                // workspace can equal the probe workspace. Actual admission is checked again below.
+                if (normalized.policy == CheckPolicy.PROTECTED_PROJECT) {
+                    ensureProbe()
+                    // A prior probe failure marks sandbox-dependent checks unavailable without aborting the runtime.
+                    probeFailure?.let { throw CheckOutcomeUnknown(it) }
+                }
                 entry.lock.withLock {
                     currentCoroutineContext().ensureActive()
                     check(accepting && !closed) { "Проверки временно остановлены" }
@@ -397,6 +403,10 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 check.phase != CommandCheckMachine.Phase.FINISHED && ref.scope.projectId != CommandCheckMachine.SANDBOX_PROBE_PROJECT
             }
             if (entry.journal.state.persistenceUnknown || unfinishedNonProbe.isNotEmpty()) {
+                // A fenced probe workspace is not an OS verdict, so it is not wrapped as one and a fresh
+                // request may retry it at once; it is still recorded, because without a log line this
+                // branch left checks unavailable with no evidence at all.
+                AppLog.error("checks", "sandbox.probe.fenced", mapOf("causeType" to "CheckOutcomeUnknown", "result" to "probe_unavailable"))
                 probeFailure = CheckOutcomeUnknown()
                 probeFailureAt = now
                 return@withLock
@@ -404,6 +414,8 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             check(accepting && !closed) { "Проверки временно остановлены" }
             val ref = CheckRef(CheckScope(CommandCheckMachine.SANDBOX_PROBE_PROJECT,
                 CommandCheckMachine.SANDBOX_PROBE_PROJECT, UUID.randomUUID().toString(), 0), "probe")
+            // A fixture refusal reaches the requesting caller unchanged and leaves probeFailure unset, so
+            // the next fresh request retries the probe immediately instead of waiting out the backoff.
             val probe = driver.createProbe(ref)
             check(probe.command.workspace == workspace && probe.command.ref == ref)
             entry.journal.append(Input.Intent.Submit(probe.command))
@@ -416,7 +428,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             } catch (failure: Throwable) {
                 // The cause is the only evidence of why every sandbox-dependent check is unavailable;
                 // recording the class name alone left a broken OS sandbox indistinguishable from a
-                // storage outage and sent diagnosis after the journal instead of the runner.
+                // storage outage and sent the diagnosis after the journal instead of the runner.
                 AppLog.error("checks", "sandbox.probe.failed", failure, mapOf("causeType" to failure.javaClass.simpleName))
                 if (failure is CancellationException) throw failure
                 probeFailure = IllegalStateException("ОС не подтвердила защиту исходников. Проверка недоступна", failure)

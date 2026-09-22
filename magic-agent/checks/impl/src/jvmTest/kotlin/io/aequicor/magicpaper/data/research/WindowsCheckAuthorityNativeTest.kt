@@ -40,4 +40,34 @@ class WindowsCheckAuthorityNativeTest {
             } finally { authority.close() }
         } finally { root.toFile().deleteRecursively() }
     }
+
+    /**
+     * Файлы, которые команда создала в каталоге результатов, наследуют ACE временного SID и не имеют
+     * снимка, к которому можно вернуться. Без снятия этого ACE доказательство восстановления не выдавалось
+     * никогда, хотя исходные ACL уже были возвращены байт в байт.
+     */
+    @Test fun restoreRevokesRunAuthorityFromArtifactsTheCommandCreated() {
+        assumeTrue(System.getProperty("os.name").startsWith("Windows"))
+        val root = Files.createTempDirectory("check-authority-artifacts-")
+        try {
+            assumeTrue(Files.getFileStore(root).type().equals("NTFS", true))
+            val artifacts = Files.createDirectory(root.resolve("build"))
+            Files.writeString(artifacts.resolve("before.txt"), "current")
+            val scratch = Files.createDirectory(root.resolve("scratch"))
+
+            val uuid = UUID.randomUUID()
+            val sid = "S-1-5-21-${uuid.mostSignificantBits.toUInt()}-" +
+                "${(uuid.mostSignificantBits ushr 32).toUInt()}-${uuid.leastSignificantBits.toUInt()}-1031"
+            val authority = WindowsCheckAuthority.capture(listOf(artifacts, scratch), sid, "receipt-2") { id, _ -> id }
+            try {
+                authority.grant(sid)
+                // Stands in for the sandboxed command: new objects inherit the granted run ACE.
+                Files.writeString(artifacts.resolve("created.txt"), "artifact")
+                val generated = Files.createDirectory(artifacts.resolve("generated"))
+                Files.writeString(generated.resolve("deep.txt"), "artifact")
+                Files.writeString(scratch.resolve("temporary.txt"), "artifact")
+                assertEquals("acl-restored:receipt-2", authority.restoreAndConfirm())
+            } finally { authority.close() }
+        } finally { root.toFile().deleteRecursively() }
+    }
 }

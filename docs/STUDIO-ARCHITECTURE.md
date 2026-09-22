@@ -463,6 +463,22 @@ JS/Wasm компиляция и проверка модульных границ
   planning writer, native reservation/legacy binding и доказуемая очистка UNKNOWN
   checks остаются незавершёнными. Scratch следующего среза не включён в этот
   checkpoint; его интеграция потребует новых проверок.
+- База `./gradlew jvmTest --continue` на Windows (22 сентября 2026, `51db4110`, чистое рабочее дерево)
+  шире записанных выше «двух исходных отказов RequestPin/TreeHeader»: `:core:storage:impl` — 2 отказа
+  (`DurableEventJournalTest.aLostCursorIsRecoveredFromTheRecordsAndNeverWritesOverThem`,
+  `aCorruptRecordIsNotReadAsAShorterHistory`); `:backend-agents:pi` — 2 из 91
+  (`PiInstallationLifecycleTest.cancellationStopsSilentInstallerAndKeepsCancellation`,
+  `PiProcessExecutionTest.recordsOwnershipBeforeSendingPromptAndDecodesDamagedUtf8`);
+  `:designSystem` — 4 из 131 (`PaperFileTransferTest.nativeTransferContainsOnlyTheExactFileAndNeverFileContents`,
+  оба `PaperResearchSourceControlsTest`, `PaperTreeGroupHeaderTest`); `:feature:skills:impl` — 11 из 174
+  (LocalSkill*/SkillImport*/SkillPackage*/SkillRuntimeIntegration); `:magic-agent:runtime:impl` — 9 из 1193
+  (7 `TaskWorktreeIntegrationChecksTest`, `ResearchCheckBridgeTest.piProtocolReusesTheNativeCallIdAcrossWireRetries`,
+  `LongMessageRenderTest.codingAnswerAndMegabyteUserMessageExpandLazilyInTheOuterTimeline`);
+  `:app` — 1 из 255 (`RequestPinViewModelTest`). Все они воспроизведены и с изменениями восстановления ACL,
+  поэтому ни один не регрессия. `TaskWorktreeIntegrationChecksTest` и `ResearchCheckBridgeTest` — не
+  следствие неработающего restricted-токена: `MANAGED_WORKTREE` идёт без него, и их причина здесь не
+  установлена. Прямое следствие долга выше — только opt-in `ResearchSandboxNativeTest`.
+  Прежние числа checkpoint снимались не на Windows, и сверять с ними Windows-прогон нельзя.
 - `:designSystem:jvmTest` — один исходный отказ, воспроизведённый до этого набора изменений:
   - `PaperTreeGroupHeaderTest.narrowHeaderRetainsDisclosureStatusAndFullTitleAtEveryTextScale`:
     `expected <Ellipsis> but was <Clip>`. Заголовок перешёл на `PaperFadingText`, а тот намеренно
@@ -498,6 +514,28 @@ JS/Wasm компиляция и проверка модульных границ
   Безопасно только через версионный переход вроде `limitPolicyVersion`. Закреплено тестом
   `aStopRequestClearsAnUnknownRunOnlyWhereNoQuarantineAndNoFailureKeepsIt`, который упадёт при смене
   политики любым писателем в любую сторону. Не «чинить» без миграции.
+- Windows-песочница проверок не удерживает произвольную команду. Процесс с токеном
+  `CreateRestrictedToken(WRITE_RESTRICTED)` завершается `STATUS_DLL_INIT_FAILED` (`0xC0000142`)
+  до первой инструкции: воспроизведено с run SID, logon SID, `Everyone` и всеми 17 группами
+  самого токена в списке restricting SID, с правами на `winsta0` и на отдельный desktop,
+  с `CREATE_NO_WINDOW` и с `DETACHED_PROCESS`, для `powershell.exe` и для `cmd.exe`;
+  та же подготовка с обычным токеном процесс запускает. Требуется решение по механизму
+  изоляции (низкий integrity level с явными метками на каталогах результатов либо
+  расследование отказа CSRSS-инициализации), а не ослабление assertions.
+  `WindowsResearchSandbox.confinesWrites = false` фиксирует факт, `ResearchSandboxNativeTest`
+  под `-Pmagicpaper.research.native=true` на Windows остаётся красным (6 отказов) и не входит
+  в обычный `jvmTest`. Пользователь 22 сентября 2026 года выбрал не ждать этого решения:
+  `PROTECTED_PROJECT` по-прежнему требует probe и отказывает, а `GIT_READ_ONLY` и
+  `METADATA_READ_ONLY` — точный allowlist аргументов с `--no-optional-locks`, пустым
+  `core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1` и `GIT_CONFIG_GLOBAL=NUL` —
+  больше не gated пробой и на Windows идут без файловой политики, которую платформа всё равно
+  не обеспечивает. На Linux/macOS `confinesWrites` истинно, и эти команды по-прежнему идут
+  в bwrap/Seatbelt с проектом только для чтения. Закреплено
+  `ReadOnlyGitWithoutSandboxProbeNativeTest`. Два настоящих дефекта восстановления ACL при этом
+  исправлены: `SetSecurityInfo` всегда проставлял `SE_DACL_AUTO_INHERITED` и не возвращал исходный
+  дескриптор (заменён на `SetKernelObjectSecurity`), а артефакты, созданные командой, наследовали
+  ACE временного SID и делали доказательство восстановления недостижимым (ACE снимается
+  пересборкой DACL, потому что `SetEntriesInAcl(REVOKE_ACCESS)` наследованные записи не трогает).
 
 ## Куда не идти
 
