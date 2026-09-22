@@ -36,7 +36,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-public enum class PaperToolbarIcon { Sidebar, Settings, Search, Filter, Archive, Unarchive, Immunity }
+public enum class PaperToolbarIcon { Sidebar, Settings, Search, Filter, Archive, Unarchive, Immunity, Stop }
 
 /** Монохромные значки без зависимости от платформенного emoji-шрифта. */
 @Composable
@@ -107,6 +107,7 @@ public fun PaperToolbarButton(
                         }
                         drawPath(diamondPath, ink, style = stroke)
                     }
+                    PaperToolbarIcon.Stop -> drawRoundRect(ink, Offset(3f, 3f), Size(10f, 10f), CornerRadius(1.5f), style = stroke)
                 }
             }
         }

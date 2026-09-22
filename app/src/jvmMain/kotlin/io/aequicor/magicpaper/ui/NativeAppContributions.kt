@@ -56,6 +56,7 @@ private class NativeSidebarContribution(private val coding: CodingService) : Sid
             is SidebarCommand.CreateInProject -> coding.requestCodingSessionInProject(command.id)
             is SidebarCommand.Select -> coding.selectCodingSession(command.id)
             is SidebarCommand.Archive -> coding.archiveCodingSession(command.id)
+            is SidebarCommand.Stop -> coding.abortCodingSession(command.id)
             is SidebarCommand.Restore -> coding.restoreCodingSession(command.id)
             is SidebarCommand.Delete -> coding.deleteCodingSession(command.id)
             SidebarCommand.DismissNotice -> coding.dismissNotice()

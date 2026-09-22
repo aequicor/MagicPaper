@@ -260,6 +260,7 @@ internal fun UnifiedSidebar(
             },
             onSelect = { id, source -> vm.dispatch(source, SidebarCommand.Select(id)) },
             onArchive = { item -> vm.dispatch(item.sourceId, SidebarCommand.Archive(item.id)) },
+            onStop = { item -> vm.dispatch(item.sourceId, SidebarCommand.Stop(item.id)) },
             onDelete = { item -> vm.dispatch(item.sourceId, SidebarCommand.Delete(item.id)) },
             onAddSession = { source, project -> vm.dispatch(source, SidebarCommand.CreateInProject(project)) },
             modifier = Modifier.weight(1f).fillMaxWidth(),
