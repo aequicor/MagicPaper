@@ -354,8 +354,12 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 try { entry.lock.withLock {
                     if (requireKnown) {
                         entry.journal.initialize()
-                        if (entry.journal.state.unknown || entry.journal.state.checks.values.any { it.phase != CommandCheckMachine.Phase.FINISHED })
-                            throw CheckOutcomeUnknown()
+                        // Stale sandbox-probe artifacts are abandoned by declaration: the fixture is
+                        // disposable and a fresh probe re-verifies it, so they never fenced user work.
+                        if (entry.journal.state.persistenceUnknown || entry.journal.state.checks.values.any {
+                                it.phase != CommandCheckMachine.Phase.FINISHED &&
+                                    it.command.ref.scope.projectId != CommandCheckMachine.SANDBOX_PROBE_PROJECT
+                            }) throw CheckOutcomeUnknown()
                     }
                 } } catch (failure: Throwable) { failures += failure }
             }
@@ -390,7 +394,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             // The probe workspace may hold stale unfinished checks from a prior crash; they do not
             // reflect the current sandbox state and must not block the fresh probe attempt.
             val unfinishedNonProbe = entry.journal.state.checks.filter { (ref, check) ->
-                check.phase != CommandCheckMachine.Phase.FINISHED && ref.scope.projectId != "sandbox-probe"
+                check.phase != CommandCheckMachine.Phase.FINISHED && ref.scope.projectId != CommandCheckMachine.SANDBOX_PROBE_PROJECT
             }
             if (entry.journal.state.persistenceUnknown || unfinishedNonProbe.isNotEmpty()) {
                 probeFailure = CheckOutcomeUnknown()

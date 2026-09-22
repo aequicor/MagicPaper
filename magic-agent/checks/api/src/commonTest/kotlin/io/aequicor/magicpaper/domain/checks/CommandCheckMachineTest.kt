@@ -72,6 +72,17 @@ class CommandCheckMachineTest {
         }
     }
 
+    @Test fun staleProbeCrashArtifactsDoNotFenceAFreshProbeSubmit() {
+        val probeRef = CheckRef(CheckScope(CommandCheckMachine.SANDBOX_PROBE_PROJECT, CommandCheckMachine.SANDBOX_PROBE_PROJECT, "old-visit", 0), "probe")
+        val probeCommand = CheckCommand(probeRef, "/checks/sandbox-probe", listOf("probe-script"))
+        val admitted = CommandCheckMachine.reduce(CommandCheckMachine.initial(probeCommand.workspace), Input.Intent.Submit(probeCommand)).state
+        val crashed = CommandCheckMachine.reduce(admitted, Input.Fact.Restored).state
+        assertEquals(Phase.UNKNOWN, crashed.checks.getValue(probeRef).phase)
+        assertTrue(crashed.unknown)
+        val fresh = CheckCommand(probeRef.copy(callId = "new-visit"), probeCommand.workspace, listOf("probe-script"))
+        assertEquals(listOf(Effect.Prepare(fresh)), CommandCheckMachine.reduce(crashed, Input.Intent.Submit(fresh)).effects)
+    }
+
     @Test fun commandIdentityCannotBeReusedForDifferentArgumentsPolicyOrGeneration() {
         val finished = states().getValue(Phase.FINISHED)
         listOf(command.copy(arguments = listOf("other")), command.copy(policy = CheckPolicy.MANAGED_WORKTREE),

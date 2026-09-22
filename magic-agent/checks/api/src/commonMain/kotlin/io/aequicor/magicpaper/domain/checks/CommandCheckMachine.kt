@@ -29,11 +29,10 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
     data class State internal constructor(val workspace: String,
         val checks: Map<CheckRef, Check> = emptyMap(), val persistenceUnknown: Boolean = false) {
         val unknown: Boolean get() = persistenceUnknown || checks.values.any { it.phase == Phase.UNKNOWN }
-        /** Unknown checks from the sandbox-probe workspace do not reflect real work; they are crash artifacts. */
-        val hasRealUnknownChecks: Boolean get() = persistenceUnknown || checks.any { (ref, check) ->
-            check.phase == Phase.UNKNOWN && ref.scope.projectId != "sandbox-probe"
-        }
     }
+    /** Scope project of the disposable OS-sandbox self-test fixture. Its unfinished checks are crash
+     *  artifacts: they fence no user resource, so they must not fence a fresh probe of the sandbox. */
+    const val SANDBOX_PROBE_PROJECT = "sandbox-probe"
     @Serializable
     sealed interface Input {
         @Serializable sealed interface Intent : Input {
@@ -91,16 +90,18 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
             val command = input.command.copy(arguments = input.command.arguments.toList(), environment = input.command.environment.toMap(), affectedResources = input.command.affectedResources.toSet())
             val ref = command.ref
             if (!valid(command, state.workspace)) return reject(Reason.INVALID)
-            // Sandbox-probe workspace may hold stale UNKNOWN checks from prior crashes; they do not block fresh probe.
-            val isProbeWorkspace = state.workspace.endsWith("sandbox-probe")
-            if (!isProbeWorkspace && state.unknown) return reject(Reason.UNKNOWN)
+            // Unfinished sandbox-probe checks are crash artifacts of the disposable self-test fixture:
+            // a fresh probe recreates and re-verifies it, so they neither unknown-fence nor busy-fence it.
+            if (state.checks.values.any { it.phase == Phase.UNKNOWN && it.command.ref.scope.projectId != SANDBOX_PROBE_PROJECT })
+                return reject(Reason.UNKNOWN)
             val prior = state.checks[ref]
             if (prior != null) return when {
                 prior.command != command -> reject(Reason.PAYLOAD_CHANGED)
                 prior.phase != Phase.FINISHED -> reject(Reason.BUSY)
                 else -> Transition(state)
             }
-            if (state.checks.values.any { it.phase != Phase.FINISHED }) return reject(Reason.BUSY)
+            if (state.checks.values.any { it.phase != Phase.FINISHED && it.command.ref.scope.projectId != SANDBOX_PROBE_PROJECT })
+                return reject(Reason.BUSY)
             return Transition(state.copy(checks = state.checks + (ref to Check(command))), listOf(Effect.Prepare(command)))
         }
         if (input is Input.Fact.PreparationRejected) {

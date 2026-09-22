@@ -21,7 +21,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
 
     override suspend fun needsGitMetadata(command: CheckCommand): Boolean = withContext(Dispatchers.IO) {
         val project = Paths.get(command.workspace).toRealPath()
-        val probe = command.ref.scope.projectId == "sandbox-probe" && project == safeRoot().resolve("sandbox-probe")
+        val probe = command.ref.scope.projectId == CommandCheckMachine.SANDBOX_PROBE_PROJECT && project == safeRoot().resolve("sandbox-probe")
         command.policy == CheckPolicy.PROTECTED_PROJECT && !probe && ResearchWorkspacePolicy.hasRepository(project)
     }
 
@@ -47,7 +47,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             val metadataRead = command.policy in setOf(CheckPolicy.METADATA_READ_ONLY, CheckPolicy.GIT_READ_ONLY)
             val artifacts = ResearchArtifactStore(ownedRoot)
             val before = if (protected) artifacts.read(project) else null
-            val isProbe = command.ref.scope.projectId == "sandbox-probe" && project == ownedRoot.resolve("sandbox-probe")
+            val isProbe = command.ref.scope.projectId == CommandCheckMachine.SANDBOX_PROBE_PROJECT && project == ownedRoot.resolve("sandbox-probe")
             val policy = when {
                 metadataRead -> ResearchWorkspacePolicy.metadataOnly(project, scratch)
                 isProbe -> ResearchWorkspacePolicy(project, listOf(project.resolve("build"), scratch), listOf(project.resolve(".git")), emptyList())
