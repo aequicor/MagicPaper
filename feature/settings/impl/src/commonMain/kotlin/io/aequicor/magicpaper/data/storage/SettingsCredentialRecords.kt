@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.storage
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
@@ -43,8 +44,15 @@ internal class SettingsCredentialRecords(private val store: KeyValueStore, priva
             store.read("settings")?.let { add(json.parseToJsonElement(it) as JsonObject) }
             store.read("llm_profiles")?.let { addAll((json.parseToJsonElement(it) as JsonArray).map { row -> row as JsonObject }) }
         }
+        // Dossiers written before the machine required a non-blank id/profileId (e.g. an old
+        // heuristic-fallback record) must not reject the whole restore; they are dropped instead.
+        val rawDossiers = JsonModelDossierRepository(store, json).dossiers()
+        val dossiers = rawDossiers.filter { it.id.isNotBlank() && it.profileId.isNotBlank() }
+            .distinctBy { SettingsDossierKey(it.profileId, it.modelId) }
+        if (dossiers.size != rawDossiers.size) AppLog.error("settings.credentials", "invalid_legacy_dossier",
+            mapOf("count" to (rawDossiers.size - dossiers.size).toString()))
         val initial = SettingsMachine.Fact.Initialized(encode(settings), profiles.map { encode(it) },
-            JsonModelDossierRepository(store, json).dossiers(), io.aequicor.magicpaper.util.Id.new())
+            dossiers, io.aequicor.magicpaper.util.Id.new())
         credentials.stageCleanup(old)
         return initial
     }

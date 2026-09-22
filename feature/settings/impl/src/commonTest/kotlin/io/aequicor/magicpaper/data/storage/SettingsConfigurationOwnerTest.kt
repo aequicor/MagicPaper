@@ -187,6 +187,17 @@ class SettingsConfigurationOwnerTest {
         assertTrue(f.owner.state.value.interruptedRequests.isEmpty())
     }
 
+    @Test fun legacyDossierWithBlankIdIsDroppedInsteadOfBlockingRestore() = runTest {
+        val f = Fixture(StandardTestDispatcher(testScheduler))
+        val valid = ModelDossier("valid-id", "provider", "model-a", strengths = "ok")
+        // Written by an older build, before the machine required a non-blank dossier id.
+        val corrupt = ModelDossier("", "provider", "model-b", strengths = "legacy heuristic fallback")
+        f.store.write("model-dossiers", f.json.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(ModelDossier.serializer()), listOf(valid, corrupt)))
+        f.owner.start()
+        assertEquals(listOf(valid), f.owner.dossiers())
+    }
+
     @Test fun lateResearchCannotReplaceAManualDossierEdit() = runTest {
         val f = Fixture(StandardTestDispatcher(testScheduler)); f.owner.start()
         f.owner.saveProfile(profile(), null)
