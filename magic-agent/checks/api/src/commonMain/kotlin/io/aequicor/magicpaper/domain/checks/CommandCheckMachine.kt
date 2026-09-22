@@ -29,6 +29,10 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
     data class State internal constructor(val workspace: String,
         val checks: Map<CheckRef, Check> = emptyMap(), val persistenceUnknown: Boolean = false) {
         val unknown: Boolean get() = persistenceUnknown || checks.values.any { it.phase == Phase.UNKNOWN }
+        /** Unknown checks from the sandbox-probe workspace do not reflect real work; they are crash artifacts. */
+        val hasRealUnknownChecks: Boolean get() = persistenceUnknown || checks.any { (ref, check) ->
+            check.phase == Phase.UNKNOWN && ref.scope.projectId != "sandbox-probe"
+        }
     }
     @Serializable
     sealed interface Input {
@@ -87,7 +91,9 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
             val command = input.command.copy(arguments = input.command.arguments.toList(), environment = input.command.environment.toMap(), affectedResources = input.command.affectedResources.toSet())
             val ref = command.ref
             if (!valid(command, state.workspace)) return reject(Reason.INVALID)
-            if (state.unknown) return reject(Reason.UNKNOWN)
+            // Sandbox-probe workspace may hold stale UNKNOWN checks from prior crashes; they do not block fresh probe.
+            val isProbeWorkspace = state.workspace.endsWith("sandbox-probe")
+            if (!isProbeWorkspace && state.unknown) return reject(Reason.UNKNOWN)
             val prior = state.checks[ref]
             if (prior != null) return when {
                 prior.command != command -> reject(Reason.PAYLOAD_CHANGED)
