@@ -387,7 +387,12 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         }
         entry.lock.withLock {
             entry.journal.initialize()
-            if (entry.journal.state.unknown) {
+            // The probe workspace may hold stale unfinished checks from a prior crash; they do not
+            // reflect the current sandbox state and must not block the fresh probe attempt.
+            val unfinishedNonProbe = entry.journal.state.checks.filter { (ref, check) ->
+                check.phase != CommandCheckMachine.Phase.FINISHED && ref.scope.projectId != "sandbox-probe"
+            }
+            if (entry.journal.state.persistenceUnknown || unfinishedNonProbe.isNotEmpty()) {
                 probeFailure = CheckOutcomeUnknown()
                 probeFailureAt = now
                 return@withLock
