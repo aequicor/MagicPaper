@@ -24,8 +24,14 @@ internal class WindowsCheckAuthority private constructor(
     private val targets: List<Target>,
 ) : AutoCloseable {
     private var mayHaveGranted = false
-    fun grant(sid: Pointer) {
+    /** Takes the SID text, not a raw pointer: this owner allocates and frees the native SID it grants. */
+    fun grant(sid: String) {
         mayHaveGranted = true // a failing Win32 call is not evidence that no ACE changed
+        val native = PointerByReference()
+        bool("ConvertStringSidToSidW", WString(sid), native)
+        try { grantSid(native.value) } finally { free(native.value) }
+    }
+    private fun grantSid(sid: Pointer) {
         roots.forEach { root ->
             val target = targets.single { it.path == root }
             target.withDescriptor { _, dacl ->
@@ -82,11 +88,14 @@ internal class WindowsCheckAuthority private constructor(
                 val dacl = PointerByReference(); val present = IntByReference(); val defaulted = IntByReference()
                 bool("GetSecurityDescriptorDacl", descriptor.value, present, dacl, defaulted)
                 check(present.value != 0 && dacl.value != null) { "Original check ACL is incomplete" }
-                // SECURITY_DESCRIPTOR_CONTROL is a WORD. Preserve inheritance protection, not just ACE bytes.
-                Memory(2).use { control ->
-                    bool("GetSecurityDescriptorControl", descriptor.value, control, IntByReference())
-                    val flags = 4 or if (control.getShort(0).toInt() and 0x1000 != 0) 0x80000000.toInt() else 0x20000000
-                    check(advapi.getFunction("SetSecurityInfo").invokeInt(arrayOf(handle, 1, flags, null, null, dacl.value, null)) == 0) { "Cannot restore original check ACL" }
+                // SetSecurityInfo rebuilds a descriptor from the DACL alone and stamps
+                // SE_DACL_AUTO_INHERITED on every unprotected write, so it can never return an object
+                // whose snapshot lacked that flag: the ACE bytes came back identical while the ACL read
+                // back as "D:AI(...)" and restoration proof was refused forever. The descriptor parsed
+                // from the snapshot SDDL carries the whole SECURITY_DESCRIPTOR_CONTROL — protection and
+                // auto-inheritance included — so it is written back verbatim through the same handle.
+                check(advapi.getFunction("SetKernelObjectSecurity").invokeInt(arrayOf(handle, 4, descriptor.value)) != 0) {
+                    "Cannot restore original check ACL (${Native.getLastError()})"
                 }
             } finally { free(descriptor.value) }
             open(path).use { check(it.snapshot.fileIdentity == snapshot.fileIdentity) { "Check ACL path identity changed" } }

@@ -142,7 +142,10 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
         val next = CommandCheckMachine.reduce(before, CommandCheckMachine.Input.Fact.PersistenceUnknown)
         MachineTransitionLog.append(CommandCheckMachine.id, CommandCheckMachine.space, before, CommandCheckMachine.Input.Fact.PersistenceUnknown, next.state, next.effects)
         state = next.state
-        AppLog.error("checks", event, mapOf("workspaceId" to hash(workspace),
+        // The cause is part of the evidence: without it a refused replay records only
+        // "IllegalStateException", and the workspace identity must use an allowlisted field name
+        // or the log sanitizer drops it and the entry cannot be correlated with a workspace.
+        AppLog.error("checks", event, failure, mapOf("journalId" to hash(workspace),
             "causeType" to failure.javaClass.simpleName, "result" to "effects_blocked"))
     }
 

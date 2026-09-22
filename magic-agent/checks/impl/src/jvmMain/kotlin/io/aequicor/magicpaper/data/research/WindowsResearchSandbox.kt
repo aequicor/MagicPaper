@@ -93,7 +93,7 @@ internal object WindowsResearchSandbox : ResearchSandbox {
             }
             // A unique restricting SID has no rights on user files; only artifact directories receive an ACE.
             authority = WindowsCheckAuthority.capture(policy.writable, sidText, receiptId, authorityRecorder)
-            authority.grant(sid.value)
+            authority.grant(sidText)
             val securityDescriptor = PointerByReference()
             // Owner access is retained; the second ACE is only for this restricted child.
             bool(advapi, "ConvertStringSecurityDescriptorToSecurityDescriptorW", WString("D:(A;;GA;;;OW)(A;;GA;;;$sidText)"), 1, securityDescriptor, null)

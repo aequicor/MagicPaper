@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.data.research
 
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import kotlin.test.*
 
@@ -22,7 +24,10 @@ class ResearchArtifactStoreTest {
             val manifest = root.resolve("artifacts-${ResearchArtifactStore.key(project.toString())}.json")
             Files.writeString(manifest, "{\"/outside/file\":\"${"a".repeat(64)}\"}")
             assertFailsWith<IllegalStateException> { ResearchArtifactStore(root).read(project) }
-            Files.writeString(manifest, "{\"${project.resolve("output")}\":\"not-a-digest\"}")
+            // A Windows path carries backslashes: interpolate it through the JSON writer, or the
+            // manifest is unparseable and the test proves the decoder instead of the digest rule.
+            val inside = Json.encodeToString(String.serializer(), project.resolve("output").toString())
+            Files.writeString(manifest, "{$inside:\"not-a-digest\"}")
             assertFailsWith<IllegalStateException> { ResearchArtifactStore(root).read(project) }
         } finally { root.toFile().deleteRecursively(); project.toFile().deleteRecursively() }
     }

@@ -154,11 +154,17 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             "printf changed > .git/index; printf allowed > build/ok.txt; printf PROBE_DONE")
         object : CheckProbe {
             override val command = CheckCommand(ref, fixture.toString(), script)
+            /** Each containment guarantee is proved separately: one conjunction made a failed probe
+             *  undiagnosable, and a failed probe disables every sandbox-dependent check for the visit. */
             override suspend fun verify(result: CheckResult) {
-                check(result.exitCode == 0 && result.blockedReason == null && "PROBE_DONE" in result.output &&
-                    Files.readString(source) == "protected" && Files.readString(git.resolve("index")) == "index" &&
-                    !Files.exists(fixture.resolve("forbidden.txt")) && !Files.exists(fixture.resolve("moved.txt")) &&
-                    Files.readString(output.resolve("ok.txt")).trim() == "allowed")
+                check(result.blockedReason == null) { "Sandbox probe was blocked before completion" }
+                check(result.exitCode == 0) { "Sandbox probe exited with code ${result.exitCode}" }
+                check("PROBE_DONE" in result.output) { "Sandbox probe printed no completion marker" }
+                check(Files.readString(source) == "protected") { "Sandbox probe overwrote a protected source" }
+                check(Files.readString(git.resolve("index")) == "index") { "Sandbox probe overwrote repository metadata" }
+                check(!Files.exists(fixture.resolve("forbidden.txt"))) { "Sandbox probe wrote outside its artifact directory" }
+                check(!Files.exists(fixture.resolve("moved.txt"))) { "Sandbox probe renamed a protected source" }
+                check(Files.readString(output.resolve("ok.txt")).trim() == "allowed") { "Sandbox probe could not write an artifact" }
             }
         }
     }

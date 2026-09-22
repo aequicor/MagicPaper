@@ -218,7 +218,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                     journal.uncertain(cleanupFailure)
                 }
             }
-            AppLog.error("checks", "run.failed", mapOf("sessionId" to ref.scope.sessionId, "requestId" to ref.scope.requestId,
+            AppLog.error("checks", "run.failed", primary, mapOf("sessionId" to ref.scope.sessionId, "requestId" to ref.scope.requestId,
                 "callId" to ref.callId, "causeType" to primary.javaClass.simpleName,
                 "result" to if (journal.state.unknown) "unknown" else "stopped"))
             if (primary is CancellationException) throw primary
@@ -340,7 +340,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         events.streams().filter { it.startsWith("command-check:") }.forEach { stream ->
             val workspace = try { CheckInputJournal.workspace(events, payloads, stream) } catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
-                AppLog.error("checks", "discovery.failed", mapOf("causeType" to failure.javaClass.simpleName))
+                AppLog.error("checks", "discovery.failed", failure, mapOf("causeType" to failure.javaClass.simpleName))
                 throw CheckOutcomeUnknown(failure)
             } ?: return@forEach
             entries.computeIfAbsent(workspace) { Entry(CheckInputJournal(events, payloads, it)) }
@@ -369,7 +369,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         try { currentCoroutineContext().ensureActive() } catch (failure: CancellationException) { failures += failure }
         val primary = failures.firstOrNull { it is CancellationException } ?: failures.firstOrNull() ?: return
         failures.filter { it !== primary }.forEach(primary::addSuppressed)
-        AppLog.error("checks", "lifecycle.cleanup.failed", mapOf("causeType" to primary.javaClass.simpleName))
+        AppLog.error("checks", "lifecycle.cleanup.failed", primary, mapOf("causeType" to primary.javaClass.simpleName))
         throw primary
     }
     /** The real OS probe is another journaled command in a fixed owned workspace, with the same lifecycle proofs.
@@ -402,7 +402,8 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 return@withLock
             }
             check(accepting && !closed) { "Проверки временно остановлены" }
-            val ref = CheckRef(CheckScope("sandbox-probe", "sandbox-probe", UUID.randomUUID().toString(), 0), "probe")
+            val ref = CheckRef(CheckScope(CommandCheckMachine.SANDBOX_PROBE_PROJECT,
+                CommandCheckMachine.SANDBOX_PROBE_PROJECT, UUID.randomUUID().toString(), 0), "probe")
             val probe = driver.createProbe(ref)
             check(probe.command.workspace == workspace && probe.command.ref == ref)
             entry.journal.append(Input.Intent.Submit(probe.command))
@@ -413,7 +414,10 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 probe.verify(result)
                 probeVerified = true
             } catch (failure: Throwable) {
-                AppLog.error("checks", "sandbox.probe.failed", mapOf("causeType" to failure.javaClass.simpleName))
+                // The cause is the only evidence of why every sandbox-dependent check is unavailable;
+                // recording the class name alone left a broken OS sandbox indistinguishable from a
+                // storage outage and sent diagnosis after the journal instead of the runner.
+                AppLog.error("checks", "sandbox.probe.failed", failure, mapOf("causeType" to failure.javaClass.simpleName))
                 if (failure is CancellationException) throw failure
                 probeFailure = IllegalStateException("ОС не подтвердила защиту исходников. Проверка недоступна", failure)
                 probeFailureAt = System.currentTimeMillis()
