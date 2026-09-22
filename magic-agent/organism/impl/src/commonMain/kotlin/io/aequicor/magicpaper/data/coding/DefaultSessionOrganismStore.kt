@@ -30,6 +30,9 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
     private val mutableFailures = MutableStateFlow<Map<String, String>>(emptyMap())
     override val failures = mutableFailures.asStateFlow()
     private fun stamp() = SessionOrganismMachine.Stamp(Id.new(), clock())
+    /** The effects [MachineTransitionLog] logs, matching what [SessionOrganismMachine.step] bridges. */
+    private fun SessionOrganismMachine.Transition.effects(): List<SessionOrganismMachine.Effect> =
+        outputs.map(SessionOrganismMachine.Effect::Emit) + listOfNotNull(reject?.let(SessionOrganismMachine.Effect::Reject))
     private fun stream(id: String) = PREFIX + encodedOrganismId(id)
     private fun key(id: String) = "session-organism-$id"
 
@@ -64,8 +67,9 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
         if (initialized) return
         val imports = mutableMapOf<String, SessionOrganismMachine.Input>()
         try {
-            for (source in journal.streams().filter { it.startsWith(PREFIX) }) {
-                val snapshot = validatedSnapshot(source)
+            // One read of every stream's snapshot, not one full journal scan per organism.
+            for ((source, snapshot) in journal.snapshotAll().filterKeys { it.startsWith(PREFIX) }.toSortedMap()) {
+                validate(source, snapshot)
                 val first = checkNotNull(snapshot.records.firstOrNull()) { "Пустой журнал организма" }
                 val id = json.decodeFromString(Envelope.serializer(), first.detail).ref.organismId
                 var state = SessionOrganismMachine.initial(id)
@@ -75,6 +79,7 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
                     check(input.stamp.at == record.at) { "Время ввода организма изменилось" }
                     val next = SessionOrganismMachine.reduce(state, input)
                     check(next.reject == null) { "Повреждён переход организма" }
+                    MachineTransitionLog.replay(SessionOrganismMachine.id, SessionOrganismMachine.space, state, input, next.state, next.effects())
                     state = next.state
                     inputId = input.stamp.id
                 }
@@ -86,8 +91,10 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
                 val old = json.decodeFromString<SessionOrganism>(checkNotNull(storage.read(legacyKey)))
                 check(old.id == id) { "Снимок принадлежит другому организму" }
                 val input = sanitize(SessionOrganismMachine.Fact.LegacyImported(stamp(), old))
-                val next = SessionOrganismMachine.reduce(SessionOrganismMachine.initial(id), input)
+                val before = SessionOrganismMachine.initial(id)
+                val next = SessionOrganismMachine.reduce(before, input)
                 check(next.reject == null) { "Повреждён снимок организма" }
+                MachineTransitionLog.replay(SessionOrganismMachine.id, SessionOrganismMachine.space, before, input, next.state, next.effects())
                 entries[id] = Entry(next.state, validatedSnapshot(stream(id)).revision, mutableListOf())
                 imports[id] = input
             }
@@ -130,17 +137,22 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
             // Input replay acknowledges durable state; it never repeats the parent's outputs.
             return SessionOrganismMachine.Transition(entry.state)
         }
-        val next = SessionOrganismMachine.reduce(entry.state, input)
-        next.reject?.let { rejected -> when (rejected.kind) {
-            SessionOrganismMachine.Rejection.VERSION -> throw StaleSessionVersion()
-            SessionOrganismMachine.Rejection.QUARANTINE -> throw SessionQuarantineBlocked(checkNotNull(rejected.sessionId), rejected.reason)
-            SessionOrganismMachine.Rejection.UNKNOWN -> error(rejected.reason)
-            SessionOrganismMachine.Rejection.VALIDATION -> throw ToolArgumentRejection(rejected.reason)
-        } }
+        val before = entry.state
+        val next = SessionOrganismMachine.reduce(before, input)
+        next.reject?.let { rejected ->
+            MachineTransitionLog.append(SessionOrganismMachine.id, SessionOrganismMachine.space, before, input, next.state, next.effects())
+            when (rejected.kind) {
+                SessionOrganismMachine.Rejection.VERSION -> throw StaleSessionVersion()
+                SessionOrganismMachine.Rejection.QUARANTINE -> throw SessionQuarantineBlocked(checkNotNull(rejected.sessionId), rejected.reason)
+                SessionOrganismMachine.Rejection.UNKNOWN -> error(rejected.reason)
+                SessionOrganismMachine.Rejection.VALIDATION -> throw ToolArgumentRejection(rejected.reason)
+            }
+        }
         validateIdentities(id, next.state)
         if (next.state == entry.state && next.outputs.isEmpty()) return next
         try { commit(id, entry, input, next.state) }
         catch (failure: Exception) { unknown(id, entry, failure); throw failure }
+        MachineTransitionLog.append(SessionOrganismMachine.id, SessionOrganismMachine.space, before, input, next.state, next.effects())
         publish(id, entry)
         checkpoint(id, entry)
         return next
@@ -166,8 +178,8 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
         entry.inputId = input.stamp.id
         entry.state = next
     }
-    private suspend fun validatedSnapshot(source: String): JournalSnapshot {
-        val snapshot = journal.snapshot(source)
+    private suspend fun validatedSnapshot(source: String): JournalSnapshot = validate(source, journal.snapshot(source))
+    private fun validate(source: String, snapshot: JournalSnapshot): JournalSnapshot {
         check(snapshot.revision.stream == source && snapshot.revision.seq >= 0 && snapshot.revision.resetEpoch >= 0) { "Неверное поколение журнала организма" }
         var previous = 0L
         val ids = mutableSetOf<String>()
@@ -185,7 +197,11 @@ class DefaultSessionOrganismStore(private val storage: KeyValueStore, private va
         entry.state.organism?.let { mutableOrganisms.value += id to it; mutableProjections.value += id to entry.projection() }
     }
     private fun unknown(id: String, entry: Entry, failure: Throwable) {
-        entry.state = SessionOrganismMachine.reduce(entry.state, SessionOrganismMachine.Fact.PersistenceUnknown(stamp())).state
+        val before = entry.state
+        val input = SessionOrganismMachine.Fact.PersistenceUnknown(stamp())
+        val next = SessionOrganismMachine.reduce(before, input)
+        MachineTransitionLog.append(SessionOrganismMachine.id, SessionOrganismMachine.space, before, input, next.state, next.effects())
+        entry.state = next.state
         publish(id, entry)
         report(id, "commit", failure)
     }

@@ -64,6 +64,8 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -412,8 +414,9 @@ class DefaultCodingService(
         val settings = settingsRepo.load()
         val profiles = profileRepo.load()
         val projects = codingProjects?.all().orEmpty()
+        val sessions = loadCodingSessions(projects)
         _state.update { it.copy(settings = settings, llmProfiles = profiles,
-            coding = it.coding.copy(projects = projects, sessions = loadCodingSessions(projects), projectStatuses = codingStatusSnapshot(projects),
+            coding = it.coding.copy(projects = projects, sessions = sessions, projectStatuses = codingStatusSnapshot(projects, sessions),
                 nativeModelEngines = codingRuntime?.modelSources?.keys.orEmpty())) }
         when (val policy = settingsCommands.runtimePolicy()) {
             is SettingsRuntimePolicy.Confirmed -> codingRuntime?.computerUse?.configure(policy.settings.computerAccess, policy.settings.applicationAccess)
@@ -708,24 +711,25 @@ class DefaultCodingService(
         return projection.copy(runPhase = codingProjects?.states?.value?.get(item.session.projectId)?.runs?.get(item.session.id)?.phase)
     }
 
+    /** Every project's worktree probe and journal read run concurrently: each is its own I/O, not a shared resource. */
     private suspend fun loadCodingSessions(projects: List<CodingProject>): List<CodingSessionUi> {
         val repo = codingProjects ?: return emptyList()
-        return projects.flatMap { project ->
-            val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
-            repo.sessions(project.id).map { session ->
-                withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id), worktreeAvailability = capability)))
-            }
+        return coroutineScope {
+            projects.map { project ->
+                async {
+                    val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+                    repo.sessions(project.id).map { session ->
+                        withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id), worktreeAvailability = capability)))
+                    }
+                }
+            }.awaitAll().flatten()
         }
     }
 
-    private suspend fun codingStatusSnapshot(projects: List<CodingProject>): Map<String, CodingSessionStatus> {
-        val repo = codingProjects ?: return emptyMap()
-        return projects.associate { project ->
-            val statuses = repo.sessions(project.id).map { session ->
-                withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id)))).status
-            }
-            project.id to aggregateCodingStatus(statuses)
-        }
+    /** Statuses are read off an already-built session list, not recomputed from the journal a second time. */
+    private fun codingStatusSnapshot(projects: List<CodingProject>, sessions: List<CodingSessionUi>): Map<String, CodingSessionStatus> {
+        val byProject = sessions.groupBy { it.session.projectId }
+        return projects.associate { it.id to aggregateCodingStatus(byProject[it.id].orEmpty().map { session -> session.status }) }
     }
 
     /**
@@ -976,18 +980,26 @@ class DefaultCodingService(
         val repo = codingProjects ?: return
         val project = repo.all().firstOrNull { it.id == projectId } ?: return
         val sessions = repo.sessions(projectId)
-        val worktreeCapability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
-        // Every sidebar row needs its saved result, including sessions that are not selected.
-        val loaded = withContext(workerDispatcher) {
-            sessions.map { session ->
-                val messages = repo.messages(projectId, session.id)
-                withUnread(withPlanningState(CodingSessionUi(
-                    session = session,
-                    messages = messages,
-                    running = codingJobs.value[session.id]?.isActive == true,
-                    worktreeAvailability = worktreeCapability,
-                )))
+        // The worktree probe (several sequential git spawns) and the sidebar rebuild are
+        // independent I/O; run them together and attach the probe result once both land,
+        // instead of paying for them back-to-back on every project switch.
+        val loaded: List<CodingSessionUi> = coroutineScope {
+            val capability = async {
+                taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
             }
+            // Every sidebar row needs its saved result, including sessions that are not selected.
+            val rows = async(workerDispatcher) {
+                sessions.map { session ->
+                    val messages = repo.messages(projectId, session.id)
+                    withUnread(withPlanningState(CodingSessionUi(
+                        session = session,
+                        messages = messages,
+                        running = codingJobs.value[session.id]?.isActive == true,
+                    )))
+                }
+            }
+            val resolved = capability.await()
+            rows.await().map { it.copy(worktreeAvailability = resolved) }
         }
         currentCoroutineContext().ensureActive()
         _state.update { st ->
@@ -1591,16 +1603,23 @@ class DefaultCodingService(
                 if (running != null) {
                     codingRuntime?.abort(sessionId)
                     running.cancelAndJoin()
-                    codingRuntime?.reconcile(sessionId)
+                    // The run's own cleanup already settled the checkpoint via RunStopped; a native
+                    // attempt still tearing down makes this best-effort call fail too, and its real
+                    // outcome (INTERRUPTED vs UNKNOWN) is re-read from the saved run below regardless.
+                    try { codingRuntime?.reconcile(sessionId) } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { AppLog.debug("coding", "run.clarify.reconcile_uncertain",
+                        mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty())) }
                 }
                 val owner = checkNotNull(codingProjects)
                 val current = owner.states.value[ui.session.projectId]?.sessions?.get(sessionId) ?: return@launch
                 val stopped = owner.states.value[ui.session.projectId]?.runs?.get(sessionId) ?: return@launch
-                if (stopped.phase != CodingMachine.Phase.INTERRUPTED) {
+                if (stopped.phase !in setOf(CodingMachine.Phase.INTERRUPTED, CodingMachine.Phase.UNKNOWN)) {
                     _state.update { it.copy(notice = "Уточнение сохранено. Исход предыдущего запроса неизвестен; проверьте состояние перед продолжением.") }
                     return@launch
                 }
-                acceptCodingSession(current, CodingMachine.Intent.DiscardInterrupted(stopped.ref))
+                // Same settlement as the explicit "Продолжить" path: INTERRUPTED discards outright,
+                // UNKNOWN runs the abandon/acknowledge handshake against the native recovery snapshot.
+                finishPreviousForExplicitRun(current)
                 startQueuedPrompt(sessionId)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {

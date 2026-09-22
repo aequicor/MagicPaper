@@ -328,11 +328,24 @@ class DurableDraftRepository(
 class DurableEventJournal(private val backend: DurableByteStore) : EventJournal {
     private val mutex = Mutex()
     private val json = Json { encodeDefaults = true }
+    // records() lists and decodes every event this journal has ever stored. Every read here goes
+    // through the same mutex, so a listing this instance already paid for is still correct until
+    // this instance itself appends or drops something, or a caller wipes the backend directly
+    // (see invalidateCache) — only those invalidate it.
+    private var recordsCache: List<JournalRecord>? = null
 
     private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock {
         readResetEpoch(backend)
         block()
     } }
+
+    /**
+     * For a caller that clears the backend directly (a durable reset) instead of through this
+     * journal. Deliberately does not take [locked]: a reset already holds the backend's draft
+     * lock while it clears storage and invalidates from inside that same callback, and the draft
+     * lock is not reentrant — taking it again here would deadlock the reset itself.
+     */
+    internal suspend fun invalidateCache() = mutex.withLock { recordsCache = null }
 
     override suspend fun append(stream: String, operation: String, at: Long, detail: String): JournalRecord = locked {
         appendLocked(stream, operation, at, detail)
@@ -351,6 +364,12 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
         catch (failure: CancellationException) { throw failure }
         catch (failure: StorageException) { throw failure }
         catch (failure: Exception) { throw StorageException("append journal record", StorageException.Kind.WRITE, failure) }
+        // reserve() only ever increases, so a fresh record's seq is always the new maximum:
+        // appending it to an already-warm cache keeps `records()` correct (still seq-ordered)
+        // without a full directory rescan. This journal is shared by every domain in the app
+        // (coding, checks, settings, ...), so without this, one domain's append would force
+        // the next unrelated streams()/discover() call to pay for a full rescan again.
+        recordsCache = recordsCache?.plus(record)
         return record
     }
 
@@ -363,6 +382,17 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
     }
 
     override suspend fun read(stream: String): List<JournalRecord> = snapshot(stream).records
+
+    /** One directory scan for every stream, instead of the one-scan-per-stream that [streams] plus a [snapshot] per name would cost here. */
+    override suspend fun snapshotAll(): Map<String, JournalSnapshot> = locked {
+        val epoch = readResetEpoch(backend)
+        records().groupBy { it.stream }.mapNotNull { (stream, recs) ->
+            val dropped = droppedThrough(stream)
+            val visible = recs.filter { it.seq > dropped }
+            if (visible.isEmpty()) null
+            else stream to JournalSnapshot(JournalRevision(stream, maxOf(visible.last().seq, dropped), epoch), visible)
+        }.toMap()
+    }
 
     override suspend fun streams(): List<String> = locked {
         records().groupBy { it.stream }.filter { (stream, records) ->
@@ -391,6 +421,8 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
                 if (firstFailure == null) firstFailure = failure else firstFailure?.addSuppressed(failure)
             }
         }
+        // Some deletes above may have landed even on the failing path; a stale cache must not survive either way.
+        recordsCache = null
         firstFailure?.let { throw StorageException("drop journal stream", StorageException.Kind.CLEANUP, it, committed = true) }
     }
 
@@ -418,7 +450,7 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
     private suspend fun recover(): Long = maxOf(records().maxOfOrNull { it.seq } ?: 0,
         backend.values(StorageArea.EVENTS).mapNotNull { it.decodeToString().toLongOrNull() }.maxOrNull() ?: 0)
 
-    private suspend fun records(): List<JournalRecord> = backend.values(StorageArea.EVENTS)
+    private suspend fun records(): List<JournalRecord> = recordsCache ?: backend.values(StorageArea.EVENTS)
         .mapNotNull { bytes ->
             // Cursor/deletion fences share the area and are not records; anything else that fails to parse
             // is a corrupt journal, which must not silently read as a shorter history.
@@ -426,6 +458,7 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
             if (raw.toLongOrNull() != null) null else decode(raw)
         }
         .sortedBy { it.seq }
+        .also { recordsCache = it }
 
     private fun decode(raw: String): JournalRecord = try {
         json.decodeFromString(StoredEvent.serializer(), raw).let {
@@ -464,7 +497,8 @@ private data class StoredEvent(
 fun persistenceStores(backend: DurableByteStore, journalId: String = "main", secrets: SecretStore = DurableSecretStore(backend), fallbackJournalId: String? = null): PersistenceStores {
     val drafts = DurableDraftRepository(backend, secrets)
     val navigation = DurableNavigationSnapshotStore(backend, journalId, fallbackJournalId)
-    return PersistenceStores(secrets, drafts, DurableDraftBlobStore(backend), navigation, DurableEventJournal(backend)) {
+    val events = DurableEventJournal(backend)
+    return PersistenceStores(secrets, drafts, DurableDraftBlobStore(backend), navigation, events) {
         val epoch = drafts.reset {
             var firstFailure: Exception? = null
             StorageArea.entries.filter { it != StorageArea.CONTROL }.forEach { area ->
@@ -476,6 +510,10 @@ fun persistenceStores(backend: DurableByteStore, journalId: String = "main", sec
                 catch (failure: Exception) {
                     if (firstFailure == null) firstFailure = failure else firstFailure?.addSuppressed(failure)
                 }
+                // This clear bypasses events' own append/drop, which is what normally invalidates
+                // its cached listing; a failed or cancelled attempt can still have deleted files,
+                // so invalidate unconditionally once EVENTS was attempted, not just on success.
+                finally { if (area == StorageArea.EVENTS) events.invalidateCache() }
             }
             firstFailure?.let { throw it }
         }

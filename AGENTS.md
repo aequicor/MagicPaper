@@ -216,6 +216,15 @@ abstraction and structured events rather than scattered `println` or payload dum
   Record configuration changes and relevant effective options through an allowlist;
   do not serialize entire settings/profile objects. Prefer IDs over titles, names
   or free-form user text. Avoid per-keystroke and per-token logging at normal levels.
+- A machine's own transitions are logged through `MachineTransitionLog`
+  (`:core:storage:api`, beside `MachineJournal`), never hand-rolled per owner: one
+  `DEBUG` line per accepted or refused input, naming the phase before and after via
+  the owner's `StateSpace`, so a machine's state and history can be read back from
+  logs alone, including while replaying the journal after a crash. It does not live
+  in `:core:state-machine:impl` — that module is unreachable from every owner's
+  `impl`, which may not depend on another one. Skip it only for a machine whose
+  inputs are per-keystroke or otherwise too frequent for `DEBUG` (`DraftMachine`'s
+  `Intent.Edit` is the one exception, filtered at the call site).
 - Do not log request/response bodies, prompts, message text, questionnaire answers,
   attachment contents or raw protocol frames at `ERROR`, `INFO` or `DEBUG`.
   Normal request diagnostics contain safe metadata such as operation type, provider,

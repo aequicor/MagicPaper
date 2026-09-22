@@ -43,7 +43,13 @@ class DefaultPlanningStore(
     private fun failed(cause: Throwable, entry: Entry? = null): Nothing {
         admitted.value = emptyMap()
         if(cause is PlanningRevisionConflictException) { loaded = false; throw cause }
-        entry?.let { it.state = PlanningMachine.reduce(it.state, PlanningMachine.Fact.PersistenceUnknown(stamp())).state }
+        entry?.let {
+            val before = it.state
+            val input = PlanningMachine.Fact.PersistenceUnknown(stamp())
+            val next = PlanningMachine.reduce(before, input)
+            MachineTransitionLog.append(PlanningMachine.id, PlanningMachine.space, before, input, next.state, next.effects)
+            it.state = next.state
+        }
         _failure.value = "Не удалось сохранить планирование. Проверьте доступ к данным и восстановите состояние."
         publish()
         AppLog.error("planning.storage", "operation.failed", fields = mapOf("causeType" to (cause::class.simpleName ?: "Exception")))
@@ -75,8 +81,12 @@ class DefaultPlanningStore(
             return PlanningMachine.Transition(entry.state, if(previous.input == frozen) emptyList() else
                 listOf(PlanningMachine.Effect.Reject("Идентификатор команды уже использован"))) to null
         }
-        val transition = PlanningMachine.reduce(entry.state, frozen)
-        if (transition.rejection != null) return transition to null
+        val previousState = entry.state
+        val transition = PlanningMachine.reduce(previousState, frozen)
+        if (transition.rejection != null) {
+            MachineTransitionLog.append(PlanningMachine.id, PlanningMachine.space, previousState, frozen, transition.state, transition.effects)
+            return transition to null
+        }
         val before = entry.snapshot
         val detail = PlanInputCommit(frozen, before.revision.resetEpoch, evidence).encode()
         try {
@@ -97,6 +107,7 @@ class DefaultPlanningStore(
                     after.revision.resetEpoch != before.revision.resetEpoch || after.records.size != before.records.size + 1 ||
                     after.records.dropLast(1) != before.records) throw primary
                 require(validate(after, entry.state.id) == transition.state) { "Plan replay differs from accepted input" }
+                MachineTransitionLog.append(PlanningMachine.id, PlanningMachine.space, previousState, frozen, transition.state, transition.effects)
                 entry.state = transition.state; entry.snapshot = after; publish()
                 if(primary is CancellationException) throw primary
                 if(checkpoint) transition.state.plan?.let { repo.save(it) }
@@ -106,6 +117,7 @@ class DefaultPlanningStore(
                 observed.revision.resetEpoch == before.revision.resetEpoch && observed.records.size == before.records.size + 1 &&
                 observed.records.dropLast(1) == before.records && observed.records.last() == record) { "Invalid plan append acknowledgement" }
             require(validate(observed, entry.state.id) == transition.state) { "Plan replay differs from accepted input" }
+            MachineTransitionLog.append(PlanningMachine.id, PlanningMachine.space, previousState, frozen, transition.state, transition.effects)
             entry.state = transition.state; entry.snapshot = observed; publish()
             if(checkpoint) transition.state.plan?.let { repo.save(it) }
             return transition to record
@@ -243,7 +255,13 @@ class DefaultPlanningStore(
         val pending = unsettledPlanIntents(entry.snapshot.records).map { it.seq }.toSet()
         if(entry.state.pendingOperations.isNotEmpty() && pending != entry.state.pendingOperations)
             commit(entry, PlanningMachine.Fact.EvidenceObserved(pending, stamp()), checkpoint = _failure.value == null)
-        if(latched) { entry.state = PlanningMachine.reduce(entry.state, PlanningMachine.Fact.PersistenceUnknown(stamp())).state; publish() }
+        if(latched) {
+            val before = entry.state
+            val input = PlanningMachine.Fact.PersistenceUnknown(stamp())
+            val next = PlanningMachine.reduce(before, input)
+            MachineTransitionLog.append(PlanningMachine.id, PlanningMachine.space, before, input, next.state, next.effects)
+            entry.state = next.state; publish()
+        }
         Unit
     }
     override suspend fun markIntentUnknown(intent: JournalRecord) = lock.withLock {

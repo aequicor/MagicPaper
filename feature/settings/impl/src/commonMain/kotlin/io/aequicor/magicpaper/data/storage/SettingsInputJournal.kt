@@ -38,8 +38,10 @@ internal class SettingsInputJournal(private val store: KeyValueStore, private va
             check(digest(element.toString()) == ref.digest) { "Changed settings input" }
             val payload = json.decodeFromJsonElement(Payload.serializer(), element)
             check(payload.id == ref.id) { "Foreign settings input" }
-            val transition = SettingsMachine.reduce(restored, payload.input)
+            val before = restored
+            val transition = SettingsMachine.reduce(before, payload.input)
             check(transition.effects.none { it is SettingsMachine.Effect.Reject }) { "Invalid settings transition" }
+            MachineTransitionLog.replay(SettingsMachine.id, SettingsMachine.space, before, payload.input, transition.state, transition.effects)
             restored = transition.state
         }
         state = restored
@@ -59,8 +61,12 @@ internal class SettingsInputJournal(private val store: KeyValueStore, private va
 
     suspend fun commit(input: SettingsMachine.Input): List<SettingsMachine.Effect> {
         val frozen = json.decodeFromString(SettingsMachine.Input.serializer(), json.encodeToString(SettingsMachine.Input.serializer(), input))
-        val transition = SettingsMachine.reduce(state, frozen)
-        transition.effects.filterIsInstance<SettingsMachine.Effect.Reject>().firstOrNull()?.let { throw SettingsInputRejected(it.reason) }
+        val before = state
+        val transition = SettingsMachine.reduce(before, frozen)
+        transition.effects.filterIsInstance<SettingsMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(SettingsMachine.id, SettingsMachine.space, before, frozen, transition.state, transition.effects)
+            throw SettingsInputRejected(it.reason)
+        }
         val expected = checkNotNull(revision) { "Settings not restored" }
         if (transition.state == state) {
             try {
@@ -112,6 +118,7 @@ internal class SettingsInputJournal(private val store: KeyValueStore, private va
             check(store.read(key) == raw) { "Committed settings input changed" }
             revision = observed.revision
             prefix = observed.records.toList()
+            MachineTransitionLog.append(SettingsMachine.id, SettingsMachine.space, before, frozen, transition.state, transition.effects)
             state = transition.state
         } } catch (failure: Throwable) {
             markUnknown()
@@ -140,7 +147,12 @@ internal class SettingsInputJournal(private val store: KeyValueStore, private va
         return digest.build().toHexString()
     }
 
-    fun markUnknown() { state = SettingsMachine.reduce(state, SettingsMachine.Fact.PersistenceUnknown).state }
+    fun markUnknown() {
+        val before = state
+        val transition = SettingsMachine.reduce(before, SettingsMachine.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(SettingsMachine.id, SettingsMachine.space, before, SettingsMachine.Fact.PersistenceUnknown, transition.state, transition.effects)
+        state = transition.state
+    }
 
     companion object {
         const val STREAM = "settings-configuration"

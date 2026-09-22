@@ -43,8 +43,10 @@ internal class SkillInputJournal(private val store: KeyValueStore, private val j
             previous = record.seq
             val (id, input) = readInput(record, snapshot.revision.resetEpoch)
             check(seen.add(id)) { "Duplicate skill input" }
-            val transition = SkillMachine.reduce(restored, input)
+            val before = restored
+            val transition = SkillMachine.reduce(before, input)
             check(transition.effects.none { it is SkillMachine.Effect.Reject }) { "Invalid skill transition" }
+            MachineTransitionLog.replay(SkillMachine.id, SkillMachine.space, before, input, transition.state, transition.effects)
             restored = transition.state
         }
         state = restored
@@ -73,8 +75,12 @@ internal class SkillInputJournal(private val store: KeyValueStore, private val j
 
     suspend fun commit(input: SkillMachine.Input) {
         val frozen = json.decodeFromString(SkillMachine.Input.serializer(), json.encodeToString(SkillMachine.Input.serializer(), input))
-        val transition = SkillMachine.reduce(state, frozen)
-        transition.effects.filterIsInstance<SkillMachine.Effect.Reject>().firstOrNull()?.let { throw SkillCommandRejected(it.reason) }
+        val before = state
+        val transition = SkillMachine.reduce(before, frozen)
+        transition.effects.filterIsInstance<SkillMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(SkillMachine.id, SkillMachine.space, before, frozen, transition.state, transition.effects)
+            throw SkillCommandRejected(it.reason)
+        }
         val expected = checkNotNull(revision) { "Skills not restored" }
         if (transition.state == state) {
             try {
@@ -126,6 +132,7 @@ internal class SkillInputJournal(private val store: KeyValueStore, private val j
             check(store.read(key) == raw) { "Committed skill input changed" }
             revision = observed.revision
             prefix = observed.records.toList()
+            MachineTransitionLog.append(SkillMachine.id, SkillMachine.space, before, frozen, transition.state, transition.effects)
             state = transition.state
         } } catch (failure: Throwable) {
             markUnknown()
@@ -153,7 +160,12 @@ internal class SkillInputJournal(private val store: KeyValueStore, private val j
         return digest.build().toHexString()
     }
 
-    fun markUnknown() { state = SkillMachine.reduce(state, SkillMachine.Fact.PersistenceUnknown).state }
+    fun markUnknown() {
+        val before = state
+        val transition = SkillMachine.reduce(before, SkillMachine.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(SkillMachine.id, SkillMachine.space, before, SkillMachine.Fact.PersistenceUnknown, transition.state, transition.effects)
+        state = transition.state
+    }
 
     companion object {
         const val STREAM = "skill-library"

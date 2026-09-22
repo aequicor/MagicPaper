@@ -61,6 +61,16 @@ interface EventJournal {
     /** Nonempty streams, including records whose owner checkpoint was never saved. */
     suspend fun streams(): List<String>
 
+    /**
+     * Every nonempty stream's snapshot, read together instead of one [snapshot] call per name
+     * in [streams]. A store replaying its whole journal at startup calls [streams] to discover
+     * its owners and then [snapshot] on each one; a backend whose [snapshot] re-scans all of
+     * storage to serve one stream (see `DurableEventJournal`) would otherwise pay for that scan
+     * once per owner instead of once total. The default keeps today's per-stream behavior for
+     * every journal that does not override it.
+     */
+    suspend fun snapshotAll(): Map<String, JournalSnapshot> = streams().associateWith { snapshot(it) }
+
     /** Every record of one stream, in the order it was appended. */
     suspend fun read(stream: String): List<JournalRecord>
 

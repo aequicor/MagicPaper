@@ -38,8 +38,10 @@ internal class UsageInputJournal(
             require(seen.add(ref.id)) { "Duplicate usage input" }
             val input = readInput(ref)
             require(record.at == input.stamp.at) { "Changed usage input time" }
-            val next = UsageMachine.reduce(restored, input)
+            val before = restored
+            val next = UsageMachine.reduce(before, input)
             check(next.rejection == null) { "Invalid usage history" }
+            MachineTransitionLog.replay(UsageMachine.id, UsageMachine.space, before, input, next.state, next.effects())
             restored = next.state
         }
         state = restored
@@ -69,8 +71,12 @@ internal class UsageInputJournal(
 
     suspend fun commit(input: UsageMachine.Input) {
         val frozen = json.decodeFromString(UsageMachine.Input.serializer(), json.encodeToString(UsageMachine.Input.serializer(), input))
-        val transition = UsageMachine.reduce(state, frozen)
-        transition.rejection?.let { throw UsageInputRejected(it) }
+        val before = state
+        val transition = UsageMachine.reduce(before, frozen)
+        transition.rejection?.let {
+            MachineTransitionLog.append(UsageMachine.id, UsageMachine.space, before, frozen, transition.state, transition.effects())
+            throw UsageInputRejected(it)
+        }
         val expected = checkNotNull(revision) { "Usage journal was not loaded" }
         if (transition.state == state) { verifyCurrent(); return }
         var cancellation: CancellationException? = null
@@ -115,6 +121,7 @@ internal class UsageInputJournal(
             validateSnapshot(observed)
             check(observed.revision.resetEpoch == expected.resetEpoch && observed.records == prefix + record) { "Usage history changed" }
             check(readInput(ref) == frozen) { "Usage payload changed" }
+            MachineTransitionLog.append(UsageMachine.id, UsageMachine.space, before, frozen, transition.state, transition.effects())
             state = transition.state
             revision = observed.revision
             prefix = observed.records.toList()
@@ -128,8 +135,14 @@ internal class UsageInputJournal(
     }
 
     fun markUnknown() {
-        state = UsageMachine.reduce(state, UsageMachine.Fact.PersistenceUnknown(UsageMachine.Stamp("unknown", 0))).state
+        val before = state
+        val input = UsageMachine.Fact.PersistenceUnknown(UsageMachine.Stamp("unknown", 0))
+        val next = UsageMachine.reduce(before, input)
+        MachineTransitionLog.append(UsageMachine.id, UsageMachine.space, before, input, next.state, next.effects())
+        state = next.state
     }
+
+    private fun UsageMachine.Transition.effects(): List<UsageMachine.Effect> = listOfNotNull(rejection?.let(UsageMachine.Effect::Reject))
 
     private suspend fun verifyCurrent() {
         try {

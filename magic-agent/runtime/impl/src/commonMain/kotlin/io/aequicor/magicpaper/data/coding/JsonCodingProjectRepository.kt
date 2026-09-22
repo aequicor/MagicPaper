@@ -91,6 +91,7 @@ class JsonCodingProjectRepository(
             store.delete("coding-orchestration-${it.id}-backup")
         }
         saveSessions(allSess.filterNot { it.projectId == id })
+        _lastHistories -= id; _lastRemovedMessages -= id
         // Журнал легаси-проекта, если миграция ещё не успела произойти.
         store.delete(legacyLogKey(id))
         store.delete(clearedKey(id))
@@ -245,19 +246,39 @@ class JsonCodingProjectRepository(
         }
     }
 
+    // Last histories/removedMessages this instance itself wrote per project, by reference. The
+    // reducer's `state.histories + (id to messages)` pattern keeps every untouched session's
+    // list at the same object identity, so a `!==` miss reliably means that session actually
+    // changed since the last checkpoint of this project — letting checkpoint() below skip
+    // rewriting the other ~N-1 sessions' history files on every single dispatch.
+    private val _lastHistories = mutableMapOf<String, Map<String, List<CodingMessage>>>()
+    private val _lastRemovedMessages = mutableMapOf<String, Map<String, Set<String>>>()
+
     override suspend fun checkpoint(state: CodingMachine.State) {
         val project = requireNotNull(state.project)
         if (state.deleted) { delete(project.id); return }
         // Write the complete projection without migration callbacks or independent mutation rules.
-        val projects = store.read(KEY_PROJECTS)?.let { json.decodeFromString(projectsSerializer, it) }.orEmpty()
-        val sessions = store.read(KEY_SESSIONS)?.let { json.decodeFromString(sessionsSerializer, it) }.orEmpty()
-        store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects.filterNot { it.id == project.id } + project))
-        store.write(KEY_SESSIONS, json.encodeToString(sessionsSerializer, sessions.filterNot { it.projectId == project.id } + state.sessions.values))
+        // Every dispatch to any project checkpoints here, so reuse the class's own read cache
+        // instead of re-reading and re-decoding the whole (every-project, every-session) blob
+        // from disk on each call; only the changed project's rows actually move.
+        val projects = all().filterNot { it.id == project.id } + project
+        val sessions = allSessions().filterNot { it.projectId == project.id } + state.sessions.values
+        store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects))
+        store.write(KEY_SESSIONS, json.encodeToString(sessionsSerializer, sessions))
         store.write(clearedKey(project.id), "true")
-        state.histories.forEach { (id, messages) -> writeHistory(project.id, id, History(messages, state.removedMessages[id].orEmpty())) }
+        val previousHistories = _lastHistories[project.id]
+        val previousRemoved = _lastRemovedMessages[project.id]
+        state.histories.forEach { (id, messages) ->
+            val removed = state.removedMessages[id].orEmpty()
+            if (previousHistories?.get(id) !== messages || previousRemoved?.get(id) !== state.removedMessages[id])
+                writeHistory(project.id, id, History(messages, removed))
+        }
+        _lastHistories[project.id] = state.histories; _lastRemovedMessages[project.id] = state.removedMessages
         state.removedSessions.forEach { id -> store.delete(logKey(project.id, id)); store.delete("coding-orchestration-$id"); store.delete("coding-orchestration-$id-backup") }
         state.orchestrations.values.forEach { saveOrchestration(it) }
-        _projectsCache = null; _sessionsCache = null
+        // Prime the cache with what was just written instead of invalidating it, so the next
+        // checkpoint (there is one after every dispatch to any project) also skips the re-read.
+        _projectsCache = projects.sortedByDescending { it.createdAt }; _sessionsCache = sessions
     }
 
     // ---- Миграция -----------------------------------------------------------

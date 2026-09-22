@@ -14,6 +14,7 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
+import io.aequicor.magicpaper.data.storage.MachineTransitionLog
 import io.aequicor.magicpaper.data.storage.NavigationSnapshotStore
 import io.aequicor.magicpaper.data.storage.StorageException
 import io.aequicor.magicpaper.logging.AppLog
@@ -238,9 +239,10 @@ class DefaultRootComponent<C : Any>(
     }
 
     private fun dispatch(input: NavigationMachine.Input) {
-        val transition = NavigationMachine.reduce(state, input)
         val previous = state
+        val transition = NavigationMachine.reduce(previous, input)
         state = transition.state
+        MachineTransitionLog.append(NavigationMachine.id, NavigationMachine.space, previous, input, transition.state, transition.effects)
         publish()
         transition.effects.forEach { effect -> perform(previous, effect) }
     }

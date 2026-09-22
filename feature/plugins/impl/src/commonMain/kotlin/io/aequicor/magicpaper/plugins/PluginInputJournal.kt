@@ -39,8 +39,10 @@ internal class PluginInputJournal(private val store: KeyValueStore, private val 
             check(digest(element.toString()) == ref.digest) { "Changed plugin input" }
             val payload = json.decodeFromJsonElement(Payload.serializer(), element)
             check(payload.id == ref.id) { "Foreign plugin input" }
-            val transition = PluginMachine.reduce(restored, payload.input)
+            val before = restored
+            val transition = PluginMachine.reduce(before, payload.input)
             check(transition.effects.none { it is PluginMachine.Effect.Reject }) { "Invalid plugin transition" }
+            MachineTransitionLog.replay(PluginMachine.id, PluginMachine.space, before, payload.input, transition.state, transition.effects)
             restored = transition.state
         }
         state = restored
@@ -57,8 +59,12 @@ internal class PluginInputJournal(private val store: KeyValueStore, private val 
 
     suspend fun commit(input: PluginMachine.Input) {
         val frozen = json.decodeFromString(PluginMachine.Input.serializer(), json.encodeToString(PluginMachine.Input.serializer(), input))
-        val transition = PluginMachine.reduce(state, frozen)
-        transition.effects.filterIsInstance<PluginMachine.Effect.Reject>().firstOrNull()?.let { throw PluginPreferenceRejected(it.reason) }
+        val before = state
+        val transition = PluginMachine.reduce(before, frozen)
+        transition.effects.filterIsInstance<PluginMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(PluginMachine.id, PluginMachine.space, before, frozen, transition.state, transition.effects)
+            throw PluginPreferenceRejected(it.reason)
+        }
         val expected = checkNotNull(revision) { "Plugins not restored" }
         if (transition.state == state) {
             try {
@@ -110,6 +116,7 @@ internal class PluginInputJournal(private val store: KeyValueStore, private val 
             check(store.read(key) == raw) { "Committed plugin input changed" }
             revision = observed.revision
             prefix = observed.records.toList()
+            MachineTransitionLog.append(PluginMachine.id, PluginMachine.space, before, frozen, transition.state, transition.effects)
             state = transition.state
         } } catch (failure: Throwable) {
             markUnknown()
@@ -137,7 +144,12 @@ internal class PluginInputJournal(private val store: KeyValueStore, private val 
         return digest.build().toHexString()
     }
 
-    fun markUnknown() { state = PluginMachine.reduce(state, PluginMachine.Fact.PersistenceUnknown).state }
+    fun markUnknown() {
+        val before = state
+        val transition = PluginMachine.reduce(before, PluginMachine.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(PluginMachine.id, PluginMachine.space, before, PluginMachine.Fact.PersistenceUnknown, transition.state, transition.effects)
+        state = transition.state
+    }
 
     companion object {
         const val STREAM = "plugin-preferences"

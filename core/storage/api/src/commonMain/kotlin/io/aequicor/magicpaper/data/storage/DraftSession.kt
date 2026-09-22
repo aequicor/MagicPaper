@@ -136,7 +136,12 @@ class DraftSession<T>(
             val transition = DraftMachine.reduce(current.machine, input)
             val next = DraftSessionState(value(current, transition.state), transition.state,
                 if (transition.state.failure == null) null else error ?: current.error)
-            if (mutableState.compareAndSet(current, next)) return transition
+            if (mutableState.compareAndSet(current, next)) {
+                // Every edit keystroke reduces through here too; excluded, per the no-per-keystroke-logging rule.
+                if (input !is DraftMachine.Intent.Edit)
+                    MachineTransitionLog.append(DraftMachine.id, DraftMachine.space, current.machine, input, transition.state, transition.effects)
+                return transition
+            }
         }
     }
 

@@ -50,8 +50,12 @@ internal class BrowserInputJournal(private val journal: EventJournal, private va
 
     suspend fun dispatch(input: BrowserMachine.Input): BrowserMachine.Transition {
         val before = checkNotNull(snapshot) { "Browser journal has not been restored" }
-        val next = BrowserMachine.reduce(state, input)
-        next.effects.filterIsInstance<BrowserMachine.Effect.Reject>().firstOrNull()?.let { throw ToolStateRejection(it.reason) }
+        val previousState = state
+        val next = BrowserMachine.reduce(previousState, input)
+        next.effects.filterIsInstance<BrowserMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(BrowserMachine.id, BrowserMachine.space, previousState, input, next.state, next.effects)
+            throw ToolStateRejection(it.reason)
+        }
         val detail = json.encodeToString(Entry(UUID.randomUUID().toString(), owner, before.revision.resetEpoch, input))
         val observed = try {
             val appended = journal.append(before.revision, OPERATION, System.currentTimeMillis(), detail)
@@ -79,12 +83,14 @@ internal class BrowserInputJournal(private val journal: EventJournal, private va
                 throw BrowserJournalUnknown(failure)
             }
             snapshot = recovered
+            MachineTransitionLog.append(BrowserMachine.id, BrowserMachine.space, previousState, input, next.state, next.effects)
             state = next.state
             // A cancelled caller never starts an external action, even after a confirmed intent write.
             if (failure is CancellationException) throw failure
             recovered
         }
         snapshot = observed
+        MachineTransitionLog.append(BrowserMachine.id, BrowserMachine.space, previousState, input, next.state, next.effects)
         state = next.state
         return next
     }
@@ -92,7 +98,10 @@ internal class BrowserInputJournal(private val journal: EventJournal, private va
     fun persistenceUnknown(failure: Throwable) = unknown(failure, "outcome.unknown")
 
     private fun unknown(failure: Throwable, event: String) {
-        state = BrowserMachine.reduce(state, BrowserMachine.Fact.PersistenceUnknown).state
+        val before = state
+        val next = BrowserMachine.reduce(before, BrowserMachine.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(BrowserMachine.id, BrowserMachine.space, before, BrowserMachine.Fact.PersistenceUnknown, next.state, next.effects)
+        state = next.state
         AppLog.error("browser", event, mapOf("sessionId" to owner.sessionId, "requestId" to owner.requestId,
             "causeType" to failure.javaClass.simpleName, "result" to "effects_blocked"))
     }
@@ -107,9 +116,11 @@ internal class BrowserInputJournal(private val journal: EventJournal, private va
             check(record.stream == stream && record.seq > sequence && record.seq <= observed.revision.seq && record.operation == OPERATION)
             val entry = json.decodeFromString<Entry>(record.detail)
             check(entry.id.isNotBlank() && ids.add(entry.id) && entry.owner == owner && entry.resetEpoch == observed.revision.resetEpoch)
-            val transition = BrowserMachine.reduce(result, entry.input)
+            val before = result
+            val transition = BrowserMachine.reduce(before, entry.input)
             check(transition.effects.none { it is BrowserMachine.Effect.Reject })
             check(transition.state.owner == owner)
+            MachineTransitionLog.replay(BrowserMachine.id, BrowserMachine.space, before, entry.input, transition.state, transition.effects)
             result = transition.state
             sequence = record.seq
         }

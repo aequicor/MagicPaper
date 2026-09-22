@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.planning
 
 import io.aequicor.magicpaper.data.storage.JournalRecord
+import io.aequicor.magicpaper.data.storage.MachineTransitionLog
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.planning.PlanStateRecord
 import io.aequicor.magicpaper.domain.planning.projectPlanState
@@ -82,6 +83,7 @@ fun projectPlanningRecord(state: PlanningMachine.State, record: JournalRecord): 
     } ?: return state
     val transition = PlanningMachine.reduce(state, input, replay = true)
     require(transition.rejection == null) { "Rejected persisted plan input" }
+    MachineTransitionLog.replay(PlanningMachine.id, PlanningMachine.space, state, input, transition.state, transition.effects)
     return transition.state
 }
 

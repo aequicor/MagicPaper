@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.domain.tools
 import io.aequicor.magicpaper.data.storage.EventJournal
 import io.aequicor.magicpaper.data.storage.JournalRevision
 import io.aequicor.magicpaper.data.storage.JournalSnapshot
+import io.aequicor.magicpaper.data.storage.MachineTransitionLog
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.util.Id
@@ -201,9 +202,11 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
                 "Запись принадлежит другому поколению журнала"
             }
             if (state.phase == ProviderToolMachine.Phase.NEW) check(entry.input is ProviderToolMachine.Intent.Start) { "Отсутствует начало запроса" }
-            val next = ProviderToolMachine.reduce(state, entry.input)
+            val before = state
+            val next = ProviderToolMachine.reduce(before, entry.input)
             check(next.effects.none { it is ProviderToolMachine.Effect.Reject }) { "Повреждён журнал инструментов" }
             check(next.state.runId == runId) { "Журнал принадлежит другому запросу" }
+            MachineTransitionLog.replay(ProviderToolMachine.id, ProviderToolMachine.space, before, entry.input, next.state, next.effects)
             state = next.state
         }
         return state
@@ -211,10 +214,20 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
 
     /** Persisted inputs contain identities/fingerprints only, never prompts, answers or continuation payloads. */
     private inner class RunJournal(private val runId: String, var state: ProviderToolMachine.State, private var revision: JournalRevision) {
-        fun outputUnknown() { state = ProviderToolMachine.reduce(state, ProviderToolMachine.Fact.PersistenceUnknown).state }
+        fun outputUnknown() = markUnknown()
+        private fun markUnknown() {
+            val before = state
+            val next = ProviderToolMachine.reduce(before, ProviderToolMachine.Fact.PersistenceUnknown)
+            MachineTransitionLog.append(ProviderToolMachine.id, ProviderToolMachine.space, before, ProviderToolMachine.Fact.PersistenceUnknown, next.state, next.effects)
+            state = next.state
+        }
         suspend fun commit(input: ProviderToolMachine.Input): List<ProviderToolMachine.Effect> {
-            val next = ProviderToolMachine.reduce(state, input)
-            next.effects.filterIsInstance<ProviderToolMachine.Effect.Reject>().firstOrNull()?.let { error(it.reason) }
+            val before = state
+            val next = ProviderToolMachine.reduce(before, input)
+            next.effects.filterIsInstance<ProviderToolMachine.Effect.Reject>().firstOrNull()?.let {
+                MachineTransitionLog.append(ProviderToolMachine.id, ProviderToolMachine.space, before, input, next.state, next.effects)
+                error(it.reason)
+            }
             val detail = json.encodeToString(Entry.serializer(), Entry(Id.new(), input, revision.resetEpoch))
             try {
                 val record = journal.append(revision, OPERATION, Id.now(), detail)
@@ -226,25 +239,29 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
             } catch (failure: Exception) {
                 val observed = try { withContext(NonCancellable) { journal.snapshot(revision.stream) } }
                 catch (readFailure: Exception) {
-                    state = ProviderToolMachine.reduce(state, ProviderToolMachine.Fact.PersistenceUnknown).state
+                    markUnknown()
                     failure.addSuppressed(readFailure)
                     throw failure
                 }
                 try { replay(observed, runId) }
                 catch (invalid: Exception) {
-                    state = ProviderToolMachine.reduce(state, ProviderToolMachine.Fact.PersistenceUnknown).state
+                    markUnknown()
                     failure.addSuppressed(invalid)
                     throw failure
                 }
                 val committed = observed.records.lastOrNull()?.takeIf { it.operation == OPERATION && it.detail == detail &&
                     it.stream == revision.stream && it.seq > revision.seq }
                 if (committed == null || observed.revision.resetEpoch != revision.resetEpoch) {
-                    if (observed.revision != revision) state = ProviderToolMachine.reduce(state, ProviderToolMachine.Fact.PersistenceUnknown).state
+                    if (observed.revision != revision) markUnknown()
                     throw failure
                 }
                 revision = observed.revision
-                if (failure is CancellationException) { state = next.state; throw failure }
+                if (failure is CancellationException) {
+                    MachineTransitionLog.append(ProviderToolMachine.id, ProviderToolMachine.space, before, input, next.state, next.effects)
+                    state = next.state; throw failure
+                }
             }
+            MachineTransitionLog.append(ProviderToolMachine.id, ProviderToolMachine.space, before, input, next.state, next.effects)
             state = next.state
             return next.effects
         }
@@ -255,7 +272,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
             if (state.phase in terminal) return
             try { withContext(NonCancellable) { commit(ProviderToolMachine.Fact.Failed(operation, unknown)) } }
             catch (failure: Exception) {
-                state = ProviderToolMachine.reduce(state, ProviderToolMachine.Fact.PersistenceUnknown).state
+                markUnknown()
                 AppLog.error("provider_tools", "failure_record_unknown", mapOf("cause" to failure::class.simpleName.orEmpty(), "operation" to operation))
             }
         }
@@ -263,7 +280,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
             if (state.phase in terminal) return
             try { commit(ProviderToolMachine.Intent.Cancel) }
             catch (failure: Exception) {
-                state = ProviderToolMachine.reduce(state, ProviderToolMachine.Fact.PersistenceUnknown).state
+                markUnknown()
                 AppLog.error("provider_tools", "cancellation_record_unknown", mapOf("cause" to failure::class.simpleName.orEmpty()))
             }
         }

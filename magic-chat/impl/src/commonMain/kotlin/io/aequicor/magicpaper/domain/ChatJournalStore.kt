@@ -37,19 +37,26 @@ class ChatJournalStore(private val checkpoints: ChatCheckpointStore, private val
                 check(snapshot.records.isEmpty()) { "Чат создан другим владельцем. Восстановите историю." }
                 Entry(ChatMachine.initial(), snapshot.revision, snapshot.records.toMutableList())
             }
-            val next = ChatMachine.reduce(entry.state, input)
+            val before = entry.state
+            val next = ChatMachine.reduce(before, input)
             check(next.state.notebookId == notebookId) { "Команда принадлежит другому чату" }
-            next.effects.filterIsInstance<ChatMachine.Effect.Reject>().firstOrNull()?.let { throw ChatCommandRejected(it.reason) }
+            next.effects.filterIsInstance<ChatMachine.Effect.Reject>().firstOrNull()?.let {
+                MachineTransitionLog.append(ChatMachine.id, ChatMachine.space, before, input, next.state, next.effects)
+                throw ChatCommandRejected(it.reason)
+            }
             if (!identitiesAvailable(notebookId, next.state, entries))
                 throw ChatCommandRejected("Идентификатор вопроса уже принадлежит другому чату")
             if (next.state == entry.state && next.effects.isEmpty()) return@withLock next
             try { commit(notebookId, entry, input, next.state) }
             catch (failure: Exception) {
-                entry.state = ChatMachine.reduce(entry.state, ChatMachine.Fact.PersistenceUnknown).state
+                val unknown = ChatMachine.reduce(entry.state, ChatMachine.Fact.PersistenceUnknown)
+                MachineTransitionLog.append(ChatMachine.id, ChatMachine.space, entry.state, ChatMachine.Fact.PersistenceUnknown, unknown.state, unknown.effects)
+                entry.state = unknown.state
                 publish(notebookId, entry)
                 report(notebookId, "input.commit", failure)
                 throw failure
             }
+            MachineTransitionLog.append(ChatMachine.id, ChatMachine.space, before, input, next.state, next.effects)
             publish(notebookId, entry)
             checkpoint(notebookId, entry)
             next
@@ -70,6 +77,7 @@ class ChatJournalStore(private val checkpoints: ChatCheckpointStore, private val
                 val input = payloads.read(ref)
                 val next = ChatMachine.reduce(state, input)
                 check(next.effects.none { it is ChatMachine.Effect.Reject }) { "Повреждён журнал чата" }
+                MachineTransitionLog.replay(ChatMachine.id, ChatMachine.space, state, input, next.state, next.effects)
                 state = next.state
             }
             check(state.initialized && stream(state.notebookId) == stream) { "Чат не инициализирован" }
@@ -83,8 +91,10 @@ class ChatJournalStore(private val checkpoints: ChatCheckpointStore, private val
             val snapshot = validatedSnapshot(stream(id))
             check(snapshot.records.isEmpty()) { "Чат изменился во время восстановления" }
             val input = ChatMachine.Fact.LegacyImported(id, sessions)
-            val next = ChatMachine.reduce(ChatMachine.initial(), input)
+            val importBefore = ChatMachine.initial()
+            val next = ChatMachine.reduce(importBefore, input)
             check(next.effects.none { it is ChatMachine.Effect.Reject }) { "Повреждена сохранённая история" }
+            MachineTransitionLog.replay(ChatMachine.id, ChatMachine.space, importBefore, input, next.state, next.effects)
             check(identitiesAvailable(id, next.state, found)) { "Идентификатор вопроса принадлежит нескольким чатам" }
             found[id] = Entry(next.state, snapshot.revision, snapshot.records.toMutableList())
             imports[id] = input
@@ -94,8 +104,12 @@ class ChatJournalStore(private val checkpoints: ChatCheckpointStore, private val
             val imported = imports[id]
             if (imported != null) commit(id, entry, imported, entry.state)
             else {
-                val restored = ChatMachine.reduce(entry.state, ChatMachine.Fact.Restored).state
-                if (restored != entry.state) commit(id, entry, ChatMachine.Fact.Restored, restored)
+                val restoredBefore = entry.state
+                val restored = ChatMachine.reduce(restoredBefore, ChatMachine.Fact.Restored)
+                if (restored.state != restoredBefore) {
+                    MachineTransitionLog.replay(ChatMachine.id, ChatMachine.space, restoredBefore, ChatMachine.Fact.Restored, restored.state, restored.effects)
+                    commit(id, entry, ChatMachine.Fact.Restored, restored.state)
+                }
             }
         }
         entries.clear(); entries.putAll(found)

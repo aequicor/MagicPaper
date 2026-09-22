@@ -46,8 +46,12 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
         val raw = json.encodeToString(Payload.serializer(), Payload(id, workspace, input))
         // Freeze caller-owned collections before either reduction or persistence can suspend.
         val frozen = json.decodeFromString(Payload.serializer(), raw).input
-        val next = CommandCheckMachine.reduce(state, frozen)
-        next.effects.filterIsInstance<CommandCheckMachine.Effect.Reject>().firstOrNull()?.let { throw CheckRejected(it.reason) }
+        val previousState = state
+        val next = CommandCheckMachine.reduce(previousState, frozen)
+        next.effects.filterIsInstance<CommandCheckMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(CommandCheckMachine.id, CommandCheckMachine.space, previousState, frozen, next.state, next.effects)
+            throw CheckRejected(it.reason)
+        }
         val envelope = Envelope(id, hash(raw), before.revision.resetEpoch)
         val detail = json.encodeToString(Envelope.serializer(), envelope)
         val at = System.currentTimeMillis()
@@ -84,11 +88,13 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
                     failure.addSuppressed(readFailure); throw failure
                 }
                 snapshot = recovered
+                MachineTransitionLog.append(CommandCheckMachine.id, CommandCheckMachine.space, previousState, frozen, next.state, next.effects)
                 state = next.state
                 if (failure is CancellationException) { cancellationSettled = true; throw failure } // The exact record is committed and adopted.
                 recovered
             }
             snapshot = after
+            MachineTransitionLog.append(CommandCheckMachine.id, CommandCheckMachine.space, previousState, frozen, next.state, next.effects)
             state = next.state
             return next
         } catch (failure: Exception) {
@@ -129,7 +135,10 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
     }
 
     fun uncertain(failure: Throwable, event: String = "effect.unknown") {
-        state = CommandCheckMachine.reduce(state, CommandCheckMachine.Input.Fact.PersistenceUnknown).state
+        val before = state
+        val next = CommandCheckMachine.reduce(before, CommandCheckMachine.Input.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(CommandCheckMachine.id, CommandCheckMachine.space, before, CommandCheckMachine.Input.Fact.PersistenceUnknown, next.state, next.effects)
+        state = next.state
         AppLog.error("checks", event, mapOf("workspaceId" to hash(workspace),
             "causeType" to failure.javaClass.simpleName, "result" to "effects_blocked"))
     }
@@ -144,8 +153,11 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
             check(record.stream == stream && record.seq > sequence && record.seq <= observed.revision.seq && record.operation == OPERATION)
             val envelope = json.decodeFromString(Envelope.serializer(), record.detail)
             check(envelope.id.isNotBlank() && ids.add(envelope.id) && envelope.epoch == observed.revision.resetEpoch)
-            val next = CommandCheckMachine.reduce(result, readInput(envelope))
+            val before = result
+            val input = readInput(envelope)
+            val next = CommandCheckMachine.reduce(before, input)
             check(next.effects.none { it is CommandCheckMachine.Effect.Reject })
+            MachineTransitionLog.replay(CommandCheckMachine.id, CommandCheckMachine.space, before, input, next.state, next.effects)
             result = next.state
             sequence = record.seq
         }

@@ -22,6 +22,9 @@ class OrganismJournalTest {
             return record
         }
         override suspend fun snapshot(stream: String) = delegate.snapshot(stream).let { replacement?.invoke(it) ?: it }
+        // `by delegate` forwards the interface's default snapshotAll() straight to the delegate,
+        // bypassing the snapshot() override above; rederive it so replay still sees the fault.
+        override suspend fun snapshotAll(): Map<String, JournalSnapshot> = delegate.streams().associateWith { snapshot(it) }
     }
     private class SnapshotFailureStore : KeyValueStore by InMemoryKeyValueStore() {
         private val backing = InMemoryKeyValueStore()

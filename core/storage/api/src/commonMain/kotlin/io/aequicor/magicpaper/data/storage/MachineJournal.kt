@@ -66,7 +66,14 @@ class MachineJournal<S : Any, I : Any, E : Any>(
     private val elideNoOps: Boolean = false,
 ) {
     /** Throws on a corrupt journal; a state the reducer would have refused is never restored. */
-    fun replay(snapshot: JournalSnapshot): S {
+    fun replay(snapshot: JournalSnapshot): S = replay(snapshot, log = true)
+
+    /**
+     * [log] is off for the internal re-check inside [append]'s settlement path: that walk repeats a
+     * transition [append] already logged once, and is not itself a state reconstruction a reader
+     * needs to see.
+     */
+    private fun replay(snapshot: JournalSnapshot, log: Boolean): S {
         val revision = snapshot.revision
         check(revision.seq >= 0 && revision.resetEpoch >= 0) { "Повреждена ревизия журнала ${machine.id.name}" }
         check(snapshot.records.isEmpty() || snapshot.records.last().seq == revision.seq) {
@@ -80,8 +87,10 @@ class MachineJournal<S : Any, I : Any, E : Any>(
             }
             previous = record.seq
             check(record.operation == operation) { "Неизвестная запись журнала ${machine.id.name}" }
-            val step = machine.step(state, codec.decode(record, revision))
+            val input = codec.decode(record, revision)
+            val step = machine.step(state, input)
             check(step.effects.none { machine.space.rejected(it) }) { "Недопустимый переход в журнале ${machine.id.name}" }
+            if (log) MachineTransitionLog.replay(machine.id, machine.space, state, input, step.state, step.effects)
             state = step.state
         }
         return state
@@ -97,13 +106,17 @@ class MachineJournal<S : Any, I : Any, E : Any>(
      */
     suspend fun append(revision: JournalRevision, state: S, input: I, at: Long): Appended<S, E> {
         val step = machine.step(state, input)
-        if (step.effects.any { machine.space.rejected(it) }) return Appended.Refused(step)
+        if (step.effects.any { machine.space.rejected(it) }) {
+            MachineTransitionLog.append(machine.id, machine.space, state, input, step.state, step.effects)
+            return Appended.Refused(step)
+        }
         if (elideNoOps && step.state == state && step.effects.isEmpty()) return Appended.Accepted(step, revision)
         val detail = codec.encode(input, revision)
         try {
             val record = journal.append(revision, operation, at, detail) ?: return Appended.Conflict
             check(record.stream == revision.stream && record.seq > revision.seq &&
                 record.operation == operation && record.detail == detail) { "Подтверждение записи принадлежит другому журналу" }
+            MachineTransitionLog.append(machine.id, machine.space, state, input, step.state, step.effects)
             return Appended.Accepted(step, revision.copy(seq = record.seq))
         } catch (failure: Exception) {
             val observed = try { journal.snapshot(revision.stream) } catch (readFailure: Exception) {
@@ -114,7 +127,7 @@ class MachineJournal<S : Any, I : Any, E : Any>(
                 it.seq > revision.seq && it.operation == operation && it.detail == detail
             }
             val settled = ours != null && observed.revision.resetEpoch == revision.resetEpoch &&
-                try { replay(observed); true } catch (invalid: Exception) { failure.addSuppressed(invalid); false }
+                try { replay(observed, log = false); true } catch (invalid: Exception) { failure.addSuppressed(invalid); false }
             if (!settled) throw JournalOutcomeUnknown(failure)
             return Appended.Accepted(step, revision.copy(seq = checkNotNull(ours).seq))
         }

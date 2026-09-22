@@ -26,6 +26,9 @@ class CodingJournalStoreTest {
             return if (corruptAckTime) record?.copy(at = at + 1) else record
         }
         override suspend fun snapshot(stream: String) = backing.snapshot(stream).let { corruptRead?.invoke(it) ?: it }
+        // `by backing` forwards the interface's default snapshotAll() straight to the backing
+        // journal, bypassing the snapshot() override above; rederive it so replay still sees the fault.
+        override suspend fun snapshotAll(): Map<String, JournalSnapshot> = backing.streams().associateWith { snapshot(it) }
     }
     private class Fixture(val storage: InMemoryKeyValueStore = InMemoryKeyValueStore(), val journal: FaultJournal = FaultJournal()) {
         val json = Json { encodeDefaults = true }

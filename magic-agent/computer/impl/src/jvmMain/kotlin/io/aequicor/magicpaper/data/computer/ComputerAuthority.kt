@@ -95,19 +95,27 @@ internal class ComputerAuthority(
     fun releaseFailed() {
         synchronized(lock) {
             // Teardown may already have stopped the journal writer. The live fence still owns failure.
-            if (closed) value = ComputerMachine.reduce(value, ComputerMachine.Fact.ReleaseFailed).state
+            if (closed) {
+                val before = value
+                val next = ComputerMachine.reduce(before, ComputerMachine.Fact.ReleaseFailed)
+                MachineTransitionLog.append(ComputerMachine.id, ComputerMachine.space, before, ComputerMachine.Fact.ReleaseFailed, next.state, next.effects)
+                value = next.state
+            }
             else enqueueLocked(ComputerMachine.Fact.ReleaseFailed, CompletableDeferred())
         }
         changed(state)
     }
 
     private fun enqueueLocked(input: ComputerMachine.Input, completion: CompletableDeferred<ComputerMachine.Transition>): ComputerMachine.Transition {
-        val transition = ComputerMachine.reduce(value, input)
+        val before = value
+        val transition = ComputerMachine.reduce(before, input)
         val rejection = transition.effects.filterIsInstance<ComputerMachine.Effect.Reject>().firstOrNull()
         if (rejection != null) {
+            MachineTransitionLog.append(ComputerMachine.id, ComputerMachine.space, before, input, transition.state, transition.effects)
             completion.completeExceptionally(if (value.persistenceUnknown) ComputerAuthorityUnavailable() else ComputerAuthorityRejected(rejection.reason))
             return transition
         }
+        MachineTransitionLog.append(ComputerMachine.id, ComputerMachine.space, before, input, transition.state, transition.effects)
         value = transition.state
         if (value.persistenceUnknown) {
             completion.completeExceptionally(ComputerAuthorityUnavailable())
@@ -119,7 +127,10 @@ internal class ComputerAuthority(
 
     private fun fail(failure: Exception) {
         val waiting = synchronized(lock) {
-            value = ComputerMachine.reduce(value, ComputerMachine.Fact.PersistenceUnknown).state
+            val before = value
+            val next = ComputerMachine.reduce(before, ComputerMachine.Fact.PersistenceUnknown)
+            MachineTransitionLog.append(ComputerMachine.id, ComputerMachine.space, before, ComputerMachine.Fact.PersistenceUnknown, next.state, next.effects)
+            value = next.state
             val completions = buffered.map { it.completion }.toMutableList()
             buffered.clear()
             initialized = true
@@ -146,8 +157,10 @@ internal class ComputerAuthority(
             sequence = record.seq
             val entry = json.decodeFromString<Entry>(record.detail)
             check(entry.id.isNotBlank() && entries.add(entry.id) && entry.resetEpoch == snapshot.revision.resetEpoch) { "Invalid computer journal generation" }
-            val next = ComputerMachine.replay(state, entry.input)
+            val before = state
+            val next = ComputerMachine.replay(before, entry.input)
             check(next.effects.none { it is ComputerMachine.Effect.Reject }) { "Invalid computer journal transition" }
+            MachineTransitionLog.replay(ComputerMachine.id, ComputerMachine.space, before, entry.input, next.state, next.effects)
             state = next.state
         }
         return state
@@ -175,7 +188,11 @@ internal class ComputerAuthority(
         synchronized(lock) {
             if (closed) return
             closed = true
-            value = ComputerMachine.reduce(value, ComputerMachine.Intent.Revoke()).state
+            val before = value
+            val revoke = ComputerMachine.Intent.Revoke()
+            val next = ComputerMachine.reduce(before, revoke)
+            MachineTransitionLog.append(ComputerMachine.id, ComputerMachine.space, before, revoke, next.state, next.effects)
+            value = next.state
             buffered.forEach { it.completion.completeExceptionally(failure) }
             buffered.clear()
             while (true) {

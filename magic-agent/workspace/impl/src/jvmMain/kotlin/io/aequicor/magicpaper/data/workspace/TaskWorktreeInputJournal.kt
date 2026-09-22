@@ -52,8 +52,12 @@ internal class TaskWorktreeInputJournal(
 
     suspend fun dispatch(input: TaskWorktreeMachine.Input): TaskWorktreeMachine.Transition {
         if (state.persistenceUnknown) throw TaskWorktreeJournalUnknown()
-        val next = TaskWorktreeMachine.reduce(state, input)
-        next.effects.filterIsInstance<TaskWorktreeMachine.Effect.Reject>().firstOrNull()?.let { throw TaskWorktreeRejected(it.reason, it.message) }
+        val previousState = state
+        val next = TaskWorktreeMachine.reduce(previousState, input)
+        next.effects.filterIsInstance<TaskWorktreeMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(TaskWorktreeMachine.id, TaskWorktreeMachine.space, previousState, input, next.state, next.effects)
+            throw TaskWorktreeRejected(it.reason, it.message)
+        }
         val before = checkNotNull(snapshot)
         val id = UUID.randomUUID().toString()
         val payload = json.encodeToString(Payload.serializer(), Payload(id, owner, input))
@@ -92,11 +96,13 @@ internal class TaskWorktreeInputJournal(
                     }
                 } catch (readFailure: Exception) { failure.addSuppressed(readFailure); throw failure }
                 snapshot = confirmed
+                MachineTransitionLog.append(TaskWorktreeMachine.id, TaskWorktreeMachine.space, previousState, input, next.state, next.effects)
                 state = next.state
                 if (failure is CancellationException) throw failure
                 confirmed
             }
             snapshot = observed
+            MachineTransitionLog.append(TaskWorktreeMachine.id, TaskWorktreeMachine.space, previousState, input, next.state, next.effects)
             state = next.state
             return next
         } catch (failure: Exception) {
@@ -133,7 +139,10 @@ internal class TaskWorktreeInputJournal(
     }
 
     private fun fail(failure: Throwable, event: String) {
-        state = TaskWorktreeMachine.reduce(state, TaskWorktreeMachine.Input.Fact.PersistenceUnknown).state
+        val before = state
+        val next = TaskWorktreeMachine.reduce(before, TaskWorktreeMachine.Input.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(TaskWorktreeMachine.id, TaskWorktreeMachine.space, before, TaskWorktreeMachine.Input.Fact.PersistenceUnknown, next.state, next.effects)
+        state = next.state
         AppLog.error("coding.worktree", event, mapOf("projectId" to owner.projectId, "sessionId" to owner.sessionId,
             "causeType" to failure.javaClass.simpleName, "result" to "effects_blocked"))
     }
@@ -148,8 +157,11 @@ internal class TaskWorktreeInputJournal(
             check(record.stream == stream && record.seq > sequence && record.seq <= observed.revision.seq && record.operation == OPERATION)
             val envelope = json.decodeFromString(Envelope.serializer(), record.detail)
             check(envelope.owner == owner && envelope.id.isNotBlank() && ids.add(envelope.id) && envelope.resetEpoch == observed.revision.resetEpoch)
-            val transition = TaskWorktreeMachine.reduce(result, readInput(envelope))
+            val before = result
+            val input = readInput(envelope)
+            val transition = TaskWorktreeMachine.reduce(before, input)
             check(transition.effects.none { it is TaskWorktreeMachine.Effect.Reject })
+            MachineTransitionLog.replay(TaskWorktreeMachine.id, TaskWorktreeMachine.space, before, input, transition.state, transition.effects)
             result = transition.state
             sequence = record.seq
         }

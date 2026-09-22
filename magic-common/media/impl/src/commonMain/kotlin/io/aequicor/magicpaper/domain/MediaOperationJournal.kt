@@ -56,7 +56,10 @@ internal class MediaOperationJournal(private val journal: EventJournal, private 
         uncertain.value[id]?.let { throw MediaJournalUnknown() }
         val (snapshot, state) = load(id)
         val next = MediaGenerationMachine.reduce(state, input)
-        next.effects.filterIsInstance<MediaGenerationMachine.Effect.Reject>().firstOrNull()?.let { throw MediaMachineRejection(it.reason) }
+        next.effects.filterIsInstance<MediaGenerationMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(MediaGenerationMachine.id, MediaGenerationMachine.space, state, input, next.state, next.effects)
+            throw MediaMachineRejection(it.reason)
+        }
         append(snapshot, state, input, next)
         next
     }
@@ -88,9 +91,11 @@ internal class MediaOperationJournal(private val journal: EventJournal, private 
             check(record.operation == OPERATION) { "Неизвестная запись журнала генерации" }
             val entry = json.decodeFromString<Entry>(record.detail)
             check(entry.resetEpoch == snapshot.revision.resetEpoch && entry.id.isNotBlank() && entries.add(entry.id)) { "Запись принадлежит другому поколению журнала" }
-            val next = MediaGenerationMachine.reduce(state, entry.input)
+            val before = state
+            val next = MediaGenerationMachine.reduce(before, entry.input)
             check(next.effects.none { it is MediaGenerationMachine.Effect.Reject }) { "Повреждён журнал генерации" }
             check(next.state.operation?.id == id) { "Журнал принадлежит другой операции генерации" }
+            MachineTransitionLog.replay(MediaGenerationMachine.id, MediaGenerationMachine.space, before, entry.input, next.state, next.effects)
             state = next.state
         }
         return state
@@ -104,6 +109,7 @@ internal class MediaOperationJournal(private val journal: EventJournal, private 
                 ?: throw IllegalStateException("Журнал изменён другим владельцем")
             check(record.stream == snapshot.revision.stream && record.seq > snapshot.revision.seq &&
                 record.operation == OPERATION && record.detail == detail) { "Подтверждение записи принадлежит другому журналу" }
+            MachineTransitionLog.append(MediaGenerationMachine.id, MediaGenerationMachine.space, state, input, next.state, next.effects)
             return snapshot.revision.copy(seq = record.seq)
         } catch (failure: Exception) {
             val observed = try { withContext(NonCancellable) { journal.snapshot(snapshot.revision.stream) } }
@@ -123,6 +129,7 @@ internal class MediaOperationJournal(private val journal: EventJournal, private 
             if (observed.revision.resetEpoch == snapshot.revision.resetEpoch && observed.records.lastOrNull()?.let {
                     it.operation == OPERATION && it.detail == detail } == true) {
                 if (failure is CancellationException) throw failure
+                MachineTransitionLog.append(MediaGenerationMachine.id, MediaGenerationMachine.space, state, input, next.state, next.effects)
                 return observed.revision
             }
             markUnknown(id, state.takeUnless { it.operation == null } ?: next.state)
@@ -131,7 +138,10 @@ internal class MediaOperationJournal(private val journal: EventJournal, private 
         }
     }
     private fun markUnknown(id: String, state: MediaGenerationMachine.State) {
-        uncertain.update { it + (id to MediaGenerationMachine.reduce(state, MediaGenerationMachine.Fact.PersistenceUnknown).state) }
+        val input = MediaGenerationMachine.Fact.PersistenceUnknown
+        val next = MediaGenerationMachine.reduce(state, input)
+        MachineTransitionLog.append(MediaGenerationMachine.id, MediaGenerationMachine.space, state, input, next.state, next.effects)
+        uncertain.update { it + (id to next.state) }
     }
     /** Producers must be joined and the application stores cleared before a new generation is accepted. */
     fun reset() { uncertain.value = emptyMap(); locks.value = emptyMap() }

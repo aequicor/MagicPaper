@@ -45,21 +45,30 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
                 Entry(CodingMachine.initial(), snapshot.revision, snapshot.records.toMutableList())
             }
             val frozenInput = freeze(input)
-            val next = CodingMachine.reduce(entry.state, frozenInput)
-            next.effects.filterIsInstance<CodingMachine.Effect.Reject>().firstOrNull()?.let { throw CodingCommandRejected(it.reason) }
+            val before = entry.state
+            val next = CodingMachine.reduce(before, frozenInput)
+            next.effects.filterIsInstance<CodingMachine.Effect.Reject>().firstOrNull()?.let {
+                MachineTransitionLog.append(CodingMachine.id, CodingMachine.space, before, frozenInput, next.state, next.effects)
+                throw CodingCommandRejected(it.reason)
+            }
             check(next.state.project?.id == projectId) { "Команда принадлежит другому проекту" }
             check(identitiesAvailable(projectId, next.state, entries)) { "Идентификатор уже принадлежит другому проекту" }
             if (next.state == entry.state && next.effects.isEmpty()) return@withLock next
             try { commit(projectId, entry, frozenInput, next.state) }
             catch (cancelled: CancellationException) {
-                entry.state = CodingMachine.reduce(entry.state, CodingMachine.Fact.PersistenceUnknown).state
+                val unknown = CodingMachine.reduce(entry.state, CodingMachine.Fact.PersistenceUnknown)
+                MachineTransitionLog.append(CodingMachine.id, CodingMachine.space, entry.state, CodingMachine.Fact.PersistenceUnknown, unknown.state, unknown.effects)
+                entry.state = unknown.state
                 publish(projectId, entry); report(projectId, "input.cancelled", cancelled)
                 throw cancelled
             }
             catch (failure: Exception) {
-                entry.state = CodingMachine.reduce(entry.state, CodingMachine.Fact.PersistenceUnknown).state
+                val unknown = CodingMachine.reduce(entry.state, CodingMachine.Fact.PersistenceUnknown)
+                MachineTransitionLog.append(CodingMachine.id, CodingMachine.space, entry.state, CodingMachine.Fact.PersistenceUnknown, unknown.state, unknown.effects)
+                entry.state = unknown.state
                 publish(projectId, entry); report(projectId, "input.commit", failure); throw failure
             }
+            MachineTransitionLog.append(CodingMachine.id, CodingMachine.space, before, frozenInput, next.state, next.effects)
             publish(projectId, entry)
             checkpoint(projectId, entry)
             next
@@ -69,13 +78,16 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
         if (initialized) return
         val recovered = mutableMapOf<String, Entry>()
         val imports = mutableMapOf<String, CodingMachine.Fact.LegacyImported>()
-        for (stream in journal.streams().filter { it.startsWith(PREFIX) }) {
-            val snapshot = snapshot(stream)
+        // One read of every stream's snapshot, not one full journal scan per project.
+        for ((stream, snapshot) in journal.snapshotAll().filterKeys { it.startsWith(PREFIX) }.toSortedMap()) {
+            validate(stream, snapshot)
             var state = CodingMachine.initial()
             for (record in snapshot.records) {
                 val envelope = json.decodeFromString(Envelope.serializer(), record.detail)
-                val next = CodingMachine.reduce(state, freeze(payloads.read(envelope.ref)))
+                val recordedInput = freeze(payloads.read(envelope.ref))
+                val next = CodingMachine.reduce(state, recordedInput)
                 check(next.effects.none { it is CodingMachine.Effect.Reject }) { "Повреждён журнал проекта" }
+                MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, state, recordedInput, next.state, next.effects)
                 state = next.state
             }
             val id = checkNotNull(state.project).id
@@ -88,8 +100,10 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
             check(id !in recovered) { "Проект уже восстановлен" }
             val snapshot = snapshot(stream(id))
             check(snapshot.records.isEmpty()) { "Проект изменился во время восстановления" }
-            val next = CodingMachine.reduce(CodingMachine.initial(), input)
+            val importBefore = CodingMachine.initial()
+            val next = CodingMachine.reduce(importBefore, input)
             check(next.effects.none { it is CodingMachine.Effect.Reject } && identitiesAvailable(id, next.state, recovered)) { "Повреждено сохранённое состояние проекта" }
+            MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, importBefore, input, next.state, next.effects)
             recovered[id] = Entry(next.state, snapshot.revision, snapshot.records.toMutableList()); imports[id] = input
         }
         // Reserve all project/session/tombstone identities before the first migration write.
@@ -97,8 +111,12 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
             val imported = imports[id]
             if (imported != null) commit(id, entry, imported, entry.state)
             else {
-                val restored = CodingMachine.reduce(entry.state, CodingMachine.Fact.Restored).state
-                if (restored != entry.state) commit(id, entry, CodingMachine.Fact.Restored, restored)
+                val restoredBefore = entry.state
+                val restored = CodingMachine.reduce(restoredBefore, CodingMachine.Fact.Restored)
+                if (restored.state != restoredBefore) {
+                    MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, restoredBefore, CodingMachine.Fact.Restored, restored.state, restored.effects)
+                    commit(id, entry, CodingMachine.Fact.Restored, restored.state)
+                }
             }
         }
         entries.clear(); entries.putAll(recovered)
@@ -113,8 +131,8 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
             (entry.state.initialized || entry.state.persistenceUnknown || entry.records.isNotEmpty()) &&
             (identities(entry.state) + id).any(requested::contains) }
     }
-    private suspend fun snapshot(stream: String): JournalSnapshot {
-        val snapshot = journal.snapshot(stream)
+    private suspend fun snapshot(stream: String): JournalSnapshot = validate(stream, journal.snapshot(stream))
+    private fun validate(stream: String, snapshot: JournalSnapshot): JournalSnapshot {
         check(snapshot.revision.stream == stream && snapshot.revision.seq >= 0 && snapshot.revision.resetEpoch >= 0) { "Неверная принадлежность журнала проекта" }
         var previous = 0L
         val inputs = mutableSetOf<String>()

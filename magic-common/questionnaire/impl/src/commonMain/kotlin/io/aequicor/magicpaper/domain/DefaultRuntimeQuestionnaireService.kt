@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.domain
 import io.aequicor.magicpaper.data.storage.EventJournal
 import io.aequicor.magicpaper.data.storage.JournalRevision
 import io.aequicor.magicpaper.data.storage.JournalSnapshot
+import io.aequicor.magicpaper.data.storage.MachineTransitionLog
 import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.util.Id
 import kotlinx.coroutines.CancellationException
@@ -69,8 +70,10 @@ class DefaultRuntimeQuestionnaireService(
         snapshot.records.forEach { record ->
             check(record.operation == "questionnaire.input.v1") { "Неизвестная запись журнала опросников" }
             val input = json.decodeFromString<Entry>(record.detail).input
-            val transition = QuestionnaireMachine.reduce(restored, input)
+            val before = restored
+            val transition = QuestionnaireMachine.reduce(before, input)
             check(transition.effects.none { it is QuestionnaireMachine.Effect.Reject }) { "Повреждён журнал опросников" }
+            MachineTransitionLog.replay(QuestionnaireMachine.id, QuestionnaireMachine.space, before, input, transition.state, transition.effects)
             restored = transition.state
         }
         return restored
@@ -200,8 +203,12 @@ class DefaultRuntimeQuestionnaireService(
 
     /** Append-before-effects with exact readback after an ambiguous store failure. */
     private suspend fun commit(input: QuestionnaireMachine.Input): List<QuestionnaireMachine.Effect> {
-        val next = QuestionnaireMachine.reduce(machine, input)
-        next.effects.filterIsInstance<QuestionnaireMachine.Effect.Reject>().firstOrNull()?.let { throw IllegalArgumentException(it.reason) }
+        val before = machine
+        val next = QuestionnaireMachine.reduce(before, input)
+        next.effects.filterIsInstance<QuestionnaireMachine.Effect.Reject>().firstOrNull()?.let {
+            MachineTransitionLog.append(QuestionnaireMachine.id, QuestionnaireMachine.space, before, input, next.state, next.effects)
+            throw IllegalArgumentException(it.reason)
+        }
         val expected = checkNotNull(revision)
         val entry = Entry(Id.new(), input)
         val detail = json.encodeToString(Entry.serializer(), entry)
@@ -231,6 +238,7 @@ class DefaultRuntimeQuestionnaireService(
             }
             // Cancellation still records durable progress, but must never execute its effects.
             if (failure is CancellationException) {
+                MachineTransitionLog.append(QuestionnaireMachine.id, QuestionnaireMachine.space, before, input, next.state, next.effects)
                 machine = next.state
                 // Do not leave an invisible live waiter after a committed answer was interrupted.
                 // Its later explicit reattachment can read the answer, without replaying delivery.
@@ -239,13 +247,17 @@ class DefaultRuntimeQuestionnaireService(
                 throw failure
             }
         }
+        MachineTransitionLog.append(QuestionnaireMachine.id, QuestionnaireMachine.space, before, input, next.state, next.effects)
         machine = next.state
         publish()
         return next.effects
     }
 
     private fun markUnknown() {
-        machine = QuestionnaireMachine.reduce(machine, QuestionnaireMachine.Fact.PersistenceUnknown).state
+        val before = machine
+        val next = QuestionnaireMachine.reduce(before, QuestionnaireMachine.Fact.PersistenceUnknown)
+        MachineTransitionLog.append(QuestionnaireMachine.id, QuestionnaireMachine.space, before, QuestionnaireMachine.Fact.PersistenceUnknown, next.state, next.effects)
+        machine = next.state
         publish()
     }
     private fun publish() {
