@@ -68,22 +68,27 @@ class JournaledBackendAgent(private val native: NativeAgentAdapter, private val 
             executor.cancel(CancellationException("Native recovery stopped the active attempt"))
             executor.join()
         } else {
-            // Legacy PID reconciliation may stop an exact parent, but cannot prove that an
-            // already-dead parent left no descendants. Only the live interpreter reports Stopped.
-            native.reconcile(attempt.run.sessionId)
+            // Legacy PID reconciliation may stop an exact parent, but usually cannot prove that an
+            // already-dead parent left no descendants. It reports Stopped only when it caught the
+            // exact recorded process still alive and confirmed it, and every current descendant, exited.
+            if (native.reconcile(attempt.run.sessionId)) lifecycle.stopped(attempt)
         }
         return lifecycle.inspect(attempt.run.sessionId)
     }
     override suspend fun acknowledgeRecovery(attempt: NativeAttemptRef, parentDecisionId: String) = lifecycle.acknowledge(attempt, parentDecisionId)
     override suspend fun acknowledgeNoDispatch(proof: NativeNoDispatchProof, parentDecisionId: String) = lifecycle.acknowledgeNoDispatch(proof, parentDecisionId)
-    override suspend fun reconcile(sessionId: String) {
+    override suspend fun reconcile(sessionId: String): Boolean {
         val before = lifecycle.inspect(sessionId)
         before.items.filter { it.termination != NativeTermination.STOPPED }.forEach { stopRecovery(it.attempt) }
         // Preserve migration recovery for an older native receipt with no lifecycle journal record.
         if (before.items.isEmpty() && before.noDispatch.isEmpty()) native.reconcile(sessionId)
         val after = lifecycle.inspect(sessionId)
+        // Callers that need an acknowledged-but-unknown-outcome attempt to count as resolved
+        // (e.g. releasing a different session's shared working folder) check acknowledgement
+        // themselves; this shared primitive always demands a known outcome or termination proof.
         if (after.persistenceUnknown || after.items.any { it.outcome == NativeOutcome.UNKNOWN || it.termination != NativeTermination.STOPPED })
             throw NativeRecoveryRequired(after)
+        return true
     }
     override suspend fun prepareForReset() {
         lifecycle.closing()

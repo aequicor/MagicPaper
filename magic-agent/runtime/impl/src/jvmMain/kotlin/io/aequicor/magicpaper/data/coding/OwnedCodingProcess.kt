@@ -44,15 +44,17 @@ internal class OwnedCodingProcess(private val directory: File) : io.aequicor.mag
         return process != null && lines.firstOrNull()?.toLongOrNull() == process.pid() &&
             lines.getOrNull(1)?.toLongOrNull() == process.info().startInstant().orElse(null)?.toEpochMilli()
     }
-    override fun reconcile(id: String) {
+    override fun reconcile(id: String): Boolean {
         val file = file(id)
-        if (!file.exists()) return
+        if (!file.exists()) return false
         val values = file.readLines().map { it.toLongOrNull() }
         require(values.size == 4 && values.all { it != null }) { "Не удалось прочитать владельца процесса $id" }
         fun matching(pid: Long, start: Long): ProcessHandle? = ProcessHandle.of(pid).orElse(null)?.takeIf {
             it.isAlive && it.info().startInstant().orElse(null)?.toEpochMilli() == start
         }
         val process = matching(values[0]!!, values[1]!!)
+        // A parent already gone by the time we look cannot prove its descendants left no orphans;
+        // only catching it still alive here and confirming its exit (and its children's) is proof.
         if (process != null) {
             val owner = matching(values[2]!!, values[3]!!)
             check(owner == null || owner.pid() == ProcessHandle.current().pid()) { "Процесс выполняется другим экземпляром приложения" }
@@ -63,5 +65,6 @@ internal class OwnedCodingProcess(private val directory: File) : io.aequicor.mag
             children.forEach { if (it.isAlive) it.onExit().get(10, TimeUnit.SECONDS) }
         }
         check(file.delete() || !file.exists()) { "Не удалось очистить запись процесса" }
+        return process != null
     }
 }

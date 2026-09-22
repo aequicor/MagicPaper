@@ -20,9 +20,10 @@ internal class InMemoryProcessOwnership : NativeProcessRecovery {
     override fun record(id: String, process: Process, attachLifetime: Boolean) { owned[id] = process.toHandle() }
     override fun clear(id: String) { owned.remove(id) }
     override fun belongsTo(id: String, process: Process?) = process != null && owned[id]?.pid() == process.pid()
-    override fun reconcile(id: String) {
-        val process = owned[id] ?: return
-        if (process.isAlive) {
+    override fun reconcile(id: String): Boolean {
+        val process = owned[id] ?: return false
+        val alive = process.isAlive
+        if (alive) {
             val children = process.descendants().use { it.toList() }
             children.asReversed().forEach { it.destroyForcibly() }
             process.destroyForcibly()
@@ -30,6 +31,7 @@ internal class InMemoryProcessOwnership : NativeProcessRecovery {
             children.forEach { if (it.isAlive) it.onExit().get(10, TimeUnit.SECONDS) }
         }
         owned.remove(id)
+        return alive
     }
 }
 

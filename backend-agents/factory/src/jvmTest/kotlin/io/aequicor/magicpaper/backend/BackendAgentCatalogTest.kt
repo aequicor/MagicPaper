@@ -105,7 +105,7 @@ class BackendAgentCatalogTest {
         override suspend fun shutdown() = close()
         override suspend fun prepareForReset() = Unit
         override suspend fun resumeAfterReset() = Unit
-        override suspend fun reconcile(sessionId: String) = Unit
+        override suspend fun reconcile(sessionId: String) = false
         override fun abort(sessionId: String) { aborted += sessionId }
         override fun abortAll() = Unit
         override fun close() { closed = true; closeFailure?.let { throw it } }

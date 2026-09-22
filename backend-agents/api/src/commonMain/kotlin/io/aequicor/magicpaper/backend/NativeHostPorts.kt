@@ -16,7 +16,8 @@ interface NativeQuestionnaires {
 }
 interface NativeProcessRecovery : NativeProcessOwnership {
     fun belongsTo(id: String, process: Process?): Boolean
-    fun reconcile(id: String)
+    /** True only when a still-matching process (and its descendants) was found, killed and confirmed exited. */
+    fun reconcile(id: String): Boolean
 }
 data class NativeToolPresentation(val name: String, val summary: String)
 fun interface NativeToolPresentationResolver {

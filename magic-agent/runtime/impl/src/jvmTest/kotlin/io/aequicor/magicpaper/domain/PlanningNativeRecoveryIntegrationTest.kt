@@ -460,7 +460,7 @@ class PlanningNativeRecoveryIntegrationTest {
                 emit(CodingEvent.FinalText("Verified result"))
             emit(CodingEvent.Finished)
         }
-        override suspend fun reconcile(sessionId: String) = Unit
+        override suspend fun reconcile(sessionId: String) = false
         override fun abort(sessionId: String) = Unit
         override fun abortAll() = Unit
         override fun close() = Unit

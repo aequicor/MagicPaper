@@ -121,7 +121,11 @@ internal class CodexBackendAgent(
         }
     }
 
-    override suspend fun reconcile(sessionId: String) = (clients[sessionId] ?: control).reconcileCoding(sessionId)
+    override suspend fun reconcile(sessionId: String): Boolean {
+        // Codex reconciliation does not yet independently prove descendant termination.
+        (clients[sessionId] ?: control).reconcileCoding(sessionId)
+        return false
+    }
     override fun abort(sessionId: String) { clients[sessionId]?.abortCoding(sessionId) }
     override fun abortAll() { clients.forEach { (id, client) -> client.abortCoding(id) } }
     override fun close() {

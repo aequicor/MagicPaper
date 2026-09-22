@@ -136,6 +136,50 @@ class JournaledBackendAgentTest {
         assertFailsWith<NativeRecoveryRequired> { restored.run(request.copy(requestId = "new")).toList() }
     }
 
+    @Test fun legacyPidReconciliationThatProvesTerminationLetsTheAttemptBeAcknowledgedAndRestarted() = runTest {
+        val journal = Memory()
+        val owner = NativeLifecycleOwner(journal, diagnostics)
+        val run = NativeRunRef("session", "request")
+        owner.begin(run)
+        val attempt = owner.admitLaunch(run)
+        owner.attached(attempt, NativeProcessIdentity("receipt", 42, 1))
+        owner.deliver(attempt, NativeDelivery.PI_STDIN)
+        val native = Adapter {
+            val (events, fresh) = admit()
+            events.terminal(fresh, NativeOutcome.SUCCEEDED)
+            events.stopped(fresh)
+            emit(CodingEvent.Finished)
+        }
+        native.reconcileProvesTermination = true
+        val restored = JournaledBackendAgent(native, NativeLifecycleOwner(journal, diagnostics))
+        val recovery = restored.stopRecovery(attempt)
+        assertEquals(1, native.reconciliations)
+        assertEquals(NativeTermination.STOPPED, recovery.items.single().termination)
+        val ack = restored.acknowledgeRecovery(attempt, "explicit-parent-decision")
+        assertEquals(listOf<CodingEvent>(CodingEvent.Finished),
+            restored.run(request.copy(requestId = "fresh", recovery = ack)).toList())
+    }
+
+    @Test fun reconcileStillRequiresAKnownOutcomeEvenAfterAnAcknowledgement() = runTest {
+        val journal = Memory()
+        val owner = NativeLifecycleOwner(journal, diagnostics)
+        val run = NativeRunRef("session", "request")
+        owner.begin(run)
+        val attempt = owner.admitLaunch(run)
+        owner.attached(attempt, NativeProcessIdentity("receipt", 42, 1))
+        owner.deliver(attempt, NativeDelivery.PI_STDIN)
+        val native = Adapter { error("Restore cannot launch") }
+        native.reconcileProvesTermination = true
+        val restored = JournaledBackendAgent(native, NativeLifecycleOwner(journal, diagnostics))
+        // Termination is now proven, but the outcome is still unknown and unacknowledged.
+        assertFailsWith<NativeRecoveryRequired> { restored.reconcile("session") }
+        restored.acknowledgeRecovery(attempt, "explicit-parent-decision")
+        // This shared primitive still demands a known outcome; callers content with an explicit
+        // human acknowledgement alone (e.g. freeing a different session's working folder) check
+        // acknowledgement themselves rather than relying on reconcile() to relax its own contract.
+        assertFailsWith<NativeRecoveryRequired> { restored.reconcile("session") }
+    }
+
     @Test fun transportFailureAfterDeliveryRemainsTypedUnknownAndRetainsItsCause() = runTest {
         val transport = IllegalStateException("private transport failure")
         val agent = JournaledBackendAgent(Adapter {
@@ -249,6 +293,8 @@ class JournaledBackendAgentTest {
     }
     private class Adapter(val body: suspend FlowCollector<CodingEvent>.() -> Unit) : NativeAgentAdapter {
         var reconciliations = 0
+        /** Simulates whether the legacy PID reconciliation itself proved the process tree dead. */
+        var reconcileProvesTermination = false
         override val descriptor = BackendAgentDescriptor(CodingEngine.PI, "fixture", emptySet(), "", "", "", "")
         override val rootPath = "fixture"
         override val approvals: NativeApprovalRequests? = null
@@ -260,7 +306,7 @@ class JournaledBackendAgentTest {
         override fun modelProfile(profile: LlmProfile, mode: CodingInteractionMode, speedBoost: Boolean) = profile
         override fun modelConnection(profile: LlmProfile) = NativeModelConnectionKind.DIRECT
         override fun run(request: NativeAgentRequest) = flow(body)
-        override suspend fun reconcile(sessionId: String) { reconciliations++ }
+        override suspend fun reconcile(sessionId: String): Boolean { reconciliations++; return reconcileProvesTermination }
         override fun abort(sessionId: String) = Unit
         override fun abortAll() = Unit
         override fun close() = Unit

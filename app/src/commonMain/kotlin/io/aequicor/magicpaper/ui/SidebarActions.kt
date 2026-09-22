@@ -12,6 +12,7 @@ internal class SidebarActions(private val chat: ChatService, contributions: List
             SidebarCommand.Create -> chat.newSession()
             is SidebarCommand.Select -> chat.selectSession(command.id)
             is SidebarCommand.Archive -> chat.archiveSession(command.id)
+            is SidebarCommand.Stop -> error("Chat sessions cannot be stopped")
             is SidebarCommand.Restore -> chat.restoreSession(command.id)
             is SidebarCommand.Delete -> chat.deleteSession(command.id)
             SidebarCommand.DismissNotice -> chat.dismissNotice()

@@ -50,6 +50,7 @@ internal sealed interface SidebarCommand {
     data class CreateInProject(val id: String) : SidebarCommand
     data class Select(val id: String) : SidebarCommand
     data class Archive(val id: String) : SidebarCommand
+    data class Stop(val id: String) : SidebarCommand
     data class Restore(val id: String) : SidebarCommand
     data class Delete(val id: String) : SidebarCommand
     data object DismissNotice : SidebarCommand

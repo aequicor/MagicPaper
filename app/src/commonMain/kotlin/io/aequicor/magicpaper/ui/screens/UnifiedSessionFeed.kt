@@ -60,6 +60,7 @@ internal fun UnifiedSessionFeed(
     onArchive: (UnifiedSidebarItem) -> Unit,
     onDelete: (UnifiedSidebarItem) -> Unit,
     onAddSession: (String, String) -> Unit,
+    onStop: (UnifiedSidebarItem) -> Unit = {},
     modifier: Modifier = Modifier,
     state: LazyListState = rememberLazyListState(),
 ) {
@@ -74,6 +75,8 @@ internal fun UnifiedSessionFeed(
     }
     // Hoist menus above lazy/pinned copies: scrolling cannot reset an open menu.
     var menuKey by rememberSaveable { mutableStateOf<String?>(null) }
+    // A working session must warn before archiving stops it; an idle session archives right away.
+    var confirmArchive by remember { mutableStateOf<UnifiedSidebarItem?>(null) }
     PaperStickyTree(rows.map { it.entry }, modifier, state) { key, retainPosition ->
         val row = byKey.getValue(key)
         val item = row.session
@@ -111,12 +114,25 @@ internal fun UnifiedSessionFeed(
                             onSelect(immunity.sessionId, item.sourceId)
                         })
                     }
+                    if (item.isCoding && item.codingStatus == CodingSessionStatus.WORKING) {
+                        PaperTooltip("Остановить") {
+                            PaperToolbarButton(
+                                icon = PaperToolbarIcon.Stop,
+                                label = "Остановить сессию",
+                                size = 24.dp,
+                                onClick = { onStop(item) },
+                            )
+                        }
+                    }
                     PaperTooltip("В архив") {
                         PaperToolbarButton(
                             icon = PaperToolbarIcon.Archive,
                             label = "Архивировать ${if (item.isCoding) "сессию" else "чат"}",
                             size = 24.dp,
-                            onClick = { onArchive(item) },
+                            onClick = {
+                                if (item.isCoding && item.codingStatus == CodingSessionStatus.WORKING) confirmArchive = item
+                                else onArchive(item)
+                            },
                         )
                     }
                     PaperRowMenu(
@@ -128,6 +144,17 @@ internal fun UnifiedSessionFeed(
                     )
                 },
             )
+        }
+    }
+    confirmArchive?.let { item ->
+        PaperDialog(
+            title = "Архивировать сессию?",
+            onDismissRequest = { confirmArchive = null },
+            confirmLabel = "Остановить и архивировать",
+            onConfirm = { onArchive(item); confirmArchive = null },
+            dismissLabel = "Отмена",
+        ) {
+            PaperText("Сессия «${item.displayName}» ещё работает. Она будет остановлена и заархивирована.")
         }
     }
 }

@@ -201,13 +201,14 @@ internal class PiBackendAgent(private val environment: NativeBackendEnvironment,
     override fun abort(sessionId: String) { aborted.add(sessionId); running[sessionId]?.abort() }
     override fun abortAll() { synchronized(lifecycleLock) { active.toList() }.forEach(::abort) }
     override fun close() { synchronized(lifecycleLock) { closed = true }; abortAll() }
-    override suspend fun reconcile(sessionId: String) = withContext(Dispatchers.IO) {
-        environment.processes.reconcile(sessionId)
+    override suspend fun reconcile(sessionId: String): Boolean = withContext(Dispatchers.IO) {
+        val terminated = environment.processes.reconcile(sessionId)
         migrateCredentials(sessionHome(sessionId))
         if (File(root, "owned-processes").listFiles().orEmpty().none { it.extension == "process" }) {
             migrateCredentials(File(root, "pihome"))
             File(root, "session-configs").listFiles().orEmpty().filter { it.isDirectory }.forEach(::migrateCredentials)
         }
+        terminated
     }
     private fun sessionHome(id: String) = File(root, "session-configs/" + id.replace(Regex("[^a-zA-Z0-9_-]"), "_"))
     private fun migrateCredentials(home: File) {
