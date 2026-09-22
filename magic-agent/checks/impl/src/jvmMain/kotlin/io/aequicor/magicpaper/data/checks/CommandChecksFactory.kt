@@ -9,5 +9,6 @@ import java.nio.file.Paths
 
 fun createCommandChecks(events: EventJournal, payloads: KeyValueStore,
     root: Path = Paths.get(System.getProperty("user.home"), ".MagicPaper", "research-checks"),
-    timeoutMillis: Long = 15 * 60_000L): CommandChecks =
-    DefaultCommandChecks(events, payloads, SandboxCheckDriver(root, timeoutMillis))
+    timeoutMillis: Long = 15 * 60_000L,
+    probeRetryDelayMs: Long = DefaultCommandChecks.PROBE_RETRY_DELAY_MS): CommandChecks =
+    DefaultCommandChecks(events, payloads, SandboxCheckDriver(root, timeoutMillis), probeRetryDelayMs)

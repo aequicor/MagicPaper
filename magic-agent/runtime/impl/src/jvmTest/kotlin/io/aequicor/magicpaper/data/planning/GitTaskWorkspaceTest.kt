@@ -237,7 +237,7 @@ class GitTaskWorkspaceTest {
     } }
 
     @Test fun verifyRunsTaskChecksInManagedCopyAndReportsTheirOutput() = runTest { fixture {
-        val checked = port(io.aequicor.magicpaper.data.checks.createCommandChecks(InMemoryEventJournal(), InMemoryKeyValueStore(), File(root, "checks").toPath()))
+        val checked = port()
         val task = open()
         val dir = File(task.path)
         dir.resolve("result.txt").writeText("ok")

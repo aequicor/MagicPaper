@@ -69,6 +69,10 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
     enum class Reason { INVALID, MISSING, BUSY, UNKNOWN, STALE, PAYLOAD_CHANGED, NOT_READY }
     data class Transition(val state: State, val effects: List<Effect> = emptyList())
     fun initial(workspace: String): State = State(workspace)
+    /** Clears the persistence-unknown flag so a fresh snapshot can prove the journal consistent again.
+     *  Used by the journal owner when retrying after a transient storage glitch; the reducer will
+     *  reject any input that cannot be reconciled with the observed records. */
+    fun clearPersistenceUnknown(state: State): State = state.copy(persistenceUnknown = false)
 
     fun reduce(state: State, input: Input): Transition {
         fun reject(reason: Reason) = Transition(state, listOf(Effect.Reject(reason)))

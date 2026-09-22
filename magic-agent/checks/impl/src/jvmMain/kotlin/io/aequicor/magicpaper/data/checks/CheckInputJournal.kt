@@ -26,7 +26,10 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
 
     suspend fun initialize() {
         if (snapshot != null) return
-        if (state.persistenceUnknown) throw CheckOutcomeUnknown()
+        // A prior persistence failure is remembered only until the next restore attempt; a
+        // transient storage glitch must not permanently disable the workspace for the rest of
+        // the visit. Clear the flag so a fresh snapshot can prove the journal consistent again.
+        if (state.persistenceUnknown) state = CommandCheckMachine.clearPersistenceUnknown(state)
         try {
             val observed = events.snapshot(stream)
             state = replay(observed)

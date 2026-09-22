@@ -16,7 +16,8 @@ import kotlinx.serialization.json.Json
 
 /** The only writer and effect interpreter for command checks; no process-global registry or shutdown hook. */
 internal class DefaultCommandChecks(private val events: EventJournal, private val payloads: KeyValueStore,
-    private val driver: CheckProcessDriver) : CommandChecks {
+    private val driver: CheckProcessDriver,
+    private val probeRetryDelayMs: Long = PROBE_RETRY_DELAY_MS) : CommandChecks {
     private class Entry(val journal: CheckInputJournal) { val lock = Mutex() }
     private val entries = ConcurrentHashMap<String, Entry>()
     private val running = ConcurrentHashMap<CheckRef, Job>()
@@ -27,8 +28,10 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
     private var probeVerified = false
     @Volatile private var accepting = true
     @Volatile private var closed = false
-    /** A failed probe marks checks unavailable but does not abort the owning runtime restore. */
+    /** A failed probe marks checks unavailable but does not abort the owning runtime restore.
+     *  The failure timestamp allows retry after a transient glitch without permanently disabling checks. */
     @Volatile private var probeFailure: Throwable? = null
+    @Volatile private var probeFailureAt: Long = 0
     override val progress = MutableSharedFlow<CheckProgress>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     override suspend fun run(command: CheckCommand): CheckResult {
@@ -325,7 +328,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
     }
     override suspend fun resumeAfterReset() {
         entries.values.forEach { entry -> entry.lock.withLock { } }
-        admission.withLock { entries.clear(); probeVerified = false; probeFailure = null; if (!closed) accepting = true }
+        admission.withLock { entries.clear(); probeVerified = false; probeFailure = null; probeFailureAt = 0; if (!closed) accepting = true }
     }
     override suspend fun close() {
         val pending = admission.withLock { closed = true; accepting = false; completions.values.toList() }
@@ -367,10 +370,16 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
     }
     /** The real OS probe is another journaled command in a fixed owned workspace, with the same lifecycle proofs.
      *  A probe failure marks checks unavailable for this runtime visit; it does not throw into the caller,
-     *  so session restore and other startup work can proceed without sandbox-protected checks. */
+     *  so session restore and other startup work can proceed without sandbox-protected checks.
+     *  The failure is retried after a short delay so a transient storage glitch does not permanently
+     *  disable sandbox-dependent checks, but a genuine sandbox outage is not hammered repeatedly. */
     private suspend fun ensureProbe() = probeLock.withLock {
         if (probeVerified) return@withLock
-        if (probeFailure != null) return@withLock
+        // A prior probe failure is retried after a short delay; a transient journal outage must not
+        // permanently disable git checks, but a genuine sandbox outage should not be hammered either.
+        val now = System.currentTimeMillis()
+        if (probeFailure != null && now - probeFailureAt < probeRetryDelayMs) return@withLock
+        probeFailure = null
         val workspace = driver.probeWorkspace() ?: return@withLock
         val entry = admission.withLock {
             check(accepting && !closed) { "Проверки временно остановлены" }
@@ -380,6 +389,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             entry.journal.initialize()
             if (entry.journal.state.unknown) {
                 probeFailure = CheckOutcomeUnknown()
+                probeFailureAt = now
                 return@withLock
             }
             check(accepting && !closed) { "Проверки временно остановлены" }
@@ -397,6 +407,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 AppLog.error("checks", "sandbox.probe.failed", mapOf("causeType" to failure.javaClass.simpleName))
                 if (failure is CancellationException) throw failure
                 probeFailure = IllegalStateException("ОС не подтвердила защиту исходников. Проверка недоступна", failure)
+                probeFailureAt = System.currentTimeMillis()
             } finally { running.remove(ref, job) }
         }
     }
@@ -421,4 +432,8 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
     else if (cleanup is CancellationException && primary !is CancellationException) {
         cleanup.addSuppressed(primary); cleanup
     } else { primary.addSuppressed(cleanup); primary }
+    companion object {
+        /** Minimum delay between probe retries; transient glitches recover faster than this, genuine outages wait. */
+        const val PROBE_RETRY_DELAY_MS = 30_000L
+    }
 }
