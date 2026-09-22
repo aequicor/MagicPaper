@@ -289,7 +289,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             }
             is Intent.DiscardInterrupted -> {
                 require(requireRun(state, input.ref).phase == Phase.INTERRUPTED) { "Исход предыдущего запроса неизвестен" }
-                val next = changeRun(state, input.ref) { it.copy(pendingRun = null) }.state
+                val next = changeRun(state, input.ref) { it.copy(pendingRun = null, taskWorktree = null) }.state
                 Transition(next.copy(runs = next.runs - input.ref.session.id))
             }
             is Intent.EditRequest -> {

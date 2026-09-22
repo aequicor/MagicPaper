@@ -2232,6 +2232,8 @@ class DefaultCodingService(
             acceptCodingSession(ui.session, CodingMachine.Intent.Pause(run.ref))
             codingRuntime?.abort(sessionId)
             codingJobs.value[sessionId]?.cancel()
+            // Освободить удержания рабочей директории после остановки сессии
+            taskWorktrees?.releaseRetainedLeases(sessionId)
         }
     }
 
