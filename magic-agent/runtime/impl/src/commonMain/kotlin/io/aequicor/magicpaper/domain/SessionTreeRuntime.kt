@@ -666,6 +666,10 @@ class SessionTreeRuntime(
             organisms.store.organisms.value.values.forEach { organism ->
                 organism.auxiliaryRuns.values.filter { it.ownerSessionId in ids && !it.settled && it.sessionId !in activeIds }.forEach { run ->
                     val observed = try { cancelQuestions(run.sessionId); runtime.reconcile(run.sessionId); SessionObservedState.STOPPED }
+                        catch (recovery: NativeRunRecoveryRequired) {
+                            cleanup.record(run.sessionId, "auxiliary_reconcile", recovery)
+                            if (organism.sessions[run.ownerSessionId]?.desired == SessionDesiredState.STOP) SessionObservedState.STOPPED else SessionObservedState.UNKNOWN
+                        }
                         catch (error: Exception) { cleanup.record(run.sessionId, "auxiliary_reconcile", error); SessionObservedState.UNKNOWN }
                     organisms.project(organisms.store.finishAuxiliary(organism.id, run.id, observed))
                 }
@@ -691,6 +695,10 @@ class SessionTreeRuntime(
                         }
                         SessionObservedState.STOPPED
                     }
+                        catch (recovery: NativeRunRecoveryRequired) {
+                            cleanup.record(id, "session_reconcile", recovery)
+                            if (node.desired == SessionDesiredState.STOP) SessionObservedState.STOPPED else SessionObservedState.UNKNOWN
+                        }
                         catch (error: Exception) { cleanup.record(id, "session_reconcile", error); SessionObservedState.UNKNOWN }
                     // A stopped child must not be picked up again by restoreCodingRuns.
                     recordStopped(organism.projectId, id, unknown = observed == SessionObservedState.UNKNOWN)
