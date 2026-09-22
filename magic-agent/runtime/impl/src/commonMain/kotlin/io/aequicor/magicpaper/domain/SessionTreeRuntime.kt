@@ -147,6 +147,16 @@ class SessionTreeRuntime(
             try {
                 return executionProjectFor(project, session)
             } catch (busy: RootLeaseBusy) {
+                // A retained lease behind a native run that cannot prove its own outcome will never
+                // free itself through blind reconcile retries: only an explicit recovery acknowledgement
+                // (on the blocking session) clears it. Give release one real attempt, then stop grinding
+                // the same unresolvable reconcile every poll for the rest of the wait budget.
+                if (waited > 0L) unresolvedRecoveryBlocking(busy.path)?.let { blocker ->
+                    val busyError = TaskWorkspaceBusy(busy.path, WORKING_FOLDER)
+                    AppLog.error("coding.workspace", "lease.recovery_required", busyError,
+                        mapOf("sessionId" to session.id, "holder" to blocker, "waitedMillis" to waited.toString()))
+                    throw busyError
+                }
                 if (waited >= rootLeaseWaitMillis()) {
                     val busyError = TaskWorkspaceBusy(busy.path, WORKING_FOLDER)
                     AppLog.error("coding.workspace", "lease.busy", busyError,
@@ -164,6 +174,15 @@ class SessionTreeRuntime(
                 waited += ROOT_LEASE_POLL_MILLIS
             }
         }
+    }
+
+    /** Read-only: never repeats the forced-kill attempt that [releaseRetainedRootLeases] already made. */
+    private suspend fun unresolvedRecoveryBlocking(path: String): String? {
+        val blocker = lock.withLock { retainedRootLeases.values.firstOrNull { it.owner.path == path } } ?: return null
+        val recovery = runtime.recovery?.inspect(blocker.sessionId) ?: return null
+        val unresolved = recovery.persistenceUnknown ||
+            recovery.items.any { it.outcome == NativeRunOutcome.UNKNOWN || it.termination != NativeRunTermination.STOPPED }
+        return blocker.sessionId.takeIf { unresolved }
     }
 
     private class RootLeaseBusy(val path: String) : IllegalStateException()
