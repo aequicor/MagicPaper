@@ -314,6 +314,14 @@ class GitTaskWorkspaceTest {
         assertFalse(port.availability(project).available)
     } }
 
+    @Test fun sandboxProbeFailureDuringAvailabilityIsUnavailableNotAThrow() = runTest { fixture {
+        val unavailable = object : CommandChecks by gitChecks {
+            override suspend fun run(command: CheckCommand): CheckResult =
+                if (command.policy == CheckPolicy.GIT_READ_ONLY) throw CheckOutcomeUnknown() else gitChecks.run(command)
+        }
+        assertFalse(port(checks = unavailable).availability(project).available)
+    } }
+
     @Test fun concurrentDestinationChangesAreIntegratedWithoutLosingEitherSide() = runTest { fixture {
         val task = open()
         File(task.path).resolve("task.txt").writeText("task")

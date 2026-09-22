@@ -63,14 +63,20 @@ class GitTaskWorkspace(
     override suspend fun availability(project: CodingProject): WorktreeAvailability = reading(project.path) {
         val source = File(project.path)
         if (!source.isDirectory) return@reading WorktreeAvailability(false, "Папка проекта недоступна")
-        if (probe(source, "--version").first != 0)
-            return@reading WorktreeAvailability(false, "Git недоступен")
-        if (probe(source, "rev-parse", "--is-inside-work-tree").second.trim() != "true")
-            return@reading WorktreeAvailability(false, "В папке нет Git-репозитория")
-        if (probe(source, "symbolic-ref", "--quiet", "--short", "HEAD").first != 0)
-            return@reading WorktreeAvailability(false, "Выберите Git-ветку")
-        if (probe(source, "rev-parse", "--verify", "HEAD").first != 0)
-            return@reading WorktreeAvailability(false, "В ветке ещё нет коммитов")
+        try {
+            if (probe(source, "--version").first != 0)
+                return@reading WorktreeAvailability(false, "Git недоступен")
+            if (probe(source, "rev-parse", "--is-inside-work-tree").second.trim() != "true")
+                return@reading WorktreeAvailability(false, "В папке нет Git-репозитория")
+            if (probe(source, "symbolic-ref", "--quiet", "--short", "HEAD").first != 0)
+                return@reading WorktreeAvailability(false, "Выберите Git-ветку")
+            if (probe(source, "rev-parse", "--verify", "HEAD").first != 0)
+                return@reading WorktreeAvailability(false, "В ветке ещё нет коммитов")
+        } catch (unknown: CheckOutcomeUnknown) {
+            // A sandbox probe failure marks checks unavailable for this visit; restoring the
+            // session list must survive it, not just the check that first discovers it.
+            return@reading WorktreeAvailability(false, "Проверка Git временно недоступна")
+        }
         WorktreeAvailability(true)
     }
 
