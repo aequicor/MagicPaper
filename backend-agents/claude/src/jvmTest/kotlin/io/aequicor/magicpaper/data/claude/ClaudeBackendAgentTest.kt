@@ -29,7 +29,7 @@ class ClaudeBackendAgentTest {
                 override fun record(id: String, process: Process, attachLifetime: Boolean) { recorded += id }
                 override fun clear(id: String) { cleared += id }
                 override fun belongsTo(id: String, process: Process?) = false
-                override fun reconcile(id: String) = Unit
+                override fun reconcile(id: String) = false
             }, NativeAuthTokens { error("No tokens") }, NativeAuthTokens { error("No tokens") },
             object : NativeQuestionnaires {
                 override suspend fun ask(request: UserInteractionRequest): List<PlanningAnswer> = error("No questionnaire")

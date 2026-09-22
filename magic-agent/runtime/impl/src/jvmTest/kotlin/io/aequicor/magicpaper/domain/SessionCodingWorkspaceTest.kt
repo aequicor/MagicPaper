@@ -16,6 +16,16 @@ import kotlin.test.*
 class SessionCodingWorkspaceTest {
     private class Native(val body: suspend FlowCollector<CodingEvent>.(CodingProject, CodingSession) -> Unit) : CodingRuntime {
         var reconciliation: suspend (String) -> Unit = {}
+        /** Set to make [recovery] non-null; releaseRetainedRootLeases reads it independently of [reconciliation]. */
+        var recoverySnapshot: NativeRunRecoverySnapshot? = null
+        override val recovery: NativeRunRecovery? get() = recoverySnapshot?.let { snapshot ->
+            object : NativeRunRecovery {
+                override suspend fun inspect(sessionId: String) = snapshot
+                override suspend fun stop(ref: NativeRunRecoveryRef) = error("Unexpected stop")
+                override suspend fun acknowledge(ref: NativeRunRecoveryRef, parentDecisionId: String) = error("Unexpected acknowledge")
+                override suspend fun acknowledgeNoDispatch(proof: NativeRunNoDispatchProof, parentDecisionId: String) = error("Unexpected acknowledge")
+            }
+        }
         override val supported = true
         override val rootPath = "/fixture"
         override suspend fun status() = RuntimeStatus(RuntimePhase.READY)
@@ -272,6 +282,27 @@ class SessionCodingWorkspaceTest {
         assertTrue(f.tree.releaseUnownedRootLeases())
         val heldWorkspace12 = assertNotNull(port.acquire(next, "lease-request-12")); port.release(heldWorkspace12)
         assertFalse(f.tree.releaseUnownedRootLeases(), "Освобождённое удержание не возвращается")
+    } }
+
+    @Test fun acknowledgedUnknownOutcomeAlsoYieldsTheSourceLease() = runTest { withContext(Dispatchers.Default) {
+        val source = repository(); val port = workspace(); val f = Fixture(source, port)
+        val native = Native { _, _ -> emit(CodingEvent.FinalText("Answer")); emit(CodingEvent.Finished) }
+        native.reconciliation = { throw NativeRunRecoveryRequired(checkNotNull(native.recoverySnapshot)) }
+        f.initialize(native)
+        val project = f.f.project.copy(path = source.path)
+        f.tree.runtime!!.run(project, f.f.root, "Work", null).collect()
+        val next = project.copy(id = "task-source-next")
+        val ref = NativeRunRecoveryRef(CodingEngine.PI, f.f.root.id, "request", 0)
+        // Termination is proven, but the AI turn's outcome is still unknown and unacknowledged.
+        native.recoverySnapshot = NativeRunRecoverySnapshot(
+            listOf(NativeRunRecoveryItem(ref, NativeRunOutcome.UNKNOWN, NativeRunTermination.STOPPED, null)), false)
+        assertNull(port.acquire(next, "lease-request-14"), "Неподтверждённый неизвестный исход держит папку")
+        assertFalse(f.tree.releaseUnownedRootLeases())
+        // An explicit human acknowledgement of that same uncertain outcome is proof enough to release it.
+        native.recoverySnapshot = NativeRunRecoverySnapshot(listOf(NativeRunRecoveryItem(ref, NativeRunOutcome.UNKNOWN,
+            NativeRunTermination.STOPPED, NativeRunRecoveryAcknowledgement("ack", ref, "decision"))), false)
+        assertTrue(f.tree.releaseUnownedRootLeases(), "Подтверждённый неизвестный исход освобождает папку")
+        val heldWorkspace15 = assertNotNull(port.acquire(next, "lease-request-15")); port.release(heldWorkspace15)
     } }
 
     @Test fun failedRootRestoreRetriesItsOwnStaleLeaseReleaseInsteadOfLooping() = runTest { withContext(Dispatchers.Default) {

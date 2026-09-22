@@ -116,7 +116,7 @@ class CodexNativeClient(
         val response = request("thread/read", buildJsonObject { put("threadId", threadId); put("includeTurns", true) }).jsonObject
         return protocol.readToolResults(response, threadId, callIds)
     }
-    override suspend fun reconcileCoding(sessionId: String) = withContext(Dispatchers.IO) {
+    override suspend fun reconcileCoding(sessionId: String): Unit = withContext(Dispatchers.IO) {
         if (ownedCoding.belongsTo(sessionId, process)) {
             // Interrupt just the owned turn and await its acknowledgement; other projects keep running.
             val threadId = codingSessions[sessionId]
@@ -147,6 +147,7 @@ class CodexNativeClient(
             return@withContext
         }
         ownedCoding.reconcile(sessionId)
+        Unit
     }
 
     @Volatile private var process: Process? = null

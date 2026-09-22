@@ -103,7 +103,8 @@ interface NativeAgentAdapter : AutoCloseable {
     fun modelProfile(profile: LlmProfile, mode: CodingInteractionMode, speedBoost: Boolean): LlmProfile
     fun modelConnection(profile: LlmProfile): NativeModelConnectionKind
     fun run(request: NativeAgentRequest): Flow<CodingEvent>
-    suspend fun reconcile(sessionId: String)
+    /** True only when this call itself proved the session's tracked native process fully terminated. */
+    suspend fun reconcile(sessionId: String): Boolean
     fun abort(sessionId: String)
     fun abortAll()
 }

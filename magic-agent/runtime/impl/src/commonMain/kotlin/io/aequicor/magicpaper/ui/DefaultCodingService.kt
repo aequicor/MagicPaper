@@ -364,6 +364,9 @@ class DefaultCodingService(
                                 ?: requireNotNull(session.messages.interruptedCodingRequest()).id
                             acceptCodingSession(session.session,
                                 CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session.session), source))
+                            // Leaving it stopped is itself the user's explicit review of the uncertain
+                            // outcome; without this, its working folder stays busy for every other session.
+                            acknowledgeNativeRecoveryQuietly(session.session)
                         } else resumeCodingSession(request.sessionId, answer.text, fromQuestionnaire = true)
                     }
                     else -> planningChat!!.submitInteraction(request, answers)
@@ -1736,6 +1739,24 @@ class DefaultCodingService(
         withContext(NonCancellable) {
             try { owner.dispatch(session.projectId, CodingMachine.Fact.RunStopped(ref, unknown = true)) }
             catch (storageFailure: Exception) { failure.addSuppressed(storageFailure) }
+        }
+    }
+
+    /** Best-effort: an unconfirmed native outcome must not block the "leave stopped" decision itself,
+     * only every other session's use of the same working folder until the native side catches up. */
+    private suspend fun acknowledgeNativeRecoveryQuietly(session: CodingSession) {
+        val recovery = codingRuntime?.recovery ?: return
+        try {
+            val snapshot = recovery.inspect(session.id)
+            if (snapshot.persistenceUnknown) return
+            snapshot.items.filter { it.acknowledgement == null }.forEach { item ->
+                val stopped = if (item.termination == NativeRunTermination.STOPPED) snapshot else recovery.stop(item.ref)
+                if (stopped.items.any { it.ref == item.ref && it.termination == NativeRunTermination.STOPPED })
+                    recovery.acknowledge(item.ref, Id.new())
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("coding", "recovery.defer.acknowledge.failed", mapOf("sessionId" to session.id, "causeType" to failure::class.simpleName.orEmpty()))
         }
     }
 

@@ -180,8 +180,10 @@ class SessionTreeRuntime(
     private suspend fun unresolvedRecoveryBlocking(path: String): String? {
         val blocker = lock.withLock { retainedRootLeases.values.firstOrNull { it.owner.path == path } } ?: return null
         val recovery = runtime.recovery?.inspect(blocker.sessionId) ?: return null
-        val unresolved = recovery.persistenceUnknown ||
-            recovery.items.any { it.outcome == NativeRunOutcome.UNKNOWN || it.termination != NativeRunTermination.STOPPED }
+        // A human already acknowledged item does not need a known outcome to count as resolved,
+        // matching the same rule the native journal applies when restarting that same session.
+        val unresolved = recovery.persistenceUnknown || recovery.items.any { it.termination != NativeRunTermination.STOPPED ||
+            (it.outcome == NativeRunOutcome.UNKNOWN && it.acknowledgement == null) }
         return blocker.sessionId.takeIf { unresolved }
     }
 
@@ -214,7 +216,17 @@ class SessionTreeRuntime(
         while (true) {
             val candidate = lock.withLock { retainedRootLeases.values.firstOrNull { it.sessionId == sessionId } }
                 ?: return released
-            try { native.reconcile(candidate.sessionId) } catch (failure: Exception) {
+            try { native.reconcile(candidate.sessionId) }
+            catch (unresolved: NativeRunRecoveryRequired) {
+                // reconcile() itself always still demands a known outcome (other callers depend on
+                // that strict contract). Releasing this session's own lease only needs proof that a
+                // human explicitly reviewed the uncertain outcome, which this checks independently.
+                if (!acknowledgedDespiteUnknownOutcome(candidate.sessionId)) {
+                    AppLog.error("coding.workspace", "lease.reconcile.failed", unresolved, mapOf("sessionId" to sessionId))
+                    return released
+                }
+            }
+            catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
                 AppLog.error("coding.workspace", "lease.reconcile.failed", failure, mapOf("sessionId" to sessionId))
                 return released
@@ -229,6 +241,13 @@ class SessionTreeRuntime(
             AppLog.info("coding.workspace", "lease.reclaimed",
                 mapOf("sessionId" to sessionId, "generation" to candidate.generation.toString()))
             released = true
+        }
+    }
+
+    private suspend fun acknowledgedDespiteUnknownOutcome(sessionId: String): Boolean {
+        val recovery = runtime.recovery?.inspect(sessionId) ?: return false
+        return !recovery.persistenceUnknown && recovery.items.isNotEmpty() && recovery.items.all {
+            it.termination == NativeRunTermination.STOPPED && (it.outcome != NativeRunOutcome.UNKNOWN || it.acknowledgement != null)
         }
     }
 
