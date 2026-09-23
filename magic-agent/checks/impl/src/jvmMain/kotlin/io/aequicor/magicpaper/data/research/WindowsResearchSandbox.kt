@@ -70,6 +70,21 @@ internal object WindowsResearchSandbox : ResearchSandbox {
     private fun free(pointer: Pointer?) { if (pointer != null) kernel.getFunction("LocalFree").invokePointer(arrayOf(pointer)) }
     private fun wide(text: String) = Memory((text.length + 1L) * 2).apply { setWideString(0, text) }
 
+    /**
+     * The program CreateProcess starts for [command] and its command line. A batch file runs through `cmd.exe`, which
+     * parses its own command line instead of splitting it like other programs: its switches stay bare and the whole
+     * command is one quoted string whose outer quotes `/s` strips — the shape Node.js uses. Quoted switches left the
+     * text after `/c` starting with a stray quote, which glued the script's path to its arguments. cmd has no escape for
+     * a quote, so a batch argument may not carry one, nor any character cmd would act on.
+     */
+    internal fun commandLine(command: List<String>, systemRoot: String?): Pair<String, String> {
+        val arguments = command.joinToString(" ", transform = ::quote)
+        if (!command.first().endsWith(".cmd", true) && !command.first().endsWith(".bat", true)) return command.first() to arguments
+        require(command.none { it.any { c -> c in "&|<>^%!\"\r\n" } }) { "Спецсимволы в аргументах batch-проверки недопустимы" }
+        val shell = systemRoot.orEmpty().ifBlank { "C:\\Windows" } + "\\System32\\cmd.exe"
+        return shell to quote(shell) + " /d /s /c \"" + arguments + "\""
+    }
+
     internal fun quote(arg: String): String = buildString {
         append('"')
         var slashes = 0
@@ -180,19 +195,14 @@ internal object WindowsResearchSandbox : ResearchSandbox {
                 setPointer(80, input); setPointer(88, binaryOutput ?: outWrite.value); setPointer(96, outWrite.value); setPointer(104, attributes)
             }
             val info = Memory(24).also { allocations += it }.apply { clear() }
-            val cmd = if (command.first().endsWith(".cmd", true) || command.first().endsWith(".bat", true)) {
-                require(command.none { it.any { c -> c in "&|<>^%!\r\n" } }) { "Спецсимволы в аргументах batch-проверки недопустимы" }
-                listOf(environment["SystemRoot"].orEmpty().ifBlank { "C:\\Windows" } + "\\System32\\cmd.exe", "/d", "/s", "/c")
-            } else command
-            val line = if (cmd !== command) cmd.joinToString(" ", transform = ::quote) + " \"" + command.joinToString(" ", transform = ::quote) + "\""
-                else command.joinToString(" ", transform = ::quote)
+            val (application, line) = commandLine(command, environment["SystemRoot"])
             val commandLine = wide(line).also { allocations += it }
             val envText = environment.toSortedMap(String.CASE_INSENSITIVE_ORDER).map { (k, v) -> "$k=$v\u0000" }.joinToString("") + "\u0000"
             val envBlock = Memory(envText.length * 2L).also { allocations += it }.apply { write(0, envText.toCharArray(), 0, envText.length) }
             val flags = 0x00080000 or 0x00000400 or 0x00000004 or 0x08000000
-            if (policy == null) bool(kernel, "CreateProcessW", WString(cmd.first()), commandLine, null, null, 1,
+            if (policy == null) bool(kernel, "CreateProcessW", WString(application), commandLine, null, null, 1,
                 flags, envBlock, WString(cwd.toString()), startup, info)
-            else bool(advapi, "CreateProcessAsUserW", restricted.value, WString(cmd.first()), commandLine, null, null, 1,
+            else bool(advapi, "CreateProcessAsUserW", restricted.value, WString(application), commandLine, null, null, 1,
                 flags, envBlock, WString(cwd.toString()), startup, info)
             child = info.getPointer(0); thread = info.getPointer(8)
             bool(kernel, "AssignProcessToJobObject", job, child)
