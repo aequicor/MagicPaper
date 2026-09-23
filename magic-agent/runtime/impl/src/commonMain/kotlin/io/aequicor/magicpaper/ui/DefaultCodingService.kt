@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.ui
 
 import io.aequicor.magicpaper.data.planning.command
+import io.aequicor.magicpaper.data.coding.CodingCommandRejected
 
 import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.logging.phase
@@ -1977,6 +1978,21 @@ class DefaultCodingService(
         }
     }
 
+    /**
+     * The failure itself, or a cleanup failure that the session tree retained on it as suppressed; that includes the same-type
+     * original behind a copy made by coroutine stack trace recovery.
+     */
+    private fun Throwable.unconfirmedNativeOutcome(): NativeRunRecoveryRequired? {
+        val visited = mutableSetOf<Throwable>()
+        var current: Throwable? = this
+        while (current != null && visited.add(current)) {
+            (current as? NativeRunRecoveryRequired ?: current.suppressedExceptions.firstNotNullOfOrNull { it as? NativeRunRecoveryRequired })
+                ?.let { return it }
+            current = current.cause?.takeIf { it::class == this::class }
+        }
+        return null
+    }
+
     private fun launchCodingRun(session: CodingSession, checkpoint: CodingRunCheckpoint, recovering: Boolean, resumeInstruction: Boolean = false, userInitiated: Boolean = true, clearComposer: Boolean = true, acquireComputerAccess: Boolean = userInitiated) {
         val runtime = codingRuntime ?: return
         val project = _state.value.coding.projects.firstOrNull { it.id == session.projectId } ?: return
@@ -2218,9 +2234,12 @@ class DefaultCodingService(
                 val task = taskWorktrees?.session(project.id, session.id)?.taskWorktree?.takeIf { it.taskId == request.workspaceTaskId }
                 val blocked = e as? SessionQuarantineBlocked
                 if (blocked != null) revealQuarantineRecovery(session.id)
+                val unconfirmed = e.unconfirmedNativeOutcome()
                 val safeError = when {
                     blocked != null -> "Сессия заблокирована: исход прерванной операции не подтверждён. " +
                         "Откройте «Восстановление после прерванной операции» над диалогом."
+                    // The run's own failure may only follow from it; this outcome is what the next request has to settle.
+                    unconfirmed != null -> unconfirmed.message ?: "Не удалось продолжить работу. Проверьте подключение и состояние сессии."
                     // Занятая папка — действенная ошибка для любого режима: ожидание уже сделано.
                     e is TaskWorkspaceBusy -> e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
                     request.worktreeEnabled == true && (e is IllegalStateException || e is IllegalArgumentException) ->
@@ -2240,8 +2259,15 @@ class DefaultCodingService(
                         CodingMachine.Fact.RunOutputPublished(ref, recorder.message(request.responseId, Id.now()))) }
                 } catch (storageError: Exception) {
                     if (storageError is CancellationException) throw storageError
-                    AppLog.error("coding", "run.failure-save.failed", storageError, operationFields)
-                    _state.update { it.copy(notice = "Не удалось сохранить состояние сессии. Последнее сохранённое состояние доступно после запуска.") }
+                    if (storageError is CodingCommandRejected) {
+                        // Another owner already settled the run (a stop), so it takes no output. Nothing failed to save,
+                        // and the reason would vanish with the draft this run clears.
+                        AppLog.info("coding", "run.failure-save.refused", operationFields + ("reason" to storageError.message.orEmpty()))
+                        _state.update { it.copy(notice = safeError) }
+                    } else {
+                        AppLog.error("coding", "run.failure-save.failed", storageError, operationFields)
+                        _state.update { it.copy(notice = "Не удалось сохранить состояние сессии. Последнее сохранённое состояние доступно после запуска.") }
+                    }
                 }
             } finally {
                 withContext(NonCancellable) {

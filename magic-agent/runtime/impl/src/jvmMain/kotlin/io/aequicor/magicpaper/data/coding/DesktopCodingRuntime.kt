@@ -309,7 +309,7 @@ class DesktopCodingRuntime(
         catch (e: Exception) { active.remove(session.id); throw e }
         runIds[session.id] = runId
         var grant: ComputerLease? = if (session.researchMode) null else computerUse?.grant(session.id)
-        try {
+        val engineRun = flow {
             val fields = mapOf("operationId" to runId, "sessionId" to session.id, "projectId" to project.id, "engine" to engine.name)
             val input = prepareSkillInput(runId, project, session, prompt) { emit(it) } ?: return@flow
             preflight(engine, profile)
@@ -321,11 +321,16 @@ class DesktopCodingRuntime(
             ownership.checkCurrent(lease)
             val selected = binding(engine).runtime
             AppLog.debug("session", "skills.dispatched", fields)
-            observeInteractions(session.id, selected,
-                selected.run(project, input.session, input.prompt, profile, attachments).flowOn(NativeRunContext(runId))).collect { emit(it) }
-        } catch (e: CancellationException) { abort(session.id); throw e }
-        catch (e: NativeRunRecoveryRequired) { throw e }
-        catch (e: Exception) { emit(CodingEvent.Failed(e.message ?: "Не удалось запустить движок")); emit(CodingEvent.Finished) }
+            emitAll(observeInteractions(session.id, selected,
+                selected.run(project, input.session, input.prompt, profile, attachments).flowOn(NativeRunContext(runId))))
+        }.catch { failure ->
+            // Only an engine failure becomes the run's reported result. A failure the collector throws from emit, such as a
+            // refused journal dispatch, is not seen here and propagates as it is: emitting after it violates exception transparency.
+            if (failure !is Exception || failure is CancellationException || failure is NativeRunRecoveryRequired) throw failure
+            emit(CodingEvent.Failed(failure.message ?: "Не удалось запустить движок")); emit(CodingEvent.Finished)
+        }
+        try { emitAll(engineRun) }
+        catch (e: CancellationException) { abort(session.id); throw e }
         finally {
             ownership.finish(lease)
             active.remove(session.id)

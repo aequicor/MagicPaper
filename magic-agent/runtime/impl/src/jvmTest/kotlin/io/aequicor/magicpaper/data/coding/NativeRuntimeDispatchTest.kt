@@ -45,6 +45,28 @@ class NativeRuntimeDispatchTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
+    @Test fun collectorFailurePropagatesUnchangedWhileEngineFailureIsReported() = runBlocking {
+        val root = Files.createTempDirectory("native-dispatch-downstream")
+        try {
+            val selected = RecordingRuntime(root.toString(), "started")
+            val runtime = coordinator(selected, RecordingRuntime(root.toString(), "unused"))
+            val profile = LlmProfile("profile", "Fixture", baseUrl = "http://fixture.invalid/v1", apiKey = "fixture", modelId = "fixture")
+            val project = CodingProject("project", "Fixture", root.toString(), 1)
+            val session = CodingSession("session", project.id, "Fixture", 1, engine = CodingEngine.PI)
+            // As ownedRun's NativeSessionBound dispatch into a run that was already stopped: the collector's own failure.
+            val rejected = CodingCommandRejected("Запуск уже остановлен")
+            val failure = assertFailsWith<CodingCommandRejected> {
+                runtime.run(project, session, "run", profile).collect { throw rejected }
+            }
+            // Stack trace recovery may wrap the original in a same-type copy; it must still be this failure, not a report of it.
+            assertTrue(generateSequence<Throwable>(failure) { it.cause }.any { it === rejected })
+
+            selected.failure = IllegalStateException("Процесс движка завершился")
+            assertEquals(listOf(CodingEvent.Notice("started"), CodingEvent.Failed("Процесс движка завершился"), CodingEvent.Finished),
+                runtime.run(project, session, "run", profile).toList())
+        } finally { root.toFile().deleteRecursively() }
+    }
+
     @Test fun persistedIdentitySelectsRegisteredStrategyForRunAndPlanning() = runBlocking {
         val root = Files.createTempDirectory("native-dispatch")
         try {
