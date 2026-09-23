@@ -122,6 +122,13 @@ interface CommandChecks {
     fun abortAll()
     suspend fun reconcile(sessionId: String)
     suspend fun prepareForReset()
+    /**
+     * Only on the user's explicit consent to erase application data: drops every journal that no longer replays
+     * or holds a check whose outcome is unknown and is not running now. Admission stays open, so a reset can still
+     * reconcile sessions and release workspaces through ordinary reads that such a journal would refuse. Returns
+     * how many journals were dropped.
+     */
+    suspend fun discardUnresolvable(): Int = 0
     suspend fun resumeAfterReset()
     suspend fun close()
 }

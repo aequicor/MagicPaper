@@ -221,7 +221,8 @@ internal fun buildRuntime(
                 get<PluginService>().prepareForReset()
                 resetSkills = true
                 get<SkillCommands>().prepareForReset()
-                get<RuntimeExtensions>().owners.forEach { it.pauseForReset() }
+                // Only a user-confirmed erase reaches here, and its confirmation covers evidence nothing can resolve.
+                get<RuntimeExtensions>().owners.forEach { it.pauseForReset(discardUnresolvable = true) }
                 resetMedia = true
                 get<MediaGenerationService>().prepareForReset()
                 openAiSubscription?.logout()

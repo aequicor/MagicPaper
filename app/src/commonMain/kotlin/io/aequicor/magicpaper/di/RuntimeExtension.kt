@@ -22,7 +22,12 @@ internal interface RuntimeExtension {
     suspend fun reload()
     suspend fun clearProfileOverrides(profileId: String)
     suspend fun prepareForReset()
-    suspend fun pauseForReset()
+    /**
+     * [discardUnresolvable] carries the user's explicit consent to erase application data: before pausing, the
+     * owner may drop execution evidence it can never resolve — a journal that no longer replays, an outcome no
+     * saved completion can settle — which would otherwise refuse every reconciliation and release the reset needs.
+     */
+    suspend fun pauseForReset(discardUnresolvable: Boolean = false)
     suspend fun clearForReset()
     suspend fun resumeAfterReset()
     suspend fun close()

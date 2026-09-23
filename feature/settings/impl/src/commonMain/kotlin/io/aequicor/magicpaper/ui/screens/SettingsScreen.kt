@@ -149,10 +149,10 @@ fun SettingsScreen(vm: DefaultSettingsComponent, state: SettingsState) {
             color = LocalPaperColors.current.secondaryText,
         )
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PaperAction(onClick = { vm.exportProfile() }) { PaperText("Экспорт профиля") }
             PaperAction(onClick = { vm.importProfile() }) { PaperText("Импорт профиля") }
-            PaperAction(onClick = { vm.wipeAll() }) { PaperText("Стереть всё") }
+            WipeDataAction(onConfirm = { vm.wipeAll() })
         }
     }
 }

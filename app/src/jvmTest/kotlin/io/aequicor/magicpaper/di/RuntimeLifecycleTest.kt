@@ -53,6 +53,17 @@ class RuntimeLifecycleTest {
             "A successful participant is not resumed twice when a sibling needs explicit retry")
     }
 
+    @Test fun consentedPauseDiscardsUnresolvableChecksBeforeTheFeatureReconcilesSessions() = runTest {
+        val events = mutableListOf<String>()
+        val extension = NativeRuntimeExtension(ResetFeature(events), ResetComputer(events),
+            { events += "native.pause" }, { events += "native.resume" }, { events += "checks.discard" })
+        extension.prepareForReset(); extension.pauseForReset(discardUnresolvable = true)
+        assertEquals(listOf("feature.prepare", "checks.discard", "feature.pause", "native.pause", "computer.pause"), events)
+        extension.resumeAfterReset(); events.clear()
+        extension.prepareForReset(); extension.pauseForReset()
+        assertFalse("checks.discard" in events, "without the user's consent no evidence is discarded")
+    }
+
     @Test fun failedNativePauseDoesNotResumeAnUntouchedComputerOwner() = runTest {
         val events = mutableListOf<String>()
         val failure = IllegalStateException("native pause")
@@ -85,6 +96,7 @@ class RuntimeLifecycleTest {
             events.clear()
             runtime.koin.get<SettingsService>().wipeAll()
             resetFinished.await(); runCurrent()
+            assertTrue("first.pause(discard)" in events, "a user-confirmed erase carries its consent to every owner")
             assertTrue("first.resume" in events)
             assertTrue("second.resume" in events)
             assertTrue("second.reload" in events)
@@ -307,7 +319,7 @@ private class ResetExtension(override val id: String, private val events: Mutabl
     override suspend fun reload() { events += "$id.reload" }
     override suspend fun clearProfileOverrides(profileId: String) = Unit
     override suspend fun prepareForReset() { events += "$id.prepare" }
-    override suspend fun pauseForReset() { events += "$id.pause" }
+    override suspend fun pauseForReset(discardUnresolvable: Boolean) { events += if (discardUnresolvable) "$id.pause(discard)" else "$id.pause" }
     override suspend fun clearForReset() { events += "$id.clear" }
     override suspend fun resumeAfterReset() { events += "$id.resume"; if (failResume) error("private resume") }
     override suspend fun close() { events += "$id.close"; if (failClose) error("private close") }

@@ -368,6 +368,30 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         withContext(NonCancellable) { pending.awaitAll() }
         drain(requireKnown = true)
     }
+    override suspend fun discardUnresolvable(): Int = withContext(Dispatchers.IO) {
+        var dropped = 0
+        for (stream in events.streams().filter { it.startsWith("command-check:") }) {
+            // A first record that cannot be read leaves only the stream name; the journal is unresolvable either way.
+            val workspace = try { CheckInputJournal.workspace(events, payloads, stream) }
+            catch (failure: Exception) { if (failure is CancellationException) throw failure; null }
+            val entry = workspace?.let { entries.computeIfAbsent(it) { key -> Entry(CheckInputJournal(events, payloads, key)) } }
+            suspend fun unresolvable(journal: CheckInputJournal) = try {
+                journal.initialize()
+                journal.state.persistenceUnknown || journal.state.checks.any { (ref, check) ->
+                    check.phase != CommandCheckMachine.Phase.FINISHED && !running.containsKey(ref) &&
+                        ref.scope.projectId != CommandCheckMachine.SANDBOX_PROBE_PROJECT
+                }
+            } catch (failure: CheckOutcomeUnknown) { true }
+            suspend fun drop() = check(events.drop(events.snapshot(stream).revision)) { "Журнал проверок изменился во время удаления" }
+            val discarded = if (entry == null) { drop(); true } else entry.lock.withLock {
+                if (!unresolvable(entry.journal)) false else { drop(); entries.remove(workspace, entry); true }
+            }
+            if (!discarded) continue
+            AppLog.info("checks", "journal.discarded", mapOf("journalId" to stream.removePrefix("command-check:"), "result" to "user_consent"))
+            dropped++
+        }
+        dropped
+    }
     override suspend fun resumeAfterReset() {
         entries.values.forEach { entry -> entry.lock.withLock { } }
         admission.withLock { entries.clear(); probeVerified = false; probeFailure = null; probeFailureAt = 0; if (!closed) accepting = true }

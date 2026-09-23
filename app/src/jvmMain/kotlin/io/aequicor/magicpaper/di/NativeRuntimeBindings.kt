@@ -56,6 +56,7 @@ internal class NativeRuntimeExtension(
     private val computer: NativeComputerUse,
     private val pauseNative: suspend () -> Unit,
     private val resumeNative: suspend () -> Unit,
+    private val discardUnresolvableChecks: suspend () -> Unit = {},
 ) : RuntimeExtension {
     override val id = "agent"
     // Reset participation is transient host coordination, not restored execution authority.
@@ -78,7 +79,10 @@ internal class NativeRuntimeExtension(
         featureNeedsResume = true
         feature.prepareForReset()
     }
-    override suspend fun pauseForReset() {
+    override suspend fun pauseForReset(discardUnresolvable: Boolean) {
+        // Before the feature pauses: stopping sessions reconciles and releases workspaces through checks, which an
+        // unresolvable check journal would refuse. Admission stays open; nothing here needs a resume.
+        if (discardUnresolvable) discardUnresolvableChecks()
         featureNeedsResume = true
         feature.pauseForReset()
         nativeNeedsResume = true

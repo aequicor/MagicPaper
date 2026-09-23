@@ -17,6 +17,8 @@ class DefaultCommandChecksTest {
         var onReleased: (() -> Unit)? = null
         var awaitCompletion: CompletableDeferred<Unit>? = null
         var probePath: String? = null
+        var cleanups = 0
+        override suspend fun cleanup() { cleanups++ }
         var probes = 0
         var probeFailure: Throwable? = null
         var beforeProbe: CompletableDeferred<Unit>? = null
@@ -243,6 +245,31 @@ class DefaultCommandChecksTest {
         reopened.resumeAfterReset()
         assertFailsWith<CheckRejected> { reopened.run(command(path).copy(ref = command(path).ref.copy(callId = "new"))) }
         assertEquals(1, driver.prepares)
+    } }
+
+    // A reset the user confirmed must get past check evidence it can never resolve — an unknown outcome, a journal
+    // that no longer replays — or every session reconciliation and workspace release it performs is refused too.
+    @Test fun consentDropsUnresolvableJournalsAndLeavesHealthyOnesAndAdmissionIntact() = runTest { fixture { path, events, payloads, driver ->
+        val healthy = Files.createTempDirectory("check-owner-healthy-")
+        val unreadable = Files.createTempDirectory("check-owner-unreadable-")
+        try {
+            fun call(dir: java.nio.file.Path, id: String) = CheckCommand(CheckRef(CheckScope("project", "session", "request", 0), id),
+                dir.toRealPath().toString(), listOf("tool"))
+            DefaultCommandChecks(events, payloads, driver).run(call(healthy, "healthy"))
+            DefaultCommandChecks(events, payloads, driver).run(call(unreadable, "unreadable"))
+            driver.cleanupFailure = IOException("group outcome unknown")
+            assertFailsWith<CheckOutcomeUnknown> { DefaultCommandChecks(events, payloads, driver).run(command(path)) }
+            driver.cleanupFailure = null
+            // Corrupt last: while any journal is unreadable, every new admission is refused before it starts.
+            payloads.delete(payloads.keys("check-input:${CheckInputJournal.hash(unreadable.toRealPath().toString())}:").last())
+            val owner = DefaultCommandChecks(events, payloads, driver)
+            assertFailsWith<CheckOutcomeUnknown> { owner.unresolved(path) }
+            assertEquals(2, owner.discardUnresolvable(), "the unknown and the unreadable journal, not the healthy one")
+            assertEquals(emptySet(), owner.unresolved(path))
+            assertEquals(0, owner.run(command(path).let { it.copy(ref = it.ref.copy(callId = "after-consent")) }).exitCode)
+            assertEquals(0, owner.run(call(healthy, "healthy")).exitCode, "the healthy journal kept its saved result")
+            owner.prepareForReset()
+        } finally { Files.deleteIfExists(healthy); Files.deleteIfExists(unreadable) }
     } }
 
     @Test fun onlyTypedPreparationFailureProvesNoDispatch() = runTest { fixture { path, events, payloads, driver ->
