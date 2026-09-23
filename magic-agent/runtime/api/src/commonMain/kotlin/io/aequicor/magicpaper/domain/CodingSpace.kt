@@ -55,7 +55,10 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    `run`, and about references that match them. `TitleRequested` and `TitleObserved` are the
  *    exception: a title names the session, not a launch, and naming takes long enough for the first
  *    launch to advance the generation, so they match the session by id alone and a late answer is
- *    told apart by its title request id;
+ *    told apart by its title request id. `WorktreeProjected` is the other: its reference carries the
+ *    launch the task was last bound to, and a native run advances the session's generation without
+ *    rebinding the task, so a durable child fact that lands afterwards — the failure note of a repair
+ *    that never handed off — matches the session by id alone and is ordered by its child revision;
  *  - which record of many. A project with two sessions is one position, named by the most pressing
  *    session, while an input addresses exactly one of them;
  *  - payload validation: blank or duplicate ids, a response that belongs to another request, a request

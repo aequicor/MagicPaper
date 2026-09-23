@@ -2058,6 +2058,7 @@ class DefaultCodingService(
                 }
 
                 var ended = false
+                var repaired = false
                 val deliveryOnly = workspaceRecord?.phase in setOf(TaskWorktreePhase.CAPTURING, TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT, TaskWorktreePhase.DELIVERING, TaskWorktreePhase.COMPLETE)
                 if (deliveryOnly) ended = true
                 else {
@@ -2095,6 +2096,7 @@ class DefaultCodingService(
                     }
                     val finished = taskWorktrees.complete(project, session.id, checkNotNull(request.workspaceTaskId)) { conflict ->
                         recorder.apply(CodingEvent.Notice("Разрешение конфликта"))
+                        repaired = true
                         val beforeRepair = checkNotNull(owner.states.value[project.id])
                         val repair = owner.dispatch(project.id, CodingMachine.Intent.BeginRepair(checkNotNull(admittedRef), Id.new(),
                             checkNotNull(beforeRepair.childRevisions["workspace:${session.id}"])))
@@ -2133,7 +2135,8 @@ class DefaultCodingService(
                     updateCodingSession(session.id) { it.copy(session = current) }
                 }
                 val recorded = recorder.message(request.responseId, Id.now())
-                val response = (if (deliveryOnly) current.taskWorktree?.executionResponse ?: recorded else recorded).copy(id = request.responseId)
+                // A delivery that only finished the Git work republishes the saved answer; a repair's agent answered anew.
+                val response = (if (deliveryOnly && !repaired) current.taskWorktree?.executionResponse ?: recorded else recorded).copy(id = request.responseId)
                 current = acceptCodingSession(current, CodingMachine.Fact.RunFinished(checkNotNull(admittedRef), response,
                     outcomeKnown = ended && (!nativeDispatched || !nativeOutcomeUnknown(runtime, session, checkNotNull(admittedRef)))))
                 updateCodingSession(session.id) { it.copy(messages = owner.states.value[project.id]?.histories?.get(session.id).orEmpty()) }
@@ -2184,7 +2187,13 @@ class DefaultCodingService(
                         e.message ?: "Не удалось завершить работу с Git. Повторите продолжение."
                     else -> "Не удалось продолжить работу. Проверьте подключение и состояние сессии."
                 }
-                if (task != null) taskWorktrees!!.failure(project.id, session.id, checkNotNull(request.workspaceTaskId), safeError)
+                if (task != null) try { taskWorktrees!!.failure(project.id, session.id, checkNotNull(request.workspaceTaskId), safeError) }
+                catch (noteError: Exception) {
+                    if (noteError is CancellationException) throw noteError
+                    // The note only annotates the task: losing it must not also lose what the agent did in this run.
+                    AppLog.error("coding", "run.task-note.failed", noteError, operationFields)
+                    _state.update { it.copy(notice = "Причина сбоя не сохранена в задаче. Ответ агента сохранён в истории.") }
+                }
                 recorder.apply(CodingEvent.Failed(safeError))
                 try {
                     admittedRef?.let { ref -> codingProjects?.dispatch(project.id,

@@ -370,14 +370,14 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
                     noDispatchAcknowledgements = state.noDispatchAcknowledgements - session.id))
             }
             is Fact.TitleRequested -> {
-                val session = requireTitledSession(state, input.session)
+                val session = requireSessionById(state, input.session)
                 require(input.requestId.isNotBlank())
                 if (!session.needsShortTitle()) Transition(state)
                 else Transition(state.copy(titleRequests = state.titleRequests + (session.id to input.requestId)))
             }
             is Fact.PromptNamed -> change(state, input.session) { it.namedFromPrompt(input.prompt, input.localSummaryAllowed) }
             is Fact.TitleObserved -> {
-                val session = requireTitledSession(state, input.session)
+                val session = requireSessionById(state, input.session)
                 val titled = if (state.titleRequests[session.id] != input.requestId || !session.needsShortTitle()) session
                     else session.copy(shortTitle = compactSessionTitle(input.title).orEmpty())
                 Transition(state.copy(sessions = state.sessions + (session.id to titled)))
@@ -399,8 +399,11 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
 
     private fun requireSession(state: State, ref: SessionRef): CodingSession =
         requireNotNull(state.session(ref)) { "Сессия удалена или её запуск изменился" }
-    /** A title names the session, not a launch: the first launch advances the generation while the model is naming it. */
-    private fun requireTitledSession(state: State, ref: SessionRef): CodingSession =
+    /**
+     * A title and a task worktree name the session, not a launch: the first launch advances the generation while the
+     * model is naming the session, and every native run advances it without rebinding the task it works in.
+     */
+    private fun requireSessionById(state: State, ref: SessionRef): CodingSession =
         requireNotNull(state.sessions[ref.id]) { "Сессия удалена" }
     private fun requireRun(state: State, ref: RunRef): Run = requireNotNull(state.run(ref)) { "Запрос уже заменён" }
     private fun requireRunSession(state: State, ref: RunRef): CodingSession {
@@ -505,7 +508,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         return revision.seq > previous.seq
     }
     private fun projectWorktree(state: State, input: Fact.WorktreeProjected): Transition {
-        val session = requireSession(state, input.session)
+        val session = requireSessionById(state, input.session)
         val key = "workspace:${session.id}"
         val newer = acceptRevision(state, key, input.revision)
         if (input.revision.seq < (state.childRevisions[key]?.seq ?: 0)) return Transition(state)
@@ -518,7 +521,7 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         val task = if (input.unknown && input.task == null) old else input.task
         require(old == null || task?.taskId == old.taskId || old.phase == TaskWorktreePhase.COMPLETE &&
             task?.phase in setOf(TaskWorktreePhase.PREPARING, TaskWorktreePhase.RUNNING)) { "Рабочая задача уже заменена" }
-        val next = change(state, input.session) { it.copy(taskWorktree = task) }.state
+        val next = state.copy(sessions = state.sessions + (session.id to session.copy(taskWorktree = task)))
         val run = next.runs[session.id]
         val stopped = if (!input.unknown && newer && run?.phase == Phase.UNKNOWN && run.knownStopped)
             next.runs + (session.id to run.copy(phase = Phase.INTERRUPTED)) else next.runs

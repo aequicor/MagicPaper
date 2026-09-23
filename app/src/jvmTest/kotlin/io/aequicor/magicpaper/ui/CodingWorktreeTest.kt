@@ -1,11 +1,14 @@
 package io.aequicor.magicpaper.ui
 
+import io.aequicor.magicpaper.data.coding.CodingCommandRejected
+import io.aequicor.magicpaper.data.coding.CodingTaskWorktreeSessionAccess
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.coding.journalCodingProjects
 import io.aequicor.magicpaper.data.storage.InMemoryEventJournal
 import io.aequicor.magicpaper.data.storage.EventJournal
 import io.aequicor.magicpaper.data.storage.JournalRevision
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.domain.tools.ToolCatalog
 import io.aequicor.magicpaper.domain.tools.ToolExecutionContext
 import io.aequicor.magicpaper.domain.tools.ToolSession
 import io.aequicor.magicpaper.di.CodingRuntimeGraph
@@ -85,6 +88,7 @@ class CodingWorktreeTest {
         var onRun: (Int) -> Unit = {}
         var gate: CompletableDeferred<Unit>? = null
         var handoff = true
+        var reply: (Int) -> String = { "Finished implementation" }
         var checks: List<List<String>> = emptyList()
         fun recordControlledCompletion(session: CodingSession) {
             val ref = NativeRunRecoveryRef(checkNotNull(session.engine), session.id, checkNotNull(session.pendingRun).runId, 1)
@@ -123,8 +127,10 @@ class CodingWorktreeTest {
             outcomes[ref] = NativeRunRecoveryItem(ref, NativeRunOutcome.UNKNOWN, NativeRunTermination.LIVE, null)
             try {
                 gate?.await()
-                if (handoff) worktrees.handoff(ToolExecutionContext.worker(session), true, checks)
-                emit(CodingEvent.FinalText("Finished implementation"))
+                // The engine is offered only the tools its context allows: an unoffered handoff never reaches the service.
+                val context = ToolExecutionContext.worker(session)
+                if (handoff && ToolCatalog.get("task.handoff").allowed(context)) worktrees.handoff(context, true, checks)
+                emit(CodingEvent.FinalText(reply(calls.size)))
                 emit(CodingEvent.Finished)
                 outcomes[ref] = outcomes.getValue(ref).copy(outcome = NativeRunOutcome.SUCCEEDED)
             } catch (cancelled: CancellationException) {
@@ -134,7 +140,8 @@ class CodingWorktreeTest {
             } finally { outcomes[ref] = outcomes.getValue(ref).copy(termination = NativeRunTermination.STOPPED) }
         }
     }
-    private suspend fun TestScope.fixture(block: suspend (DefaultCodingService, Runtime, Workspace, CodingProjectOwner) -> Unit) {
+    private suspend fun TestScope.fixture(sessions: (TaskWorktreeSessionAccess) -> TaskWorktreeSessionAccess = { it },
+        block: suspend (DefaultCodingService, Runtime, Workspace, CodingProjectOwner) -> Unit) {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var service: DefaultCodingService? = null
         try {
@@ -144,7 +151,8 @@ class CodingWorktreeTest {
             val port = Workspace()
             val events = InMemoryEventJournal()
             val projects = journalCodingProjects(f.kv, f.json, journal = events, checkpoints = repo)
-            val worktrees = testTaskWorktreeService(projects, port, LocalPlanningWorkspace(), events, f.kv)
+            val worktrees = testTaskWorktreeService(projects, port, LocalPlanningWorkspace(), events, f.kv,
+                sessions = sessions(CodingTaskWorktreeSessionAccess(projects)))
             val runtime = Runtime(worktrees)
             service = f.prepareCoding(runtime, projects, taskWorktrees = worktrees)
             runCurrent()
@@ -353,6 +361,57 @@ class CodingWorktreeTest {
         assertNull(repo.sessions("p").single().pendingRun)
         assertEquals(1, port.deliveries)
     } }
+
+    /**
+     * A repair that ends without a handoff fails the run, and the user continues it: the continued delivery repairs
+     * again. Each repair is a fresh request of the same task, so each is offered the handoff, and what each agent
+     * said stays in the history instead of the task's first answer.
+     */
+    @Test fun continuedConflictRepairIsHandedOffAndEveryRepairKeepsItsTranscript() = runTest { fixture { service, runtime, port, repo ->
+        port.conflict = true
+        runtime.reply = { call -> listOf("Finished implementation", "Staged without handoff", "Conflict resolved")[call - 1] }
+        runtime.onRun = { call -> runtime.handoff = call != 2; if (call == 3) port.conflict = false }
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(TaskWorktreePhase.CONFLICT, repo.sessions("p").single().taskWorktree?.phase)
+        val unfinished = repo.messages("p", "s").last { it.role == CodingRole.AGENT && !it.systemNotice }
+        assertTrue(unfinished.failed)
+        assertEquals("Staged without handoff", unfinished.text)
+
+        val recovery = service.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
+        service.submitQuestionnaire(recovery.id, listOf(PlanningAnswer("decision", listOf("retry")))); runCurrent()
+        assertEquals(3, runtime.calls.size, "the continued delivery launches only its repair")
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").single().taskWorktree?.phase)
+        assertEquals(1, port.deliveries)
+        val history = repo.messages("p", "s")
+        val delivered = history.last { it.role == CodingRole.AGENT && !it.systemNotice }
+        assertFalse(delivered.failed)
+        assertEquals("Conflict resolved", delivered.text)
+        assertTrue(unfinished in history, "the failed repair stays in the history")
+    } }
+
+    @Test fun refusedTaskFailureNoteLeavesTheRepairTranscriptInTheHistory() = runTest {
+        fixture(sessions = ::RefusingFailureNotes) { service, runtime, port, repo ->
+            port.conflict = true
+            runtime.reply = { call -> if (call == 1) "Finished implementation" else "Staged without handoff" }
+            runtime.onRun = { call -> runtime.handoff = call != 2 }
+            service.sendCodingPromptTo("s", "Task"); runCurrent()
+            val failed = repo.messages("p", "s").last { it.role == CodingRole.AGENT && !it.systemNotice }
+            assertTrue(failed.failed)
+            assertEquals("Staged without handoff", failed.text)
+            val refused = AppLog.history().last { it.component == "coding" && it.event == "run.task-note.failed" }
+            assertEquals(listOf("CodingCommandRejected"), refused.causeTypes)
+            assertNotNull(service.state.value.notice)
+            assertFalse(service.state.value.coding.sessions.single().running)
+        }
+    }
+
+    /** Refuses the note of a failed run, as the parent refused one from a task bound to the launch before the repair. */
+    private class RefusingFailureNotes(private val delegate: TaskWorktreeSessionAccess) : TaskWorktreeSessionAccess by delegate {
+        override suspend fun publish(projection: TaskWorktreeProjection) {
+            if (projection.task?.error == "Конфликт требует продолжения") throw CodingCommandRejected("Сессия удалена или её запуск изменился")
+            delegate.publish(projection)
+        }
+    }
 
     /**
      * Занятая исходная папка — ожидание, а не отказ: удержание без живого исполнителя снимает
