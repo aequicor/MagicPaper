@@ -83,6 +83,15 @@ class AppLoggerTest {
         assertTrue("\"causeType\":\"IllegalStateException\"" in entry.line(), entry.line())
     }
 
+    /** A failed external check is unreadable without knowing which program ran; its arguments stay out. */
+    @Test fun theProgramOfAnExternalCommandIsKeptButACommandLineIsRefused() {
+        val log = AppLogger(sink = AppLogSink {})
+        log.info("coding.worktree", "check.finished", mapOf("executable" to "gradlew.bat"))
+        log.info("coding.worktree", "check.finished", mapOf("executable" to "python -c print(secret)"))
+        assertEquals(listOf("gradlew.bat", "[redacted]"), log.history().map { it.fields["executable"] })
+        assertFalse(log.history().any { "secret" in it.line() })
+    }
+
     @Test fun aCauseTypeThatIsNotAClassNameIsRefusedNotPublished() {
         val log = AppLogger(sink = AppLogSink {})
         log.error("checks", "output_unavailable", mapOf("causeType" to "the user typed secret words"))
@@ -133,7 +142,7 @@ class AppLoggerTest {
         val chainStack = entry.causeStack!!
         assertTrue(entry.causeMessage!!.length <= 512)
         assertTrue(chainStack.length <= 8_192)
-        assertTrue(chainStack.lines().size <= 41, "Header plus at most 40 frames")
+        assertTrue(chainStack.lines().size <= 41 + 6, "Header, at most 40 frames and at most six cause headers")
 
         class BrokenRender(message: String) : IllegalStateException(message) {
             override fun toString(): String = error("broken renderer")

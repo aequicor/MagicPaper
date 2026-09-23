@@ -174,8 +174,11 @@ private val numericMetricSuffixes = listOf("Ms", "Tokens", "Calls", "Count", "Pe
 
 private fun isNumericKey(key: String): Boolean =
     key in numeric || (key.length <= 40 && numericMetricSuffixes.any { suffix -> key.endsWith(suffix) && key != suffix })
-/** `causeType` is the simple class name of the cause a caller without an exception in hand reports; it is not free text. */
-private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure", "causeType")
+/**
+ * `causeType` is the simple class name of the cause a caller without an exception in hand reports; it is not free text.
+ * `executable` is the file name of an external program a check ran, never its directory or arguments.
+ */
+private val metadata = setOf("operation", "action", "status", "reason", "strategy", "storageArea", "format", "phase", "result", "provider", "model", "route", "routeKind", "component", "section", "from", "to", "source", "target", "capability", "recovery", "outcome", "enabled", "mode", "backend", "kind", "scope", "tool", "category", "failure", "causeType", "executable")
 private val machineCode by lazy { Regex("[A-Za-z0-9_./:+-]{1,160}") }
 private val eventCode by lazy { Regex("[A-Za-z][A-Za-z0-9_.-]{0,79}") }
 
@@ -227,6 +230,8 @@ private fun causeTypes(cause: Throwable): List<String> = buildList {
 private const val MESSAGE_SCAN_LIMIT = 4_096
 private const val MESSAGE_RESULT_LIMIT = 512
 private const val STACK_FRAME_LIMIT = 40
+/** As many as [causeTypes] names: the headers of causes and suppressed failures past the frame window. */
+private const val CAUSE_HEADER_LIMIT = 6
 private const val STACK_LENGTH_LIMIT = 8_192
 
 private fun sanitizedMessage(cause: Throwable): String? = try {
@@ -240,8 +245,13 @@ private fun sanitizedStack(cause: Throwable): String? = try {
         causeTypes(cause).firstOrNull() ?: "Throwable"
     }
     val frames = try {
-        cause.stackTraceToString().lineSequence().filter { it.isNotBlank() }.take(STACK_FRAME_LIMIT)
-    } catch (failure: Throwable) { emptySequence() }
+        val lines = cause.stackTraceToString().lineSequence().filter { it.isNotBlank() }.toList()
+        // A coroutine stack fills the frame window, and the causes below it carry the messages that explain
+        // the failure: their headers stay, their frames do not.
+        lines.take(STACK_FRAME_LIMIT) + lines.drop(STACK_FRAME_LIMIT).filter { line ->
+            line.trimStart().let { it.startsWith("Caused by:") || it.startsWith("Suppressed:") }
+        }.take(CAUSE_HEADER_LIMIT)
+    } catch (failure: Throwable) { emptyList() }
     val rendered = buildString {
         append(header)
         frames.forEach { append('\n').append(it) }

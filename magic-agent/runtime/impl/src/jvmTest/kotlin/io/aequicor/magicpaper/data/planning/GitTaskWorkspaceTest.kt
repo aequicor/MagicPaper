@@ -7,6 +7,8 @@ import io.aequicor.magicpaper.domain.tools.ToolRole
 import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
 import io.aequicor.magicpaper.data.storage.InMemoryEventJournal
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.LogLevel
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.*
@@ -315,6 +317,49 @@ class GitTaskWorkspaceTest {
         assertContains(failure.message.orEmpty(), "BUILD FAILED in 16s")
         assertTrue(failure.message.orEmpty().length < 2200, "Diagnostic remains bounded")
         assertEquals(record.baseCommit, git(source, "rev-parse", "HEAD"), "A failed check never delivers the task")
+    } }
+
+    /**
+     * A failed check has to be explained from the log alone, on a machine nobody can look at: which program ran,
+     * how it ended and how long it took at INFO; its command line, blocking reason and output only at TRACE.
+     */
+    @Test fun failedAndBlockedChecksAreReadableFromTheLogWithoutTheirOutputAtNormalLevels() = runTest { fixture {
+        val output = "SuiteTest > case FAILED\napi_key=private-value\nBUILD FAILED in 3s"
+        val runner = object : CommandChecks by gitChecks {
+            private val results = mutableMapOf<CheckRef, CheckResult>()
+            override suspend fun run(command: CheckCommand): CheckResult =
+                if (command.outputMode != CheckOutputMode.TEXT) gitChecks.run(command)
+                else (if (command.arguments.first() == "python3") CheckResult("", null, "Команда проверки не найдена: python3")
+                    else CheckResult(output, 1)).also { results[command.ref] = it }
+            override suspend fun inspect(ref: CheckRef) = results[ref] ?: gitChecks.inspect(ref)
+        }
+        val checked = port(runner)
+        val task = open()
+        File(task.path, "result.txt").writeText("pending result")
+        val record = prepare(task)
+        val level = AppLog.level
+        AppLog.level = LogLevel.TRACE
+        try {
+            assertFails { checked.verify(record.copy(checks = listOf(listOf("C:\\tools\\gradlew.bat", "test", "--info"))), "logged-failure") }
+            assertFails { checked.verify(record.copy(checks = listOf(listOf("python3", "-m", "pytest"))), "logged-blocked") }
+        } finally { AppLog.level = level }
+        fun worktree(event: String) = AppLog.history().filter { it.component == "coding.worktree" && it.event == event }
+        assertEquals(listOf("1", "1"), worktree("verification.started").takeLast(2).map { it.fields["count"] })
+        val finished = worktree("check.finished").takeLast(2)
+        assertEquals(listOf("failed", "blocked"), finished.map { it.fields["status"] })
+        assertEquals(listOf("gradlew.bat", "python3"), finished.map { it.fields["executable"] }, "the program, never its directory")
+        assertEquals(listOf("2", "2"), finished.map { it.fields["argumentCount"] })
+        assertEquals(listOf("1", "null"), finished.map { it.fields["result"] })
+        assertEquals(listOf(output.length.toString(), "0"), finished.map { it.fields["bytes"] })
+        assertTrue(finished.all { it.fields["durationMs"]?.toLongOrNull() != null })
+        finished.forEach { assertFalse("private-value" in it.line() || "SuiteTest" in it.line() || "tools" in it.line(), it.line()) }
+        val (failedDetail, blockedDetail) = worktree("check.output").takeLast(2).map { it.detail.orEmpty() }
+        assertContains(failedDetail, "command: C:\\tools\\gradlew.bat test --info")
+        assertContains(failedDetail, "SuiteTest > case FAILED")
+        assertContains(failedDetail, "BUILD FAILED in 3s")
+        assertFalse("private-value" in failedDetail, failedDetail)
+        assertContains(blockedDetail, "command: python3 -m pytest")
+        assertContains(blockedDetail, "blocked: Команда проверки не найдена: python3")
     } }
 
     @Test fun checkCancellationPreservesUnknownLeaseWithoutDelivery() = runTest { fixture {

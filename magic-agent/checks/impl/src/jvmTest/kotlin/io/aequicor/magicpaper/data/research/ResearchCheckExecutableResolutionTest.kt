@@ -1,5 +1,7 @@
 package io.aequicor.magicpaper.data.research
 
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.LogLevel
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import kotlin.test.*
@@ -53,6 +55,35 @@ class ResearchCheckExecutableResolutionTest {
         val dir = Files.createTempDirectory("research-check-missing-")
         try { assertFailsWith<NoSuchFileException> { runner.resolveExecutable("./absent-tool", dir, env()) } }
         finally { dir.toFile().deleteRecursively() }
+    }
+
+    /**
+     * «Команда не найдена» без имени не объясняет упавшую проверку. Имя команды и отвергнутый одноимённый
+     * кандидат (на Windows так выглядит псевдоним Microsoft Store — точка повторной обработки, а не файл)
+     * попадают в сообщение; каталоги PATH остаются только в TRACE.
+     */
+    @Test fun unresolvedCommandNamesItselfAndTheCandidateItRefused() {
+        val bin = Files.createTempDirectory("research-check-refused-")
+        val level = AppLog.level
+        try {
+            AppLog.level = LogLevel.TRACE
+            Files.createDirectory(bin.resolve("tool"))
+            val failure = assertFailsWith<NativeCheckUnavailable> {
+                runner.resolveExecutable("tool", bin, mapOf("PATH" to bin.toString(), "PATHEXT" to ".COM;.EXE;.BAT;.CMD"))
+            }
+            assertEquals("Команда проверки не найдена: tool (найден tool, но это не обычный файл)", failure.message)
+            assertFalse(bin.toString() in failure.message!!, "the directory stays out of the message")
+            val trace = AppLog.history().last { it.component == "checks" && it.event == "executable.unresolved" }
+            assertEquals("1", trace.fields["count"])
+            assertEquals("1", trace.fields["entries"])
+            assertContains(trace.detail.orEmpty(), "PATH[0]=$bin")
+            assertContains(trace.detail.orEmpty(), "refused ${bin.resolve("tool")}: это не обычный файл")
+            val absent = assertFailsWith<NativeCheckUnavailable> { runner.resolveExecutable("npm test", bin, env()) }
+            assertEquals("Команда проверки не найдена: npm test", absent.message, "a command line passed as one argument is recognisable")
+        } finally {
+            AppLog.level = level
+            bin.toFile().deleteRecursively()
+        }
     }
 
     @Test fun pathSearchPrefersExecutableExtensionOnWindows() {

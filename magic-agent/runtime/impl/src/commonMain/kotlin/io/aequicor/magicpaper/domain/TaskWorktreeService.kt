@@ -89,6 +89,13 @@ class TaskWorktreeService(
         require(record.taskId == (request.workspaceTaskId ?: request.runId)) { "Задача изменилась" }
         accept(context.projectId, current.id, TaskWorktreeMachine.Input.Intent.BindRun(record.taskId, context.runtimeGeneration))
         accept(context.projectId, current.id, TaskWorktreeMachine.Input.Intent.Handoff(record.taskId, context.runtimeGeneration, result, checks))
+        val fields = mapOf("sessionId" to current.id, "entityId" to record.taskId)
+        AppLog.info("coding.worktree", "handoff.recorded", fields + mapOf("outcome" to if (result) "RESULT" else "BLOCKED",
+            "count" to checks.size.toString()))
+        // The agent chose these commands; which program failed verification is read from here when it does.
+        AppLog.trace("coding.worktree", "handoff.checks", fields) {
+            checks.withIndex().joinToString("\n") { (index, args) -> "check[$index]: ${checkCommandLine(args)}" }
+        }
     }
 
     suspend fun revokeHandoff(projectId: String, sessionId: String, taskId: String): TaskWorktree {
@@ -291,3 +298,7 @@ class TaskWorktreeService(
         } }
     }
 }
+
+/** A check as it would be typed, for TRACE only: an argument with spaces is quoted so the line reads back unambiguously. */
+internal fun checkCommandLine(args: List<String>): String =
+    args.joinToString(" ") { if (it.isEmpty() || it.any(Char::isWhitespace)) "\"$it\"" else it }

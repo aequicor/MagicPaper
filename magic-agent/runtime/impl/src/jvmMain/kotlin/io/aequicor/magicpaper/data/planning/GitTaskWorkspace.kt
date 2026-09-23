@@ -250,12 +250,25 @@ class GitTaskWorkspace(
     override suspend fun verify(record: TaskWorktree, operation: TaskWorkspaceOperation) = owned(record, operation, TaskWorktreeMachine.Operation.VERIFY) {
         val dir = managed(record)
         val before = verificationSnapshot(dir.path, commands())
+        AppLog.info("coding.worktree", "verification.started", mapOf("entityId" to record.taskId, "count" to record.checks.size.toString()))
         for ((index, args) in record.checks.withIndex()) {
             require(args.isNotEmpty() && args.none { '\u0000' in it }) { "Некорректная команда проверки" }
+            val started = System.nanoTime()
             val result = commands().check(dir, args)
             val code = result.exitCode
-            // Ключи вне allowlist AppLog санитируются до `[redacted]`: идентификатор задачи и код выхода берём из разрешённых.
-            AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(), "result" to code.toString()))
+            val status = if (result.blockedReason != null) "blocked" else if (code == 0) "passed" else "failed"
+            // Ключи вне allowlist AppLog санитируются до `[redacted]`: программу называет имя файла, аргументы и вывод — только TRACE.
+            AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(),
+                "result" to code.toString(), "status" to status, "executable" to programName(args.first()),
+                "argumentCount" to (args.size - 1).toString(), "durationMs" to ((System.nanoTime() - started) / 1_000_000).toString(),
+                "bytes" to result.output.toByteArray(Charsets.UTF_8).size.toString()))
+            if (status != "passed") AppLog.trace("coding.worktree", "check.output", mapOf("entityId" to record.taskId, "index" to index.toString())) {
+                buildString {
+                    append("command: ").append(checkCommandLine(args).take(TRACE_COMMAND))
+                    result.blockedReason?.let { append("\nblocked: ").append(it.take(TRACE_COMMAND)) }
+                    append("\noutput:\n").append(checkFailureDetail(result.output, TRACE_OUTPUT))
+                }
+            }
             if (code != 0 || result.blockedReason != null) {
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
                 val detail = checkFailureDetail(result.output)
@@ -430,15 +443,17 @@ class GitTaskWorkspace(
             git(dir, "update-ref", ref, head(dir))
     }
     private fun preIntegrationRef(record: TaskWorktree) = "refs/magicpaper/task-pre-integration-${hash(record.taskId)}"
-    private fun checkFailureDetail(output: String): String {
+    private fun checkFailureDetail(output: String, limit: Int = CHECK_OUTPUT_DETAIL): String {
         val safe = PlanningDiagnostics.redact(output)
         // Parallel Gradle tasks can print warnings after a failed test. A tail alone loses
         // the failing test's identity, and the next run overwrites its HTML/XML report.
         val failures = safe.lineSequence().filter { it.trimEnd().endsWith(" FAILED") }
             .take(6).joinToString("\n") { it.take(160) }
-        if (failures.isEmpty()) return safe.takeLast(CHECK_OUTPUT_DETAIL).trim()
-        return (failures + "\n" + safe.takeLast(CHECK_OUTPUT_DETAIL - failures.length - 1)).trim()
+        if (failures.isEmpty()) return safe.takeLast(limit).trim()
+        return (failures + "\n" + safe.takeLast(limit - failures.length - 1)).trim()
     }
+    /** The program's file name, never its directory: the log names what ran, not where it lives. */
+    private fun programName(executable: String) = executable.substringAfterLast('/').substringAfterLast('\\')
     private fun tail(output: String) = PlanningDiagnostics.redact(output.takeLast(CHECK_OUTPUT_DETAIL)).trim()
     private suspend fun ancestor(dir: File, before: String, after: String): Boolean {
         val code = probe(dir, "merge-base", "--is-ancestor", before, after).first
@@ -492,6 +507,9 @@ class GitTaskWorkspace(
 }
 
 private const val CHECK_OUTPUT_DETAIL = 2000
+/** A TRACE entry keeps 2048 characters; the command and the output tail share them so the tail's last lines survive. */
+private const val TRACE_COMMAND = 300
+private const val TRACE_OUTPUT = 1400
 private const val DIRTY_ENTRY_LIMIT = 8
 private const val DIRTY_ENTRY_LENGTH = 160
 private const val SOURCE_FOLDER = "исходная папка проекта"

@@ -3,6 +3,7 @@ package io.aequicor.magicpaper.data.research
 import io.aequicor.magicpaper.data.checks.*
 import io.aequicor.magicpaper.data.coding.WindowsExecutables
 import io.aequicor.magicpaper.domain.checks.*
+import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.*
 import java.io.File
 import java.io.IOException
@@ -312,13 +313,31 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             }
             return file.toRealPath().toString()
         }
-        val paths = env.entries.firstOrNull { it.key.equals("PATH", true) }?.value.orEmpty().split(File.pathSeparator)
-        return paths.asSequence().filter(String::isNotBlank).flatMap { candidates(Paths.get(it, name)) }
-            .firstOrNull { Files.isRegularFile(it) && (windows || Files.isExecutable(it)) && WindowsExecutables.isLaunchable(it.toFile(), extensions) }
-            ?.toRealPath()?.toString() ?: throw NativeCheckUnavailable("Команда проверки не найдена")
+        val paths = env.entries.firstOrNull { it.key.equals("PATH", true) }?.value.orEmpty().split(File.pathSeparator).filter(String::isNotBlank)
+        fun refusal(candidate: Path): String? = when {
+            !Files.isRegularFile(candidate) -> "это не обычный файл"
+            !windows && !Files.isExecutable(candidate) -> "нет права на запуск"
+            !WindowsExecutables.isLaunchable(candidate.toFile(), extensions) -> "это не исполнимый файл Windows"
+            else -> null
+        }
+        val searched = paths.asSequence().flatMap { candidates(Paths.get(it, name)) }
+        searched.firstOrNull { refusal(it) == null }?.let { return it.toRealPath().toString() }
+        // A same-named file that exists and was refused explains the failure: on Windows a Microsoft Store alias is a
+        // reparse point, not a regular file. Its name reaches the user; the searched directories only TRACE.
+        val refused = searched.filter { Files.exists(it, LinkOption.NOFOLLOW_LINKS) }.map { it to checkNotNull(refusal(it)) }.toList()
+        AppLog.trace("checks", "executable.unresolved", mapOf("count" to paths.size.toString(), "entries" to refused.size.toString())) {
+            buildString {
+                append("name=").append(name).append("\nPATHEXT=").append(extensions.joinToString(";"))
+                refused.forEach { (candidate, reason) -> append("\nrefused ").append(candidate).append(": ").append(reason) }
+                paths.forEachIndexed { index, directory -> append("\nPATH[").append(index).append("]=").append(directory) }
+            }
+        }
+        val hint = refused.firstOrNull()?.let { (candidate, reason) -> " (найден ${candidate.fileName}, но $reason)" }.orEmpty()
+        throw NativeCheckUnavailable("Команда проверки не найдена: ${name.take(MAX_NAME)}$hint")
     }
     companion object {
         const val MAX_OUTPUT = 64_000
+        private const val MAX_NAME = 120
         const val DEFAULT_PATHEXT = ".EXE;.CMD;.BAT"
 
         /**

@@ -143,7 +143,8 @@ class DefaultTaskWorktreeOwner(
             store.saveOutcome(operation, fact)
             store.dispatch(fact)
             if (fact is Input.Fact.VerificationFailed) {
-                AppLog.info("coding.worktree", "verification.failed", mapOf("operationId" to operation.id, "sessionId" to store.state.owner.sessionId))
+                AppLog.info("coding.worktree", "verification.failed", mapOf("operationId" to operation.id,
+                    "sessionId" to store.state.owner.sessionId, "entityId" to effect.record.taskId))
                 throw TaskWorktreeVerificationFailed(fact.message)
             }
         } catch (failure: Exception) {
@@ -153,7 +154,7 @@ class DefaultTaskWorktreeOwner(
             try { withContext(NonCancellable) { store.dispatch(Input.Fact.Failed(operation.id, beforeEffect = !started || destinationChanged)) } }
             catch (recordFailure: Exception) { failure.addSuppressed(recordFailure); store.uncertain(failure) }
             if (destinationChanged && !store.state.persistenceUnknown) throw failure
-            AppLog.error("coding.worktree", "operation.failed", mapOf("operationId" to operation.id,
+            AppLog.error("coding.worktree", "operation.failed", failure, mapOf("operationId" to operation.id,
                 "sessionId" to store.state.owner.sessionId, "phase" to operation.kind.name,
                 "causeType" to failure.javaClass.simpleName, "result" to if (started) "unknown" else "not_started"))
             if (failure is CancellationException) throw failure
@@ -173,7 +174,7 @@ class DefaultTaskWorktreeOwner(
                 TaskWorktreeInspection.Missing -> store.dispatch(Input.Fact.NeighbourMissing(effect.record.taskId))
             }
         } catch (failure: Exception) {
-            AppLog.error("coding.worktree", "inspection.failed", mapOf("operationId" to effect.pending.id,
+            AppLog.error("coding.worktree", "inspection.failed", failure, mapOf("operationId" to effect.pending.id,
                 "sessionId" to store.state.owner.sessionId, "causeType" to failure.javaClass.simpleName))
             if (failure is CancellationException) throw failure
             throw TaskWorktreeOperationUnknown(failure)

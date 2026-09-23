@@ -9,6 +9,8 @@ import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.ToolExecutionContext
 import io.aequicor.magicpaper.domain.tools.ToolSession
 import io.aequicor.magicpaper.di.CodingRuntimeGraph
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.LogLevel
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -83,6 +85,7 @@ class CodingWorktreeTest {
         var onRun: (Int) -> Unit = {}
         var gate: CompletableDeferred<Unit>? = null
         var handoff = true
+        var checks: List<List<String>> = emptyList()
         fun recordControlledCompletion(session: CodingSession) {
             val ref = NativeRunRecoveryRef(checkNotNull(session.engine), session.id, checkNotNull(session.pendingRun).runId, 1)
             outcomes[ref] = NativeRunRecoveryItem(ref, NativeRunOutcome.SUCCEEDED, NativeRunTermination.STOPPED, null)
@@ -120,7 +123,7 @@ class CodingWorktreeTest {
             outcomes[ref] = NativeRunRecoveryItem(ref, NativeRunOutcome.UNKNOWN, NativeRunTermination.LIVE, null)
             try {
                 gate?.await()
-                if (handoff) worktrees.handoff(ToolExecutionContext.worker(session), true, emptyList())
+                if (handoff) worktrees.handoff(ToolExecutionContext.worker(session), true, checks)
                 emit(CodingEvent.FinalText("Finished implementation"))
                 emit(CodingEvent.Finished)
                 outcomes[ref] = outcomes.getValue(ref).copy(outcome = NativeRunOutcome.SUCCEEDED)
@@ -157,6 +160,23 @@ class CodingWorktreeTest {
         assertTrue(service.state.value.coding.sessions.single().worktreeLocked)
         assertEquals("Агент завершил ответ, не передав результат задачи, поэтому изменения не влиты. Уточните запрос и продолжите",
             repo.sessions("p").single().taskWorktree?.error)
+        val failed = AppLog.history().last { it.component == "coding" && it.event == "run.failed" }
+        assertEquals(listOf("TaskWorktreeRejected"), failed.causeTypes, "the log names the refusal, not only a type")
+        assertEquals(repo.sessions("p").single().taskWorktree?.error, failed.causeMessage)
+    } }
+
+    @Test fun handoffIsTracedWithTheChecksTheAgentChose() = runTest { fixture { service, runtime, _, _ ->
+        runtime.checks = listOf(listOf("gradlew.bat", "test", "--tests", "Suite Test"))
+        val level = AppLog.level
+        AppLog.level = LogLevel.TRACE
+        try { service.sendCodingPromptTo("s", "Task"); runCurrent() } finally { AppLog.level = level }
+        val recorded = AppLog.history().last { it.component == "coding.worktree" && it.event == "handoff.recorded" }
+        assertEquals("RESULT", recorded.fields["outcome"])
+        assertEquals("1", recorded.fields["count"])
+        assertFalse("gradlew" in recorded.line(), "the commands stay out of the normal levels")
+        val traced = AppLog.history().last { it.component == "coding.worktree" && it.event == "handoff.checks" }
+        assertEquals("check[0]: gradlew.bat test --tests \"Suite Test\"", traced.detail)
+        assertEquals(recorded.fields["entityId"], traced.fields["entityId"])
     } }
 
     @Test fun continuedTaskRecordsDestinationDistanceItCouldNotClose() = runTest { fixture { service, runtime, port, repo ->

@@ -2171,7 +2171,7 @@ class DefaultCodingService(
                 }
                 throw e
             } catch (e: Exception) {
-                AppLog.error("coding", "run.failed", operationFields + ("causeType" to e::class.simpleName.orEmpty()))
+                AppLog.error("coding", "run.failed", e, operationFields + ("causeType" to e::class.simpleName.orEmpty()))
                 val task = taskWorktrees?.session(project.id, session.id)?.taskWorktree?.takeIf { it.taskId == request.workspaceTaskId }
                 val blocked = e as? SessionQuarantineBlocked
                 if (blocked != null) revealQuarantineRecovery(session.id)
