@@ -155,6 +155,8 @@ class CodingWorktreeTest {
         assertEquals(0, port.deliveries)
         assertEquals(ExecutionIntent.STOP, repo.sessions("p").single().pendingRun?.intent)
         assertTrue(service.state.value.coding.sessions.single().worktreeLocked)
+        assertEquals("Агент завершил ответ, не передав результат задачи, поэтому изменения не влиты. Уточните запрос и продолжите",
+            repo.sessions("p").single().taskWorktree?.error)
     } }
 
     @Test fun continuedTaskRecordsDestinationDistanceItCouldNotClose() = runTest { fixture { service, runtime, port, repo ->

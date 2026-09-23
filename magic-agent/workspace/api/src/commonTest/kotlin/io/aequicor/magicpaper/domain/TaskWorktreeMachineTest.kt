@@ -19,14 +19,15 @@ class TaskWorktreeMachineTest {
     private fun merged(): TaskWorktreeMachine.State = next(next(merging(), Input.Intent.Integrate("task", 1, "integrate", "target")), Input.Fact.Integrated("integrate", "merged"))
     private fun verified(): TaskWorktreeMachine.State = next(next(merged(), Input.Intent.Verify("task", 1, "verify")), Input.Fact.Verified("verify"))
     private fun accepted() = next(verified(), Input.Intent.AcceptMerge("task", 1, "merged"))
-    private fun reject(state: TaskWorktreeMachine.State, input: Input, reason: TaskWorktreeMachine.Reason) {
+    private fun reject(state: TaskWorktreeMachine.State, input: Input, reason: TaskWorktreeMachine.Reason, message: String? = null) {
         val transition = TaskWorktreeMachine.reduce(state, input)
         assertEquals(state, transition.state)
-        assertEquals(listOf(TaskWorktreeMachine.Effect.Reject(reason)), transition.effects)
+        assertEquals(listOf(TaskWorktreeMachine.Effect.Reject(reason, message)), transition.effects)
     }
+    private val noHandoff = "Агент завершил ответ, не передав результат задачи, поэтому изменения не влиты. Уточните запрос и продолжите"
 
     @Test fun deliveryRequiresCurrentHandoffCaptureIntegrationAndBothChecks() {
-        reject(running(), Input.Intent.Capture("task", 1, "capture"), TaskWorktreeMachine.Reason.NOT_READY)
+        reject(running(), Input.Intent.Capture("task", 1, "capture"), TaskWorktreeMachine.Reason.NOT_READY, noHandoff)
         reject(ready(), Input.Intent.Capture("task", 0, "capture"), TaskWorktreeMachine.Reason.STALE)
         reject(merged(), Input.Intent.Deliver("task", 1, "deliver"), TaskWorktreeMachine.Reason.NOT_READY)
         reject(verified(), Input.Intent.Deliver("task", 1, "deliver"), TaskWorktreeMachine.Reason.NOT_READY)
@@ -117,9 +118,19 @@ class TaskWorktreeMachineTest {
         assertEquals("task", state.record?.taskId)
         assertNull(state.record?.handoffGeneration)
         reject(state, Input.Intent.Handoff("task", 1, true, emptyList()), TaskWorktreeMachine.Reason.STALE)
-        reject(state, Input.Intent.Capture("task", 2, "capture"), TaskWorktreeMachine.Reason.NOT_READY)
+        reject(state, Input.Intent.Capture("task", 2, "capture"), TaskWorktreeMachine.Reason.NOT_READY, noHandoff)
         val admitted = next(state, Input.Intent.Handoff("task", 2, true, emptyList()))
         assertEquals(TaskWorktreePhase.CAPTURING, next(admitted, Input.Intent.Capture("task", 2, "capture")).record?.phase)
+    }
+
+    @Test fun refusedCaptureSaysWhetherTheAgentBlockedTheTaskOrNeverHandedItOff() {
+        reject(running(), Input.Intent.Capture("task", 1, "capture"), TaskWorktreeMachine.Reason.NOT_READY, noHandoff)
+        val blocked = next(running(), Input.Intent.Handoff("task", 1, false, emptyList()))
+        reject(blocked, Input.Intent.Capture("task", 1, "capture"), TaskWorktreeMachine.Reason.NOT_READY,
+            "Задача заблокирована агентом. Уточните запрос и продолжите")
+        val conflict = next(next(merging(), Input.Intent.Integrate("task", 1, "integrate", "target")), Input.Fact.Integrated("integrate", null))
+        assertEquals(TaskWorktreePhase.CONFLICT, conflict.record?.phase)
+        reject(conflict, Input.Intent.Capture("task", 1, "capture"), TaskWorktreeMachine.Reason.NOT_READY)
     }
 
     @Test fun failedEffectAndMissingNeighbourRemainUnknownAcrossNotesAndRestore() {

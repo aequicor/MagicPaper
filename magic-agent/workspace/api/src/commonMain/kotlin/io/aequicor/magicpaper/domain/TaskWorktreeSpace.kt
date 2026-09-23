@@ -36,6 +36,8 @@ import io.aequicor.magicpaper.machine.acceptance
  * prove that arbitrary commands finished. `Prepare` and `PrepareReuse` differ only in the reuse fields
  * of the record; a finished record accepts only the second. `unknown-no-operation` is a neighbour that
  * went missing with nothing in flight: it recovers by inspection, and no recovery fact applies to it.
+ * Nor does it express the text of a refusal, which is what the user reads: a `Capture` refused in
+ * `running` says whether the agent blocked the task or ended its answer without handing off a result.
  */
 object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMachine.Input, TaskWorktreeMachine.Effect> {
     val UNINITIALIZED = PhaseId("uninitialized")

@@ -215,8 +215,10 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
             }
             is Input.Intent.Refresh -> if (record.phase !in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY)) reject(Reason.NOT_READY)
                 else begin(state, input.operationId, Operation.REFRESH)
-            is Input.Intent.Capture -> if (record.phase !in ACTIVE_PHASES ||
-                (!input.planAccepted && (record.phase != TaskWorktreePhase.READY || record.handoffGeneration != state.generation))) reject(Reason.NOT_READY, record.error)
+            is Input.Intent.Capture -> if (record.phase !in ACTIVE_PHASES) reject(Reason.NOT_READY, record.error)
+                // A blocked handoff already says why; a running task without one ended its answer without a result.
+                else if (!input.planAccepted && (record.phase != TaskWorktreePhase.READY || record.handoffGeneration != state.generation))
+                    reject(Reason.NOT_READY, record.error ?: NO_HANDOFF_NOTICE.takeIf { record.phase == TaskWorktreePhase.RUNNING })
                 else begin(state.copy(record = record.copy(phase = TaskWorktreePhase.CAPTURING, error = null), verifiedCommit = "", acceptedCommit = ""), input.operationId, Operation.CAPTURE, before = record)
             is Input.Intent.Integrate -> if (state.verificationFailed || record.phase !in setOf(TaskWorktreePhase.MERGING, TaskWorktreePhase.CONFLICT) || record.resultCommit.isBlank() || input.targetCommit.isBlank() ||
                 (record.phase == TaskWorktreePhase.CONFLICT && record.handoffGeneration != state.generation && !input.planAccepted)) reject(Reason.NOT_READY)
@@ -313,4 +315,5 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
     private val ACTIVE_PHASES = setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY, TaskWorktreePhase.CONFLICT)
     private const val UNKNOWN_NOTICE = "Исход операции с рабочей копией неизвестен. Проверьте сохранённый результат"
     private const val MISSING_NOTICE = "Рабочая копия недоступна. Проверьте папку задачи"
+    private const val NO_HANDOFF_NOTICE = "Агент завершил ответ, не передав результат задачи, поэтому изменения не влиты. Уточните запрос и продолжите"
 }
