@@ -5,9 +5,8 @@ description: "Design or assess MagicPaper module boundaries, public contracts, d
 
 # Design within the module architecture
 
-Read the relevant row of the [task map](../../docs/agent-workflows/CODEMAP.md)
-and owner AGENTS.md. Consult [MODULES.md](../../docs/MODULES.md) only when the
-boundary change spans multiple modules. Start from the concrete behavior and
+Read the owner AGENTS.md, and the Class structure section of the root AGENTS.md
+only when the boundary change spans multiple modules. Start from the concrete behavior and
 existing owners. Preserve the user-requested scope; make routine implementation
 choices without a separate approval ceremony.
 
@@ -42,5 +41,5 @@ components and library mechanisms first, combine proven patterns by responsibili
 and keep their roles within the module ownership graph. Explain why a custom
 mechanism is necessary if established solutions do not fit. Reject both tangled
 control flow and unnecessary layers added merely to exhibit a pattern.
-Document decisions that affect future edits in the owning guide/task map; avoid
+Document decisions that affect future edits in the owning AGENTS.md; avoid
 duplicating class inventories or transient test statuses.

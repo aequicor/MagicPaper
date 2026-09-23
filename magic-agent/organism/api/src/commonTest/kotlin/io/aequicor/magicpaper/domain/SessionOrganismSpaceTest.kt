@@ -625,7 +625,7 @@ class SessionOrganismSpaceTest {
      * until the runtime reports it stopped. `observe` says an ordinary completion must not clear an unknown outcome, and the first
      * kind of writer removes the mark it relies on. It is not a decision anyone made: the sequence needs a run that is unknown, which
      * means its process is gone, to report a completion, and changing it would stop journals that recorded one from replaying. It is
-     * listed among the debts of `STUDIO-ARCHITECTURE.md`, and pinned here so that neither side moves unnoticed.
+     * a known debt, pinned here so that neither side moves unnoticed.
      */
     @Test fun aStopRequestClearsAnUnknownRunOnlyWhereNoQuarantineAndNoFailureKeepsIt() {
         fun observed(state: SessionOrganismMachine.State?, id: String) = state?.organism?.sessions?.get(id)?.let { "${it.observed}/${it.desired}" } ?: "refused"

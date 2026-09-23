@@ -5,7 +5,7 @@ description: "Implement or refactor Kotlin/Compose Multiplatform behavior in Mag
 
 # Implement MagicPaper behavior
 
-Use the [task map](../../docs/agent-workflows/CODEMAP.md) for entry points.
+Find entry points from the owner's API and its `AGENTS.md` or `CODEMAP.md`.
 Inspect the contract, implementation and relevant test before expanding
 the search. Read the pinned dependency API only when local usage does not settle it.
 For straightforward changes, proceed directly from code; skip subtree AGENTS.md
@@ -29,7 +29,7 @@ and this skill's full text when the task is unambiguous.
 - Prefer the existing Paper API for UI. Apply the UI skill for visual/interactive
   changes; keep implementation descriptions out of user-facing copy.
 
-Use [targeted checks](../../docs/agent-workflows/VERIFICATION.md) for the changed
+Run targeted checks for the changed
 behavior and its consumers. Add a regression test for meaningful failure/race logic;
 do not mirror a private implementation or invent tests for a wording-only change.
 Inspect the final diff for unrelated edits and temporary compatibility layers.

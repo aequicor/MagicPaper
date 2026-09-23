@@ -13,4 +13,4 @@ and `webpack.config.d/`. Application history behavior lives in `app/src/commonMa
 - Check JS and Wasm independently through executable linking. Browser execution
   is needed for History API and IndexedDB behavior, beyond compiler success.
 
-Platform commands and evidence requirements: root `docs/agent-workflows/VERIFICATION.md`.
+Platform compilation: `./gradlew compileMigrationTargets`.

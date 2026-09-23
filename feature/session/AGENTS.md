@@ -19,5 +19,4 @@ classpath names. Public access belongs to `CodingService` and other API ports.
 - Use local fixtures and temporary repositories. Live Pi/Codex checks are opt-in;
   never use the user's active projects or application history as disposable fixtures.
 
-Read [engine instructions](../../docs/ENGINES.md) only for native engines/protocols.
-Relevant test choices are in the root verification map.
+For native engines and protocols, read `backend-agents/README.md`.

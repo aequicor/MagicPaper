@@ -16,4 +16,4 @@ Application composition and navigation belong to `:app`; this module owns the De
 - Use broker/unit fixtures and isolated app data for checks. Do not launch a test
   runtime against the user's normal history to validate a window or protocol.
 
-Platform commands and evidence requirements: root `docs/agent-workflows/VERIFICATION.md`.
+Platform compilation: `./gradlew compileMigrationTargets`.

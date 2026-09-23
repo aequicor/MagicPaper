@@ -5,7 +5,7 @@ Read this reference before declaring a UI task complete.
 ## Select checks by risk
 
 - Always run the deterministic desktop UI contract checks and `git diff --check`.
-- Run focused DS/component tests and tests named by `docs/desktop-ui/CONTRACT.md` for behavior touched by the change.
+- Run focused DS/component tests for behavior touched by the change.
 - Compile every affected target. A successful JVM build does not prove Android, JS, or Wasm compatibility.
 - For dialogs, windows, focus, keyboard, scaling, accessibility, IME, drag/resize, Snap, or menus, capture separate platform evidence where available.
 - Preserve scroll anchors, drafts, selection, active session, and user data across resize, DPI/profile change, cancellation, and async completion.
@@ -54,4 +54,4 @@ reviewer search the entire application or infer the affected region from a file 
 
 ## Research provenance
 
-The local skill text is original and uses behavior themes from primary Apple, Microsoft, and JetBrains documentation. The visual-design reference also links primary Android/Material and W3C guidance; golden-section composition is a project preference. Two candidate skills were reviewed only for applicability: `yetone/native-feel-skill` and `Meet-Miyani/compose-skill`, both MIT at the reviewed upstream repositories. No text, code, reference tree, install script, WebView architecture, Material mandate, MVI/Hilt/Navigation requirement, or dependency was copied from them. See `docs/desktop-ui/SOURCES.md` for URLs, license evidence, scope, and limitations.
+The local skill text is original and uses behavior themes from primary Apple, Microsoft, and JetBrains documentation. The visual-design reference also links primary Android/Material and W3C guidance; golden-section composition is a project preference. Two candidate skills were reviewed only for applicability: `yetone/native-feel-skill` and `Meet-Miyani/compose-skill`, both MIT at the reviewed upstream repositories. No text, code, reference tree, install script, WebView architecture, Material mandate, MVI/Hilt/Navigation requirement, or dependency was copied from them. URLs, license evidence, scope, and limitations were recorded in `docs/desktop-ui/SOURCES.md`, removed from the tree in 4e350dd4; read it with `git show 4e350dd4~1:docs/desktop-ui/SOURCES.md`.

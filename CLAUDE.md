@@ -46,10 +46,10 @@ Read the result XMLs under `<module>/build/test-results/jvmTest/` rather than th
 console summary when the claim matters: grep for failure tags across every
 module's directory, so a failure in a task you did not name is not missed.
 
-## The branch carries known failures
+## Pre-existing failures are reproduced, not listed
 
-The accepted baseline is the Долги section of
-[STUDIO-ARCHITECTURE.md](docs/STUDIO-ARCHITECTURE.md). Check a new failure against
-it before calling it a regression, and against reality before calling it known —
-a debt entry that no longer reproduces is how a real failure gets dismissed.
-Never quiet a failure by weakening its assertion.
+There is no recorded baseline. Before calling a failure pre-existing, reproduce it
+on the unchanged base commit in a separate worktree (`git worktree add`); one that
+does not reproduce there is yours. A recorded list has already hidden a real
+defect: two storage tests accepted as known on 2026-09-22 were the journal cache
+that corrupted check journals. Never quiet a failure by weakening its assertion.

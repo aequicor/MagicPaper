@@ -8,28 +8,29 @@
 ## Start with the owner
 
 This repository uses feature `api`/`impl` modules, Decompose navigation and an
-isolated Koin application. [docs/MODULES.md](docs/MODULES.md) defines ownership.
+isolated Koin application. Owner contracts are listed under Class structure below.
 Subtree `AGENTS.md` files contain only module-specific details; common rules are
 here. Read a subtree `AGENTS.md` only when the task touches that module's unique
 constraints; do not chain-read all ancestors.
 
-Use [the task map](docs/agent-workflows/CODEMAP.md) to locate the owning module,
-entry points and checks. Start with its API, the implementation being changed and
+Locate the owning module from the Class structure table and `settings.gradle.kts`.
+Start with its API, the implementation being changed and
 the nearest relevant test. Search that module with `rg`; expand to callers only
 when the contract or evidence requires it. Exclude build outputs from source searches.
 For simple tasks, begin with the code directly; skip architecture documents and
 skills unless the task is complex or ambiguous.
 
 Current source, Gradle declarations and executable tests establish current
-behavior. `docs/PLAN-*`, historical inventories and old verification reports
+behavior. Plans, checkpoints, historical inventories and old verification reports
 describe their recorded revision; they are not proof of today's paths or passes.
-If a mapped path moved, locate it once and repair the map in the same change.
+If a path named in an `AGENTS.md` or `CODEMAP.md` moved, locate it once and repair
+it in the same change.
 For library API questions, check the pinned version and local usage first; consult
 official documentation when the answer is unresolved or version-sensitive.
 
 ## Select a workflow
 
-For straightforward code changes, proceed directly from the task map and code;
+For straightforward code changes, proceed directly from the owner's code;
 skip the skill files. Read the matching skill only when the task involves a
 non-obvious workflow, cross-module design or diagnostic complexity. Choose a
 primary workflow; add a specialist only for the part of the task that needs it.
@@ -53,7 +54,7 @@ links. These are development workflows, separate from the app's installed skills
 `skills/ui/` vendors third-party UI-creation skills from
 [MengTo/skills](https://github.com/MengTo/skills) (MIT, © Meng To; provenance and
 catalog in [skills/ui/README.md](skills/ui/README.md)). They are design
-playbooks, not contracts: `magicpaper-desktop-ui`, `docs/desktop-ui/BRANDBOOK.md`
+playbooks, not contracts: `magicpaper-desktop-ui`, the Paper palette in `PaperTheme.kt`
 and the Paper API boundary win on any conflict. Their web recipes (Tailwind, CSS,
 GSAP, IntersectionObserver) must be re-expressed with Paper tokens and Compose
 modifiers, never copied into a feature module.
@@ -66,15 +67,15 @@ Each tool call (read, grep, powershell, find) costs time. Reduce unnecessary cal
   parallel rather than sequentially.
 - **Targeted search**: use `rg` with specific patterns and file filters; avoid
   broad scans that return many irrelevant matches.
-- **Skip redundant reads**: if the task map already points to the file, do not
-  search for it again. If you already read a file, do not re-read it.
-- **Avoid documentation cascades**: do not read MODULES.md, VERIFICATION.md,
-  subtree AGENTS.md and skills for a simple code change. Start with the code.
+- **Skip redundant reads**: if an `AGENTS.md` or `CODEMAP.md` already names the
+  file, do not search for it again. If you already read a file, do not re-read it.
+- **Avoid documentation cascades**: do not read subtree AGENTS.md and skills for
+  a simple code change. Start with the code.
 - **One search per intent**: combine related searches into one `rg` call with
   alternation (`pattern1|pattern2`) instead of multiple separate searches.
-- **Skip verification matrix for trivial changes**: run only the owner test
-  from the task map; read VERIFICATION.md only when the change affects shared
-  contracts, multiple modules or platform behavior.
+- **Keep checks proportional**: for a trivial change run only the owner's test;
+  widen the checks only when the change affects shared contracts, multiple modules
+  or platform behavior.
 
 ## Shared invariants
 
@@ -126,18 +127,16 @@ Where a new declaration belongs:
   state and dispatches actions; execution, drafts and background work stay in services
   that outlive the screen.
 
-The target execution architecture — one deterministic state machine and an append-only
-event journal — is described in `docs/STUDIO-ARCHITECTURE.md`. Do not introduce its
-modules piecemeal.
+The target execution architecture is one deterministic state machine and an append-only
+event journal. Do not introduce its modules piecemeal.
 
 - A machine declares its state space: an owner's `reduce` implements `Machine<State, Input,
   Effect>` from `:core:state-machine:api`, declares a `StateSpace`, and has a test running
-  `verifyStateSpace` over it. `docs/STATE-SPACES.md` says how and lists every machine;
-  `tools/verify/verify-module-architecture.py` fails a reducer that has none of the three.
+  `verifyStateSpace` over it; `tools/verify/verify-module-architecture.py` fails a reducer
+  that has none of the three.
 - A defect in behavior a machine owns is fixed declaration first: read the machine's tree,
   name the gap or contradiction, fix the `StateSpace` and get a red test, and only then change
-  `reduce` and its service. The order and the list of gap kinds are in
-  [STATE-SPACES.md](docs/STATE-SPACES.md#исправление-дефекта-машины).
+  `reduce` and its service.
 
 ## Design patterns and code quality
 
@@ -239,18 +238,18 @@ abstraction and structured events rather than scattered `println` or payload dum
 
 ## MagicPaper UI
 
-For interface work, read and apply `skills/magicpaper-desktop-ui/SKILL.md` and
-`docs/desktop-ui/BRANDBOOK.md`. All new reusable visual and interactive components
-belong to `:designSystem`; application screens and plugins consume its Paper API.
+For interface work, read and apply `skills/magicpaper-desktop-ui/SKILL.md` and the
+Paper palette in `:designSystem`'s `PaperTheme.kt`. All new reusable visual and
+interactive components belong to `:designSystem`; application screens and plugins
+consume its Paper API.
 Run `python3 tools/verify/verify-design-system.py --self-test` and relevant
 Gradle checks. Keep user-facing copy limited to labels, actions, results,
 validation and information needed for decisions; implementation explanations
 belong in code.
 
-For a chat or journal surface that renders streamed agent output, read
-[docs/desktop-ui/STREAMING-CHAT.md](docs/desktop-ui/STREAMING-CHAT.md) before
-changing follow-end scrolling, chunk coalescing or Markdown parsing: it maps each
-cause of a jumping transcript to its `:designSystem` owner.
+In a chat or journal surface that renders streamed agent output, follow-end
+scrolling, chunk coalescing and Markdown parsing belong to `:designSystem`: each
+cause of a jumping transcript has its owner there, and is fixed there.
 
 By default, center button content horizontally and vertically within the hit area;
 center an icon and label together as one group. Use a different alignment only
@@ -304,7 +303,6 @@ when an explicit component or platform guideline requires it.
 
 ## Verification and review
 
-Choose checks from [the verification map](docs/agent-workflows/VERIFICATION.md).
 Run affected-owner checks first; expand for changed public contracts, shared
 infrastructure or platform behavior. Keep live engine integrations opt-in.
 Report the behavior changed, evidence, and unverified platforms. A build, a render,
@@ -319,10 +317,9 @@ Owner checks are the default, but they cannot see a sibling module that stopped
 compiling: each one builds only its own closure. `./gradlew jvmTest --continue`
 across every module is the check that does, and the root `checkMigrationJvm`
 depends on each subproject's `jvmTest`, so that is what CI sees. Run it before
-calling a change set ready, and reconcile the result with the Долги section of
-[STUDIO-ARCHITECTURE.md](docs/STUDIO-ARCHITECTURE.md) in both directions. A debt
-list that lists too little hides a new regression among accepted ones; a list
-that claims too much invites the next agent to dismiss a real failure as known.
+calling a change set ready. No list of accepted failures is kept: a failure is
+pre-existing only once it reproduces on the unchanged base commit, run in a separate
+worktree. A recorded excuse is not a run.
 
 A module's `jvmTest` may need an explicit project dependency on a module reached
 only through `:app`: `:app` consumes features with `implementation`, which is not

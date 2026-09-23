@@ -6,7 +6,7 @@ description: "Diagnose and fix MagicPaper build failures, runtime exceptions, in
 # Diagnose a failure
 
 Start with the failing command or user-visible trigger, first actionable error,
-source set and owner from the [task map](../../docs/agent-workflows/CODEMAP.md).
+source set and owner.
 Use existing logs and the matching test before a full rebuild or repository scan.
 For clear failures, go directly to the failing code; skip this workflow when
 the cause is obvious from the error message.
@@ -24,9 +24,7 @@ the cause is obvious from the error message.
 When the cause sits in behavior a state machine owns, the fix order is fixed:
 declaration first, logic second. Expand the machine's tree, name the gap or
 contradiction, change its `StateSpace` and get a red test, then change `reduce`, then
-its service. Do not guard the symptom in the service. Follow
-[STATE-SPACES.md](../../docs/STATE-SPACES.md#исправление-дефекта-машины) for the gap
-kinds, when a green harness proves nothing, and what the report must name.
+its service. Do not guard the symptom in the service.
 
 An `UNKNOWN` native result must not become success or a repeatable action merely
 to satisfy a test. A cancelled coroutine is not a storage error. A failed decode
@@ -38,5 +36,4 @@ evidence; do not silently edit assertions or mark them passed. Missing browser,
 native OS or cached dependency is an environment limitation with a concrete next
 check, not proof of a source regression.
 
-Use the [verification map](../../docs/agent-workflows/VERIFICATION.md) to bound the
-rerun. Finish with cause, change, reproducer result and remaining uncertainty.
+Bound the rerun to the affected owner and its consumers. Finish with cause, change, reproducer result and remaining uncertainty.

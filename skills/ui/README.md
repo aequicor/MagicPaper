@@ -8,7 +8,7 @@ which covers every skill in this folder.
 
 These are design playbooks, not MagicPaper contracts. They complement
 [`magicpaper-desktop-ui`](../magicpaper-desktop-ui/SKILL.md); they never override
-the Paper API boundary, `docs/desktop-ui/BRANDBOOK.md` or `AGENTS.md`.
+the Paper API boundary, the Paper palette (`PaperTheme.kt`) or `AGENTS.md`.
 
 ## What was vendored, and what was not
 
@@ -51,7 +51,7 @@ Motion and surface polish (upstream `web-design/`):
 ## How to work with them
 
 1. Pick the skill that matches the task; do not chain-read the whole folder.
-2. Read the local surface first: `docs/desktop-ui/BRANDBOOK.md`, the Paper
+2. Read the local surface first: the Paper palette in `PaperTheme.kt`, the Paper
    component you are changing and its existing previews.
 3. Apply the skill's judgment gates to the real render, at the real window sizes
    and text scales, not to the source text.

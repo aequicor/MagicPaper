@@ -17,8 +17,8 @@ For simple UI tweaks (text, spacing, color), inspect the current component and
 edit directly; skip steps 1–3 below. For new screens or substantial layout
 changes, follow the full checklist.
 
-1. Read `docs/desktop-ui/CONTRACT.md` and the relevant rows in `docs/desktop-ui/SURFACE-MAP.md`. Treat `surface-bindings.json` as the migration assignment, not as generated API.
-2. Inspect the current public API of `:designSystem` and its call sites. If the module does not exist yet, create it according to the contract before migrating feature UI.
+1. Read the palette in `:designSystem`'s `PaperTheme.kt` and the Paper components the surface already uses.
+2. Inspect the current public API of `:designSystem` and its call sites.
 3. Read [design-system.md](references/design-system.md). For platform behavior, window chrome, menus, keyboard, focus, dialogs, or accessibility, also read [platform-behavior.md](references/platform-behavior.md). For completion evidence, read [verification.md](references/verification.md).
 4. Record pre-existing working-tree changes and preserve them. Do not treat unrelated recovery or parallel-session edits as yours.
 
@@ -54,7 +54,7 @@ input response, frame pacing and motion without removing necessary safeguards.
 
 ## Brand and interaction
 
-- Read `docs/desktop-ui/BRANDBOOK.md` for the current palette; the earlier contract palette is historical baseline.
+- The current palette is defined in `:designSystem`'s `PaperTheme.kt`.
 - Pastel sand, lilac, grey, white, ash green and coral are surfaces. Black-burgundy ink and accessible dark accents carry text.
 - Use `paperClickable` or a Paper control for actions. The same shape clips the full hover/pressed fill and focus outline; preserve selected state when the pointer leaves. Do not add ripple, pointer-only handlers or feature-local hover drawing.
 - By default, center button content horizontally and vertically within the hit area; center an icon and label together as one group. Override this only when an explicit component or platform guideline requires different alignment. Align forms and lists to shared leading guides, and use Paper spacing/density rather than arbitrary gaps.
@@ -73,7 +73,7 @@ input response, frame pacing and motion without removing necessary safeguards.
 
 ## Completion
 
-Implement the smallest coherent public API and migrate every in-scope call site from its surface-map row. Run the focused tests plus the architectural boundary check and relevant target compilations. Report what was actually exercised on macOS and Windows separately; never infer Windows native behavior from a macOS screenshot or JVM unit test.
+Implement the smallest coherent public API and migrate every in-scope call site. Run the focused tests plus the architectural boundary check and relevant target compilations. Report what was actually exercised on macOS and Windows separately; never infer Windows native behavior from a macOS screenshot or JVM unit test.
 
 Inspect an actual render for visual changes. Give the reviewer a focused acceptance
 route to the affected screen/state and identify the regions and interactions to

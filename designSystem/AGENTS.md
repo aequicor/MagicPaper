@@ -1,7 +1,7 @@
 # Paper API
 
-Read `skills/magicpaper-desktop-ui/SKILL.md` and the current brandbook from the
-repository root for interface work. `src/commonMain/.../designsystem` owns public
+Read `skills/magicpaper-desktop-ui/SKILL.md` for interface work; the palette lives
+in `PaperTheme.kt`. `src/commonMain/.../designsystem` owns public
 Paper controls; moved generic rendering/window helpers also live in this module.
 
 - New reusable visual/interactive behavior belongs here. Publish a narrow Paper

@@ -1,8 +1,8 @@
 # Visual composition and familiar interaction
 
 Read for screen composition, layout, typography, color or visual review. The current
-project palette and spacing live in `docs/desktop-ui/BRANDBOOK.md` from the repository
-root. This reference explains how to apply them, not a replacement palette.
+project palette and spacing live in `:designSystem`, starting from `PaperTheme.kt`.
+This reference explains how to apply them, not a replacement palette.
 
 ## Make the composition visible
 

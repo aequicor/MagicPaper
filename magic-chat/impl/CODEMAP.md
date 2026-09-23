@@ -1,6 +1,5 @@
 # Session implementation map
 
-Start with [the repository task map](../../../docs/agent-workflows/CODEMAP.md).
 Source paths below are relative to `src/commonMain/kotlin/io/aequicor/magicpaper`.
 
 | Task | Owner |
@@ -22,5 +21,5 @@ Source paths below are relative to `src/commonMain/kotlin/io/aequicor/magicpaper
 `CodingApprovalDock` and `PlanningBlockerDock` are legacy components. Current
 approvals use `UserInteractionRequest` and the questionnaire/interaction dock.
 
-Search the relevant owner with `rg`, excluding `build`. Tests and live fixture
-opt-ins are listed in [VERIFICATION.md](../../../docs/agent-workflows/VERIFICATION.md).
+Search the relevant owner with `rg`, excluding `build`. Tests live beside their
+owner; live engine fixtures are opt-in.

@@ -21,7 +21,7 @@ Feature code owns domain state, validation decisions, loading operations, naviga
 
 ## Extending the API
 
-1. Confirm the need against `docs/desktop-ui/SURFACE-MAP.md` and current call sites.
+1. Confirm the need against current call sites.
 2. Choose an existing primitive/composite before adding a new one. Do not expose an internal Material escape hatch.
 3. Define semantic states and platform variation, including keyboard, pointer, focus, accessibility, localization, scaling, busy/error, and dismissal behavior where relevant.
 4. Implement common behavior and the smallest platform adapter. Keep non-desktop targets functional with a compatible fallback.

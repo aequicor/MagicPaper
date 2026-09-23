@@ -12,4 +12,4 @@ Application composition and navigation belong to `:app`; this module owns the An
 - Verify APK assembly and affected host behavior. A `NO-SOURCE` unit task alone
   does not prove recreation or link handling.
 
-Platform commands and evidence requirements: root `docs/agent-workflows/VERIFICATION.md`.
+Platform compilation: `./gradlew compileMigrationTargets`.

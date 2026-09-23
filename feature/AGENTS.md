@@ -25,4 +25,4 @@ platform adapters stay in the implementation's platform source sets.
   runtime contract are separate capabilities.
 
 For visual changes, apply the root Paper UI instructions. For API changes, inspect
-the factory binding in `:app` and the callers identified by the task map.
+the factory binding in `:app` and the API's direct callers.

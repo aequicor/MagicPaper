@@ -9,7 +9,7 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform) apply false
 }
 // Link one DOM implementation on JS; core:platform supplies the Compose SAM ABI.
-// Compile classpaths and Wasm stay intact. See docs/WEB_ABI.md.
+// Compile classpaths and Wasm stay intact.
 subprojects {
     configurations.matching { it.name.startsWith("js") && it.name.endsWith("RuntimeClasspath") }.configureEach {
         exclude(group = "org.jetbrains.kotlin", module = "kotlin-dom-api-compat")

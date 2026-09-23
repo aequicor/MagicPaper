@@ -5,8 +5,7 @@ description: "Review MagicPaper state transitions, identities, concurrency, pers
 
 # Review observable invariants
 
-Use the [task map](../../docs/agent-workflows/CODEMAP.md) to inspect the changed
-owner, its contract and direct callers. Review the requested scope; do not expand
+Inspect the changed owner, its contract and direct callers. Review the requested scope; do not expand
 into an unrelated whole-project audit or change code in a review-only task.
 
 For the changed operation identify its input identity, allowed starting states,

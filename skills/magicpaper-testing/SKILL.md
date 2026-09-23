@@ -5,12 +5,10 @@ description: "Select, implement and interpret MagicPaper tests across feature ow
 
 # Verify the changed contract
 
-Select the affected owner and layers from the
-[verification map](../../docs/agent-workflows/VERIFICATION.md).
-Read only the rows relevant to the change. Tests live beside their owner;
+Select the affected owner and layers. Tests live beside their owner;
 cross-feature assembly is allowed in tests without production dependency leaks.
-For simple changes, run only the owner's test from the task map; skip the full
-verification matrix unless the change affects shared contracts or infrastructure.
+For simple changes, run only the owner's test; skip the wider checks
+unless the change affects shared contracts or infrastructure.
 
 - Test observable behavior at the boundary that can fail: persisted record after
   reopen, transition after Back, native cleanup before lease release, or a real

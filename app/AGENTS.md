@@ -25,5 +25,5 @@ Entry points under `src/commonMain/kotlin/io/aequicor/magicpaper/`:
 - Android recreation retains runtime ownership. Desktop acquires its instance lock
   before DI. Web owns one history bridge and an independent journal per tab.
 
-Use separate fake assemblies for previews/tests. Host changes also require the
-platform rows in `docs/agent-workflows/VERIFICATION.md` (path from repository root).
+Use separate fake assemblies for previews/tests. Host changes also require
+`./gradlew compileMigrationTargets`.
