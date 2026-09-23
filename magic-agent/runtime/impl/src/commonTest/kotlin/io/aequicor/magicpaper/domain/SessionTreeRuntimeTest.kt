@@ -295,6 +295,67 @@ class SessionTreeRuntimeTest {
         } finally { reconciled.complete(Unit); rootJob.cancelAndJoin() }
     } }
 
+    /**
+     * Stopping proves cleanup, not the outcome of what the interrupted turn executed. A stop someone asked for is settled by
+     * a proven exit, so the user's stop can finish; the unknown outcome stays with the native recovery and the coding run.
+     * An exit nobody proved, or a cancellation nobody asked for, still leaves the session unknown. Regression: a Pi run
+     * stopped while a questionnaire was open stayed unknown, and «Остановка ещё не подтверждена» refused the user's stop.
+     */
+    @Test fun requestedStopWithAProvenExitSettlesThoughTheTurnOutcomeIsUnknown() = runTest { withContext(Dispatchers.Default) {
+        for ((termination, requested) in listOf(NativeRunTermination.STOPPED to true, NativeRunTermination.UNKNOWN to true,
+            NativeRunTermination.STOPPED to false)) {
+            val f = SessionOrganismTestFixture(); f.initialize()
+            val attempt = NativeRunRecoveryRef(CodingEngine.PI, f.root.id, "request", 0)
+            val native = Runtime { emit(CodingEvent.Finished) }
+            native.reconcileHandler = { throw NativeRunRecoveryRequired(NativeRunRecoverySnapshot(
+                listOf(NativeRunRecoveryItem(attempt, NativeRunOutcome.UNKNOWN, termination, null)), false)) }
+            val tree = connect(f, native)
+            val id = f.root.organismId!!
+            val started = CompletableDeferred<Unit>()
+            val rootJob = launch { tree.withScope(f.root) { started.complete(Unit); awaitCancellation() } }
+            withTimeout(5_000) { started.await() }
+            // The order OrchestrationService.stopManaged uses: record the stop, stop the subtree, then finish the stop.
+            if (requested) { f.store.requestUserStop(id, f.root.id, "stop-root", archive = false); f.service.stopSubtree(setOf(f.root.id)) }
+            else rootJob.cancelAndJoin()
+            assertTrue(rootJob.isCompleted, "the stop joins the run it stopped")
+            val observed = f.store.get(id).sessions.getValue(f.root.id).observed
+            val case = "termination=$termination requested=$requested"
+            if (termination == NativeRunTermination.STOPPED && requested) {
+                assertEquals(SessionObservedState.STOPPED, observed, case)
+                f.store.finishStop(id, setOf(f.root.id))
+                assertTrue(f.service.failures.value.isEmpty(), "a stop the user asked for is not a failure to confirm: $case")
+            } else {
+                assertEquals(SessionObservedState.UNKNOWN, observed, case)
+                if (requested) assertFailsWith<ToolArgumentRejection>(case) { f.store.finishStop(id, setOf(f.root.id)) }
+                assertTrue(withTimeout(5_000) { f.service.failures.first { it.isNotEmpty() } }.containsKey(id), case)
+            }
+        }
+    } }
+
+    /** An auxiliary run stopped with its owner follows the same rule: a proven exit settles it, an unproven one does not. */
+    @Test fun auxiliaryRunStoppedWithItsOwnerSettlesOnAProvenExit() = runTest { withContext(Dispatchers.Default) {
+        for (termination in listOf(NativeRunTermination.STOPPED, NativeRunTermination.UNKNOWN)) {
+            val f = SessionOrganismTestFixture(); f.initialize(CodingInteractionMode.PLANNING)
+            val alias = CodingSession("alias", f.project.id, "Planner", 1, planId = "plan", parentSessionId = f.root.id, planningMode = true)
+            val native = Runtime { emit(CodingEvent.Finished) }
+            native.reconcileHandler = { throw NativeRunRecoveryRequired(NativeRunRecoverySnapshot(listOf(NativeRunRecoveryItem(
+                NativeRunRecoveryRef(CodingEngine.PI, alias.id, "request", 0), NativeRunOutcome.UNKNOWN, termination, null)), false)) }
+            val tree = connect(f, native)
+            val id = f.root.organismId!!
+            val started = CompletableDeferred<Unit>()
+            val job = launch {
+                tree.withAuxiliaryScope(alias, ToolExecutionContext(f.project.id, f.root.id, alias.id, "request", ToolRole.PLANNER,
+                    CodingInteractionMode.PLANNING, planId = "plan", runId = "run", organismId = id,
+                    runtimeGeneration = f.root.runtimeGeneration)) { started.complete(Unit); awaitCancellation() }
+            }
+            withTimeout(5_000) { started.await() }
+            f.store.requestUserStop(id, f.root.id, "stop-root", archive = false)
+            job.cancelAndJoin()
+            val expected = if (termination == NativeRunTermination.STOPPED) SessionObservedState.STOPPED else SessionObservedState.UNKNOWN
+            assertEquals(expected, f.store.get(id).auxiliaryRuns.values.single().observed, "termination=$termination")
+        }
+    } }
+
     @Test fun questionCleanupFailureCannotLeaveSiblingRuntimeAlive() = runTest { withContext(Dispatchers.Default) { supervisorScope {
         val f = SessionOrganismTestFixture(); f.initialize()
         val firstStarted = CompletableDeferred<Unit>(); val secondStarted = CompletableDeferred<Unit>()

@@ -125,7 +125,15 @@ class SessionTreeRuntime(
                 children.cancelAndJoin()
                 var uncertain = false
                 try { cancelQuestions(session.id) } catch (error: Exception) { uncertain = true; cleanup.record(session.id, "questions_revoke", error) }
-                try { runtime.reconcile(session.id) } catch (error: Exception) { uncertain = true; cleanup.record(session.id, "native_reconcile", error) }
+                try { runtime.reconcile(session.id) }
+                catch (recovery: NativeRunRecoveryRequired) {
+                    // As for a session's own run: a stop its owner asked for is settled by a proven exit.
+                    val owner = handle.auxiliary?.let { organisms.store.get(organismId).sessions[it.ownerSessionId] }
+                    if (recovery.recovery.exitProven && owner?.desired in setOf(SessionDesiredState.STOP, SessionDesiredState.PAUSE))
+                        AppLog.info("organism", "stop.outcome_unknown", mapOf("sessionId" to session.id, "result" to "exit_proven"))
+                    else { uncertain = true; cleanup.record(session.id, "native_reconcile", recovery) }
+                }
+                catch (error: Exception) { uncertain = true; cleanup.record(session.id, "native_reconcile", error) }
                 handle.auxiliary?.let { run ->
                     val observed = when { uncertain -> SessionObservedState.UNKNOWN; failure is CancellationException -> SessionObservedState.STOPPED
                         failure != null || handle.failed -> SessionObservedState.FAILED; else -> SessionObservedState.COMPLETED }
@@ -403,6 +411,10 @@ class SessionTreeRuntime(
         try { ensureActive(); block() } finally { monitor.cancel() }
     }
 
+    /** Every recorded attempt's process is proven to have exited; what the interrupted turn executed may still be unknown. */
+    private val NativeRunRecoverySnapshot.exitProven: Boolean
+        get() = !persistenceUnknown && items.all { it.termination == NativeRunTermination.STOPPED }
+
     private fun SessionOrganism.tokensExhausted(): Boolean =
         limits.tokens?.let { limit -> sessions.values.sumOf { it.spentTokens } >= limit } == true
 
@@ -410,28 +422,38 @@ class SessionTreeRuntime(
         val cleanup = CleanupFailures(failure)
         try {
             var uncertain = false
+            // Stopping proves cleanup, not the outcome of the commands the turn executed. That outcome keeps the folders held
+            // until someone decides about it, and it is the native recovery's and the coding run's to resolve.
+            var outcomeUnknown: NativeRunRecoveryRequired? = null
             try { cancelQuestions(session.id) } catch (error: Exception) { uncertain = true; cleanup.record(session.id, "questions_revoke", error) }
             // Cancelling a coroutine is not proof that its native process or tool stopped.
-            try { runtime.reconcile(session.id) } catch (error: Exception) { uncertain = true; cleanup.record(session.id, "native_reconcile", error) }
+            try { runtime.reconcile(session.id) }
+            catch (recovery: NativeRunRecoveryRequired) {
+                if (recovery.recovery.exitProven) outcomeUnknown = recovery
+                else { uncertain = true; cleanup.record(session.id, "native_reconcile", recovery) }
+            }
+            catch (error: Exception) { uncertain = true; cleanup.record(session.id, "native_reconcile", error) }
             handle.workspace?.let { lease ->
                 try {
-                    if (uncertain) codingWorkspaces!!.quarantine(lease)
+                    if (uncertain || outcomeUnknown != null) codingWorkspaces!!.quarantine(lease)
                     else codingWorkspaces!!.finish(lease, failure == null && !handle.failed, session.name + "\n" + handle.report())
                 } catch (error: Exception) { cleanup.record(session.id, "workspace_finish", error); uncertain = true }
             }
             handle.directRootLease?.let { lease ->
                 try {
-                    if (uncertain) lock.withLock { retainedRootLeases[lease.owner.id] = lease }
+                    if (uncertain || outcomeUnknown != null) lock.withLock { retainedRootLeases[lease.owner.id] = lease }
                     else planningWorkspace!!.release(lease.workspaceLease)
                 } catch (error: Exception) { cleanup.record(session.id, "root_lease_release", error);
                     uncertain = true
                     lock.withLock { retainedRootLeases[lease.owner.id] = lease }
                 }
             }
+            // Without this generation's node nobody asked this run to stop: an unknown outcome is reported as it was found.
+            fun reportUnknownOutcome() { outcomeUnknown?.let { cleanup.record(session.id, "native_reconcile", it) } }
             val organism = session.organismId?.let { organisms.store.get(it) }
-                ?: organisms.store.organisms.value.values.firstOrNull { session.id in it.sessions } ?: return
+                ?: organisms.store.organisms.value.values.firstOrNull { session.id in it.sessions } ?: run { reportUnknownOutcome(); return }
             val node = organisms.store.get(organism.id).sessions.getValue(session.id)
-            if (node.generation != session.runtimeGeneration) return
+            if (node.generation != session.runtimeGeneration) { reportUnknownOutcome(); return }
             if (node.kind == SessionKind.ZYGOTE && (failure != null || handle.failed)) {
                 try { organisms.store.requestFailureStop(organism.id, session.id, session.runtimeGeneration, "Рабочая область корня завершилась с ошибкой или отменой") }
                 catch (error: Exception) { cleanup.record(session.id, "failure_stop_checkpoint", error); uncertain = true }
@@ -444,6 +466,12 @@ class SessionTreeRuntime(
                 if (descendants.isNotEmpty()) try { stop(descendants) } catch (error: Exception) { cleanup.record(session.id, "descendants_stop", error); uncertain = true }
                 if (controllerConfirmed) try { organisms.project(organisms.store.finishStop(organism.id, descendants)) }
                     catch (error: Exception) { cleanup.record(session.id, "stop_checkpoint", error); uncertain = true }
+            }
+            // A stop someone asked for is settled by a proven exit; any other unknown outcome leaves the session unknown.
+            val requestedStop = node.desired in setOf(SessionDesiredState.STOP, SessionDesiredState.PAUSE)
+            if (outcomeUnknown != null) {
+                if (requestedStop) AppLog.info("organism", "stop.outcome_unknown", mapOf("sessionId" to session.id, "result" to "exit_proven"))
+                else { uncertain = true; reportUnknownOutcome() }
             }
             val observed = when {
                 uncertain || node.observed == SessionObservedState.UNKNOWN -> SessionObservedState.UNKNOWN
