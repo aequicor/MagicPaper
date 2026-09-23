@@ -328,11 +328,13 @@ class DurableDraftRepository(
 class DurableEventJournal(private val backend: DurableByteStore) : EventJournal {
     private val mutex = Mutex()
     private val json = Json { encodeDefaults = true }
-    // records() lists and decodes every event this journal has ever stored. Every read here goes
-    // through the same mutex, so a listing this instance already paid for is still correct until
-    // this instance itself appends or drops something, or a caller wipes the backend directly
-    // (see invalidateCache) — only those invalidate it.
+    // records() lists and decodes every event this journal has ever stored. The listing is reused
+    // only while the shared cursor still reads [cachedCursor]: every writer — this instance, another
+    // one, another browser tab — advances the cursor before it writes a record, so an unchanged
+    // cursor proves nothing was added since. A record write that failed clears it (see appendLocked),
+    // and so does a caller that wipes the backend directly (see invalidateCache).
     private var recordsCache: List<JournalRecord>? = null
+    private var cachedCursor: String? = null
 
     private suspend fun <T> locked(block: suspend () -> T): T = mutex.withLock { backend.withDraftLock {
         readResetEpoch(backend)
@@ -361,15 +363,23 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
         val seq = reserve()
         val record = JournalRecord(seq, at, stream, operation, detail)
         try { backend.write(StorageArea.EVENTS, key(seq), json.encodeToString(StoredEvent.serializer(), record.stored()).encodeToByteArray()) }
-        catch (failure: CancellationException) { throw failure }
-        catch (failure: StorageException) { throw failure }
-        catch (failure: Exception) { throw StorageException("append journal record", StorageException.Kind.WRITE, failure) }
+        catch (failure: Exception) {
+            // A failed write is not proof of absence: the desktop backend returns through withContext,
+            // which throws CancellationException after the file is already in place, and an
+            // acknowledgement can be lost. An owner re-reads the stream to learn whether its record
+            // landed; answered from the old listing, it would append again against a history it
+            // never reduced, and its next replay would refuse that history for good.
+            recordsCache = null
+            if (failure is CancellationException || failure is StorageException) throw failure
+            throw StorageException("append journal record", StorageException.Kind.WRITE, failure)
+        }
         // reserve() only ever increases, so a fresh record's seq is always the new maximum:
-        // appending it to an already-warm cache keeps `records()` correct (still seq-ordered)
-        // without a full directory rescan. This journal is shared by every domain in the app
-        // (coding, checks, settings, ...), so without this, one domain's append would force
-        // the next unrelated streams()/discover() call to pay for a full rescan again.
-        recordsCache = recordsCache?.plus(record)
+        // appending it to a listing taken at the cursor this reservation advanced keeps `records()`
+        // correct (still seq-ordered) without a full directory rescan. This journal is shared by
+        // every domain in the app (coding, checks, settings, ...), so without this, one domain's
+        // append would force the next unrelated streams()/discover() call to pay for a full rescan.
+        recordsCache = recordsCache?.takeIf { cachedCursor == (seq - 1).toString() }?.plus(record)
+        cachedCursor = seq.toString()
         return record
     }
 
@@ -450,15 +460,21 @@ class DurableEventJournal(private val backend: DurableByteStore) : EventJournal 
     private suspend fun recover(): Long = maxOf(records().maxOfOrNull { it.seq } ?: 0,
         backend.values(StorageArea.EVENTS).mapNotNull { it.decodeToString().toLongOrNull() }.maxOrNull() ?: 0)
 
-    private suspend fun records(): List<JournalRecord> = recordsCache ?: backend.values(StorageArea.EVENTS)
-        .mapNotNull { bytes ->
-            // Cursor/deletion fences share the area and are not records; anything else that fails to parse
-            // is a corrupt journal, which must not silently read as a shorter history.
-            val raw = bytes.decodeToString()
-            if (raw.toLongOrNull() != null) null else decode(raw)
-        }
-        .sortedBy { it.seq }
-        .also { recordsCache = it }
+    private suspend fun records(): List<JournalRecord> {
+        // Read before listing: a writer that reserves while the listing is taken moves the cursor past
+        // this value, so the next read lists again instead of trusting a listing that may have missed it.
+        val cursor = backend.read(StorageArea.EVENTS, CURSOR_KEY)?.decodeToString()
+        recordsCache?.let { if (cursor != null && cursor == cachedCursor) return it }
+        return backend.values(StorageArea.EVENTS)
+            .mapNotNull { bytes ->
+                // Cursor/deletion fences share the area and are not records; anything else that fails to parse
+                // is a corrupt journal, which must not silently read as a shorter history.
+                val raw = bytes.decodeToString()
+                if (raw.toLongOrNull() != null) null else decode(raw)
+            }
+            .sortedBy { it.seq }
+            .also { recordsCache = it; cachedCursor = cursor }
+    }
 
     private fun decode(raw: String): JournalRecord = try {
         json.decodeFromString(StoredEvent.serializer(), raw).let {

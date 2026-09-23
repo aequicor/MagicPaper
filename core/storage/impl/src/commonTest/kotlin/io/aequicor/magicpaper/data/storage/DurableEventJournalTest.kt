@@ -1,10 +1,12 @@
 package io.aequicor.magicpaper.data.storage
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DurableEventJournalTest {
@@ -97,6 +99,32 @@ class DurableEventJournalTest {
         journal.record("plan-1", "agent-intent")
         backend.write(StorageArea.EVENTS, "e000000000000000002", "{\"storageFormat\":\"other\",\"version\":1,\"seq\":2,\"at\":0,\"stream\":\"plan-1\",\"operation\":\"x\"}".encodeToByteArray())
         assertEquals(StorageException.Kind.CORRUPT, assertFailsWith<StorageException> { journal.read("plan-1") }.kind)
+    }
+
+    @Test fun aRecordThatLandedBeforeItsAppendFailedIsWhatTheNextReadSees() = runTest {
+        // The desktop backend returns through withContext, which throws CancellationException after
+        // the file is already in place when its caller was cancelled meanwhile; a lost acknowledgement
+        // looks the same. An owner re-reads the stream to learn whether its record landed. Answered
+        // from a listing cached before the write, it concludes "nothing changed", keeps appending
+        // against the old revision, and its next replay refuses a history it never reduced.
+        listOf(CancellationException("cancelled after the record landed"), IllegalStateException("lost acknowledgement")).forEach { failure ->
+            val memory = InMemoryDurableByteStore()
+            var failAfterRecord = false
+            val backend = object : DurableByteStore by memory {
+                override suspend fun write(area: StorageArea, key: String, bytes: ByteArray) {
+                    memory.write(area, key, bytes)
+                    if (failAfterRecord && area == StorageArea.EVENTS && key.startsWith("e")) { failAfterRecord = false; throw failure }
+                }
+            }
+            val journal = DurableEventJournal(backend)
+            val before = journal.snapshot("check")
+            failAfterRecord = true
+            assertFailsWith<Exception> { journal.append(before.revision, "landed", 1) }
+            val after = journal.snapshot("check")
+            assertEquals(listOf("landed"), after.records.map { it.operation }, failure.message)
+            assertNull(journal.append(before.revision, "reduced-without-it", 2), failure.message)
+            assertEquals(listOf("landed"), DurableEventJournal(backend).read("check").map { it.operation }, failure.message)
+        }
     }
 
     @Test fun aRecordWithoutAStreamIsRefusedBeforeItIsWritten() = runTest {
