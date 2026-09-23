@@ -118,7 +118,7 @@ Desktop выполняет независимые этапы Git-проекта 
 Временные сетевые ошибки имеют ограниченные повторы; счётчики сохраняются.
 
 Проверки восстановления и графа: `./gradlew checkMigrationJvm`. Изображения реального
-Compose-графа генерируются тестом в `feature/session/impl/build/reports/planning/`.
+Compose-графа генерируются тестом в `magic-agent/runtime/impl/build/reports/planning/`.
 
 ## Платформы
 
@@ -137,7 +137,7 @@ Compose-графа генерируются тестом в `feature/session/imp
 
 Тесты всех модулей: `./gradlew checkMigrationJvm`. Компиляция платформ: `./gradlew compileMigrationTargets`
 (интеграционный тест пи-агента с реальной установкой:
-`./gradlew :feature:session:impl:jvmTest --tests "*PiCodingRuntimeIntegrationTest" -Pmagicpaper.pi.it=true`)
+`./gradlew :magic-agent:runtime:impl:jvmTest --tests "*PiCodingRuntimeIntegrationTest" -Pmagicpaper.pi.it=true`)
 
 ## Типографика
 

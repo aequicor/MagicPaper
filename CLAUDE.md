@@ -6,20 +6,21 @@ is the contract. This file holds only what running as Claude Code here adds.
 
 ## Checks take minutes, and silence is not progress
 
-Measured wall clock on a warm daemon. Plan the round around these, not around a
-hope that a check is quick:
+Measured wall clock on a warm daemon (macOS, 2026-09-23; test tasks forced with
+`--rerun`). Plan the round around these, not around a hope that a check is quick:
 
 | Check | Cost | What it establishes |
 | --- | --- | --- |
-| `python3 tools/verify/verify-module-architecture.py --self-test` | ~1 s | Module graph, platform boundary, effect and planning-purity rules. Not a dry run: it scans the real tree and fails every Gradle `check` task |
-| `:core:model:jvmTest` | seconds | 196 tests: values, pure rules, machines |
-| `:feature:tools:impl:jvmTest` | seconds | Tool catalogue and the access matrix pin |
-| `:feature:settings:impl:jvmTest` | ~20 s | 56 tests, including settings renders |
-| `:feature:skills:impl:jvmTest` | ~55 s | 147 tests |
-| `compileMigrationTargets` | ~25 s warm | Common modules really build for Android, JS and Wasm |
-| `:feature:coding:impl:jvmTest` | ~4 min | 1305 tests; the largest owner |
-| `:app:jvmTest --rerun-tasks` | ~5 min | 207 integration tests |
-| `./gradlew jvmTest --continue` | ~10 min | Every module; the only check that sees a sibling that stopped compiling |
+| `python3 tools/verify/verify-module-architecture.py --self-test` | ~7 s | Module graph, platform boundary, effect and planning-purity rules. Not a dry run: it scans the real tree and fails every Gradle `check` task |
+| `python3 tools/verify/verify-design-system.py --self-test` | ~2 s | No Material or raw interactive primitive outside `:designSystem`; also fails every Gradle `check` task |
+| `:core:model:jvmTest` | seconds | 213 tests: values, pure rules, machines |
+| `:magic-common:tools:impl:jvmTest` | seconds | 31 tests: tool catalogue and the access matrix pin |
+| `:feature:settings:impl:jvmTest` | ~5 s | 85 tests, including settings renders |
+| `:feature:skills:impl:jvmTest` | ~30 s | 174 tests |
+| `compileMigrationTargets` | ~40 s after a common-code change | Common modules really build for Android, JS and Wasm |
+| `:magic-agent:runtime:impl:jvmTest` | ~3.5 min | 1195 tests; the largest owner |
+| `:app:jvmTest --rerun-tasks` | ~1 min | 255 integration tests |
+| `./gradlew jvmTest --continue` | ~4 min | Every module, ~3500 tests; the only check that sees a sibling that stopped compiling |
 
 A run that prints nothing for ten minutes is indistinguishable from a stall.
 While a long check or a background agent is working, say what is running and
