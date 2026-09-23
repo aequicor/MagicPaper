@@ -23,6 +23,13 @@ interface TaskWorktreeSessionAccess {
     suspend fun publish(projection: TaskWorktreeProjection)
 }
 
+/**
+ * Reset closed admission and joined every operation, yet a recorded Git operation has no outcome. Only an erase the
+ * user confirmed may pass it: those records are erased next, and the dialog said unconfirmed operations are forgotten.
+ */
+class TaskWorktreeResetUnconfirmed : IllegalStateException(
+    "Остановка операций с рабочими копиями не подтверждена. Проверьте сохранённые результаты перед сбросом")
+
 /** A task owner survives individual native attempts. Reads and replay execute no Git commands. */
 interface TaskWorktreeOwner {
     suspend fun projection(owner: TaskWorktreeOwnerId, legacy: TaskWorktree? = null, generation: Long = 0): TaskWorktreeProjection

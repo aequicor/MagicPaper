@@ -86,6 +86,30 @@ class CodingRuntimeGraphTest {
         } finally { graph?.close(); Dispatchers.resetMain() }
     }
 
+    // A Git operation with no recorded outcome refuses a reset, unless the user confirmed an erase that forgets it:
+    // the pause then finishes every step after the workspace owner instead of stopping there.
+    @Test fun unconfirmedWorkspaceOperationRefusesResetUnlessTheUserConsentedToForgetIt() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var graph: CodingRuntimeGraph? = null
+        try {
+            val fixture = SessionOrganismTestFixture(limits = OrganismLimits()); fixture.initialize()
+            var prepares = 0
+            val workspace = object : TaskWorktreeOwner by testTaskWorktreeOwner(UnavailableTaskWorkspace, fixture.journal, fixture.storage) {
+                override suspend fun prepareForReset() { prepares++; throw TaskWorktreeResetUnconfirmed() }
+            }
+            val active = graph(fixture, NoopCodingRuntime, workspace).also { graph = it }
+            active.start()
+            assertFailsWith<TaskWorktreeResetUnconfirmed> { active.pauseForReset() }
+            active.resumeAfterReset()
+            active.pauseForReset(discardUnresolvable = true)
+            assertEquals(2, prepares)
+            active.resumeAfterReset()
+            var entered = false
+            assertNotNull(active.sessionTree).withScope(fixture.root) { entered = true }
+            assertTrue(entered, "the consented pause resumes like any other")
+        } finally { graph?.close(); Dispatchers.resetMain() }
+    }
+
     private fun graph(fixture: SessionOrganismTestFixture, native: CodingRuntime,
         workspaces: TaskWorktreeOwner = testTaskWorktreeOwner(UnavailableTaskWorkspace, fixture.journal, fixture.storage),
         orchestrationFactory: (OrchestrationActions) -> CustomOrchestration = { actions ->

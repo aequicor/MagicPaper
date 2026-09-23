@@ -106,7 +106,8 @@ interface CodingFeature {
      * then storage is wiped. These stay separate members because other owners run between them.
      */
     suspend fun prepareForReset() = Unit
-    suspend fun pauseForReset() = Unit
+    /** [discardUnresolvable] is the user's consent to forget operations whose outcome no record can confirm. */
+    suspend fun pauseForReset(discardUnresolvable: Boolean = false) = Unit
     suspend fun clearForReset() = Unit
     suspend fun resumeAfterReset() = Unit
 }

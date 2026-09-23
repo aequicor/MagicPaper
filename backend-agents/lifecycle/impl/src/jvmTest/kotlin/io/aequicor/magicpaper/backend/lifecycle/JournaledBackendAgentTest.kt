@@ -136,6 +136,22 @@ class JournaledBackendAgentTest {
         assertFailsWith<NativeRecoveryRequired> { restored.run(request.copy(requestId = "new")).toList() }
     }
 
+    // Reset tries to stop what it can and names what it cannot prove as its own type, which only a consented erase passes.
+    @Test fun resetThatCannotProveAnEarlierProcessEndedRefusesAsUnconfirmedCleanup() = runTest {
+        val journal = Memory()
+        val owner = NativeLifecycleOwner(journal, diagnostics)
+        val run = NativeRunRef("session", "request")
+        owner.begin(run)
+        val attempt = owner.admitLaunch(run)
+        owner.attached(attempt, NativeProcessIdentity("receipt", Long.MAX_VALUE, 1))
+        val native = Adapter { error("Reset cannot launch") }
+        val restored = JournaledBackendAgent(native, NativeLifecycleOwner(journal, diagnostics))
+        assertFailsWith<NativeCleanupUnconfirmed> { restored.prepareForReset() }
+        assertEquals(1, native.reconciliations, "the reset tried to stop it first")
+        native.reconcileProvesTermination = true
+        restored.prepareForReset()
+    }
+
     @Test fun legacyPidReconciliationThatProvesTerminationLetsTheAttemptBeAcknowledgedAndRestarted() = runTest {
         val journal = Memory()
         val owner = NativeLifecycleOwner(journal, diagnostics)

@@ -56,12 +56,15 @@ class RuntimeLifecycleTest {
     @Test fun consentedPauseDiscardsUnresolvableChecksBeforeTheFeatureReconcilesSessions() = runTest {
         val events = mutableListOf<String>()
         val extension = NativeRuntimeExtension(ResetFeature(events), ResetComputer(events),
-            { events += "native.pause" }, { events += "native.resume" }, { events += "checks.discard" })
+            { discard -> events += if (discard) "native.pause(discard)" else "native.pause" }, { events += "native.resume" },
+            { events += "checks.discard" })
         extension.prepareForReset(); extension.pauseForReset(discardUnresolvable = true)
-        assertEquals(listOf("feature.prepare", "checks.discard", "feature.pause", "native.pause", "computer.pause"), events)
+        assertEquals(listOf("feature.prepare", "checks.discard", "feature.pause(discard)", "native.pause(discard)", "computer.pause"), events,
+            "the consent reaches every owner whose fence can refuse an unconfirmed outcome")
         extension.resumeAfterReset(); events.clear()
         extension.prepareForReset(); extension.pauseForReset()
-        assertFalse("checks.discard" in events, "without the user's consent no evidence is discarded")
+        assertEquals(listOf("feature.prepare", "feature.pause", "native.pause", "computer.pause"), events,
+            "without the user's consent no evidence is discarded")
     }
 
     @Test fun failedNativePauseDoesNotResumeAnUntouchedComputerOwner() = runTest {
@@ -393,7 +396,9 @@ private class ResetFeature(private val events: MutableList<String>) : CodingFeat
     override val presentation: io.aequicor.magicpaper.ui.components.CodingPresentation get() = error("Unexpected UI access")
     override val plugins: List<io.aequicor.magicpaper.plugins.MagicPlugin> = emptyList()
     override suspend fun prepareForReset() { events += "feature.prepare" }
-    override suspend fun pauseForReset() { events += "feature.pause" }
+    override suspend fun pauseForReset(discardUnresolvable: Boolean) {
+        events += if (discardUnresolvable) "feature.pause(discard)" else "feature.pause"
+    }
     override suspend fun resumeAfterReset() { events += "feature.resume" }
 }
 

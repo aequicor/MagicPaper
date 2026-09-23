@@ -26,6 +26,11 @@ data class NativeRecoverySummary(val items: List<NativeRecoveryItem>, val persis
     val noDispatch: List<NativeNoDispatchItem> = emptyList(), val consumptions: List<NativeRecoveryConsumption> = emptyList())
 class NativeRecoveryRequired(val recovery: NativeRecoverySummary) : IllegalStateException(
     "Исход предыдущего запуска не подтверждён. Проверьте сохранённый результат перед новым запросом.")
+/**
+ * Reset stopped everything it could and still cannot prove a recorded native process ended. Only an erase the user
+ * confirmed may pass it: those records are erased next, and the dialog said unconfirmed operations are forgotten.
+ */
+class NativeCleanupUnconfirmed(message: String) : IllegalStateException(message)
 
 /** Opaque revision includes the host's stream/reset fence; the backend never interprets it. */
 data class NativeJournalRevision(val generation: String, val position: Long)

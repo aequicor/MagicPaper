@@ -104,6 +104,9 @@ class TaskWorktreeJournalTest {
         assertTrue(reopened.projection(owner).unknown)
         assertEquals(1, f.workspace.writes); assertEquals(0, f.workspace.reads)
         assertFailsWith<TaskWorktreeRejected> { reopened.acceptWithLeases(owner, Input.Intent.BindRun("task", 2)) }
+        // Reset refuses it by its own type, the one a user-confirmed erase may pass; then the owner reopens as it was.
+        assertFailsWith<TaskWorktreeResetUnconfirmed> { reopened.prepareForReset() }
+        reopened.resumeAfterReset()
         assertTrue(reopened.acceptWithLeases(owner, Input.Intent.Inspect("task")).unknown)
         f.workspace.evidence = { TaskWorktreeInspection.Confirmed(TaskWorktreeProof(it.id, it.taskId, it.kind)) }
         assertFalse(reopened.acceptWithLeases(owner, Input.Intent.Inspect("task")).unknown)

@@ -58,7 +58,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         override suspend fun start() { projects.start(); graph.start() }
         override suspend fun close() = graph.close()
         override suspend fun prepareForReset() = service.prepareForReset()
-        override suspend fun pauseForReset() = graph.pauseForReset()
+        override suspend fun pauseForReset(discardUnresolvable: Boolean) = graph.pauseForReset(discardUnresolvable)
         override suspend fun clearForReset() { projects.wipe(); graph.clearForReset() }
         override suspend fun resumeAfterReset() = graph.resumeAfterReset()
     }

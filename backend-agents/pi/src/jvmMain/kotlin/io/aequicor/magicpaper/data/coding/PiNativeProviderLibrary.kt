@@ -179,7 +179,7 @@ class PiNativeProviderLibrary(
             if (failure == null) failure = cleanup else failure!!.addSuppressed(cleanup)
         } }
         failure?.let { throw it }
-        check(lifecycle.inspect().items.all { it.termination == NativeTermination.STOPPED }) { "Provider cleanup is not confirmed" }
+        if (lifecycle.inspect().items.any { it.termination != NativeTermination.STOPPED }) throw NativeCleanupUnconfirmed("Provider cleanup is not confirmed")
     }
     override suspend fun resumeAfterReset() { lifecycle.reload(); recovery.withLock { recovered = false } }
     override suspend fun shutdown() {

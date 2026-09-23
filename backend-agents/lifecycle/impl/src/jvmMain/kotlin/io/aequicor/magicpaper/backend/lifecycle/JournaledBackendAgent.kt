@@ -96,7 +96,7 @@ class JournaledBackendAgent(private val native: NativeAgentAdapter, private val 
         jobs.values.toList().joinAll()
         val recovery = lifecycle.inspect()
         recovery.items.filter { it.termination != NativeTermination.STOPPED }.forEach { stopRecovery(it.attempt) }
-        check(lifecycle.inspect().items.all { it.termination == NativeTermination.STOPPED }) { "Native cleanup is not confirmed" }
+        if (lifecycle.inspect().items.any { it.termination != NativeTermination.STOPPED }) throw NativeCleanupUnconfirmed("Native cleanup is not confirmed")
     }
     override suspend fun resumeAfterReset() = lifecycle.reload()
     override suspend fun shutdown() {

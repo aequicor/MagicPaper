@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.data.coding.*
@@ -156,7 +157,7 @@ class CodingRuntimeGraph(
     private var planningChatResetAttempted = false
     private var workspaceResetAttempted = false
 
-    suspend fun pauseForReset() {
+    suspend fun pauseForReset(discardUnresolvable: Boolean = false) {
         planningExecutionResetAttempted = true
         planningExecution.pauseForReset()
         planningChatResetAttempted = planningChat != null
@@ -169,7 +170,12 @@ class CodingRuntimeGraph(
             }
         }
         workspaceResetAttempted = true
-        taskWorktreeOwner.prepareForReset()
+        try { taskWorktreeOwner.prepareForReset() }
+        catch (unconfirmed: TaskWorktreeResetUnconfirmed) {
+            // Admission is closed and every operation joined; only an outcome is unrecorded, and the reset erases it.
+            if (!discardUnresolvable) throw unconfirmed
+            AppLog.info("coding.worktree", "reset.unconfirmed.discarded", mapOf("result" to "user_consent"))
+        }
         taskWorktrees?.releaseRetainedLeases()
         toolQuestions.clearForReset()
     }

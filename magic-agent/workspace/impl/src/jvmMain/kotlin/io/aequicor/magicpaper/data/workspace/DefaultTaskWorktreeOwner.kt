@@ -81,7 +81,7 @@ class DefaultTaskWorktreeOwner(
             entry.journal.initialize(null, 0)
             unknown = unknown || entry.journal.state.stage == TaskWorktreeMachine.Stage.UNKNOWN
         } }
-        check(!unknown) { "Остановка операций с рабочими копиями не подтверждена. Проверьте сохранённые результаты перед сбросом" }
+        if (unknown) throw TaskWorktreeResetUnconfirmed()
     }
 
     override suspend fun resumeAfterReset() = admission.withLock {

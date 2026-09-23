@@ -54,7 +54,7 @@ internal fun Module.nativeRuntimeBindings(
 internal class NativeRuntimeExtension(
     private val feature: CodingFeature,
     private val computer: NativeComputerUse,
-    private val pauseNative: suspend () -> Unit,
+    private val pauseNative: suspend (discardUnresolvable: Boolean) -> Unit,
     private val resumeNative: suspend () -> Unit,
     private val discardUnresolvableChecks: suspend () -> Unit = {},
     private val eraseFiles: suspend () -> Unit = {},
@@ -86,9 +86,9 @@ internal class NativeRuntimeExtension(
         // unresolvable check journal would refuse. Admission stays open; nothing here needs a resume.
         if (discardUnresolvable) discardUnresolvableChecks()
         featureNeedsResume = true
-        feature.pauseForReset()
+        feature.pauseForReset(discardUnresolvable)
         nativeNeedsResume = true
-        pauseNative()
+        pauseNative(discardUnresolvable)
         computerNeedsResume = true
         computer.prepareForReset()
     }

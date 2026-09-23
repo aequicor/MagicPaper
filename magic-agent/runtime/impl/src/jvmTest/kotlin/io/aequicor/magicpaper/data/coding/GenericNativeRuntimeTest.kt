@@ -115,16 +115,7 @@ class GenericNativeRuntimeTest {
             override suspend fun resumeAfterReset() { calls += "library.resume" }
             override suspend fun shutdown() { calls += "library.shutdown" }
         }
-        val subscription = object : OpenAiSubscriptionService {
-            override suspend fun account(refreshToken: Boolean): OpenAiSubscriptionAccount = error("Unexpected account")
-            override suspend fun startLogin(): OpenAiSubscriptionLogin = error("Unexpected login")
-            override suspend fun awaitLogin(loginId: String): OpenAiSubscriptionAccount = error("Unexpected login")
-            override suspend fun cancelLogin(loginId: String) = error("Unexpected login")
-            override suspend fun logout() = error("Unexpected logout")
-            override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> = error("Unexpected models")
-            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected model")
-            override fun close() { calls += "subscription.close" }
-        }
+        val subscription = subscription { calls += "subscription.close" }
         val checks = object : io.aequicor.magicpaper.domain.checks.CommandChecks by testCommandChecks {
             override suspend fun prepareForReset() { calls += "checks.pause" }
             override suspend fun resumeAfterReset() { calls += "checks.resume" }
@@ -139,6 +130,37 @@ class GenericNativeRuntimeTest {
         calls.clear()
         assertSame(cancelled, assertFailsWith<CancellationException> { runtime.shutdown() })
         assertEquals(listOf("first.shutdown", "second.shutdown", "checks.close", "library.shutdown", "resource.close", "subscription.close"), calls)
+    }
+
+    // Reset stops what it can; an engine or provider record it cannot prove stopped refuses the reset, unless the user
+    // confirmed an erase that forgets such operations. Every other participant still pauses either way.
+    @Test fun nativeResetPassesUnconfirmedCleanupOnlyWithTheUsersConsent() = runBlocking {
+        val calls = mutableListOf<String>()
+        val unproven = object : BackendAgent by Agent() {
+            override suspend fun prepareForReset() { calls += "agent.pause"; throw NativeCleanupUnconfirmed("Native cleanup is not confirmed") }
+        }
+        val library = object : NativeProviderLibrary by Library {
+            override suspend fun prepareForReset() { calls += "library.pause"; throw NativeCleanupUnconfirmed("Provider cleanup is not confirmed") }
+        }
+        val checks = object : io.aequicor.magicpaper.domain.checks.CommandChecks by testCommandChecks {
+            override suspend fun prepareForReset() { calls += "checks.pause" }
+        }
+        val runtime = io.aequicor.magicpaper.di.DesktopNativeRuntime(NoopCodingRuntime, subscription(), null,
+            emptyList(), listOf(unproven), library, checks)
+        assertFailsWith<NativeCleanupUnconfirmed> { runtime.prepareForReset() }
+        runtime.prepareForReset(discardUnresolvable = true)
+        assertEquals(List(2) { listOf("agent.pause", "checks.pause", "library.pause") }.flatten(), calls)
+    }
+
+    private fun subscription(onClose: () -> Unit = {}) = object : OpenAiSubscriptionService {
+        override suspend fun account(refreshToken: Boolean): OpenAiSubscriptionAccount = error("Unexpected account")
+        override suspend fun startLogin(): OpenAiSubscriptionLogin = error("Unexpected login")
+        override suspend fun awaitLogin(loginId: String): OpenAiSubscriptionAccount = error("Unexpected login")
+        override suspend fun cancelLogin(loginId: String) = error("Unexpected login")
+        override suspend fun logout() = error("Unexpected logout")
+        override suspend fun models(profile: LlmProfile): List<ModelDefaults.DiscoveredModel> = error("Unexpected models")
+        override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String = error("Unexpected model")
+        override fun close() = onClose()
     }
 
     @Test fun nativeReceivesOnlyPreparedValuesAndFinishedFollowsResourceClose() = runBlocking {

@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.di
 
+import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.backend.*
 import io.aequicor.magicpaper.data.coding.*
 import io.aequicor.magicpaper.data.llm.CodexAppServerOpenAiSubscription
@@ -23,8 +24,15 @@ class DesktopNativeRuntime internal constructor(
     private val library: NativeProviderLibrary,
     private val checks: CommandChecks,
 ) : AutoCloseable {
-    suspend fun prepareForReset() = finishNativeCleanup(
-        agents.map { agent -> suspend { agent.prepareForReset() } } + listOf(suspend { checks.prepareForReset() }, suspend { library.prepareForReset() }))
+    suspend fun prepareForReset(discardUnresolvable: Boolean = false) {
+        // These fences fail only after everything they could stop is stopped; the reset erases the unproven records.
+        suspend fun consented(action: suspend () -> Unit) = try { action() } catch (unconfirmed: NativeCleanupUnconfirmed) {
+            if (!discardUnresolvable) throw unconfirmed
+            AppLog.info("coding", "native.cleanup.discarded", mapOf("result" to "user_consent"))
+        }
+        finishNativeCleanup(agents.map { agent -> suspend { consented { agent.prepareForReset() } } } +
+            listOf(suspend { checks.prepareForReset() }, suspend { consented { library.prepareForReset() } }))
+    }
     suspend fun resumeAfterReset() = finishNativeCleanup(
         listOf(suspend { library.resumeAfterReset() }, suspend { checks.resumeAfterReset() }) + agents.map { agent -> suspend { agent.resumeAfterReset() } })
     suspend fun eraseSessionsForReset() = finishNativeCleanup(agents.map { agent -> suspend { agent.eraseSessionsForReset() } })
