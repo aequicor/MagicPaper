@@ -10,7 +10,8 @@ import kotlin.test.assertEquals
 /** Model-cache tests never start an external process. Unexpected effects fail the test. */
 internal fun nativeTestClient(json: Json, home: Path,
     diagnostics: NativeDiagnostics = NativeDiagnostics { _, _, cause, _ -> throw AssertionError("Unexpected native failure", cause) },
-) = CodexNativeClient(json, home, null,
+    command: String? = null,
+) = CodexNativeClient(json, home, command,
     object : NativeProcessRecovery {
         override fun record(id: String, process: Process, attachLifetime: Boolean) = error("Unexpected process start")
         override fun clear(id: String) = error("Unexpected process receipt cleanup")

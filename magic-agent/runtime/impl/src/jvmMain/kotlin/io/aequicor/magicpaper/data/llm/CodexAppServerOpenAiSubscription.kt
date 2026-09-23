@@ -7,7 +7,6 @@ import io.aequicor.magicpaper.domain.checks.CommandChecks
 import io.aequicor.magicpaper.data.coding.OwnedCodingProcess
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.ToolSession
-import io.aequicor.magicpaper.logging.AppLog
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -46,7 +45,7 @@ class CodexAppServerOpenAiSubscription(
             processes = OwnedCodingProcess(appHome.resolve("coding-processes").toFile()),
             accessTokens = NativeAuthTokens { cachedAccessToken() },
             questionnaires = questionnaireRegistry.asNativeQuestionnaires(),
-            diagnostics = NativeDiagnostics { component, event, cause, fields -> AppLog.error(component, event, cause, fields) },
+            diagnostics = io.aequicor.magicpaper.data.coding.nativeDiagnostics,
             toolPresentation = NativeToolPresentationResolver { server, tool, arguments ->
                 if (server == "magicpaper_computer") NativeToolPresentation("computer",
                     io.aequicor.magicpaper.data.computer.ComputerTool.label((arguments as? JsonObject)?.get("action")?.jsonPrimitive?.contentOrNull.orEmpty()))

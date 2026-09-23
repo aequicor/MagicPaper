@@ -168,6 +168,11 @@ class CodexNativeClient(
         NativeRuntimeStatus(true,
             "Codex app-server: ${resolveCodexCommand(commandOverride)}")
     } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+      catch (e: CodexNotInstalled) {
+          // Not installing Codex is a choice: the status says what to install, and the log records it without a stack.
+          diagnostics.info("CodexSubscription", "runtime_status", mapOf("result" to "not_installed"))
+          NativeRuntimeStatus(false, CODEX_NOT_FOUND)
+      }
       catch (e: Exception) {
           diagnostics.error("CodexSubscription", "runtime_status_failed", e, mapOf("result" to "unavailable"))
           NativeRuntimeStatus(false, "Не удалось подключиться к Codex. Проверьте установку и повторите проверку.")
@@ -558,10 +563,9 @@ class CodexNativeClient(
             }
         }.getOrElse { cause ->
             if (cause is CancellationException) throw cause
-            throw AppServerException(
-                "Не найден Codex app-server. Установите Codex desktop/CLI или задайте " +
-                    "MAGICPAPER_CODEX_PATH.", cause,
-            )
+            // A bare name that no PATH directory holds is a Codex nobody installed; a file that is there but does not start is a failure.
+            if (!command.contains('/') && !command.contains('\\') && !onPath(command)) throw CodexNotInstalled(cause)
+            throw AppServerException(CODEX_NOT_FOUND, cause)
         }
         currentCoroutineContext().ensureActive()
         val connection = created.outputStream.bufferedWriter()
@@ -1069,7 +1073,12 @@ class CodexNativeClient(
     }
 
     private data class LoginEvent(val loginId: String?, val success: Boolean, val error: String?)
-    private class AppServerException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+    private open class AppServerException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+    private class CodexNotInstalled(cause: Throwable) : AppServerException(CODEX_NOT_FOUND, cause)
+
+    /** An entry that is not a valid path cannot hold the program, so it is skipped rather than reported. */
+    private fun onPath(name: String): Boolean = System.getenv("PATH").orEmpty().split(File.pathSeparator).filter(String::isNotBlank)
+        .any { directory -> try { Files.exists(Paths.get(directory, name)) } catch (invalid: java.nio.file.InvalidPathException) { false } }
 
     internal companion object {
         const val LOGIN_TIMEOUT_MS = 10 * 60 * 1_000L
@@ -1173,3 +1182,5 @@ private fun JsonObject.count(key: String): Long? = (get(key) as? JsonPrimitive)?
 private fun codexUsage(usage: JsonObject) = TokenUsage(
     usage.count("inputTokens")?.let { (it - (usage.count("cachedInputTokens") ?: 0)).coerceAtLeast(0) },
     usage.count("outputTokens"), usage.count("cachedInputTokens"), reasoning = usage.count("reasoningOutputTokens"), total = usage.count("totalTokens"))
+
+private const val CODEX_NOT_FOUND = "Не найден Codex app-server. Установите Codex desktop/CLI или задайте MAGICPAPER_CODEX_PATH."

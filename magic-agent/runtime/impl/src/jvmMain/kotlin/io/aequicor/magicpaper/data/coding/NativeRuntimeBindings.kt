@@ -13,7 +13,10 @@ import kotlinx.serialization.json.*
 data class NativeRuntimeBinding(val descriptor: BackendAgentDescriptor, val runtime: CodingRuntime)
 
 internal val nativeResources = NativeResources { path -> GenericNativeRuntime::class.java.getResource(path)?.let(::readCodingResource) }
-internal val nativeDiagnostics = NativeDiagnostics { component, event, cause, fields -> AppLog.error(component, event, cause, fields) }
+internal val nativeDiagnostics = object : NativeDiagnostics {
+    override fun error(component: String, event: String, cause: Throwable, fields: Map<String, String>) = AppLog.error(component, event, cause, fields)
+    override fun info(component: String, event: String, fields: Map<String, String>) = AppLog.info(component, event, fields)
+}
 internal val nativePresentation = NativeToolPresentationResolver { server, tool, arguments ->
     if (server == "magicpaper_computer") NativeToolPresentation("computer",
         io.aequicor.magicpaper.data.computer.ComputerTool.label((arguments as? JsonObject)?.get("action")?.jsonPrimitive?.contentOrNull.orEmpty()))
