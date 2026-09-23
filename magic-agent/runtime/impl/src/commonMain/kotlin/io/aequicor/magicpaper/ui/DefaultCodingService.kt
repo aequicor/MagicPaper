@@ -3,6 +3,8 @@ package io.aequicor.magicpaper.ui
 import io.aequicor.magicpaper.data.planning.command
 
 import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.phase
+import kotlin.time.TimeSource
 import io.aequicor.magicpaper.data.storage.logPersistenceFailure
 import kotlinx.coroutines.CoroutineExceptionHandler
 
@@ -415,11 +417,12 @@ class DefaultCodingService(
         observePins()
         val settings = settingsRepo.load()
         val profiles = profileRepo.load()
-        val projects = codingProjects?.all().orEmpty()
-        val sessions = loadCodingSessions(projects)
+        val projects = AppLog.phase("coding", "start.projects") { codingProjects?.all().orEmpty() }
+        val sessions = AppLog.phase("coding", "start.sessions", mapOf("count" to projects.size.toString())) { loadCodingSessions(projects) }
         _state.update { it.copy(settings = settings, llmProfiles = profiles,
             coding = it.coding.copy(projects = projects, sessions = sessions, projectStatuses = codingStatusSnapshot(projects, sessions),
                 nativeModelEngines = codingRuntime?.modelSources?.keys.orEmpty())) }
+        AppLog.info("coding", "sessions.listed", mapOf("count" to projects.size.toString(), "sessionsCount" to sessions.size.toString()))
         when (val policy = settingsCommands.runtimePolicy()) {
             is SettingsRuntimePolicy.Confirmed -> codingRuntime?.computerUse?.configure(policy.settings.computerAccess, policy.settings.applicationAccess)
             SettingsRuntimePolicy.Unconfirmed -> {
@@ -431,7 +434,7 @@ class DefaultCodingService(
         knownImmunitySignals = planningChat?.organisms?.store?.organisms?.value?.values.orEmpty().flatMap { it.signals }.map { it.id }.toSet()
         observeRuntime()
         refreshCodingEngines()
-        restoreCodingRuns(projects)
+        AppLog.phase("coding", "start.restore") { restoreCodingRuns(projects) }
         observeCodingJournal()
         observeAutoArchive()
     }
@@ -444,6 +447,7 @@ class DefaultCodingService(
         val removed = owner.states.value.mapValues { it.value.removedSessions }.toMutableMap()
         journalObserver = scope.launch {
             owner.states.collect { all ->
+                val projecting = TimeSource.Monotonic.markNow()
                 val savedProjects = all.values.filterNot { it.deleted }.mapNotNull { it.project }.sortedByDescending { it.createdAt }
                 val sessions = all.values.flatMap { it.sessions.values }.sortedByDescending { it.createdAt }
                 _state.update { state ->
@@ -457,6 +461,11 @@ class DefaultCodingService(
                         current = state.coding.current?.let { selected -> savedProjects.firstOrNull { it.id == selected.id } },
                         currentSessionId = state.coding.currentSessionId?.takeIf { id -> sessions.any { it.id == id } }))
                 }
+                val projected = projecting.elapsedNow().inWholeMilliseconds
+                val projectedFields = mapOf("count" to sessions.size.toString(), "elapsedMs" to projected.toString())
+                // Runs after every saved change: only a slow rebuild of the list reaches INFO.
+                if (projected >= SLOW_PROJECTION_MILLIS) AppLog.info("coding", "sessions.projected", projectedFields)
+                else AppLog.debug("coding", "sessions.projected", projectedFields)
                 for ((projectId, aggregate) in all) {
                     val fresh = aggregate.removedSessions - removed[projectId].orEmpty()
                     removed[projectId] = aggregate.removedSessions
@@ -719,9 +728,13 @@ class DefaultCodingService(
         return coroutineScope {
             projects.map { project ->
                 async {
-                    val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
-                    repo.sessions(project.id).map { session ->
-                        withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id), worktreeAvailability = capability)))
+                    val capability = AppLog.phase("coding", "worktree.availability", mapOf("projectId" to project.id)) {
+                        taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+                    }
+                    AppLog.phase("coding", "project.sessions", mapOf("projectId" to project.id)) {
+                        repo.sessions(project.id).map { session ->
+                            withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id), worktreeAvailability = capability)))
+                        }
                     }
                 }
             }.awaitAll().flatten()
@@ -987,17 +1000,21 @@ class DefaultCodingService(
         // instead of paying for them back-to-back on every project switch.
         val loaded: List<CodingSessionUi> = coroutineScope {
             val capability = async {
-                taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+                AppLog.phase("coding", "worktree.availability", mapOf("projectId" to projectId)) {
+                    taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+                }
             }
             // Every sidebar row needs its saved result, including sessions that are not selected.
             val rows = async(workerDispatcher) {
-                sessions.map { session ->
-                    val messages = repo.messages(projectId, session.id)
-                    withUnread(withPlanningState(CodingSessionUi(
-                        session = session,
-                        messages = messages,
-                        running = codingJobs.value[session.id]?.isActive == true,
-                    )))
+                AppLog.phase("coding", "project.sessions", mapOf("projectId" to projectId, "count" to sessions.size.toString())) {
+                    sessions.map { session ->
+                        val messages = repo.messages(projectId, session.id)
+                        withUnread(withPlanningState(CodingSessionUi(
+                            session = session,
+                            messages = messages,
+                            running = codingJobs.value[session.id]?.isActive == true,
+                        )))
+                    }
                 }
             }
             val resolved = capability.await()
@@ -2332,13 +2349,15 @@ class DefaultCodingService(
             _state.update { it.copy(coding = it.coding.copy(current = null, currentSessionId = null)) }
             return
         }
-        openCodingProject(projectId)
+        AppLog.phase("coding", "open.project", mapOf("projectId" to projectId)) { openCodingProject(projectId) }
         // The route may target a session other than the project's most recent one.
         // Load its history after openCodingProject has rebuilt the projections.
         if (sessionId != null) {
             val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId && it.session.projectId == projectId }
             if (selected != null && selected.messages.isEmpty() && !selected.running) {
-                val messages = codingProjects?.messages(projectId, sessionId).orEmpty()
+                val messages = AppLog.phase("coding", "open.history", mapOf("sessionId" to sessionId)) {
+                    codingProjects?.messages(projectId, sessionId).orEmpty()
+                }
                 updateCodingSession(sessionId) { it.copy(messages = messages) }
             }
         }
@@ -2424,3 +2443,6 @@ class DefaultCodingService(
         } finally { shutdownCoding() }
     }
 }
+
+/** A rebuild of the session list slower than this is reported at INFO; it runs after every saved change. */
+private const val SLOW_PROJECTION_MILLIS = 100L

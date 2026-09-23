@@ -7,6 +7,7 @@ import io.aequicor.magicpaper.designsystem.PaperDialog
 import io.aequicor.magicpaper.designsystem.PaperText
 import io.aequicor.magicpaper.domain.CodingFeature
 import io.aequicor.magicpaper.domain.sidebarTitle
+import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.navigation.*
 import io.aequicor.magicpaper.ui.components.LocalCodingPresentation
 import io.aequicor.magicpaper.ui.screens.*
@@ -79,13 +80,19 @@ private class NativeSessionDialog(private val coding: CodingService) : AppDialog
             val closeCurrent = { if (root.dialogSlot.value.child?.configuration === dialog) root.dismissDialog(dialog) }
             NewCodingSessionDialog(selection.value, draft::update,
                 onDismiss = closeCurrent,
-                onCancel = { coding.discardCodingSessionDraft(projectId, closeCurrent) },
-                onCreate = { coding.createCodingSession(projectId) { sessionId ->
-                    if (root.dialogSlot.value.child?.configuration === dialog) {
-                        root.dismissDialog(dialog)
-                        root.navigate(AppRoute.Projects(projectId, sessionId))
+                onCancel = {
+                    AppLog.info("coding", "action", mapOf("action" to "discardCodingSessionDraft", "projectId" to projectId, "source" to "dialog"))
+                    coding.discardCodingSessionDraft(projectId, closeCurrent)
+                },
+                onCreate = {
+                    AppLog.info("coding", "action", mapOf("action" to "createCodingSession", "projectId" to projectId, "source" to "dialog"))
+                    coding.createCodingSession(projectId) { sessionId ->
+                        if (root.dialogSlot.value.child?.configuration === dialog) {
+                            root.dismissDialog(dialog)
+                            root.navigate(AppRoute.Projects(projectId, sessionId))
+                        }
                     }
-                } }, loaded = selection.loaded, busy = operation.busy,
+                }, loaded = selection.loaded, busy = operation.busy,
                 error = selection.error?.let { if (it.committed) "Выбор сохранён. Не удалось завершить очистку."
                     else "Не удалось сохранить выбор движка. Повторите попытку." } ?: operation.error,
                 onRetry = if (selection.error != null) draft::retry else null)

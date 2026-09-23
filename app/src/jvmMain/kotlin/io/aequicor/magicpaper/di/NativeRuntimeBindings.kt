@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.data.coding.JsonRuntimeQuestionnaireStore
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.phase
 import io.aequicor.magicpaper.domain.tools.DefaultCustomOrchestration
 import io.aequicor.magicpaper.navigation.AppRoute
 import io.aequicor.magicpaper.ui.*
@@ -68,8 +70,8 @@ internal class NativeRuntimeExtension(
     private var computerNeedsResume = false
     override suspend fun start() {
         // Recovery must rebuild planning before the service consumes saved run checkpoints.
-        feature.start()
-        feature.service.start()
+        AppLog.phase("runtime", "agent.feature") { feature.start() }
+        AppLog.phase("runtime", "agent.service") { feature.service.start() }
     }
     override fun updateConfiguration(state: SettingsState) = feature.service.updateConfiguration(
         state.settings, state.llmProfiles, state.openAiSubscription.available,

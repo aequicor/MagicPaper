@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.data.coding.PersistedCodingModelCatalog
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.phase
 import io.aequicor.magicpaper.plugins.MagicPlugin
 import io.aequicor.magicpaper.plugins.builtin.CodingPlanningPlugin
 import io.aequicor.magicpaper.ui.CodingComponent
@@ -55,7 +57,10 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
             DefaultCodingComponentFactory(service, deps.filePicker, deps.projectSkills)
         override val presentation: CodingPresentation = DefaultCodingPresentation
         override val plugins: List<MagicPlugin> = listOf(plugin)
-        override suspend fun start() { projects.start(); graph.start() }
+        override suspend fun start() {
+            AppLog.phase("runtime", "agent.projects") { projects.start() }
+            AppLog.phase("runtime", "agent.graph") { graph.start() }
+        }
         override suspend fun close() = graph.close()
         override suspend fun prepareForReset() = service.prepareForReset()
         override suspend fun pauseForReset(discardUnresolvable: Boolean) = graph.pauseForReset(discardUnresolvable)

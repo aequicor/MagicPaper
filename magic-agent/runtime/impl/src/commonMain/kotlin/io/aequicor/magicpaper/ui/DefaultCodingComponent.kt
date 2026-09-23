@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlin.time.TimeSource
 
 class DefaultCodingComponent(
     context: ComponentContext,
@@ -23,7 +24,7 @@ class DefaultCodingComponent(
     filePicker: FilePicker,
     val projectSkills: ProjectSkills?,
     private val onOutput: (CodingOutput) -> Unit,
-) : CodingComponent, CodingService by service {
+) : CodingComponent, CodingService by LoggingCodingService(service) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val picker = AttachmentSelection(filePicker, scope)
     private var activationJob: Job? = null
@@ -38,11 +39,19 @@ class DefaultCodingComponent(
         context.lifecycle.doOnResume {
             activationJob = scope.launch {
                 activation.value = Activation()
+                val opening = TimeSource.Monotonic.markNow()
+                val fields = listOfNotNull(input.projectId?.let { "projectId" to it }, input.sessionId?.let { "sessionId" to it }).toMap()
+                fun elapsed() = fields + ("elapsedMs" to opening.elapsedNow().inWholeMilliseconds.toString())
+                AppLog.info("coding-screen", "open.started", fields)
                 try {
                     service.activate(input.projectId, input.sessionId)
                     activation.value = Activation(ready = true)
-                } catch (cancelled: CancellationException) { throw cancelled }
-                catch (failure: Exception) { AppLog.error("coding-screen", "open.failed", failure); activation.value = Activation(error = "Не удалось открыть сессию.") }
+                    AppLog.info("coding-screen", "open.finished", elapsed())
+                } catch (cancelled: CancellationException) {
+                    AppLog.info("coding-screen", "open.cancelled", elapsed())
+                    throw cancelled
+                }
+                catch (failure: Exception) { AppLog.error("coding-screen", "open.failed", failure, elapsed()); activation.value = Activation(error = "Не удалось открыть сессию.") }
             }
         }
         context.lifecycle.doOnPause { activationJob?.cancel(); activation.value = Activation(); service.setVisible(false) }

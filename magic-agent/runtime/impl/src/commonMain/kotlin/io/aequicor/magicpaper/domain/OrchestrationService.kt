@@ -8,6 +8,7 @@ import io.aequicor.magicpaper.util.Id
 import io.aequicor.magicpaper.data.storage.DraftRepository
 import io.aequicor.magicpaper.data.storage.InMemoryDraftRepository
 import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.phase
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
@@ -702,19 +703,22 @@ class OrchestrationService(
     fun bootstrap() {
         launch {
             try {
-                toolProfiles()
-                refreshSessions()
-                migrate()
+                AppLog.phase("planning", "restore.tools") { toolProfiles() }
+                AppLog.phase("planning", "restore.sessions") { refreshSessions() }
+                AppLog.phase("planning", "restore.migrate") { migrate() }
                 // Legacy migration can create the session that owns an existing journal stream.
-                execution.recoverJournalQuarantines()
-                organisms?.recover()
-                refreshSessions()
-                _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }.forEach { session ->
-                    try {
-                        val saved = updateState(session.id, session.projectId, OrchestrationEvent.Restore)
-                        saved.inputs.forEach { syncInputMessage(session, it.id) }
-                        replaySessionCommands(session)
-                    } catch (_: OrchestrationPersistenceException) { /* Keep other orchestrators available. */ }
+                AppLog.phase("planning", "restore.quarantines") { execution.recoverJournalQuarantines() }
+                AppLog.phase("planning", "restore.organisms") { organisms?.recover() }
+                AppLog.phase("planning", "restore.sessions") { refreshSessions() }
+                val orchestrators = _sessions.value.filter { it.effectiveRole == CodingSessionRole.ORCHESTRATOR }
+                AppLog.phase("planning", "restore.orchestrators", mapOf("count" to orchestrators.size.toString())) {
+                    orchestrators.forEach { session ->
+                        try {
+                            val saved = updateState(session.id, session.projectId, OrchestrationEvent.Restore)
+                            saved.inputs.forEach { syncInputMessage(session, it.id) }
+                            replaySessionCommands(session)
+                        } catch (_: OrchestrationPersistenceException) { /* Keep other orchestrators available. */ }
+                    }
                 }
                 ready.complete(Unit)
                 if (execution.supported) messageScheduler.bootstrap()

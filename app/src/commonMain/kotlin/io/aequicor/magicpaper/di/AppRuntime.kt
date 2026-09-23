@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.phase
 
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.ui.*
@@ -58,12 +59,7 @@ class MagicPaperRuntime internal constructor(
             val started = TimeSource.Monotonic.markNow()
             // Each owner replays its whole saved history here. How long each one takes depends on
             // the machine's storage far more than on its CPU, so every phase reports its duration.
-            suspend fun <T> phase(name: String, block: suspend () -> T): T {
-                val mark = TimeSource.Monotonic.markNow()
-                return block().also {
-                    AppLog.info("runtime", "phase.finished", mapOf("phase" to name, "elapsedMs" to mark.elapsedNow().inWholeMilliseconds.toString()))
-                }
-            }
+            suspend fun <T> phase(name: String, block: suspend () -> T): T = AppLog.phase("runtime", name) { block() }
             try {
                 // Migrate and hydrate saved credentials before any runtime can restore work.
                 phase("settings") {

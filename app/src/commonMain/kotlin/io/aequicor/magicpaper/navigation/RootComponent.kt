@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.time.TimeSource
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -185,7 +186,24 @@ class DefaultRootComponent<C : Any>(
     }
 
     private fun send(command: Command) {
+        logRequest(command)
         if (commands.trySend(command).isFailure) AppLog.debug("navigation", "command_discarded", mapOf("reason" to "owner_closed"))
+    }
+
+    /** A user's request, logged when it is made; `visit_changed` then says whether and how fast it landed. */
+    private fun logRequest(command: Command) {
+        val fields = when (command) {
+            is Command.Navigate -> mapOf("action" to "navigate", "to" to command.route.logKind())
+            is Command.Reset -> mapOf("action" to "reset", "to" to command.route.logKind())
+            Command.Back -> mapOf("action" to "back")
+            Command.Forward -> mapOf("action" to "forward")
+            // The link itself can carry identifiers of the user's content; its arrival is what the path needs.
+            is Command.Link -> mapOf("action" to "link")
+            is Command.Dialog -> mapOf("action" to "dialog", "to" to (command.route?.kind ?: "none"))
+            is Command.DismissDialog -> mapOf("action" to "dismissDialog")
+            else -> return
+        }
+        AppLog.info("navigation", "requested", fields)
     }
 
     private suspend fun processSafely(command: Command) {
@@ -257,11 +275,13 @@ class DefaultRootComponent<C : Any>(
                 else AppLog.debug("navigation", "command_rejected", mapOf("reason" to effect.reason))
             is NavigationMachine.Effect.Project -> {
                 val restoring = state.pending?.restoring == true
+                val projecting = TimeSource.Monotonic.markNow()
                 try {
                     project(effect.journal, previous.journal)
                     if (!restoring) AppLog.info("navigation", "visit_changed", mapOf(
                         "visitId" to effect.journal.current.id, "from" to previous.journal.current.route.logKind(),
-                        "to" to effect.journal.current.route.logKind(), "count" to effect.journal.visits.size.toString()))
+                        "to" to effect.journal.current.route.logKind(), "count" to effect.journal.visits.size.toString(),
+                        "elapsedMs" to projecting.elapsedNow().inWholeMilliseconds.toString()))
                     dispatch(NavigationMachine.Fact.Projected)
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (failure: Exception) {

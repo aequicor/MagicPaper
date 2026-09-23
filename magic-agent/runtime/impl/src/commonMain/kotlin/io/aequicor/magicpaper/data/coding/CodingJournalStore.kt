@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlin.time.TimeSource
 
 /** One application-lived writer; legacy files are rebuildable projections of typed journal inputs. */
 class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private val journal: EventJournal,
@@ -24,7 +25,15 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
     override val states: StateFlow<Map<String, CodingMachine.State>> = _states.asStateFlow()
     private val _failures = MutableStateFlow<Map<String, String>>(emptyMap())
     override val failures: StateFlow<Map<String, String>> = _failures.asStateFlow()
-    override suspend fun start(): Unit = withContext(dispatcher) { lock.withLock { initialize() } }
+    override suspend fun start(): Unit = withContext(dispatcher) {
+        val requested = TimeSource.Monotonic.markNow()
+        lock.withLock {
+            // Every read waits here behind the writer; a slow list or history names the wait, not the read.
+            val waited = requested.elapsedNow().inWholeMilliseconds
+            if (initialized && waited >= SLOW_MILLIS) AppLog.info("coding.journal", "read.waited", mapOf("waitMs" to waited.toString()))
+            initialize()
+        }
+    }
     override suspend fun all(): List<CodingProject> { start(); return states.value.values.filterNot { it.deleted }.mapNotNull { it.project }.sortedByDescending { it.createdAt } }
     override suspend fun sessions(projectId: String): List<CodingSession> { start(); return states.value[projectId]?.sessions?.values.orEmpty().sortedByDescending { it.createdAt } }
     override suspend fun messages(projectId: String, sessionId: String): List<CodingMessage> { start(); return states.value[projectId]?.histories?.get(sessionId).orEmpty() }
@@ -37,7 +46,9 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
     }
 
     override suspend fun dispatch(projectId: String, input: CodingMachine.Input): CodingMachine.Transition = withContext(dispatcher) {
+        val requested = TimeSource.Monotonic.markNow()
         lock.withLock {
+            val waited = requested.elapsedNow().inWholeMilliseconds
             initialize()
             val entry = entries.getOrPut(projectId) {
                 val snapshot = snapshot(stream(projectId))
@@ -54,6 +65,7 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
             check(next.state.project?.id == projectId) { "Команда принадлежит другому проекту" }
             check(identitiesAvailable(projectId, next.state, entries)) { "Идентификатор уже принадлежит другому проекту" }
             if (next.state == entry.state && next.effects.isEmpty()) return@withLock next
+            val committing = TimeSource.Monotonic.markNow()
             try { commit(projectId, entry, frozenInput, next.state) }
             catch (cancelled: CancellationException) {
                 val unknown = CodingMachine.reduce(entry.state, CodingMachine.Fact.PersistenceUnknown)
@@ -69,24 +81,44 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
                 publish(projectId, entry); report(projectId, "input.commit", failure); throw failure
             }
             MachineTransitionLog.append(CodingMachine.id, CodingMachine.space, before, frozenInput, next.state, next.effects)
+            val committed = committing.elapsedNow().inWholeMilliseconds
             publish(projectId, entry)
+            val checkpointing = TimeSource.Monotonic.markNow()
             checkpoint(projectId, entry)
+            val checkpointed = checkpointing.elapsedNow().inWholeMilliseconds
+            val elapsed = requested.elapsedNow().inWholeMilliseconds
+            val fields = mapOf("projectId" to projectId, "action" to CodingMachine.space.name(frozenInput).name,
+                "waitMs" to waited.toString(), "commitMs" to committed.toString(), "checkpointMs" to checkpointed.toString(),
+                "elapsedMs" to elapsed.toString())
+            if (elapsed >= SLOW_MILLIS) AppLog.info("coding.journal", "input.slow", fields)
+            else AppLog.debug("coding.journal", "input.committed", fields)
             next
         }
     }
     private suspend fun initialize() {
         if (initialized) return
+        val started = TimeSource.Monotonic.markNow()
         val recovered = mutableMapOf<String, Entry>()
         val imports = mutableMapOf<String, CodingMachine.Fact.LegacyImported>()
+        var payloadMillis = 0L
+        var replayMillis = 0L
+        var inputs = 0
         // One read of every stream's snapshot, not one full journal scan per project.
-        for ((stream, snapshot) in journal.snapshotAll().filterKeys { it.startsWith(PREFIX) }.toSortedMap()) {
+        val snapshots = journal.snapshotAll().filterKeys { it.startsWith(PREFIX) }.toSortedMap()
+        val readMillis = started.elapsedNow().inWholeMilliseconds
+        for ((stream, snapshot) in snapshots) {
             validate(stream, snapshot)
             var state = CodingMachine.initial()
+            val projectStarted = TimeSource.Monotonic.markNow()
+            var projectPayloadMillis = 0L
             // Each input is its own payload record: read a batch together rather than one round trip per input.
             for (batch in snapshot.records.chunked(REPLAY_BATCH)) {
                 val refs = batch.map { json.decodeFromString(Envelope.serializer(), it.detail).ref }
-                for (stored in payloads.readAll(refs)) {
-                    val recordedInput = freeze(stored)
+                val reading = TimeSource.Monotonic.markNow()
+                val stored = payloads.readAll(refs)
+                projectPayloadMillis += reading.elapsedNow().inWholeMilliseconds
+                for (recorded in stored) {
+                    val recordedInput = freeze(recorded)
                     val next = CodingMachine.reduce(state, recordedInput)
                     check(next.effects.none { it is CodingMachine.Effect.Reject }) { "Повреждён журнал проекта" }
                     MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, state, recordedInput, next.state, next.effects)
@@ -96,7 +128,14 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
             val id = checkNotNull(state.project).id
             check(stream(id) == stream && identitiesAvailable(id, state, recovered)) { "Неверная принадлежность проекта" }
             recovered[id] = Entry(state, snapshot.revision, snapshot.records.toMutableList())
+            val projectMillis = projectStarted.elapsedNow().inWholeMilliseconds
+            payloadMillis += projectPayloadMillis; replayMillis += projectMillis - projectPayloadMillis; inputs += snapshot.records.size
+            val projectFields = mapOf("projectId" to id, "entries" to snapshot.records.size.toString(), "count" to state.sessions.size.toString(),
+                "payloadMs" to projectPayloadMillis.toString(), "elapsedMs" to projectMillis.toString())
+            if (projectMillis >= SLOW_MILLIS) AppLog.info("coding.journal", "project.restored", projectFields)
+            else AppLog.debug("coding.journal", "project.restored", projectFields)
         }
+        val importing = TimeSource.Monotonic.markNow()
         for (legacy in checkpoints.legacyProjects(recovered.keys)) {
             val input = freeze(legacy) as CodingMachine.Fact.LegacyImported
             val id = input.project.id
@@ -109,6 +148,8 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
             MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, importBefore, input, next.state, next.effects)
             recovered[id] = Entry(next.state, snapshot.revision, snapshot.records.toMutableList()); imports[id] = input
         }
+        val importMillis = importing.elapsedNow().inWholeMilliseconds
+        val restoring = TimeSource.Monotonic.markNow()
         // Reserve all project/session/tombstone identities before the first migration write.
         for ((id, entry) in recovered) {
             val imported = imports[id]
@@ -122,9 +163,16 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
                 }
             }
         }
+        val restoreMillis = restoring.elapsedNow().inWholeMilliseconds
         entries.clear(); entries.putAll(recovered)
         _states.value = recovered.mapValues { it.value.state }; initialized = true
+        val checkpointing = TimeSource.Monotonic.markNow()
         for ((id, entry) in recovered) checkpoint(id, entry)
+        AppLog.info("coding.journal", "restored", mapOf("count" to recovered.size.toString(), "entries" to inputs.toString(),
+            "sessionsCount" to recovered.values.sumOf { it.state.sessions.size }.toString(),
+            "readMs" to readMillis.toString(), "payloadMs" to payloadMillis.toString(), "replayMs" to replayMillis.toString(),
+            "importMs" to importMillis.toString(), "restoreMs" to restoreMillis.toString(),
+            "checkpointMs" to checkpointing.elapsedNow().inWholeMilliseconds.toString(), "elapsedMs" to started.elapsedNow().inWholeMilliseconds.toString()))
     }
     private fun freeze(input: CodingMachine.Input): CodingMachine.Input = json.decodeFromString(CodingMachine.Input.serializer(), json.encodeToString(CodingMachine.Input.serializer(), input))
     private fun identitiesAvailable(owner: String, candidate: CodingMachine.State, owners: Map<String, Entry>): Boolean {
@@ -194,6 +242,8 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
         private const val OPERATION = "coding.input.v1"
         /** Bounds how many payloads, some of them tens of megabytes, a replay holds at once. */
         private const val REPLAY_BATCH = 64
+        /** A read or a write that took this long is reported at INFO; faster ones stay at DEBUG. */
+        private const val SLOW_MILLIS = 200L
         fun stream(projectId: String) = PREFIX + projectId.encodeToByteArray().joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     }
 }

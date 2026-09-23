@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.di
 
 import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.phase
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.*
 import io.aequicor.magicpaper.data.coding.*
@@ -210,13 +211,13 @@ class CodingRuntimeGraph(
     }
 
     suspend fun start() {
-        toolQuestions.start()
+        AppLog.phase("runtime", "agent.questions") { toolQuestions.start() }
         planningChat?.bootstrap()
         planningExecution.bootstrap()
         // Coding-run restoration inspects the recovered organism projection. Do not let
         // DefaultCodingService admit a parent while interrupted children still look RUNNING.
         // Recovery records unknown outcomes; it never relaunches those children.
-        planningChat?.awaitReady()
+        AppLog.phase("runtime", "agent.planning") { planningChat?.awaitReady() }
     }
     suspend fun close() {
         var failure: Exception? = null
