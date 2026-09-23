@@ -29,6 +29,9 @@ class CodingSpaceTest {
     private val sessionRef = CodingMachine.ref(session)
     private val other = session.copy(id = "other")
     private val task = TaskWorktree("task", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.CONFLICT)
+    /** A merge the agent's checks refused: the worktree publishes their report as the merged record's error. */
+    private val checked = task.copy(phase = TaskWorktreePhase.MERGING, resultCommit = "result", mergeCommit = "merged",
+        error = "Проверка результата завершилась с ошибкой")
 
     /** Ids carry the session, so two sessions of one project never share a request, message or response. */
     private fun tag(owner: CodingSession) = if (owner.id == session.id) "" else "-${owner.id}"
@@ -72,6 +75,7 @@ class CodingSpaceTest {
             CodingSpace.WORKSPACE_UNKNOWN -> step(base, Fact.WorktreeProjected(ref, null, ChildRevision("workspace", 1, 0, "one"), unknown = true))
             CodingSpace.RUNNING -> running
             CodingSpace.RUNNING_CONFLICT -> step(running, Fact.WorktreeProjected(ref, task, ChildRevision("workspace", 1, 0, "one")))
+            CodingSpace.RUNNING_CHECKS_FAILED -> step(running, Fact.WorktreeProjected(ref, checked, ChildRevision("workspace", 1, 0, "one")))
             CodingSpace.RUNNING_RECOVERY_HELD -> held
             CodingSpace.STOPPING -> step(running, Intent.Pause(runOf(running)))
             CodingSpace.INTERRUPTED -> step(running, Fact.RunStopped(runOf(running), unknown = false))
@@ -100,7 +104,7 @@ class CodingSpaceTest {
         // Every input that addresses a run carries one reference, and `DeferRecovery` names the message
         // of that run. A representative that ran under another generation, or an unfinished history
         // holding another message, would be refused for a reason the matrix does not describe.
-        val holders = listOf(CodingSpace.RUNNING, CodingSpace.RUNNING_CONFLICT, CodingSpace.RUNNING_RECOVERY_HELD, CodingSpace.STOPPING,
+        val holders = listOf(CodingSpace.RUNNING, CodingSpace.RUNNING_CONFLICT, CodingSpace.RUNNING_CHECKS_FAILED, CodingSpace.RUNNING_RECOVERY_HELD, CodingSpace.STOPPING,
             CodingSpace.INTERRUPTED, CodingSpace.UNKNOWN, CodingSpace.ABANDONING_ATTEMPT, CodingSpace.ABANDONING_NO_DISPATCH)
         holders.forEach { assertEquals(ref, at(it).runs.getValue(session.id).ref, "${it.name} runs under another reference") }
         assertEquals(ref.messageId, unfinishedRequest(session).id)
@@ -127,8 +131,8 @@ class CodingSpaceTest {
         val two = step(idle, Intent.CreateSession(other))
         val ranked = listOf(
             CodingSpace.UNKNOWN, CodingSpace.ABANDONING_ATTEMPT, CodingSpace.ABANDONING_NO_DISPATCH, CodingSpace.WORKSPACE_UNKNOWN,
-            CodingSpace.INTERRUPTED, CodingSpace.STOPPING, CodingSpace.RUNNING_CONFLICT, CodingSpace.RUNNING_RECOVERY_HELD,
-            CodingSpace.RUNNING, CodingSpace.UNFINISHED_HISTORY, CodingSpace.QUEUED, CodingSpace.ANSWERED, CodingSpace.IDLE,
+            CodingSpace.INTERRUPTED, CodingSpace.STOPPING, CodingSpace.RUNNING_CONFLICT, CodingSpace.RUNNING_CHECKS_FAILED,
+            CodingSpace.RUNNING_RECOVERY_HELD, CodingSpace.RUNNING, CodingSpace.UNFINISHED_HISTORY, CodingSpace.QUEUED, CodingSpace.ANSWERED, CodingSpace.IDLE,
             CodingSpace.ARCHIVED,
         )
         for ((index, higher) in ranked.withIndex()) for (lower in ranked.drop(index + 1)) {
@@ -165,9 +169,14 @@ class CodingSpaceTest {
 
     /** Ties and blind spots the KDoc admits to; pinned so the KDoc cannot drift from what `label` does. */
     @Test fun whatThePositionDoesNotNameIsWhatTheDocumentationSays() {
-        // A run holding both an acknowledgement and a conflict is named by the conflict.
+        // A run holding both an acknowledgement and a refusal is named by the refusal.
         val both = step(at(CodingSpace.RUNNING_RECOVERY_HELD), Fact.WorktreeProjected(sessionRef, task, ChildRevision("workspace", 1, 0, "one")))
         assertEquals(CodingSpace.RUNNING_CONFLICT, CodingSpace.label(both))
+        val refused = step(at(CodingSpace.RUNNING_RECOVERY_HELD), Fact.WorktreeProjected(sessionRef, checked, ChildRevision("workspace", 1, 0, "one")))
+        assertEquals(CodingSpace.RUNNING_CHECKS_FAILED, CodingSpace.label(refused))
+        // A merge that nothing refused is not named: the run is only running.
+        val merged = step(running, Fact.WorktreeProjected(sessionRef, checked.copy(error = null), ChildRevision("workspace", 1, 0, "one")))
+        assertEquals(CodingSpace.RUNNING, CodingSpace.label(merged))
         // An unknown workspace beside a live run is named by the run, and unknown() still reports it.
         val beside = step(running, Fact.WorktreeProjected(sessionRef, null, ChildRevision("workspace", 1, 0, "one"), unknown = true))
         assertEquals(CodingSpace.RUNNING, CodingSpace.label(beside))
@@ -199,6 +208,8 @@ class CodingSpaceTest {
             CodingSpace.WORKSPACE_UNKNOWN to at(CodingSpace.WORKSPACE_UNKNOWN),
             CodingSpace.RUNNING to running,
             CodingSpace.RUNNING_CONFLICT to at(CodingSpace.RUNNING_CONFLICT),
+            // The merged result was refused by the checks the agent handed off with it.
+            CodingSpace.RUNNING_CHECKS_FAILED to at(CodingSpace.RUNNING_CHECKS_FAILED),
             // Started right after an abandoned predecessor: the acknowledgement is not yet handed to the native side.
             CodingSpace.RUNNING_RECOVERY_HELD to at(CodingSpace.RUNNING_RECOVERY_HELD),
             CodingSpace.STOPPING to at(CodingSpace.STOPPING),

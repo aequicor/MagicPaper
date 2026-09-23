@@ -360,7 +360,12 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
                 paths.forEachIndexed { index, directory -> append("\nPATH[").append(index).append("]=").append(directory) }
             }
         }
-        val hint = refused.firstOrNull()?.let { (candidate, reason) -> " (найден ${candidate.fileName}, но $reason)" }.orEmpty()
+        // A bare name is looked up in PATH only, as a shell would; a same-named script beside the check is the usual
+        // mistake (`gradlew.bat` for `./gradlew.bat`), and the agent that chose the command reads this message.
+        val local = candidates(cwd.resolve(name)).firstOrNull { Files.isRegularFile(it) }?.let { script ->
+            " (в рабочей папке есть ${script.fileName}: команда без пути ищется только в PATH, укажите ./${name.take(MAX_NAME)})"
+        }
+        val hint = local ?: refused.firstOrNull()?.let { (candidate, reason) -> " (найден ${candidate.fileName}, но $reason)" }.orEmpty()
         throw NativeCheckUnavailable("Команда проверки не найдена: ${name.take(MAX_NAME)}$hint")
     }
     companion object {

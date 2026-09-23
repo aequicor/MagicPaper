@@ -19,9 +19,12 @@ import io.aequicor.magicpaper.machine.StateSpace
  *  - an initialized project with no session (`project-only`), which refuses everything addressed to
  *    a session;
  *  - a session with a run, split by [CodingMachine.Phase]. Two of those phases are not one position
- *    each. `RUNNING` is three, because what a run accepts depends on evidence it already holds: a
+ *    each. `RUNNING` is four, because what a run accepts depends on evidence it already holds: a
  *    recovery acknowledgement inherited from an abandoned predecessor (`RecoveryAcknowledgementConsumed`
- *    needs it) and a task worktree in conflict (`BeginRepair` needs it). `ABANDONING` is two, because
+ *    needs it), and a task worktree that refused the result the agent handed off — in conflict, or
+ *    merged with the report of the agent's checks that failed on it (`BeginRepair` needs one of the
+ *    two; they accept the same inputs and are named apart so that the transition log says which
+ *    refusal a run stands at). `ABANDONING` is two, because
  *    it waits for a different acknowledgement depending on how it was entered — after a decision
  *    about an attempt, or after proof that nothing was dispatched — and each acknowledgement is
  *    refused by the other. With one position for each of them the acknowledgement facts could not be
@@ -67,11 +70,15 @@ import io.aequicor.magicpaper.machine.StateSpace
  *    one. The representatives send an empty `expected`, so every position whose history is not empty
  *    (`unfinished-history`, `answered`) reads as a refusal for a reason of payload, not of position;
  *  - what a run holds beyond its position. A queue beside a run, a recovery acknowledgement beside any
- *    phase but `RUNNING`, an archived session beside a run, a task worktree that is not the conflict
+ *    phase but `RUNNING`, an archived session beside a run, a task worktree that is neither refusal
  *    or that is `COMPLETE` (`SetWorktreeEnabled` looks at it): none is named, so `QueuedClarified`,
  *    `RecoveryAcknowledgementConsumed` and `SetWorktreeEnabled` read as refusals there although the
  *    reducer would accept or refuse them by that evidence. A run that both holds an acknowledgement
- *    and stands in a conflict is named by the conflict;
+ *    and stands at a refusal is named by the refusal;
+ *  - where a merged task's error came from. The worktree keeps the report of failed checks in the
+ *    error of the merged record it publishes, and a failure note of the parent lands in the same
+ *    field, so a merged task that carries a note is named `running-checks-failed` as well. Only the
+ *    checks' refusal sends `BeginRepair`;
  *  - `BeginRun` accepts a request that was never queued, which the production sequence never sends.
  *
  * `unknown(state)` and the position can disagree. It is true for a run in `UNKNOWN` or `ABANDONING`,
@@ -90,6 +97,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     val WORKSPACE_UNKNOWN = PhaseId("workspace-unknown")
     val RUNNING = PhaseId("running")
     val RUNNING_CONFLICT = PhaseId("running-conflict")
+    val RUNNING_CHECKS_FAILED = PhaseId("running-checks-failed")
     val RUNNING_RECOVERY_HELD = PhaseId("running-recovery-held")
     val STOPPING = PhaseId("stopping")
     val INTERRUPTED = PhaseId("interrupted")
@@ -157,7 +165,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     override val phases = listOf(
         UNRESTORED, PROJECT_ONLY,
         IDLE, QUEUED, ARCHIVED, UNFINISHED_HISTORY, ANSWERED, WORKSPACE_UNKNOWN,
-        RUNNING, RUNNING_CONFLICT, RUNNING_RECOVERY_HELD, STOPPING, INTERRUPTED, UNKNOWN,
+        RUNNING, RUNNING_CONFLICT, RUNNING_CHECKS_FAILED, RUNNING_RECOVERY_HELD, STOPPING, INTERRUPTED, UNKNOWN,
         ABANDONING_ATTEMPT, ABANDONING_NO_DISPATCH,
         DELETED, PERSISTENCE_UNKNOWN,
     )
@@ -226,7 +234,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     )
 
     /** A run in `RUNNING` or `STOPPING`: the phases that still take output, a binding and a finish. */
-    private val LIVE = setOf(RUNNING, RUNNING_CONFLICT, RUNNING_RECOVERY_HELD, STOPPING)
+    private val LIVE = setOf(RUNNING, RUNNING_CONFLICT, RUNNING_CHECKS_FAILED, RUNNING_RECOVERY_HELD, STOPPING)
 
     /** Every position that holds a run. `Pause`, `Clarify` and a stop apply to all of them. */
     private val RUNS = LIVE + setOf(INTERRUPTED, UNKNOWN, ABANDONING_ATTEMPT, ABANDONING_NO_DISPATCH)
@@ -270,7 +278,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         ENQUEUE to SESSION - ARCHIVED,
         QUEUED_CLARIFIED to setOf(QUEUED),
         BEGIN_RUN to setOf(IDLE, QUEUED, UNFINISHED_HISTORY, ANSWERED),
-        BEGIN_REPAIR to setOf(RUNNING_CONFLICT),
+        BEGIN_REPAIR to setOf(RUNNING_CONFLICT, RUNNING_CHECKS_FAILED),
         PAUSE to RUNS,
         DEFER_RECOVERY to setOf(UNFINISHED_HISTORY, INTERRUPTED, UNKNOWN),
         CLARIFY to RUNS,
@@ -313,7 +321,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
      */
     private val PRECEDENCE = listOf(
         UNKNOWN, ABANDONING_ATTEMPT, ABANDONING_NO_DISPATCH, WORKSPACE_UNKNOWN, INTERRUPTED, STOPPING,
-        RUNNING_CONFLICT, RUNNING_RECOVERY_HELD, RUNNING, UNFINISHED_HISTORY, QUEUED, ANSWERED, IDLE, ARCHIVED,
+        RUNNING_CONFLICT, RUNNING_CHECKS_FAILED, RUNNING_RECOVERY_HELD, RUNNING, UNFINISHED_HISTORY, QUEUED, ANSWERED, IDLE, ARCHIVED,
     )
 
     init {
@@ -326,6 +334,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         if (run != null) return when (run.phase) {
             CodingMachine.Phase.RUNNING -> when {
                 session.taskWorktree?.phase == TaskWorktreePhase.CONFLICT -> RUNNING_CONFLICT
+                session.taskWorktree?.checksFailed == true -> RUNNING_CHECKS_FAILED
                 session.id in state.acknowledgements || session.id in state.noDispatchAcknowledgements -> RUNNING_RECOVERY_HELD
                 else -> RUNNING
             }

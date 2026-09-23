@@ -86,6 +86,21 @@ class ResearchCheckExecutableResolutionTest {
         }
     }
 
+    /**
+     * A bare name is looked up in PATH only. The wrapper the agent meant usually lies in the checked folder, so the
+     * refusal it reads tells it how to name that file instead of only that nothing was found.
+     */
+    @Test fun bareNameOfAScriptInTheCheckedFolderIsRefusedWithThePathThatWouldRunIt() {
+        val dir = Files.createTempDirectory("research-check-local-")
+        try {
+            Files.writeString(dir.resolve("gradlew.bat"), "@echo off")
+            val failure = assertFailsWith<NativeCheckUnavailable> { runner.resolveExecutable("gradlew.bat", dir, env()) }
+            assertEquals("Команда проверки не найдена: gradlew.bat (в рабочей папке есть gradlew.bat: " +
+                "команда без пути ищется только в PATH, укажите ./gradlew.bat)", failure.message)
+            assertFalse(dir.toString() in failure.message!!, "the directory stays out of the message")
+        } finally { dir.toFile().deleteRecursively() }
+    }
+
     @Test fun pathSearchPrefersExecutableExtensionOnWindows() {
         val bin = Files.createTempDirectory("research-check-bin-")
         try {

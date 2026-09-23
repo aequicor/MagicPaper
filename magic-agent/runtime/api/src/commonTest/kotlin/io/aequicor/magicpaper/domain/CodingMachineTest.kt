@@ -308,6 +308,27 @@ class CodingMachineTest {
             CodingMachine.Fact.WorktreeProjected(bound, task, revision.copy(seq = 4, inputId = "four")))
     }
 
+    /**
+     * A repair is a fresh request of the same run, admitted only for a result the worktree refused. A merge that nothing
+     * refused is on its way to delivery; a repair there would relaunch the agent on a result that is already accepted.
+     */
+    @Test fun repairIsAdmittedForAMergeItsChecksRefusedAndNotForOneOnItsWayToDelivery() {
+        val merged = TaskWorktree("task", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.MERGING,
+            resultCommit = "result", mergeCommit = "merged")
+        val revision = CodingMachine.ChildRevision("workspace", 1, 0, "one")
+        val onItsWay = apply(running(), CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session), merged, revision))
+        rejected(onItsWay, CodingMachine.Intent.BeginRepair(onItsWay.ref(), "repair", revision))
+
+        val failed = revision.copy(seq = 2, inputId = "two")
+        val refused = apply(onItsWay, CodingMachine.Fact.WorktreeProjected(CodingMachine.ref(session),
+            merged.copy(error = "Проверка результата завершилась с ошибкой"), failed))
+        rejected(refused, CodingMachine.Intent.BeginRepair(refused.ref(), "repair", revision))
+        val repair = CodingMachine.reduce(refused, CodingMachine.Intent.BeginRepair(refused.ref(), "repair", failed))
+        val effect = assertIs<CodingMachine.Effect.RunRequest>(repair.effects.single())
+        assertEquals("repair", effect.request.runId)
+        assertEquals(refused.ref().generation + 1, effect.ref.generation)
+    }
+
     @Test fun lateCompleteTaskCannotOverwriteNewTaskAndLateStopCannotClearUnknown() {
         val task = TaskWorktree("old", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.COMPLETE)
         val revision = CodingMachine.ChildRevision("workspace", 1, 0, "one")

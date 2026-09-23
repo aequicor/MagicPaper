@@ -284,12 +284,46 @@ class CodingWorktreeTest {
         assertNotNull(repo.sessions("p").single().taskWorktree?.executionResponse)
     } }
 
-    @Test fun snapshotFailureAfterResultResumesDeliveryWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->
-        port.verificationError = "Неподдерживаемый файл снимка: tools/mission-visualization"
+    /**
+     * The checks are the agent's own, so their failure goes back to it instead of ending the session: the repair is
+     * told what failed, fixes the command it handed off, and its second handoff is the one verified and delivered.
+     */
+    @Test fun failedChecksAreReturnedToTheAgentAndItsRepairIsDelivered() = runTest { fixture { service, runtime, port, repo ->
+        val report = "Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение\n" +
+            "Команда проверки не найдена: gradlew.bat"
+        port.verificationError = report
+        runtime.checks = listOf(listOf("gradlew.bat", "test"))
+        runtime.reply = { call -> listOf("Finished implementation", "Fixed the check command")[call - 1] }
+        runtime.onRun = { call -> if (call == 2) { runtime.checks = listOf(listOf("./gradlew.bat", "test")); port.verificationError = null } }
         service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(2, runtime.calls.size, "the first run and one repair")
+        assertContains(runtime.prompts[1], report, message = "the repair is told what the checks reported")
+        val delivered = repo.sessions("p").single()
+        assertEquals(delivered.taskWorktree?.taskId, runtime.calls[1].second.pendingRun?.workspaceTaskId, "the repair continues the same task")
+        assertEquals(TaskWorktreePhase.COMPLETE, delivered.taskWorktree?.phase)
+        assertEquals(listOf(listOf("./gradlew.bat", "test")), delivered.taskWorktree?.checks, "the repaired handoff is the one verified")
+        assertEquals(1, port.deliveries)
+        assertNull(delivered.pendingRun)
+        val answer = repo.messages("p", "s").last { it.role == CodingRole.AGENT && !it.systemNotice }
+        assertFalse(answer.failed)
+        assertEquals("Fixed the check command", answer.text)
+        val returned = AppLog.history().last { it.component == "coding.worktree" && it.event == "verification.returned" }
+        assertEquals("1", returned.fields["attempt"])
+    } }
+
+    /**
+     * Checks that keep failing are returned to the agent a bounded number of times, and the last refusal stops the run
+     * with the saved result kept. Once the cause is gone outside the task — the check passes again — an explicit retry
+     * delivers that result without another agent run.
+     */
+    @Test fun checksThatKeepFailingStopAfterBoundedRepairsAndAnExplicitRetryDeliversWithoutTheAgent() = runTest { fixture { service, runtime, port, repo ->
+        port.verificationError = "Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение\nFAILED: SuiteTest"
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(4, runtime.calls.size, "the first run and three repairs")
         val failed = repo.sessions("p").single()
         val task = failed.taskWorktree!!
         assertEquals(TaskWorktreePhase.MERGING, task.phase)
+        assertEquals(port.verificationError, task.error, "the user sees what the checks reported")
         assertEquals(ExecutionIntent.STOP, failed.pendingRun?.intent)
         assertEquals(0, port.deliveries)
         val response = assertNotNull(task.executionResponse)
@@ -297,7 +331,7 @@ class CodingWorktreeTest {
         val recovery = service.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
         service.submitQuestionnaire(recovery.id, listOf(PlanningAnswer("decision", selected = listOf("retry")))); runCurrent()
         val completed = repo.sessions("p").single()
-        assertEquals(1, runtime.calls.size)
+        assertEquals(4, runtime.calls.size)
         assertEquals(1, port.opens)
         assertEquals(1, port.deliveries)
         assertEquals(task.taskId, completed.taskWorktree?.taskId)
@@ -305,6 +339,45 @@ class CodingWorktreeTest {
         assertEquals(TaskWorktreePhase.COMPLETE, completed.taskWorktree?.phase)
         assertNull(completed.pendingRun)
         assertEquals(1, repo.messages("p", "s").count { it.id == response.id })
+    } }
+
+    /**
+     * An explicit retry verifies the saved result again without the agent, and a refusal there is returned to the agent
+     * like the first one: the continuation delivers only after its repair.
+     */
+    @Test fun aRetriedVerificationThatFailsAgainIsReturnedToTheAgent() = runTest { fixture { service, runtime, port, repo ->
+        port.verificationError = "Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение\nFAILED: SuiteTest"
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(4, runtime.calls.size)
+        runtime.onRun = { call -> if (call == 5) port.verificationError = null }
+        val recovery = service.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
+        service.submitQuestionnaire(recovery.id, listOf(PlanningAnswer("decision", listOf("retry")))); runCurrent()
+        assertEquals(5, runtime.calls.size, "the retried verification failed, and only its repair ran the agent")
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").single().taskWorktree?.phase)
+        assertEquals(1, port.deliveries)
+    } }
+
+    /**
+     * A repair that ends its answer without handing off again is refused with the reason the task keeps, and the task
+     * stays with the agent: continuing runs it on the same copy, and that handoff is delivered.
+     */
+    @Test fun aChecksRepairWithoutANewHandoffStopsWithItsReasonAndContinuesTheSameTask() = runTest { fixture { service, runtime, port, repo ->
+        port.verificationError = "Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение\nFAILED: SuiteTest"
+        runtime.onRun = { call -> runtime.handoff = call != 2; if (call == 3) port.verificationError = null }
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(2, runtime.calls.size)
+        val stopped = repo.sessions("p").single()
+        val task = stopped.taskWorktree!!
+        assertEquals(TaskWorktreePhase.RUNNING, task.phase, "the task stays returned to the agent")
+        assertEquals("Агент завершил ответ, не передав результат задачи, поэтому изменения не влиты. Уточните запрос и продолжите", task.error)
+        assertEquals(0, port.deliveries)
+        val recovery = service.state.value.coding.interactions.single { it.kind == InteractionKind.RECOVER_RUN }
+        service.submitQuestionnaire(recovery.id, listOf(PlanningAnswer("decision", listOf("retry")))); runCurrent()
+        assertEquals(3, runtime.calls.size, "continuing runs the agent on the returned task")
+        val delivered = repo.sessions("p").single()
+        assertEquals(task.taskId, delivered.taskWorktree?.taskId)
+        assertEquals(TaskWorktreePhase.COMPLETE, delivered.taskWorktree?.phase)
+        assertEquals(1, port.deliveries)
     } }
 
     @Test fun destinationAdvanceRepeatsIntegrationAndChecksWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->

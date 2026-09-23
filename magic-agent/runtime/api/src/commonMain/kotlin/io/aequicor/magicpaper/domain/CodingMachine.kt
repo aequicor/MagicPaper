@@ -223,8 +223,10 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             is Intent.BeginRepair -> {
                 val run = requireRun(state, input.ref)
                 val session = requireRunSession(state, input.ref)
-                require("workspace:${session.id}" !in state.unknownChildren && run.phase == Phase.RUNNING && session.taskWorktree?.phase == TaskWorktreePhase.CONFLICT &&
-                    state.childRevisions["workspace:${session.id}"] == input.workspaceRevision) { "Исправление конфликта уже недоступно" }
+                // Only a result the worktree refused is repaired: a transfer conflict, or a merge its checks failed.
+                val refused = session.taskWorktree?.let { it.phase == TaskWorktreePhase.CONFLICT || it.checksFailed } == true
+                require("workspace:${session.id}" !in state.unknownChildren && run.phase == Phase.RUNNING && refused &&
+                    state.childRevisions["workspace:${session.id}"] == input.workspaceRevision) { "Исправление результата уже недоступно" }
                 require(input.requestId.isNotBlank() && input.requestId !in state.startedRequests) { "Запрос уже выполнялся" }
                 val request = requireNotNull(session.pendingRun).copy(runId = input.requestId)
                 val ref = run.ref.copy(requestId = input.requestId, generation = run.ref.generation + 1)
@@ -561,3 +563,9 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         return Transition(next.copy(childRevisions = next.childRevisions + (key to input.revision)))
     }
 }
+
+/**
+ * The agent's own checks refused the merged result it handed off. The task worktree keeps their report in the
+ * error of the merged record it publishes, so the parent reads the refusal from the projection it already holds.
+ */
+internal val TaskWorktree.checksFailed: Boolean get() = phase == TaskWorktreePhase.MERGING && error != null

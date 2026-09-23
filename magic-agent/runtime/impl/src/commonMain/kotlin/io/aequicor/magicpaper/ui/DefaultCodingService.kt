@@ -2110,8 +2110,11 @@ class DefaultCodingService(
                         taskWorktrees.recordResponse(project.id, session.id, checkNotNull(request.workspaceTaskId), recorder.message(request.responseId, Id.now()))
                         current = taskWorktrees.session(project.id, session.id)
                     }
-                    val finished = taskWorktrees.complete(project, session.id, checkNotNull(request.workspaceTaskId)) { conflict ->
-                        recorder.apply(CodingEvent.Notice("Разрешение конфликта"))
+                    val taskId = checkNotNull(request.workspaceTaskId)
+                    // A repair is a fresh request of the same run: the agent continues in the task copy on what refused
+                    // its result. It reports whether the agent's turn ended cleanly; the handoff is judged by the caller.
+                    suspend fun repairTurn(copy: TaskWorktree, notice: String, instruction: String, returnTask: suspend () -> Unit): Boolean {
+                        recorder.apply(CodingEvent.Notice(notice))
                         repaired = true
                         val beforeRepair = checkNotNull(owner.states.value[project.id])
                         val repair = owner.dispatch(project.id, CodingMachine.Intent.BeginRepair(checkNotNull(admittedRef), Id.new(),
@@ -2121,7 +2124,7 @@ class DefaultCodingService(
                         // The repair is a fresh request; prior native work proves nothing
                         // about whether this request reached the runtime.
                         nativeDispatched = false
-                        taskWorktrees.bindRun(project.id, session.id, checkNotNull(request.workspaceTaskId))
+                        returnTask()
                         val repairSession = repair.state.sessions.getValue(session.id)
                         request = checkNotNull(repairSession.pendingRun)
                         var repairEnded = false
@@ -2132,11 +2135,8 @@ class DefaultCodingService(
                         }
                         nativeDispatched = true
                         withContext(repairRecovery) {
-                            recorder.recordDrafts(runtime.run(project.copy(path = conflict.path), repairSession,
-                                "Разреши конфликт переноса задачи на ветку назначения в этой рабочей папке: отредактируй спорные файлы, " +
-                                    "сохрани обе стороны и добавь их в индекс (git add). Приложение само продолжит перенос и запустит проверки: " +
-                                    "не выполняй git rebase --continue, --skip или --abort и не меняй исходную папку. " +
-                                    "При неоднозначности задай вопрос через magicpaper_questionnaire. Перед завершением передай RESULT через magicpaper_task_handoff с командами проверок.\n\nАктуальная задача и уточнения:\n${request.prompt}",
+                            recorder.recordDrafts(runtime.run(project.copy(path = copy.path), repairSession,
+                                "$instruction\n\nАктуальная задача и уточнения:\n${request.prompt}",
                                 codingProfileOf(repairSession)), onEvent = { if (it is CodingEvent.Finished) repairEnded = true }).collect { draft ->
                                 updateCodingSession(session.id) { it.copy(draft = draft) }
                             }
@@ -2144,8 +2144,32 @@ class DefaultCodingService(
                         if (repairEffect.previousAcknowledgement != null || repairEffect.previousNoDispatchAcknowledgement != null)
                             inspectNativeRecovery(runtime, session, checkNotNull(admittedRef))
                         runtime.reconcileDecided(session.id)
-                        check(repairEnded && recorder.draft(active = false).failedMessage == null && taskWorktrees.session(project.id, session.id).taskWorktree?.handoffGeneration != null) { "Конфликт требует продолжения" }
+                        return repairEnded && recorder.draft(active = false).failedMessage == null
                     }
+                    val finished = taskWorktrees.complete(project, session.id, taskId, repair = { conflict ->
+                        val clean = repairTurn(conflict, "Разрешение конфликта",
+                            "Разреши конфликт переноса задачи на ветку назначения в этой рабочей папке: отредактируй спорные файлы, " +
+                                "сохрани обе стороны и добавь их в индекс (git add). Приложение само продолжит перенос и запустит проверки: " +
+                                "не выполняй git rebase --continue, --skip или --abort и не меняй исходную папку. " +
+                                "При неоднозначности задай вопрос через magicpaper_questionnaire. Перед завершением передай RESULT через magicpaper_task_handoff с командами проверок.") {
+                            taskWorktrees.bindRun(project.id, session.id, taskId)
+                        }
+                        check(clean && taskWorktrees.session(project.id, session.id).taskWorktree?.handoffGeneration != null) { "Конфликт требует продолжения" }
+                    }, repairChecks = { refused, report ->
+                        // The checks are the agent's own: their failure is its to fix, like a conflict, not the user's.
+                        val clean = repairTurn(refused, "Исправление после проверки",
+                            "Приложение не приняло переданный результат задачи: проверки из magicpaper_task_handoff не прошли на объединённом результате.\n\n" +
+                                "Отчёт проверки:\n$report\n\n" +
+                                "Устрани причину в этой рабочей папке: если не запустилась или неверна сама команда проверки, исправь команду, " +
+                                "иначе исправь изменения. Не убирай и не ослабляй проверки ради прохождения. Не меняй исходную папку и не выполняй слияние: " +
+                                "приложение само зафиксирует изменения, повторит перенос и проверки. При неоднозначности задай вопрос через magicpaper_questionnaire. " +
+                                "Затем снова передай RESULT через magicpaper_task_handoff с командами проверок (массивы аргументов). " +
+                                "Если причина вне рабочей папки и устранить её нельзя, передай BLOCKED и объясни причину.") {
+                            taskWorktrees.returnForRepair(project.id, session.id, taskId)
+                        }
+                        // A clean turn without a new handoff is refused by the capture that follows, with the reason the task keeps.
+                        check(clean) { "Исправление после проверки прервано. Нажмите «Продолжить»." }
+                    })
                     recorder.apply(CodingEvent.Notice("Результат влит в ${finished.targetBranch}"))
                     current = taskWorktrees.session(project.id, session.id)
                     updateCodingSession(session.id) { it.copy(session = current) }

@@ -62,7 +62,7 @@ proves Git delivery.
 | PREPARING | Create or validate the exact recorded branch and directory |
 | RUNNING / READY | Continue the same task; READY is an authenticated handoff. A transfer stopped by a conflict stays in the copy for the resumed agent to resolve on the working branch |
 | CAPTURING | Capture remaining changes; reuse existing agent commits |
-| MERGING | Bring the copy onto the recorded destination tip and verify |
+| MERGING | Bring the copy onto the recorded destination tip and verify; failed checks go back to the agent |
 | CONFLICT | Agent repairs the managed copy; questions retain this workspace |
 | DELIVERING | Await the exact operation's durable outcome; restore never repeats delivery |
 | COMPLETE | Persist final response and release the slot for the next task |
@@ -159,9 +159,22 @@ their HEAD, index and actual tracked/untracked bytes recursively. An ignored
 submodule status does not hide its changes from verification, and recursion is
 bounded by depth. An untracked nested repository, which Git itself enumerates as
 a single entry, contributes one marker instead of its bytes. Snapshot failures
-retain the merge phase and the saved response. A known failed check permits the
-explicit `RetryVerification` transition; delivery still requires a new successful
-verification and acceptance. An interrupted check with an unknown outcome cannot
+retain the merge phase and the saved response.
+
+The checks are the ones the agent handed off, so a known failed check of an ordinary
+task run goes back to that agent instead of ending the session, as a conflict does:
+the parent opens a repair request (`BeginRepair`, admitted at `running-checks-failed`),
+the task returns to RUNNING (`ReturnForRepair`), and the agent receives the check
+report — a failed command, one that could not start, or checks that changed the
+task's files. Its next handoff is captured and merged like the first. Three such
+rounds per run bound an agent that cannot make its checks pass; the last refusal
+then fails the run with the report as the task error. A repair that ends without
+a new handoff is refused by the capture with the task's own reason and stays with
+the agent for the next continuation. Plan acceptance keeps its own verification.
+
+A known failed check then permits the explicit `RetryVerification` transition; delivery
+still requires a new successful verification and acceptance, and a failure on that retry
+is returned to the agent again. An interrupted check with an unknown outcome cannot
 use this transition. Failed lease release is retried separately, including after
 delivery reached COMPLETE, without repeating Git.
 
@@ -181,7 +194,10 @@ Previews: `PaperMenuToggleInfoPreview`, group **Menu setting**.
 
 Focused tests: `GitTaskWorkspaceTest`, `CodingWorktreeTest`
 (`newTaskWaitsForTheSourceFolderInsteadOfFailing`,
-`permanentlyBusySourceFolderKeepsTheSavedResultRecoverable`), `SessionCodingWorkspaceTest`
+`permanentlyBusySourceFolderKeepsTheSavedResultRecoverable`,
+`failedChecksAreReturnedToTheAgentAndItsRepairIsDelivered`,
+`checksThatKeepFailingStopAfterBoundedRepairsAndAnExplicitRetryDeliversWithoutTheAgent`,
+`aChecksRepairWithoutANewHandoffStopsWithItsReasonAndContinuesTheSameTask`), `SessionCodingWorkspaceTest`
 (`staleSourceLeaseYieldsOnlyToProvenNativeStop`),
 `CodingSystemPromptsTest.destinationDistanceAndPreRunUpdateReachTheAgent`,
 `CodingSystemPromptsTest.pendingTransferConflictIsResolvedOnTheWorkingBranchInPlace`,

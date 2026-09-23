@@ -143,11 +143,19 @@ class TaskWorktreeService(
         .orEmpty().trim().take(MAX_TASK_LABEL)
 
 
-    /** Continuation is an explicit parent action. Journal replay never calls this coordinator. */
+    /**
+     * Continuation is an explicit parent action. Journal replay never calls this coordinator.
+     *
+     * A result the worktree refuses goes back to the agent that handed it off: [repair] resolves a transfer conflict,
+     * and [repairChecks], when given, receives the report of the agent's own checks that failed on the merge. The agent
+     * hands off again, and that handoff is captured like the first, so the next verification sees what it changed.
+     * [MAX_CHECK_REPAIRS] rounds bound an agent that cannot make its checks pass; the last refusal then fails the run.
+     */
     suspend fun complete(project: CodingProject, sessionId: String, taskId: String,
         planAccepted: Boolean = false, executionLease: WorkspaceLease? = null,
         verifyMerged: suspend (TaskWorktree) -> Unit = {},
         repair: suspend (TaskWorktree) -> Unit,
+        repairChecks: (suspend (TaskWorktree, String) -> Unit)? = null,
     ): TaskWorktree {
         var child = projection(project.id, sessionId)
         var record = checkNotNull(child.task)
@@ -164,14 +172,16 @@ class TaskWorktreeService(
             if (executionLease != null) action(executionLease)
             else leased(project.copy(id = "task-merge-$sessionId", path = record.path), sessionId, TASK_COPY, action)
         }
-        if (record.phase in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY)) {
-            if (!planAccepted) check(parent(project.id, sessionId).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
-            execution { lease -> record = accept(project.id, sessionId, TaskWorktreeMachine.Input.Intent.Capture(taskId, generation, Id.new(), planAccepted),
-                handles = TaskWorkspaceLeases(execution = lease)) }
-        }
         var repairedAt: String? = null
+        var checkRepairs = 0
         while (true) {
             currentCoroutineContext().ensureActive()
+            // The agent's handoff, or its handoff after a checks repair, becomes the result to merge.
+            if (record.phase in setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY)) {
+                if (!planAccepted) check(parent(project.id, sessionId).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
+                execution { lease -> record = accept(project.id, sessionId, TaskWorktreeMachine.Input.Intent.Capture(taskId, generation, Id.new(), planAccepted),
+                    handles = TaskWorkspaceLeases(execution = lease)) }
+            }
             val finished = try { mergeTurn(record.sourcePath) {
                 val target = workspace.target(record)
                 if (record.phase != TaskWorktreePhase.CONFLICT || record.handoffGeneration != null || planAccepted) {
@@ -200,6 +210,20 @@ class TaskWorktreeService(
             } catch (changed: TaskDestinationChanged) {
                 AppLog.debug("coding.worktree", "merge.destination-advanced", mapOf("taskId" to taskId, "sessionId" to sessionId))
                 record = checkNotNull(projection(project.id, sessionId).task)
+                repairedAt = null
+                continue
+            } catch (refused: TaskWorktreeVerificationFailed) {
+                // The refusal is durable before it is thrown: the merged record carries the report the agent receives.
+                val repairing = repairChecks ?: throw refused
+                if (checkRepairs == MAX_CHECK_REPAIRS) throw refused
+                checkRepairs++
+                AppLog.info("coding.worktree", "verification.returned", mapOf("sessionId" to sessionId, "entityId" to taskId,
+                    "attempt" to checkRepairs.toString()))
+                repairing(checkNotNull(projection(project.id, sessionId).task), refused.safeMessage)
+                if (!planAccepted) runtime.requireQuiescent(sessionId)
+                generation = parent(project.id, sessionId).runtimeGeneration
+                record = checkNotNull(projection(project.id, sessionId).task)
+                // A repaired result is a new result: a conflict on it has not been repaired yet.
                 repairedAt = null
                 continue
             }
@@ -244,6 +268,8 @@ class TaskWorktreeService(
         /** Очереди влития по исходной папке: одна незавершённая попытка слияния на проект. */
         /** Имя ветки и subject коммита ограничивает порт; здесь сырой текст просто не разрастается. */
         const val MAX_TASK_LABEL = 160
+        /** Сколько раз за прогон упавшие проверки возвращаются агенту, прежде чем отказ дойдёт до пользователя. */
+        const val MAX_CHECK_REPAIRS = 3
         /** Соседняя доставка держит папку секунды; дольше ждёт только пользователь, а не прогон. */
         const val SOURCE_LEASE_WAIT_MILLIS = 60_000L
         const val SOURCE_LEASE_POLL_MILLIS = 250L
