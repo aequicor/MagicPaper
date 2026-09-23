@@ -2223,6 +2223,11 @@ class DefaultCodingService(
                     catch (cancelled: CancellationException) {
                         AppLog.info("coding", "run.partial-save.cancelled", operationFields)
                     }
+                    catch (refused: CodingCommandRejected) {
+                        // The stop that ended this launch already settled its run (the session tree records a stop that lands
+                        // before the engine starts), so the run takes no output. Nothing failed to save.
+                        AppLog.info("coding", "run.partial-save.refused", operationFields + ("reason" to refused.message.orEmpty()))
+                    }
                     catch (failure: Exception) {
                         AppLog.error("coding", "run.partial-save.failed", failure, operationFields)
                         _state.update { it.copy(notice = "Не удалось сохранить промежуточный результат. Проверьте сессию после запуска.") }

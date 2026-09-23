@@ -143,6 +143,72 @@ class SessionTreeRuntimeTest {
         }
     } }
 
+    /** Admits a user turn the way DefaultCodingService does, before the launch reaches the tree. */
+    private suspend fun admit(f: SessionOrganismTestFixture, turn: Int): Pair<CodingMachine.RunRef, CodingSession> {
+        val current = f.projects.sessions(f.project.id).single { it.id == f.root.id }
+        val request = CodingRunCheckpoint("input-$turn", "Prompt $turn", responseId = "output-$turn",
+            responseTimelineId = "timeline-$turn", runId = "request-$turn")
+        val admitted = f.projects.dispatch(f.project.id, CodingMachine.Intent.BeginRun(CodingMachine.ref(current), request, 1_000))
+        return admitted.effects.filterIsInstance<CodingMachine.Effect.RunRequest>().single().ref to admitted.state.sessions.getValue(f.root.id)
+    }
+
+    @Test fun laterTurnOfAResumedSessionKeepsItsRunLiveAndBindsItsNativeConversation() = runTest { withContext(Dispatchers.Default) {
+        for (resumed in listOf(false, true)) {
+            val f = SessionOrganismTestFixture(); f.initialize()
+            connect(f, Runtime { session ->
+                emit(CodingEvent.SessionStarted("native-${session.pendingRun!!.runId}"))
+                emit(CodingEvent.FinalText("Done")); emit(CodingEvent.Finished)
+            })
+            val id = f.root.organismId!!
+            if (resumed) {
+                // Found interrupted after a crash and resumed by the user's next message: a restart of the root's generation.
+                f.store.observe(id, f.root.id, f.store.get(id).sessions.getValue(f.root.id).generation, SessionObservedState.UNKNOWN)
+                f.service.prepareUserTurn(f.root, "resume")
+            }
+            for (turn in 1..2) {
+                val (ref, admitted) = admit(f, turn)
+                // The second turn advances the generation by running, not by a restart: its own run must stay live.
+                val events = try { f.ports.nativeRuntime.run(f.project, admitted, admitted.pendingRun!!.prompt, null, emptyList()).toList() }
+                    catch (refused: CodingCommandRejected) { fail("resumed=$resumed turn $turn: ${refused.message}") }
+                assertEquals(CodingEvent.Finished, events.last(), "resumed=$resumed turn $turn")
+                val state = f.projects.states.value.getValue(f.project.id)
+                assertEquals(CodingMachine.Phase.RUNNING, state.runs.getValue(f.root.id).phase, "resumed=$resumed turn $turn")
+                assertEquals("native-request-$turn", state.sessions.getValue(f.root.id).piSessionId, "resumed=$resumed turn $turn")
+                f.projects.dispatch(f.project.id, CodingMachine.Fact.RunFinished(ref, CodingMessage(ref.responseId, CodingRole.AGENT, "Done", createdAt = 1)))
+            }
+        }
+    } }
+
+    @Test fun stopRequestedBeforeTheLaunchReachesTheTreeEndsItAsAStopWithoutStartingTheEngine() = runTest { withContext(Dispatchers.Default) {
+        for (earlierTurn in listOf(false, true)) {
+            val f = SessionOrganismTestFixture(); f.initialize()
+            var engineStarts = 0
+            connect(f, Runtime { engineStarts++; emit(CodingEvent.SessionStarted("native")); emit(CodingEvent.Finished) })
+            if (earlierTurn) {
+                // A finished turn leaves the root settled, which the tree's stop passes over.
+                val (ref, admitted) = admit(f, 0)
+                f.ports.nativeRuntime.run(f.project, admitted, admitted.pendingRun!!.prompt, null, emptyList()).toList()
+                f.projects.dispatch(f.project.id, CodingMachine.Fact.RunFinished(ref, CodingMessage(ref.responseId, CodingRole.AGENT, "Done", createdAt = 1)))
+                engineStarts = 0
+            }
+            val (_, admitted) = admit(f, 1)
+            // The user's stop, sent as OrchestrationService.stopManaged sends it, lands before the admitted launch enters the tree.
+            val id = f.root.organismId!!
+            val stopped = f.store.requestUserStop(id, f.root.id, "stop", archive = false)
+            f.service.project(stopped)
+            f.service.stopSubtree(stopped.subtree(f.root.id))
+            f.service.project(f.store.finishStop(id, stopped.subtree(f.root.id)))
+
+            assertFailsWith<CancellationException>("after an earlier turn: $earlierTurn") {
+                f.ports.nativeRuntime.run(f.project, admitted, admitted.pendingRun!!.prompt, null, emptyList()).toList()
+            }
+            assertEquals(0, engineStarts, "after an earlier turn: $earlierTurn")
+            // Nothing was dispatched to the engine, so the stop is a known one.
+            assertEquals(CodingMachine.Phase.INTERRUPTED, f.projects.states.value.getValue(f.project.id).runs.getValue(f.root.id).phase,
+                "after an earlier turn: $earlierTurn")
+        }
+    } }
+
     @Test fun cancellingParentWaitsForChildCleanupAndCancelsLocalQuestions() = runTest { withContext(Dispatchers.Default) {
         val f = SessionOrganismTestFixture(); f.initialize()
         val started = CompletableDeferred<Unit>(); val cleaning = CompletableDeferred<Unit>(); val cleaned = CompletableDeferred<Unit>()

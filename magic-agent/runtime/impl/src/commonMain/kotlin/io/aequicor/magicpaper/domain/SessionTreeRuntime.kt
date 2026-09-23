@@ -75,6 +75,13 @@ class SessionTreeRuntime(
         if (run.executionGeneration != session.runtimeGeneration) return
         projects.dispatch(session.projectId, CodingMachine.Fact.NativeSessionBound(run.ref, nativeSessionId))
     }
+    /** The refusals of `BeginRun` that a stop, an archive or a deletion by the session's owner causes; a quarantine is not one. */
+    private suspend fun stopRequested(session: CodingSession): Boolean {
+        val organism = organisms.store.get(checkNotNull(session.organismId))
+        val node = organism.sessions[session.id] ?: return false
+        return organism.deletedAt != null || session.id in organism.historyDeletedIds || organism.stoppedByUser || node.archived ||
+            node.desired in setOf(SessionDesiredState.STOP, SessionDesiredState.PAUSE)
+    }
     private suspend fun recordStopped(projectId: String, sessionId: String, unknown: Boolean) {
         val run = projects.states.value[projectId]?.runs?.get(sessionId) ?: return
         if (run.phase !in setOf(CodingMachine.Phase.RUNNING, CodingMachine.Phase.STOPPING)) return
@@ -302,6 +309,7 @@ class SessionTreeRuntime(
         val childScope = SupervisorJob(currentCoroutineContext()[Job])
         val handle = Handle(currentCoroutineContext().job, childScope, generation = session.runtimeGeneration)
         var registered = false
+        var stoppedBeforeStart = false
         var current = session
         var failure: Throwable? = null
         try {
@@ -334,7 +342,17 @@ class SessionTreeRuntime(
                     // Сверка подтвердила остановку прежнего поколения: его удержанная папка больше не занята.
                     releaseRetainedRootLeases(session.id)
                 }
-                val node = organisms.store.beginRun(current.organismId!!, session.id)
+                val node = try { organisms.store.beginRun(current.organismId!!, session.id) }
+                catch (refused: IllegalArgumentException) {
+                    if (!stopRequested(current)) throw refused
+                    // The owner's stop landed after this launch was admitted and before it reached the tree, where stop() had no
+                    // job to cancel. The launch ends as that stop: nothing started, so the stop is a known one with no scope to finish.
+                    stoppedBeforeStart = true
+                    recordStopped(current.projectId, current.id, unknown = false)
+                    AppLog.info("organism", "run.stopped_before_start", mapOf("sessionId" to session.id,
+                        "generation" to current.runtimeGeneration.toString()))
+                    throw CancellationException("Сессия остановлена до начала запуска", refused)
+                }
                 current = current.copy(runtimeGeneration = node.generation, planningRulesSnapshot = node.rules)
                 handle.generation = current.runtimeGeneration
                 currentCoroutineContext()[RunCapture]?.let { it.generation = current.runtimeGeneration; it.entered = true }
@@ -374,7 +392,7 @@ class SessionTreeRuntime(
             withContext(NonCancellable) {
                 try {
                     childScope.cancelAndJoin()
-                    if (registered) finishScope(current, handle, failure)
+                    if (registered && !stoppedBeforeStart) finishScope(current, handle, failure)
                 } catch (cleanup: Exception) {
                     if (failure == null) throw cleanup
                     retainCleanupFailure(failure, cleanup)
@@ -700,6 +718,8 @@ class SessionTreeRuntime(
                 }
             }
             // A pending child has no native job. Reconcile even when process ownership is only on disk.
+            // A launch that was admitted but has not reached withScope yet is settled here too: BeginRun refuses it once the stop is
+            // requested, so its engine never starts, the stop recorded here stays a known one, and the launch ends as that stop.
             val known = ids.mapNotNull { id -> organisms.store.organisms.value.values.firstOrNull { id in it.sessions }?.let { id to it } }
             known.sortedByDescending { (id, organism) ->
                 var depth = 0

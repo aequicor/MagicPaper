@@ -219,6 +219,28 @@ class CodingMachineTest {
         assertEquals(CodingMachine.Phase.UNKNOWN, projected.runs.getValue(session.id).phase)
         assertNotNull(projected.sessions.getValue(session.id).pendingRun)
         rejected(projected, CodingMachine.Fact.RunFinished(active.ref(), CodingMessage(request().responseId, CodingRole.AGENT, "Old", createdAt = 4)))
+        // The replaced generation's engine may still report its session; the recreated session does not take it.
+        val late = CodingMachine.reduce(projected, CodingMachine.Fact.NativeSessionBound(active.ref(), "old-native"))
+        assertEquals(projected, late.state)
+        assertTrue(late.effects.isEmpty())
+    }
+
+    /** The engine reports its session while it runs, so the report can land after the run's owner settled the run. */
+    @Test fun nativeSessionReportedAfterTheRunWasSettledChangesNothingAndFailsNothing() {
+        val active = running()
+        val settled = listOf(
+            apply(active, CodingMachine.Fact.RunStopped(active.ref(), unknown = false)),
+            apply(active, CodingMachine.Fact.RunStopped(active.ref(), unknown = true)),
+            apply(apply(active, CodingMachine.Fact.RunStopped(active.ref(), unknown = true)), CodingMachine.Intent.Abandon(active.ref(), "decision",
+                NativeRunRecoveryRef(CodingEngine.PI, session.id, active.ref().requestId, 0))),
+        )
+        for (state in settled) {
+            val late = CodingMachine.reduce(state, CodingMachine.Fact.NativeSessionBound(active.ref(), "late"))
+            assertEquals(state, late.state, "${state.runs.getValue(session.id).phase}")
+            assertTrue(late.effects.isEmpty(), "${state.runs.getValue(session.id).phase}")
+        }
+        // Another request's report is still refused, as a report for a deleted session is.
+        rejected(settled.first(), CodingMachine.Fact.NativeSessionBound(active.ref().copy(requestId = "other"), "late"))
     }
 
     @Test fun historyDeletionIsAtomicWithContextInvalidationAndStopsLateProjectionResurrection() {

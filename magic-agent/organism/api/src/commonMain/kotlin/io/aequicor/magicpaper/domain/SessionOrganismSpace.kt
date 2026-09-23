@@ -92,6 +92,9 @@ import io.aequicor.magicpaper.machine.StateSpace
  *  - the payload behind a name. A pending or completed report of a session that is not meant to run again is recorded as a
  *    stop, or as an unknown when the run was unknown or a quarantine is held; any other report of the current generation
  *    replaces the state of a session whose run was unknown, and so does a completion while the session is still meant to run.
+ *    `BeginRun` that moves a generation on records no previous generation, because the run continues the session's
+ *    conversation; only a restart names the generation it replaced, and the coding projection ends that generation's run
+ *    and conversation by it.
  *    `DeleteHistoryByUser` is the whole organism, not one session; `RequestUserStop` archives or not, `SetArchiveVisibility`
  *    hides or shows, `CommandReviewResult` accepts or rejects, and a retry admission (`AdmitPlanWorker` with an
  *    authorization) is not the fresh one the representative is;

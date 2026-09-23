@@ -10,7 +10,10 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
 import kotlin.test.*
 
-/** A launch whose native outcome nobody confirmed reports that outcome, not the refusal it caused or a storage failure. */
+/**
+ * A launch reports what ended it: an outcome nobody confirmed, or its owner's stop. It does not report a refusal that
+ * followed from either, or a storage failure that did not happen.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CodingUnconfirmedOutcomeNoticeTest {
     private val project = CodingProject("project", "Project", "/fixture", 1)
@@ -58,6 +61,30 @@ class CodingUnconfirmedOutcomeNoticeTest {
             assertEquals(1, runtime.calls)
             assertEquals(unconfirmed, model.state.value.notice)
             assertEquals(CodingMachine.Phase.UNKNOWN, model.state.value.coding.currentSession!!.runPhase)
+        } finally { model?.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun stopBeforeTheEngineStartedEndsAsAStopWithoutAFalseSaveFailure() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var model: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture(); val owner = owner(f)
+            // As the session tree ends a launch its owner stopped before it began: a known stop, then cancellation.
+            val runtime = object : CodingRuntime by Runtime({ error("unused") }) {
+                override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?,
+                    attachments: List<Attachment>) = flow<CodingEvent> {
+                    emit(CodingEvent.Notice("Подготовка worktree"))
+                    val run = checkNotNull(owner.states.value[project.id]?.runs?.get(session.id))
+                    owner.dispatch(project.id, CodingMachine.Fact.RunStopped(run.ref, unknown = false))
+                    throw CancellationException("Сессия остановлена до начала запуска")
+                }
+            }
+            model = f.prepareCoding(runtime, owner); runCurrent()
+            model.sendCodingPromptTo(session.id, "Request"); runCurrent()
+
+            assertNull(model.state.value.notice)
+            assertEquals(CodingMachine.Phase.INTERRUPTED, model.state.value.coding.currentSession!!.runPhase)
+            assertFalse(model.state.value.coding.currentSession!!.running)
         } finally { model?.close(); Dispatchers.resetMain() }
     }
 

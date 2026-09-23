@@ -213,6 +213,26 @@ class SessionOrganismStoreTest {
         assertEquals(900L, stopped.sessions.getValue("root").remainingTokens)
     }
 
+    /** The coding projection ends a run and its conversation by `previousGeneration`, so only a restart may name one. */
+    @Test fun aGenerationARunMovesOnNamesNoPreviousGenerationWhileARestartDoes() = runTest {
+        val f = Fixture(); f.initialize()
+        val crashed = f.store.get(f.organism.id).sessions.getValue("root")
+        // Found running after a crash, then resumed by the user's next turn: a restart.
+        f.store.observe(f.organism.id, "root", crashed.generation, SessionObservedState.UNKNOWN)
+        val resumed = f.store.prepareUserTurn(f.organism.id, "root", "resume").sessions.getValue("root")
+        assertEquals(crashed.generation + 1, resumed.generation)
+        assertEquals(crashed.generation, resumed.previousGeneration)
+        // Its first run begins the resumed generation itself and keeps the restart on record.
+        val first = f.store.beginRun(f.organism.id, "root")
+        assertEquals(resumed.generation, first.generation)
+        assertEquals(crashed.generation, first.previousGeneration)
+        // A later turn moves the generation on by running.
+        f.store.observe(f.organism.id, "root", first.generation, SessionObservedState.COMPLETED)
+        val second = f.store.beginRun(f.organism.id, "root")
+        assertEquals(first.generation + 1, second.generation)
+        assertNull(second.previousGeneration)
+    }
+
     @Test fun restorationRevokesOldGenerationAndPreservesBudgetAndLineage() = runTest {
         val f = Fixture(); f.initialize(OrganismLimits(tokens = 1_000, recoveryTokens = 100, retries = 1))
         val child = f.child("a")

@@ -61,6 +61,11 @@ import kotlinx.serialization.Serializable
     val failurePolicy: SessionFailurePolicy = SessionFailurePolicy.ISOLATE,
     val task: SessionTask? = null,
     val rules: PlanningRulesSnapshot? = null,
+    /**
+     * The generation a restart replaced: a restore, a resumed turn, a mode change, a new task for the same child. A projected
+     * coding session reads it as the end of the old conversation and of the old run's known outcome. Null once a run moves the
+     * generation on, because that generation continues the same conversation.
+     */
     val previousGeneration: Long? = null,
     val lastObservedAt: Long = 0,
     val workspace: SessionCodingWorkspace? = null,

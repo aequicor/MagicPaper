@@ -691,8 +691,10 @@ object SessionOrganismMachine : Machine<SessionOrganismMachine.State, SessionOrg
             require(old.limits.activeSessions.hasRoom(occupied + old.auxiliaryRuns.values.count { !it.settled })) { "Достигнут лимит активных сессий" }
             val generation = if (node.observed != SessionObservedState.PENDING || node.generation <= node.lastStartedGeneration)
                 node.generation + 1 else node.generation.coerceAtLeast(1)
+            // A generation this run moves on continues the conversation: it replaced nothing, so it names no previous one.
             val next = node.copy(generation = generation, lastStartedGeneration = generation, desired = SessionDesiredState.RUN,
-                observed = SessionObservedState.RUNNING, version = node.version + 1, lastObservedAt = clock())
+                observed = SessionObservedState.RUNNING, version = node.version + 1, lastObservedAt = clock(),
+                previousGeneration = if (generation == node.generation) node.previousGeneration else null)
             commit(old.copy(version = old.version + 1, sessions = old.sessions + (sessionId to next),
                 // Context packets belong to the enduring conversation. Unlike questionnaires,
                 // an unprocessed packet can be explicitly rebound at a new ordinary turn.

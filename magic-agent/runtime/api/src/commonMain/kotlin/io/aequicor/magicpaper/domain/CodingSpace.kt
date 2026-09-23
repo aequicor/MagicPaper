@@ -233,7 +233,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         EffectId("Orchestrated"), EffectId("Reject"),
     )
 
-    /** A run in `RUNNING` or `STOPPING`: the phases that still take output, a binding and a finish. */
+    /** A run in `RUNNING` or `STOPPING`: the phases that still take output and a finish, and bind a native session. */
     private val LIVE = setOf(RUNNING, RUNNING_CONFLICT, RUNNING_CHECKS_FAILED, RUNNING_RECOVERY_HELD, STOPPING)
 
     /** Every position that holds a run. `Pause`, `Clarify` and a stop apply to all of them. */
@@ -256,6 +256,11 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     // `EditRequest` and `ReplaceHistory` are accepted only where the history is empty, which is what
     // the representatives send as `expected`. `Abandon` and `AbandonNotDispatched` are accepted from
     // `INTERRUPTED` and `UNKNOWN`, and `DeferRecovery` from those two and from an unfinished history.
+    // `NativeSessionBound` is accepted wherever a run stands and binds only a live one. The engine reports its session while
+    // it runs, so the report can arrive after the run's owner settled the run by a stop, or by a restart that replaced its
+    // generation. There it changes nothing: the stop or restart already decided the run, a replaced conversation must not be
+    // bound again, and the report is not a failure of the run. Nothing a resume needs is lost: recovery finds the attempt by
+    // session and request, and a session without a bound conversation reseeds its history.
     override val accepts: Map<InputId, Set<PhaseId>> = mapOf(
         CREATE_PROJECT to setOf(UNRESTORED),
         SET_PROJECT_MODEL to PROJECT,
@@ -292,7 +297,7 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
         HISTORY_PUBLISHED to SESSION,
         STATUS_OBSERVED to SESSION,
         ARCHIVE_READINESS_OBSERVED to SESSION,
-        NATIVE_SESSION_BOUND to LIVE,
+        NATIVE_SESSION_BOUND to RUNS,
         RUN_FINISHED to LIVE,
         RUN_FINISHED_UNKNOWN to LIVE,
         RUN_OUTPUT_PUBLISHED to LIVE,

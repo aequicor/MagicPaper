@@ -330,8 +330,9 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
                 else if (input.at - checkNotNull(it.archiveReadySince) >= input.delay && it.organismId == null && state.runs[it.id] == null) it.copy(archived = true) else it
             }
             is Fact.NativeSessionBound -> {
-                require(requireRun(state, input.ref).phase in setOf(Phase.RUNNING, Phase.STOPPING)) { "Запуск уже остановлен" }
-                changeRun(state, input.ref) { it.copy(piSessionId = input.nativeSessionId, needsHistorySeed = false) }
+                // A report that lands after the run's owner settled it binds nothing and fails nothing (see CodingSpace).
+                if (requireRun(state, input.ref).phase !in setOf(Phase.RUNNING, Phase.STOPPING)) Transition(state)
+                else changeRun(state, input.ref) { it.copy(piSessionId = input.nativeSessionId, needsHistorySeed = false) }
             }
             is Fact.RunFinished -> finish(state, input)
             is Fact.RunOutputPublished -> {
