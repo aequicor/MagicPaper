@@ -88,6 +88,8 @@ class CodingWorktreeTest {
         var onRun: (Int) -> Unit = {}
         var gate: CompletableDeferred<Unit>? = null
         var handoff = true
+        /** Pi records no terminal outcome for a turn stopped midway. */
+        var cancelledOutcome = NativeRunOutcome.FAILED
         var reply: (Int) -> String = { "Finished implementation" }
         var checks: List<List<String>> = emptyList()
         fun recordControlledCompletion(session: CodingSession) {
@@ -101,6 +103,12 @@ class CodingWorktreeTest {
         override suspend fun uninstall() = Unit
         override fun abort(sessionId: String) = Unit
         override fun abortAll() = Unit
+        /** The native journal's contract: an unproven exit or an unknown outcome refuses, even after the user's decision. */
+        override suspend fun reconcile(sessionId: String) {
+            val snapshot = recovery.inspect(sessionId)
+            if (snapshot.items.any { it.outcome == NativeRunOutcome.UNKNOWN || it.termination != NativeRunTermination.STOPPED })
+                throw NativeRunRecoveryRequired(snapshot)
+        }
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             val ref = NativeRunRecoveryRef(checkNotNull(session.engine), session.id, checkNotNull(session.pendingRun).runId, 1)
             calls += project to session
@@ -134,8 +142,8 @@ class CodingWorktreeTest {
                 emit(CodingEvent.Finished)
                 outcomes[ref] = outcomes.getValue(ref).copy(outcome = NativeRunOutcome.SUCCEEDED)
             } catch (cancelled: CancellationException) {
-                // This controlled fixture launches no process or external tool. Joining its flow proves a known failure.
-                outcomes[ref] = outcomes.getValue(ref).copy(outcome = NativeRunOutcome.FAILED)
+                // This controlled fixture launches no process or external tool. Joining its flow proves the stop.
+                outcomes[ref] = outcomes.getValue(ref).copy(outcome = cancelledOutcome)
                 throw cancelled
             } finally { outcomes[ref] = outcomes.getValue(ref).copy(termination = NativeRunTermination.STOPPED) }
         }
@@ -387,6 +395,27 @@ class CodingWorktreeTest {
         assertFalse(delivered.failed)
         assertEquals("Conflict resolved", delivered.text)
         assertTrue(unfinished in history, "the failed repair stays in the history")
+    } }
+
+    /**
+     * A repair stopped midway leaves its outcome unknown, and continuing is the user's decision about it. That decision
+     * settles the attempt for the next run of the session, as the native journal admits it: the reconciliations before
+     * the relaunch, the delivery and after the repair refused it forever, so every continuation failed the same way.
+     */
+    @Test fun repairStoppedMidTurnContinuesOnceTheUserDecidedItsUnknownOutcome() = runTest { fixture { service, runtime, port, repo ->
+        port.conflict = true
+        runtime.cancelledOutcome = NativeRunOutcome.UNKNOWN
+        runtime.onRun = { call -> runtime.gate = if (call == 2) CompletableDeferred() else null; if (call == 3) port.conflict = false }
+        service.sendCodingPromptTo("s", "Task"); runCurrent()
+        assertEquals(2, runtime.calls.size)
+        service.abortCodingSession("s"); runCurrent()
+        assertEquals(CodingMachine.Phase.UNKNOWN, service.state.value.coding.currentSession!!.runPhase)
+
+        service.resumeCodingSession("s"); runCurrent()
+        assertEquals(3, runtime.calls.size, "the continued delivery relaunches only its repair")
+        assertNotNull(runtime.bindings.last()?.acknowledgement, "the repair carries the user's decision to the native journal")
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").single().taskWorktree?.phase)
+        assertEquals(1, port.deliveries)
     } }
 
     @Test fun refusedTaskFailureNoteLeavesTheRepairTranscriptInTheHistory() = runTest {

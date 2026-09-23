@@ -1815,7 +1815,7 @@ class DefaultCodingService(
             if (operation != "fork") {
                 check(ui.canChangeHistory && sessionId !in codingJobs.value)
                 check(planningChat?.drafts?.value?.get(sessionId)?.active != true)
-                codingRuntime?.reconcile(sessionId)
+                codingRuntime?.reconcileDecided(sessionId)
             }
             val result = action(ui, checkNotNull(codingProjects))
             AppLog.info("coding", "history.$operation", mapOf("sessionId" to sessionId))
@@ -2017,7 +2017,7 @@ class DefaultCodingService(
                 if (userInitiated && composerVersion != null) clearAcceptedComposer(composer, composerVersion)
                 updateCodingSession(session.id) { it.copy(running = true, draft = recorder.draft(active = true)) }
                 currentCoroutineContext().ensureActive()
-                if (recovering) runtime.reconcile(session.id)
+                if (recovering) runtime.reconcileDecided(session.id)
                 var prompt = if (recovering) "Продолжи незавершённую работу в этой сессии. Сначала проверь сохранённый контекст, " +
                     "результаты команд и состояние файлов; учитывай уже сделанное и не повторяй завершённые действия.\n\n" + request.prompt else request.prompt
                 if (current.sessionKind == SessionKind.IMMUNITY) {
@@ -2087,7 +2087,7 @@ class DefaultCodingService(
                 }
                 if (!ended) recorder.apply(CodingEvent.Failed("Выполнение прервано. Нажмите «Продолжить»."))
                 if (workspaceRecord != null && ended && recorder.draft(active = false).failedMessage == null) {
-                    runtime.reconcile(session.id)
+                    runtime.reconcileDecided(session.id)
                     check(runtime.questionnaires.value.none { it.sessionId == session.id }) { "Ожидается ответ на уточнение" }
                     check(taskWorktrees!!.session(project.id, session.id).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }
                     if (!deliveryOnly) {
@@ -2127,7 +2127,7 @@ class DefaultCodingService(
                         }
                         if (repairEffect.previousAcknowledgement != null || repairEffect.previousNoDispatchAcknowledgement != null)
                             inspectNativeRecovery(runtime, session, checkNotNull(admittedRef))
-                        runtime.reconcile(session.id)
+                        runtime.reconcileDecided(session.id)
                         check(repairEnded && recorder.draft(active = false).failedMessage == null && taskWorktrees.session(project.id, session.id).taskWorktree?.handoffGeneration != null) { "Конфликт требует продолжения" }
                     }
                     recorder.apply(CodingEvent.Notice("Результат влит в ${finished.targetBranch}"))

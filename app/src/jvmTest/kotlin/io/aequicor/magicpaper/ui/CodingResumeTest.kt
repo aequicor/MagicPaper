@@ -91,8 +91,12 @@ class CodingResumeTest {
                 return inspect(ref.sessionId)
             }
             override suspend fun acknowledge(ref: NativeRunRecoveryRef, parentDecisionId: String): NativeRunRecoveryAcknowledgement {
-                check(recoveryItems.single { it.ref == ref }.termination == NativeRunTermination.STOPPED)
-                return NativeRunRecoveryAcknowledgement("ack-$parentDecisionId", ref, parentDecisionId).also { acknowledgements += it }
+                val index = recoveryItems.indexOfFirst { it.ref == ref }
+                check(recoveryItems[index].termination == NativeRunTermination.STOPPED)
+                return NativeRunRecoveryAcknowledgement("ack-$parentDecisionId", ref, parentDecisionId).also {
+                    acknowledgements += it
+                    recoveryItems[index] = recoveryItems[index].copy(acknowledgement = it)
+                }
             }
         }
         val calls = mutableListOf<Pair<CodingSession, String>>()
@@ -109,7 +113,13 @@ class CodingResumeTest {
         override suspend fun uninstall() = Unit
         override fun abort(sessionId: String) = Unit
         override fun abortAll() = Unit
-        override suspend fun reconcile(sessionId: String) { reconciled += sessionId }
+        /** The native journal's contract: an unproven exit or an unknown outcome refuses, even after the user's decision. */
+        override suspend fun reconcile(sessionId: String) {
+            reconciled += sessionId
+            val snapshot = recovery.inspect(sessionId)
+            if (snapshot.items.any { it.outcome == NativeRunOutcome.UNKNOWN || it.termination != NativeRunTermination.STOPPED })
+                throw NativeRunRecoveryRequired(snapshot)
+        }
         override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
             val ref = NativeRunRecoveryRef(checkNotNull(session.engine), session.id, checkNotNull(session.pendingRun).runId, 1)
             recoveryItems += NativeRunRecoveryItem(ref, NativeRunOutcome.UNKNOWN, NativeRunTermination.LIVE, null)

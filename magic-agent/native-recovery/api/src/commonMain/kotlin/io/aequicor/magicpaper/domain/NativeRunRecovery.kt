@@ -21,6 +21,15 @@ data class NativeRunRecoverySnapshot(val items: List<NativeRunRecoveryItem>, val
 class NativeRunRecoveryRequired(val recovery: NativeRunRecoverySnapshot, cause: Throwable? = null) : IllegalStateException(
     "Исход предыдущего запуска не подтверждён. Проверьте сохранённый результат перед новым запросом.", cause)
 
+/**
+ * Every recorded process has exited and every outcome nobody can know carries the user's explicit decision: the rule the
+ * native journal applies when it admits the next run of the same session. A plain reconcile stays stricter and demands a
+ * known outcome, for callers that must not act on an uncertain one.
+ */
+val NativeRunRecoverySnapshot.decided: Boolean get() = !persistenceUnknown && items.all {
+    it.termination == NativeRunTermination.STOPPED && (it.outcome != NativeRunOutcome.UNKNOWN || it.acknowledgement != null)
+}
+
 /** Inspection never repeats work. Stopping proves cleanup, not the outcome of executed commands. */
 interface NativeRunRecovery {
     suspend fun inspect(sessionId: String): NativeRunRecoverySnapshot
