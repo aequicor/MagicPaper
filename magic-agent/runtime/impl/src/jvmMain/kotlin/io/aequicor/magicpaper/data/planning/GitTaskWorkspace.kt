@@ -9,6 +9,8 @@ import io.aequicor.magicpaper.domain.checks.*
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import java.security.MessageDigest
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Branch delivery is separate from the planner's legacy file transfer. All writes stay in managed copies until ff-only delivery.
@@ -288,10 +290,49 @@ class GitTaskWorkspace(
         check(delivered(record)) { "Слияние не подтверждено" }
     }
 
-    // Git keeps each deleted copy registered as prunable; `git worktree prune` in the source releases its branch.
+    // Repositories whose registrations of erased copies are not yet pruned; a failed prune is retried by the next reset.
+    private val unpruned = ConcurrentHashMap.newKeySet<String>()
+
     override suspend fun eraseForReset() = withContext(Dispatchers.IO) {
+        // Only a copy's own `.git` link names the repository that registered it, so it is read before deletion.
+        root.listFiles().orEmpty().mapNotNullTo(unpruned) { copy -> registeringRepository(copy)?.path }
         deleteTree(root.toPath())
-        AppLog.info("coding.worktree", "pool.erased", mapOf("result" to "reset"))
+        AppLog.info("coding.worktree", "pool.erased", mapOf("result" to "reset", "count" to unpruned.size.toString()))
+    }
+
+    // Git keeps a deleted copy registered, and its branch counts as checked out there until the registration is pruned.
+    override suspend fun pruneAfterReset() {
+        var failure: Exception? = null
+        for (path in unpruned.toList()) try {
+            val source = File(path)
+            if (source.isDirectory) {
+                val request = UUID.randomUUID().toString()
+                val owner = CodingProject("worktree-prune-$request", "", source.path, 0)
+                val lease = checkNotNull(authority.acquire(owner, request)) { "Папка репозитория занята; ветки задач не освобождены" }
+                try {
+                    authority.owned(listOf(lease), CheckScope(owner.id, "reset", request, 0), "task-prune") { transport ->
+                        withContext(Commands(transport)) { git(source, "worktree", "prune") }
+                    }
+                } finally { withContext(NonCancellable) { authority.release(lease) } }
+            }
+            unpruned.remove(path)
+            AppLog.info("coding.worktree", "source.pruned", mapOf("result" to if (source.isDirectory) "pruned" else "missing"))
+        } catch (error: Exception) {
+            // One unavailable repository must not keep the others' branches held; it stays for the next reset.
+            if (error is CancellationException) throw error
+            AppLog.error("coding.worktree", "source.prune.failed", error)
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
+        failure?.let { throw it }
+    }
+
+    /** The main checkout, or the Git directory itself when it lives apart from one, of the repository behind [copy]. */
+    private fun registeringRepository(copy: File): File? {
+        val link = File(copy, ".git").takeIf { it.isFile && it.length() <= 16_384 } ?: return null
+        val text = link.readText().trim().takeIf { it.startsWith("gitdir: ") && '\n' !in it && '\u0000' !in it } ?: return null
+        val admin = File(text.removePrefix("gitdir: ")).let { if (it.isAbsolute) it else File(copy, it.path) }.canonicalFile
+        val common = admin.parentFile?.takeIf { it.name == "worktrees" }?.parentFile ?: return null
+        return if (common.name == ".git") common.parentFile else common
     }
 
     /**

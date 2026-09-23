@@ -55,6 +55,11 @@ interface TaskWorkspace {
      * Task branches and their commits stay in the source repositories.
      */
     suspend fun eraseForReset() = Unit
+    /**
+     * After the reset resumed command admission: prunes the source repositories' registrations of the erased
+     * copies, without which Git still counts each task branch as checked out in a deleted folder.
+     */
+    suspend fun pruneAfterReset() = Unit
 }
 
 object UnavailableTaskWorkspace : TaskWorkspace {

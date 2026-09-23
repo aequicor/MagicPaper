@@ -97,9 +97,10 @@ class RuntimeLifecycleTest {
             runtime.koin.get<SettingsService>().wipeAll()
             resetFinished.await(); runCurrent()
             assertTrue("first.pause(discard)" in events, "a user-confirmed erase carries its consent to every owner")
-            assertEquals(listOf("first.clear", "second.clear", "first.erase", "second.erase", "first.resume", "second.resume"),
-                events.filter { it.substringAfter('.') in setOf("clear", "erase", "resume") },
-                "files go after the records and before any owner resumes work in them")
+            // The first owner fails to resume, so it admits no commands to prune with.
+            assertEquals(listOf("first.clear", "second.clear", "first.erase", "second.erase", "first.resume", "second.resume", "second.prune"),
+                events.filter { it.substringAfter('.') in setOf("clear", "erase", "resume", "prune") },
+                "files go after the records and before any owner resumes work in them; Git forgets them after it")
             assertTrue("first.resume" in events)
             assertTrue("second.resume" in events)
             assertTrue("second.reload" in events)
@@ -378,6 +379,7 @@ private class ResetExtension(override val id: String, private val events: Mutabl
     override suspend fun clearForReset() { events += "$id.clear" }
     override suspend fun eraseFilesForReset() { events += "$id.erase" }
     override suspend fun resumeAfterReset() { events += "$id.resume"; if (failResume) error("private resume") }
+    override suspend fun pruneAfterReset() { events += "$id.prune" }
     override suspend fun close() { events += "$id.close"; if (failClose) error("private close") }
 }
 

@@ -238,8 +238,9 @@ class GitTaskWorkspaceTest {
         assertEquals("", git(source, "status", "--porcelain"))
     } }
 
-    // Reset deletes the copies with their uncommitted changes; what the agent committed stays on the task branch.
-    @Test fun resetErasesEveryCopyAndKeepsTaskBranchesInTheSource() = runTest { fixture {
+    // Reset deletes the copies with their uncommitted changes; what the agent committed stays on the task branch,
+    // which the source can check out again once the registration of the deleted copy is pruned.
+    @Test fun resetErasesEveryCopyAndPrunesItsRegistrationKeepingTaskBranches() = runTest { fixture {
         val task = open()
         val dir = File(task.path)
         dir.resolve("agent.txt").writeText("committed")
@@ -250,9 +251,30 @@ class GitTaskWorkspaceTest {
         port.eraseForReset()
 
         assertFalse(pool.exists())
-        assertEquals(agent, git(source, "rev-parse", "refs/heads/${task.branch}"))
+        assertTrue("prunable" in git(source, "worktree", "list", "--porcelain"), "Git still holds the deleted copy")
+        port.pruneAfterReset()
+        assertEquals(1, git(source, "worktree", "list", "--porcelain").lines().count { it.startsWith("worktree ") })
         assertEquals(task.baseCommit, git(source, "rev-parse", "HEAD"))
         assertEquals("", git(source, "status", "--porcelain"))
+        git(source, "switch", task.branch)
+        assertEquals(agent, git(source, "rev-parse", "HEAD"))
+        port.pruneAfterReset()
+    } }
+
+    // A repository that cannot be pruned neither keeps another's branches held nor is forgotten before the next reset.
+    @Test fun unprunableRepositoryDoesNotBlockOthersAndStaysForTheNextReset() = runTest { fixture {
+        open()
+        val other = File(root, "other").apply { mkdirs() }
+        git(other, "init", "-b", "main"); git(other, "commit", "--allow-empty", "-m", "base")
+        git(other, "worktree", "add", "-b", "other-task", File(pool, "other-copy").path)
+        port.eraseForReset()
+        File(source, ".git").deleteRecursively() // The first repository is no longer one.
+
+        assertFails { port.pruneAfterReset() }
+
+        assertEquals(1, git(other, "worktree", "list", "--porcelain").lines().count { it.startsWith("worktree ") })
+        git(other, "switch", "other-task")
+        assertFails("the failed repository is retried, not forgotten") { port.pruneAfterReset() }
     } }
 
     @Test fun verifyRunsTaskChecksInManagedCopyAndReportsTheirOutput() = runTest { fixture {

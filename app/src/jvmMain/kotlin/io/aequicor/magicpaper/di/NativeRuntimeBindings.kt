@@ -58,6 +58,7 @@ internal class NativeRuntimeExtension(
     private val resumeNative: suspend () -> Unit,
     private val discardUnresolvableChecks: suspend () -> Unit = {},
     private val eraseFiles: suspend () -> Unit = {},
+    private val pruneFiles: suspend () -> Unit = {},
 ) : RuntimeExtension {
     override val id = "agent"
     // Reset participation is transient host coordination, not restored execution authority.
@@ -93,6 +94,7 @@ internal class NativeRuntimeExtension(
     }
     override suspend fun clearForReset() = feature.clearForReset()
     override suspend fun eraseFilesForReset() = eraseFiles()
+    override suspend fun pruneAfterReset() = pruneFiles()
     override suspend fun resumeAfterReset() = completeRuntimeCleanup(
         { if (computerNeedsResume) { computer.resumeAfterReset(); computerNeedsResume = false } },
         { if (nativeNeedsResume) { resumeNative(); nativeNeedsResume = false } },

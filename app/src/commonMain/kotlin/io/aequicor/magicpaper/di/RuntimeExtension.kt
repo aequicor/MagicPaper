@@ -36,6 +36,11 @@ internal interface RuntimeExtension {
      */
     suspend fun eraseFilesForReset()
     suspend fun resumeAfterReset()
+    /**
+     * Once this owner resumed, only after [eraseFilesForReset]: lets external tools forget the erased files — Git's
+     * registrations of deleted task worktrees. It runs commands, which a paused owner does not admit.
+     */
+    suspend fun pruneAfterReset()
     suspend fun close()
 }
 
