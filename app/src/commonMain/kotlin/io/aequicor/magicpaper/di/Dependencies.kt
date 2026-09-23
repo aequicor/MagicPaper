@@ -209,7 +209,7 @@ internal fun buildRuntime(
             clearCodingOverrides = { id -> get<RuntimeExtensions>().owners.forEach { it.clearProfileOverrides(id) } },
             onDataChanged = { get<ChatService>().start(); get<RuntimeExtensions>().owners.forEach { it.reload() }; get<PluginService>().start() },
             onProfileSaved = { get<NavigationEvents>().back() },
-            clearApplicationData = {
+            clearApplicationData = { erase ->
                 get<NavigationEvents>().reset()
                 resetting = true
                 get<DefaultSettingsService>().prepareForReset()
@@ -225,12 +225,14 @@ internal fun buildRuntime(
                 get<RuntimeExtensions>().owners.forEach { it.pauseForReset(discardUnresolvable = true) }
                 resetMedia = true
                 get<MediaGenerationService>().prepareForReset()
-                openAiSubscription?.logout()
+                // The subscription sign-in is configuration: only erasing everything signs out.
+                if (erase == ApplicationDataReset.ALL) openAiSubscription?.logout()
                 get<RuntimeExtensions>().owners.forEach { it.clearForReset() }
                 get<RuntimeQuestionnaireFactory>().clearForReset()
-                persistence.clearOwnedData()
-                mediaStore.clear()
-                store.clear()
+                when (erase) {
+                    ApplicationDataReset.ALL -> { persistence.clearOwnedData(); mediaStore.clear(); store.clear() }
+                    ApplicationDataReset.SESSIONS -> clearSessionData(persistence, store, mediaStore)
+                }
             },
             finishApplicationReset = {
                 if (resetting) {

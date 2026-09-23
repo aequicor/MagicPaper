@@ -65,7 +65,7 @@ class SettingsResetLifecycleTest {
                 override val supportsFilePicker = false
                 override suspend fun export(json: String) = false
                 override suspend fun import(): String? = null
-            }, store, json, clearApplicationData = clear, finishApplicationReset = finish,
+            }, store, json, clearApplicationData = { clear() }, finishApplicationReset = finish,
             usage = object : UsageLedger {
                 override val state = MutableStateFlow(UsageArchive())
                 override val failure = MutableStateFlow<String?>(null)

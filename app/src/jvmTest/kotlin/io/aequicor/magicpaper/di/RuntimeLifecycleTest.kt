@@ -139,6 +139,54 @@ class RuntimeLifecycleTest {
         } finally { runtime.close(); runtime.awaitClosed(); Dispatchers.resetMain() }
     }
 
+    @Test fun sessionsResetErasesProjectsSessionsAndChatsButKeepsProvidersWithTheirKeys() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val store = InMemoryKeyValueStore()
+        val persistence = persistenceStores(InMemoryDurableByteStore())
+        val computer = io.aequicor.magicpaper.data.computer.DesktopComputerUse(persistence.events)
+        val runtime = buildRuntime(store, persistence, bridge, NavigationSessionConfig(),
+            platformDefinitions = { scope -> nativeRuntimeBindings(scope, LifecycleTestRuntime(), null,
+                LocalPlanningWorkspace(), UnavailableTaskWorkspace, null) },
+            runtimeExtensions = { listOf(NativeRuntimeExtension(get(), computer, {}, {})) },
+            featurePlugins = { get<CodingFeature>().plugins },
+            onPlatformClosed = { computer.close() })
+        try {
+            runtime.start()
+            assertEquals(RuntimeState.Ready, runtime.ready.first { it != RuntimeState.Loading })
+            val resetFinished = CompletableDeferred<Unit>()
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                runtime.koin.get<NavigationEvents>().events.collect { event -> when (event) {
+                    is NavigationEvents.Event.Reset -> event.completed.complete(Unit)
+                    is NavigationEvents.Event.ResetComplete -> { event.completed.complete(Unit); resetFinished.complete(Unit) }
+                    else -> Unit
+                } }
+            }
+            val settings = runtime.koin.get<SettingsService>()
+            val profiles = runtime.koin.get<LlmProfileRepository>()
+            settings.saveLlmProfile(LlmProfile("provider", "Поставщик", "https://provider.test/v1", apiKey = "provider-test-key"))
+            withContext(Dispatchers.Default) { withTimeout(5_000) {
+                while (profiles.load().none { it.id == "provider" }) kotlinx.coroutines.delay(10)
+            } }
+            val chat = runtime.koin.get<ChatService>()
+            createChatAndAwaitCommit(chat)
+            (runtime.koin.get<CodingProjectRepository>() as CodingProjectOwner).dispatch("reset",
+                CodingMachine.Intent.CreateProject(CodingProject("reset", "Проект", "/test/reset", 1)))
+            assertEquals(1, runtime.koin.get<CodingProjectRepository>().all().size)
+
+            settings.dismissNotice() // The profile's own "saved" notice must not stand in for the reset's result.
+            settings.resetSessions()
+            resetFinished.await(); runCurrent()
+
+            assertEquals("Проекты, сессии и чаты удалены.", settings.state.first { it.notice != null }.notice)
+            assertTrue(runtime.koin.get<ChatRepository>().sessions().isEmpty())
+            assertTrue(runtime.koin.get<CodingProjectRepository>().all().isEmpty())
+            assertEquals("provider-test-key", profiles.load().single { it.id == "provider" }.apiKey,
+                "the provider and its key survive a sessions reset")
+            createChatAndAwaitCommit(chat)
+            assertEquals(1, runtime.koin.get<ChatRepository>().sessions().size, "chat works after the reset")
+        } finally { runtime.close(); runtime.awaitClosed(); Dispatchers.resetMain() }
+    }
+
     @Test fun koinOwnersAreSingletonsAndResetKeepsThemUsable() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val store = InMemoryKeyValueStore()

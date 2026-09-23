@@ -3,6 +3,9 @@ package io.aequicor.magicpaper.ui
 import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.flow.StateFlow
 
+/** What a user-confirmed erase removes: everything, or the sessions and what they own while configuration stays. */
+enum class ApplicationDataReset { ALL, SESSIONS }
+
 interface SettingsService {
     val state: StateFlow<SettingsState>
     suspend fun start()
@@ -37,6 +40,9 @@ interface SettingsService {
     fun exportProfile()
     fun importProfile()
     fun wipeAll()
+    /** Erases projects, coding sessions and chats with every journal of their execution; keeps settings, provider
+     *  profiles with their keys, models, skills, plugin preferences and the subscription sign-in. */
+    fun resetSessions()
     fun prepareProfileEditor()
     suspend fun close()
 }

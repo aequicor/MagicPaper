@@ -63,7 +63,7 @@ class DefaultSettingsService(
     private val clearCodingOverrides: suspend (String) -> Unit = {},
     private val onDataChanged: suspend () -> Unit = {},
     private val onProfileSaved: (String) -> Unit = {},
-    private val clearApplicationData: suspend () -> Unit = {},
+    private val clearApplicationData: suspend (ApplicationDataReset) -> Unit = {},
     private val finishApplicationReset: suspend () -> Unit = {},
     private val draftRepository: io.aequicor.magicpaper.data.storage.DraftRepository = io.aequicor.magicpaper.data.storage.InMemoryDraftRepository(),
     private val mediaGeneration: MediaGenerationService? = null,
@@ -679,7 +679,10 @@ class DefaultSettingsService(
     }
 
 
-    override fun wipeAll() {
+    override fun wipeAll() = reset(ApplicationDataReset.ALL)
+    override fun resetSessions() = reset(ApplicationDataReset.SESSIONS)
+
+    private fun reset(erase: ApplicationDataReset) {
         scope.launch {
             var failure: Throwable? = null
             fun retain(next: Throwable) {
@@ -693,12 +696,12 @@ class DefaultSettingsService(
                 }
             }
             try {
-                clearApplicationData()
-                drafts.forget()
-                usage.clear()
+                clearApplicationData(erase)
+                val everything = erase == ApplicationDataReset.ALL
+                // Settings drafts, the usage ledger, plugin preferences and configuration are what a sessions reset keeps.
+                if (everything) { drafts.forget(); usage.clear() }
                 chatHistory.wipeHistory()
-                pluginPreferences.clearPreferences()
-                configuration.clearAfterReset()
+                if (everything) { pluginPreferences.clearPreferences(); configuration.clearAfterReset() }
                 start()
             } catch (error: Throwable) { retain(error) }
             // Every participant must leave reset even if clearing failed or was cancelled.
@@ -708,7 +711,8 @@ class DefaultSettingsService(
             try { currentCoroutineContext().ensureActive() } catch (cancelled: CancellationException) { retain(cancelled) }
             if (failure == null) try { onDataChanged() } catch (refresh: Throwable) { retain(refresh) }
             when (val error = failure) {
-                null -> _state.update { it.copy(notice = "Все данные удалены.") }
+                null -> _state.update { it.copy(notice = if (erase == ApplicationDataReset.ALL) "Все данные удалены."
+                    else "Проекты, сессии и чаты удалены.") }
                 is CancellationException -> {
                     if (error.suppressedExceptions.isNotEmpty()) {
                         AppLog.error("SettingsService", "reset_cleanup_failed",
