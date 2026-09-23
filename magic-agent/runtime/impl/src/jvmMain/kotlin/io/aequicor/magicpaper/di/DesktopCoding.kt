@@ -27,6 +27,7 @@ class DesktopNativeRuntime internal constructor(
         agents.map { agent -> suspend { agent.prepareForReset() } } + listOf(suspend { checks.prepareForReset() }, suspend { library.prepareForReset() }))
     suspend fun resumeAfterReset() = finishNativeCleanup(
         listOf(suspend { library.resumeAfterReset() }, suspend { checks.resumeAfterReset() }) + agents.map { agent -> suspend { agent.resumeAfterReset() } })
+    suspend fun eraseSessionsForReset() = finishNativeCleanup(agents.map { agent -> suspend { agent.eraseSessionsForReset() } })
     suspend fun shutdown() = finishNativeCleanup(
         agents.map { agent -> suspend { agent.shutdown() } } + listOf(suspend { checks.close() }, suspend { library.shutdown() }, suspend { close() }))
 

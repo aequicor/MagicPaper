@@ -4,7 +4,11 @@ import io.aequicor.magicpaper.backend.*
 import io.aequicor.magicpaper.domain.*
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
@@ -201,6 +205,19 @@ internal class PiBackendAgent(private val environment: NativeBackendEnvironment,
     override fun abort(sessionId: String) { aborted.add(sessionId); running[sessionId]?.abort() }
     override fun abortAll() { synchronized(lifecycleLock) { active.toList() }.forEach(::abort) }
     override fun close() { synchronized(lifecycleLock) { closed = true }; abortAll() }
+    override suspend fun eraseSessionsForReset() = withContext(Dispatchers.IO) {
+        check(synchronized(lifecycleLock) { active.isEmpty() }) { "Сначала остановите выполняющиеся сессии" }
+        eraseTree(sessions.toPath())
+    }
+    // Only Pi writes here, yet a link is removed as an entry and never followed: the host's deleteTree rule, which
+    // an engine module may not depend on. Windows reports a junction as a directory that is also "other".
+    private fun eraseTree(path: Path) {
+        val attributes = try { Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }
+        catch (_: NoSuchFileException) { return }
+        if (attributes.isDirectory && !attributes.isSymbolicLink && !attributes.isOther)
+            Files.newDirectoryStream(path).use { entries -> entries.forEach(::eraseTree) }
+        Files.deleteIfExists(path)
+    }
     override suspend fun reconcile(sessionId: String): Boolean = withContext(Dispatchers.IO) {
         val terminated = environment.processes.reconcile(sessionId)
         migrateCredentials(sessionHome(sessionId))

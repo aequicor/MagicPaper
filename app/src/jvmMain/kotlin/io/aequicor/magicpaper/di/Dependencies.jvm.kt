@@ -24,6 +24,7 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
     val native = createDesktopNativeRuntime(appJson, persistence.events, computer, persistence.secrets, questionnaires,
         skills::selection, skills::recordRun, skills.runObserver,
         browser = io.aequicor.magicpaper.data.browser.createDesktopBrowserSessions(persistence.events), checks = checks)
+    val taskWorkspace = io.aequicor.magicpaper.data.planning.GitTaskWorkspace(authority = gitWorkspaces)
     return buildRuntime(
         researchPageBrowser = io.aequicor.magicpaper.data.browser.DesktopResearchPageBrowser(),
         // Пределы моделей из каталога установленного движка: эндпоинты без метаданных
@@ -40,10 +41,11 @@ actual fun createMagicPaperRuntime(navigationSession: NavigationSessionConfig): 
         openAiSubscription = native.subscription,
         // Only this host installs an agent's executable bindings and lifecycle owner.
         platformDefinitions = { scope -> nativeRuntimeBindings(scope, native.runtime, DesktopProjectDirPicker(),
-            GitPlanningWorkspace(authority = gitWorkspaces), io.aequicor.magicpaper.data.planning.GitTaskWorkspace(authority = gitWorkspaces),
+            GitPlanningWorkspace(authority = gitWorkspaces), taskWorkspace,
             ResearchSessionIntegrationChecks(checks)) },
         runtimeExtensions = { listOf(NativeRuntimeExtension(get(), computer, native::prepareForReset, native::resumeAfterReset,
-            discardUnresolvableChecks = { checks.discardUnresolvable() })) },
+            discardUnresolvableChecks = { checks.discardUnresolvable() },
+            eraseFiles = { completeRuntimeCleanup({ taskWorkspace.eraseForReset() }, { native.eraseSessionsForReset() }) })) },
         mediaOwnerPolicies = { listOf(NativeMediaOwnerPolicy(get())) },
         featurePlugins = { get<CodingFeature>().plugins },
         appContributions = { nativeAppContributions(get(), get()) },

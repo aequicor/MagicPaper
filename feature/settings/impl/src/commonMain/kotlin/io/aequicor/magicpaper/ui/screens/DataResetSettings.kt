@@ -47,8 +47,12 @@ internal fun DataResetDialog(title: String, consequences: List<String>, confirmL
     }
 }
 
+private const val WORKTREES_CONSEQUENCE =
+    "Рабочие копии задач удалятся с незакоммиченными изменениями; ветки задач с коммитами останутся в репозиториях."
+
 internal val SESSIONS_RESET_CONSEQUENCES = listOf(
     "Удалятся проекты, кодинг-сессии и чаты вместе с планами, черновиками и созданными изображениями.",
+    WORKTREES_CONSEQUENCE,
     "Настройки, профили поставщиков с ключами, модели, навыки и вход в подписку сохранятся.",
     "Операции, завершение которых не подтверждено, будут забыты.",
     "Вернуть удалённое нельзя.",
@@ -56,20 +60,21 @@ internal val SESSIONS_RESET_CONSEQUENCES = listOf(
 
 internal val WIPE_CONSEQUENCES = listOf(
     "Удалятся проекты, кодинг-сессии и чаты, все настройки, профили поставщиков с ключами и вход в подписку.",
+    WORKTREES_CONSEQUENCE,
     "Операции, завершение которых не подтверждено, будут забыты.",
     "Вернуть данные нельзя.",
 )
 
 @Preview(name = "Wipe data", group = "Data reset", widthDp = 900, heightDp = 600)
-@Preview(name = "Wipe data · narrow", group = "Data reset", widthDp = 390, heightDp = 700)
-@Preview(name = "Wipe data · 200% text", group = "Data reset", widthDp = 390, heightDp = 900, fontScale = 2f)
+@Preview(name = "Wipe data · narrow", group = "Data reset", widthDp = 390, heightDp = 800)
+@Preview(name = "Wipe data · 200% text", group = "Data reset", widthDp = 390, heightDp = 1100, fontScale = 2f)
 @Composable internal fun WipeDataDialogPreview() {
     PaperTheme { DataResetDialog("Стереть данные?", WIPE_CONSEQUENCES, "Стереть данные", {}, {}) }
 }
 
 @Preview(name = "Reset sessions", group = "Data reset", widthDp = 900, heightDp = 600)
-@Preview(name = "Reset sessions · narrow", group = "Data reset", widthDp = 390, heightDp = 800)
-@Preview(name = "Reset sessions · 200% text", group = "Data reset", widthDp = 390, heightDp = 1000, fontScale = 2f)
+@Preview(name = "Reset sessions · narrow", group = "Data reset", widthDp = 390, heightDp = 900)
+@Preview(name = "Reset sessions · 200% text", group = "Data reset", widthDp = 390, heightDp = 1300, fontScale = 2f)
 @Composable internal fun ResetSessionsDialogPreview() {
     PaperTheme { DataResetDialog("Сбросить сессии?", SESSIONS_RESET_CONSEQUENCES, "Сбросить сессии", {}, {}) }
 }

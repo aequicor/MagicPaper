@@ -55,6 +55,7 @@ internal fun buildRuntime(
     var resetChat = false
     var resetPlugins = false
     var resetSkills = false
+    var eraseResetFiles = false
     module {
         single { appJson }
         single<KeyValueStore> { store }
@@ -233,12 +234,16 @@ internal fun buildRuntime(
                     ApplicationDataReset.ALL -> { persistence.clearOwnedData(); mediaStore.clear(); store.clear() }
                     ApplicationDataReset.SESSIONS -> clearSessionData(persistence, store, mediaStore)
                 }
+                eraseResetFiles = true
             },
             finishApplicationReset = {
                 if (resetting) {
                     resetting = false
                     val resumed = mutableSetOf<RuntimeExtension>()
                     val actions = buildList<suspend () -> Unit> {
+                        // Only once no record refers to them, and before any owner resumes work in them. A failure
+                        // does not skip the resumes below; the next reset finishes the deletion.
+                        if (eraseResetFiles) add { eraseResetFiles = false; get<RuntimeExtensions>().owners.forEach { it.eraseFilesForReset() } }
                         resetOwners.toList().forEach { owner -> add { owner.resumeAfterReset(); resumed += owner; resetOwners -= owner } }
                         if (resetMedia) add { get<MediaGenerationService>().resumeAfterReset(); resetMedia = false }
                         if (resetSkills) add { get<SkillCommands>().finishReset(); resetSkills = false }

@@ -97,6 +97,9 @@ class RuntimeLifecycleTest {
             runtime.koin.get<SettingsService>().wipeAll()
             resetFinished.await(); runCurrent()
             assertTrue("first.pause(discard)" in events, "a user-confirmed erase carries its consent to every owner")
+            assertEquals(listOf("first.clear", "second.clear", "first.erase", "second.erase", "first.resume", "second.resume"),
+                events.filter { it.substringAfter('.') in setOf("clear", "erase", "resume") },
+                "files go after the records and before any owner resumes work in them")
             assertTrue("first.resume" in events)
             assertTrue("second.resume" in events)
             assertTrue("second.reload" in events)
@@ -144,10 +147,12 @@ class RuntimeLifecycleTest {
         val store = InMemoryKeyValueStore()
         val persistence = persistenceStores(InMemoryDurableByteStore())
         val computer = io.aequicor.magicpaper.data.computer.DesktopComputerUse(persistence.events)
+        var streamsAtErase: List<String>? = null
         val runtime = buildRuntime(store, persistence, bridge, NavigationSessionConfig(),
             platformDefinitions = { scope -> nativeRuntimeBindings(scope, LifecycleTestRuntime(), null,
                 LocalPlanningWorkspace(), UnavailableTaskWorkspace, null) },
-            runtimeExtensions = { listOf(NativeRuntimeExtension(get(), computer, {}, {})) },
+            runtimeExtensions = { listOf(NativeRuntimeExtension(get(), computer, {}, {},
+                eraseFiles = { streamsAtErase = persistence.events.streams() })) },
             featurePlugins = { get<CodingFeature>().plugins },
             onPlatformClosed = { computer.close() })
         try {
@@ -178,6 +183,8 @@ class RuntimeLifecycleTest {
             resetFinished.await(); runCurrent()
 
             assertEquals("Проекты, сессии и чаты удалены.", settings.state.first { it.notice != null }.notice)
+            assertTrue(checkNotNull(streamsAtErase) { "the reset erases worktrees and transcripts" }.all { it in SessionResetKeeps.streams },
+                "files go only once no record refers to them: $streamsAtErase")
             assertTrue(runtime.koin.get<ChatRepository>().sessions().isEmpty())
             assertTrue(runtime.koin.get<CodingProjectRepository>().all().isEmpty())
             assertEquals("provider-test-key", profiles.load().single { it.id == "provider" }.apiKey,
@@ -369,6 +376,7 @@ private class ResetExtension(override val id: String, private val events: Mutabl
     override suspend fun prepareForReset() { events += "$id.prepare" }
     override suspend fun pauseForReset(discardUnresolvable: Boolean) { events += if (discardUnresolvable) "$id.pause(discard)" else "$id.pause" }
     override suspend fun clearForReset() { events += "$id.clear" }
+    override suspend fun eraseFilesForReset() { events += "$id.erase" }
     override suspend fun resumeAfterReset() { events += "$id.resume"; if (failResume) error("private resume") }
     override suspend fun close() { events += "$id.close"; if (failClose) error("private close") }
 }

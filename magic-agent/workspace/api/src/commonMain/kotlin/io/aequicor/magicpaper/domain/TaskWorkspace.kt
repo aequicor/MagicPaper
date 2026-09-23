@@ -50,6 +50,11 @@ interface TaskWorkspace {
     suspend fun delivered(record: TaskWorktree): Boolean
     /** Inspects an interrupted operation without changing Git, starting checks or repeating delivery. */
     suspend fun inspect(record: TaskWorktree, pending: TaskWorktreeMachine.Pending): TaskWorktreeInspection = TaskWorktreeInspection.Unknown
+    /**
+     * Application reset, once no record refers to a managed copy: deletes every copy with its uncommitted changes.
+     * Task branches and their commits stay in the source repositories.
+     */
+    suspend fun eraseForReset() = Unit
 }
 
 object UnavailableTaskWorkspace : TaskWorkspace {

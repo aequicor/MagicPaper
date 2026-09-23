@@ -238,6 +238,23 @@ class GitTaskWorkspaceTest {
         assertEquals("", git(source, "status", "--porcelain"))
     } }
 
+    // Reset deletes the copies with their uncommitted changes; what the agent committed stays on the task branch.
+    @Test fun resetErasesEveryCopyAndKeepsTaskBranchesInTheSource() = runTest { fixture {
+        val task = open()
+        val dir = File(task.path)
+        dir.resolve("agent.txt").writeText("committed")
+        git(dir, "add", "."); git(dir, "commit", "-m", "agent commit")
+        val agent = git(dir, "rev-parse", "HEAD")
+        dir.resolve("pending.txt").writeText("uncommitted")
+
+        port.eraseForReset()
+
+        assertFalse(pool.exists())
+        assertEquals(agent, git(source, "rev-parse", "refs/heads/${task.branch}"))
+        assertEquals(task.baseCommit, git(source, "rev-parse", "HEAD"))
+        assertEquals("", git(source, "status", "--porcelain"))
+    } }
+
     @Test fun verifyRunsTaskChecksInManagedCopyAndReportsTheirOutput() = runTest { fixture {
         val checked = port()
         val task = open()

@@ -29,6 +29,12 @@ internal interface RuntimeExtension {
      */
     suspend fun pauseForReset(discardUnresolvable: Boolean = false)
     suspend fun clearForReset()
+    /**
+     * Once the records are erased and before any owner resumes: deletes the files they owned — task worktrees,
+     * engine session transcripts. A failure leaves no record pointing at a half-deleted folder; the next reset
+     * finishes the deletion.
+     */
+    suspend fun eraseFilesForReset()
     suspend fun resumeAfterReset()
     suspend fun close()
 }

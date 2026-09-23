@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.planning
 
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.data.storage.deleteTree
 import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.*
 import java.io.File
@@ -285,6 +286,12 @@ class GitTaskWorkspace(
         git(File(record.sourcePath), "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", record.mergeCommit)
         checkpoint("delivered")
         check(delivered(record)) { "Слияние не подтверждено" }
+    }
+
+    // Git keeps each deleted copy registered as prunable; `git worktree prune` in the source releases its branch.
+    override suspend fun eraseForReset() = withContext(Dispatchers.IO) {
+        deleteTree(root.toPath())
+        AppLog.info("coding.worktree", "pool.erased", mapOf("result" to "reset"))
     }
 
     /**

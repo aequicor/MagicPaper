@@ -107,6 +107,11 @@ interface NativeAgentAdapter : AutoCloseable {
     suspend fun reconcile(sessionId: String): Boolean
     fun abort(sessionId: String)
     fun abortAll()
+    /**
+     * Application reset, after every run stopped and no record refers to a session: deletes the engine's own
+     * session files. The installation and its configuration stay.
+     */
+    suspend fun eraseSessionsForReset() = Unit
 }
 
 /** Public factory result. The protocol adapter cannot bypass journal admission or recovery. */

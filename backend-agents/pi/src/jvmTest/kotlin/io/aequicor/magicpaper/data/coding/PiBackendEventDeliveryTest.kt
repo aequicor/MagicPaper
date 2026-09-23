@@ -42,15 +42,42 @@ class PiBackendEventDeliveryTest {
         } finally { agent.close(); home.deleteRecursively() }
     }
 
+    // Reset deletes Pi's transcripts only once no session runs; the installation and its homes stay.
+    @Test fun resetErasesSessionTranscriptsOnlyWhenNoSessionRuns() = runBlocking {
+        val home = Files.createTempDirectory("pi-session-erase").toFile()
+        val cli = home.resolve("fixture-cli").apply { writeText("unused") }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val agent = PiBackendContribution().create(environment(home.absolutePath,
+            Installation(cli.absolutePath, IOException("stopped after the gate"), entered, release)))
+        try {
+            home.resolve("sessions/--project--").mkdirs()
+            home.resolve("sessions/--project--/session.jsonl").writeText("{}")
+            home.resolve("session-configs/session").mkdirs()
+            val run = launch(Dispatchers.Default) { runCatching { agent.run(request(home.absolutePath)).collect() } }
+            entered.await()
+            assertFailsWith<IllegalStateException> { agent.eraseSessionsForReset() }
+            assertTrue(home.resolve("sessions/--project--/session.jsonl").isFile, "a running session keeps its transcript")
+            release.complete(Unit); run.join()
+
+            agent.eraseSessionsForReset()
+
+            assertFalse(home.resolve("sessions").exists())
+            assertTrue(cli.isFile && home.resolve("session-configs/session").isDirectory)
+            agent.eraseSessionsForReset()
+        } finally { release.complete(Unit); agent.close(); home.deleteRecursively() }
+    }
+
     private fun request(path: String) = NativeAgentRequest("request", CodingSession("session", "project", "", 0, engine = CodingEngine.PI),
         path, "prompt", "", null, LlmProfile("profile", "fixture", modelId = "model"), JsonObject(emptyMap()), emptyList(),
         CodingInteractionMode.CODE, NativeAgentTools(emptyList(), emptyMap(), emptyMap(), emptySet(), JsonObject(emptyMap())))
-    private class Installation(override val cliPath: String, private val failure: Throwable) : PiInstallation {
+    private class Installation(override val cliPath: String, private val failure: Throwable,
+        private val entered: CompletableDeferred<Unit>? = null, private val release: CompletableDeferred<Unit>? = null) : PiInstallation {
         override fun aiDirectory() = error("No model library access")
         override suspend fun status() = NativeInstallationStatus(NativeInstallationPhase.READY, "Ready")
         override fun ensureReady() = flow { emit(status()) }
         override suspend fun uninstall() = error("No installation change")
-        override suspend fun node() = "unused-node"
+        override suspend fun node(): String { entered?.complete(Unit); release?.await(); return "unused-node" }
         override fun prepareBundledTools() = Unit
         override fun toolsNotice() = "Fixture tools notice"
         override fun ensureFuzzySafety(): Unit = throw failure
