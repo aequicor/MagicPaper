@@ -16,22 +16,56 @@ import kotlinx.coroutines.withContext
 
 /** Native Windows runner. No Codex, PowerShell policy, chmod or changes to source ACLs. */
 internal object WindowsResearchSandbox : ResearchSandbox {
-    /**
-     * A token from `CreateRestrictedToken` with WRITE_RESTRICTED yields a child that dies with
-     * STATUS_DLL_INIT_FAILED before its first instruction here — reproduced with the run SID, the logon
-     * SID, Everyone and all of the caller's own groups in the restricting list, and with the run SID
-     * granted on both the window station and a dedicated desktop; the same preparation starts the child
-     * with an unrestricted token. So the run SID confines nothing today. Only exact read-only argument
-     * allowlists may run in that state; the sandbox probe keeps arbitrary protected commands refused
-     * rather than silently unprotected.
-     */
-    override val confinesWrites: Boolean get() = false
     private val kernel by lazy { NativeLibrary.getInstance("kernel32") }
     private val advapi by lazy { NativeLibrary.getInstance("advapi32") }
     private val user by lazy { NativeLibrary.getInstance("user32") }
     private fun bool(lib: NativeLibrary, name: String, vararg args: Any?) {
         check(lib.getFunction(name).invokeInt(args) != 0) { "$name: ${Native.getLastError()}" }
     }
+    /** `SID_AND_ATTRIBUTES`, also the size of `TOKEN_MANDATORY_LABEL`: `PSID` plus `DWORD`, padded. */
+    private const val SID_AND_ATTRIBUTES = 16L
+    /** `TOKEN_INFORMATION_CLASS.TokenIntegrityLevel` and the `SE_GROUP_INTEGRITY` attribute. */
+    private const val TOKEN_INTEGRITY_LEVEL = 25
+    private const val SE_GROUP_INTEGRITY = 0x20
+    /** `DISABLE_MAX_PRIVILEGE`: the child keeps none of the user's privileges. */
+    private const val DISABLE_MAX_PRIVILEGE = 0x1
+    /** `DuplicateTokenEx` arguments: full access to the copy, no impersonation, a primary token. */
+    private const val TOKEN_ALL_ACCESS = 0xF01FF
+    private const val SECURITY_ANONYMOUS = 0
+    private const val TOKEN_PRIMARY = 1
+    /** Low mandatory level: the level the child runs at and the level its artifacts are lowered to. */
+    private const val LOW_INTEGRITY_SID = "S-1-16-4096"
+
+    /**
+     * Low integrity instead of a write-restricted token. A `WRITE_RESTRICTED` child cannot be given a
+     * console at all — allocating one needs an object that only SYSTEM may write — so no real Windows
+     * tool tree started: the Git launcher, `cmd` and any Gradle wrapper died with STATUS_DLL_INIT_FAILED
+     * (0xC0000142) before their first command, and every sandboxed check ended unknown. Reproduced with
+     * the run SID, the logon SID, Everyone, RESTRICTED_CODE and all of the caller's own groups in the
+     * restricting list, and with the run SID granted on both the window station and a dedicated desktop;
+     * the same preparation starts the child with an unrestricted token. Mandatory integrity control is
+     * the platform's own containment and does confine writes here: the child still reads as its user,
+     * cannot write up into the medium-labeled project, and runs ordinary process trees. The native
+     * sandbox suite asserts the refusals on a real OS, so [confinesWrites] keeps its default `true`.
+     */
+    private fun lowIntegrityToken(token: Pointer, restricted: PointerByReference) {
+        val stripped = PointerByReference()
+        bool(advapi, "CreateRestrictedToken", token, DISABLE_MAX_PRIVILEGE, 0, null, 0, null, 0, null, stripped)
+        try {
+            // The handle CreateRestrictedToken returns may not lower its own level (ERROR_ACCESS_DENIED);
+            // a full-access duplicate may, and stays a primary token for CreateProcessAsUserW.
+            bool(advapi, "DuplicateTokenEx", stripped.value, TOKEN_ALL_ACCESS, null, SECURITY_ANONYMOUS, TOKEN_PRIMARY, restricted)
+            val low = PointerByReference()
+            bool(advapi, "ConvertStringSidToSidW", WString(LOW_INTEGRITY_SID), low)
+            try {
+                Memory(SID_AND_ATTRIBUTES).use { label ->
+                    label.clear(); label.setPointer(0, low.value); label.setInt(8, SE_GROUP_INTEGRITY)
+                    bool(advapi, "SetTokenInformation", restricted.value, TOKEN_INTEGRITY_LEVEL, label, SID_AND_ATTRIBUTES.toInt())
+                }
+            } finally { free(low.value) }
+        } finally { close(stripped.value) }
+    }
+
     private fun close(handle: Pointer?) { if (handle != null) bool(kernel, "CloseHandle", handle) }
     private fun free(pointer: Pointer?) { if (pointer != null) kernel.getFunction("LocalFree").invokePointer(arrayOf(pointer)) }
     private fun wide(text: String) = Memory((text.length + 1L) * 2).apply { setWideString(0, text) }
@@ -75,7 +109,7 @@ internal object WindowsResearchSandbox : ResearchSandbox {
         receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder, standardOutput: Path?): PreparedCheckProcess {
         if (Native.POINTER_SIZE != 8) throw NativeCheckUnavailable("Проверки требуют 64-битную Windows")
         if (policy != null && !(listOf(policy.project) + policy.writable).all { java.nio.file.Files.getFileStore(it).type().equals("NTFS", true) }) throw NativeCheckUnavailable("Защита проекта и временных каталогов Windows требует NTFS")
-        val token = PointerByReference(); val restricted = PointerByReference(); val sid = PointerByReference()
+        val token = PointerByReference(); val restricted = PointerByReference()
         val outRead = PointerByReference(); val outWrite = PointerByReference()
         var input: Pointer? = null
         var binaryOutput: Pointer? = null
@@ -94,19 +128,15 @@ internal object WindowsResearchSandbox : ResearchSandbox {
         try {
             if (policy != null) {
             bool(advapi, "OpenProcessToken", kernel.getFunction("GetCurrentProcess").invokePointer(emptyArray()), 0x000B, token)
-            val uuid = UUID.randomUUID()
-            val sidText = "S-1-5-21-${uuid.mostSignificantBits.toUInt()}-${(uuid.mostSignificantBits ushr 32).toUInt()}-${uuid.leastSignificantBits.toUInt()}-1031"
-            bool(advapi, "ConvertStringSidToSidW", WString(sidText), sid)
-            Memory(16).use { restrictedSid ->
-                restrictedSid.clear(); restrictedSid.setPointer(0, sid.value)
-                bool(advapi, "CreateRestrictedToken", token.value, 0x1 or 0x8, 0, null, 0, null, 1, restrictedSid, restricted)
-            }
-            // A unique restricting SID has no rights on user files; only artifact directories receive an ACE.
-            authority = WindowsCheckAuthority.capture(policy.writable, sidText, receiptId, authorityRecorder)
-            authority.grant(sidText)
+            lowIntegrityToken(token.value, restricted)
+            // Only artifact directories are lowered; the project and a real .git stay at their medium
+            // label, which is what refuses the child's writes to them.
+            authority = WindowsCheckAuthority.capture(policy.writable, receiptId, authorityRecorder)
+            authority.lower()
             val securityDescriptor = PointerByReference()
-            // Owner access is retained; the second ACE is only for this restricted child.
-            bool(advapi, "ConvertStringSecurityDescriptorToSecurityDescriptorW", WString("D:(A;;GA;;;OW)(A;;GA;;;$sidText)"), 1, securityDescriptor, null)
+            // Owner access is retained, and the private desktop carries the child's own low label.
+            bool(advapi, "ConvertStringSecurityDescriptorToSecurityDescriptorW",
+                WString("D:(A;;GA;;;OW)$WINDOWS_LOW_LABEL_DESKTOP"), 1, securityDescriptor, null)
             val security = Memory(24).also { allocations += it }.apply {
                 clear(); setInt(0, 24); setPointer(8, securityDescriptor.value); setInt(16, 1)
             }
@@ -114,7 +144,7 @@ internal object WindowsResearchSandbox : ResearchSandbox {
                 desktop = user.getFunction("CreateDesktopW").invokePointer(arrayOf(WString(desktopName), null, null, 0, 0x01FF, security))
                 check(desktop != null) { "Не удалось создать изолированный desktop: ${Native.getLastError()}" }
             } finally { free(securityDescriptor.value); security.setPointer(8, null) }
-            } // managed worktrees require a job, but no restricted token or ACL mutation
+            } // managed worktrees require a job, but neither a lowered token nor a label change
             val security = Memory(24).also { allocations += it }.apply { clear(); setInt(0, 24); setInt(16, 1) }
             bool(kernel, "CreatePipe", outRead, outWrite, security, 0)
             bool(kernel, "SetHandleInformation", outRead.value, 1, 0)
@@ -192,7 +222,6 @@ internal object WindowsResearchSandbox : ResearchSandbox {
             cleanup { if (initializedAttributes) kernel.getFunction("DeleteProcThreadAttributeList").invokeVoid(arrayOf(attributes)) }
             allocations.asReversed().forEach { cleanup { it.close() } }
             listOf(thread, input, binaryOutput, outWrite.value, token.value, restricted.value).forEach { cleanup { close(it) } }
-            cleanup { free(sid.value) }
             if (!handedOff) {
                 var stopped = true
                 cleanup { try { job?.let { terminateJobAndConfirm(it) } } catch (error: Throwable) { stopped = false; throw error } }

@@ -514,28 +514,51 @@ JS/Wasm компиляция и проверка модульных границ
   Безопасно только через версионный переход вроде `limitPolicyVersion`. Закреплено тестом
   `aStopRequestClearsAnUnknownRunOnlyWhereNoQuarantineAndNoFailureKeepsIt`, который упадёт при смене
   политики любым писателем в любую сторону. Не «чинить» без миграции.
-- Windows-песочница проверок не удерживает произвольную команду. Процесс с токеном
-  `CreateRestrictedToken(WRITE_RESTRICTED)` завершается `STATUS_DLL_INIT_FAILED` (`0xC0000142`)
-  до первой инструкции: воспроизведено с run SID, logon SID, `Everyone` и всеми 17 группами
-  самого токена в списке restricting SID, с правами на `winsta0` и на отдельный desktop,
-  с `CREATE_NO_WINDOW` и с `DETACHED_PROCESS`, для `powershell.exe` и для `cmd.exe`;
-  та же подготовка с обычным токеном процесс запускает. Требуется решение по механизму
-  изоляции (низкий integrity level с явными метками на каталогах результатов либо
-  расследование отказа CSRSS-инициализации), а не ослабление assertions.
-  `WindowsResearchSandbox.confinesWrites = false` фиксирует факт, `ResearchSandboxNativeTest`
-  под `-Pmagicpaper.research.native=true` на Windows остаётся красным (6 отказов) и не входит
-  в обычный `jvmTest`. Пользователь 22 сентября 2026 года выбрал не ждать этого решения:
-  `PROTECTED_PROJECT` по-прежнему требует probe и отказывает, а `GIT_READ_ONLY` и
-  `METADATA_READ_ONLY` — точный allowlist аргументов с `--no-optional-locks`, пустым
-  `core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1` и `GIT_CONFIG_GLOBAL=NUL` —
-  больше не gated пробой и на Windows идут без файловой политики, которую платформа всё равно
-  не обеспечивает. На Linux/macOS `confinesWrites` истинно, и эти команды по-прежнему идут
-  в bwrap/Seatbelt с проектом только для чтения. Закреплено
-  `ReadOnlyGitWithoutSandboxProbeNativeTest`. Два настоящих дефекта восстановления ACL при этом
-  исправлены: `SetSecurityInfo` всегда проставлял `SE_DACL_AUTO_INHERITED` и не возвращал исходный
-  дескриптор (заменён на `SetKernelObjectSecurity`), а артефакты, созданные командой, наследовали
-  ACE временного SID и делали доказательство восстановления недостижимым (ACE снимается
-  пересборкой DACL, потому что `SetEntriesInAcl(REVOKE_ACCESS)` наследованные записи не трогает).
+- Windows-песочница проверок переведена на низкий уровень целостности (22 сентября 2026) — это
+  то решение механизма изоляции, которого требовал прежний долг. Процесс с токеном
+  `CreateRestrictedToken(WRITE_RESTRICTED)` завершался `STATUS_DLL_INIT_FAILED` (`0xC0000142`)
+  до первой инструкции: воспроизведено с run SID, logon SID, `Everyone`, `RESTRICTED_CODE` и всеми
+  17 группами самого токена в списке restricting SID, с правами на `winsta0` и на отдельный
+  desktop, с `CREATE_NO_WINDOW` и с `DETACHED_PROCESS`, для `powershell.exe`, `java.exe`,
+  `cmd.exe` и обёртки `Git\cmd\git.exe`; та же подготовка с обычным токеном процесс запускает.
+  Причина в консоли: её выделение требует объекта, доступного на запись только SYSTEM, поэтому
+  дерево консольных процессов не стартует ни с каким набором restricting SID кроме SYSTEM, а
+  SYSTEM обнулил бы саму защиту. Теперь токен проверки — `DISABLE_MAX_PRIVILEGE` плюс
+  `SetTokenInformation(TokenIntegrityLevel)` в Low, каталоги результатов на время проверки
+  получают наследуемую метку Low и возвращают исходную, отдельный desktop несёт ту же метку.
+  `WindowsResearchSandbox.confinesWrites` снова `true`: `ResearchSandboxNativeTest` под
+  `-Pmagicpaper.research.native=true` на Windows 11 x64 зелёный (85 тестов, 0 отказов, 1 пропущен
+  Unix-only) и подтверждает отказы записи исходников и `.git`, запись артефакта, hardlink и
+  symlink, потомков после завершения и отмены, повтор и восстановление после краха.
+  Оба прежних дефекта восстановления authority сняты в новом механизме: Windows пересчитывает
+  флаги наследования при любой записи (`AI` в дескрипторе, `ID` в ACE), поэтому сравнение
+  игнорирует только их, а уровень, политика и защита `P` сравниваются точно; артефакты, созданные
+  командой, наследуют метку Low и не имеют снимка — метка снимается с них явно, потому что одного
+  возврата родительской метки для доказательства недостаточно.
+  Решение пользователя от 22 сентября 2026 года сохранено: `PROTECTED_PROJECT` по-прежнему требует
+  probe и отказывает при его провале, а `GIT_READ_ONLY` и `METADATA_READ_ONLY` — точный allowlist
+  аргументов с `--no-optional-locks`, пустым `core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`,
+  `GIT_CONFIG_NOSYSTEM=1` и `GIT_CONFIG_GLOBAL=NUL` — пробой не блокируются, поэтому отказ
+  песочницы не отнимает у экрана проекта, ожидания worktree и возобновления агента чтения Git.
+  На Linux/macOS эти команды по-прежнему идут в bwrap/Seatbelt с проектом только для чтения.
+  Закреплено `ReadOnlyGitWithoutSandboxProbeNativeTest`, `WindowsCheckAuthorityNativeTest`,
+  `WindowsCheckLabelRestoreTest` и `GitTaskWorkspaceAvailabilityNativeTest`. Worktree-режим был
+  недоступен именно из-за этой цепочки: `GitTaskWorkspace.availability` ловила
+  `CheckOutcomeUnknown` и постоянно возвращала «Проверка Git временно недоступна», журнал
+  проверок уходил в `effects_blocked`, и любой запуск сессии падал с «Завершение проверки не
+  подтверждено».
+
+- Исходные отказы Windows, не связанные с этим набором изменений (воспроизведены на HEAD с
+  убранными правками): `:magic-agent:runtime:impl:jvmTest` — 1193 теста, 8 отказов. Семь в
+  `TaskWorktreeIntegrationChecksTest` (`checkWritesIntoManagedCopyAndReportsOutputAndCode`,
+  `checkSeesInheritedEnvironment`, `windowsPrefersExecutableWrapperOverPosixScript`,
+  `nonExecutableScriptOnWindowsReportsActionableReason`, `timedOutCheckIsBlockedInsteadOfSilentlyPassing`,
+  `abortStopsRunningCheck`, `cancellationStopsCheckAndPropagates`): команды управляемой копии
+  (`cmd.exe /c …` и `.bat`-обёртки) завершаются кодом 1 или не стартуют. Этот же класс выполняет
+  проверки результата задачи, поэтому на Windows проверки `task.handoff` ожидают те же отказы.
+  Восьмой — `ResearchCheckBridgeTest.piProtocolReusesTheNativeCallIdAcrossWireRetries`: локальный
+  Node не принимает модуль `data:text/javascript` (`SyntaxError: Unexpected token 'export'`).
+  Не «чинить» в одном наборе с песочницей: нужен отдельный разбор построения командной строки.
 
 ## Куда не идти
 

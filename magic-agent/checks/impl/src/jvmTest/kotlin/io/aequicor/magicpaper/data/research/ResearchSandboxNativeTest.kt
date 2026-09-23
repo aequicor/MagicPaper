@@ -186,10 +186,12 @@ class ResearchSandboxNativeTest {
                 assertFalse(Files.exists(project.resolve("build/late.txt")))
                 val owned = root.resolve("runtime/owned")
                 Files.list(owned).use { paths ->
-                    val identities = paths.filter { it.fileName.toString().startsWith("native-") && !it.fileName.toString().contains(".cleanup.") }.toList()
-                    assertEquals(1, identities.size)
-                    val identity = kotlinx.serialization.json.Json.decodeFromString(NativeCheckIdentity.serializer(), Files.readString(identities.single()))
-                    assertNull(readNativeCheckCleanup(identity.receipt, owned))
+                    val identities = paths.filter { it.fileName.toString().startsWith("native-") && !it.fileName.toString().contains(".cleanup.") }
+                        .map { kotlinx.serialization.json.Json.decodeFromString(NativeCheckIdentity.serializer(), Files.readString(it)) }.toList()
+                    // The OS probe finishes before the run and leaves its own confirmed receipt beside it;
+                    // the crashed run is the one identity that never received a cleanup proof.
+                    val crashed = identities.filter { readNativeCheckCleanup(it.receipt, owned) == null }
+                    assertEquals(1, crashed.size, identities.map { it.receipt.id }.toString())
                 }
                 // No persisted native cleanup proof: restart must retain authority as UNKNOWN.
                 Files.list(root.resolve("runtime")).use { paths -> assertTrue(paths.anyMatch { it.fileName.toString().startsWith("run-") }) }

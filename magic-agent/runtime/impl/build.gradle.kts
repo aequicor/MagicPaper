@@ -81,6 +81,7 @@ kotlin {
 }
 
 tasks.withType<Test>().configureEach {
+    systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
     systemProperty("magicpaper.browser.native", providers.gradleProperty("magicpaper.browser.native").getOrElse("false"))
     systemProperty("magicpaper.paperEditor.it", providers.gradleProperty("magicpaper.paperEditor.it").getOrElse("false"))
     val launcher = when {

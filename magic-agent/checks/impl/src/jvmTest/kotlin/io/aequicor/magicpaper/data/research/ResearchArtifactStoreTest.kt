@@ -1,8 +1,9 @@
 package io.aequicor.magicpaper.data.research
 
+import java.nio.file.Files
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import java.nio.file.Files
 import kotlin.test.*
 
 class ResearchArtifactStoreTest {
@@ -22,12 +23,15 @@ class ResearchArtifactStoreTest {
         val project = Files.createTempDirectory("artifact-project-").toRealPath()
         try {
             val manifest = root.resolve("artifacts-${ResearchArtifactStore.key(project.toString())}.json")
-            Files.writeString(manifest, "{\"/outside/file\":\"${"a".repeat(64)}\"}")
+            // A Windows path is not valid JSON on its own: encoding it keeps this a rejection of the
+            // malformed digest rather than a failure to parse the manifest at all.
+            fun write(entries: Map<String, String>) = Files.writeString(manifest,
+                Json.encodeToString(MapSerializer(String.serializer(), String.serializer()), entries))
+            write(mapOf("/outside/file" to "a".repeat(64)))
             assertFailsWith<IllegalStateException> { ResearchArtifactStore(root).read(project) }
             // A Windows path carries backslashes: interpolate it through the JSON writer, or the
             // manifest is unparseable and the test proves the decoder instead of the digest rule.
-            val inside = Json.encodeToString(String.serializer(), project.resolve("output").toString())
-            Files.writeString(manifest, "{$inside:\"not-a-digest\"}")
+            write(mapOf(project.resolve("output").toString() to "not-a-digest"))
             assertFailsWith<IllegalStateException> { ResearchArtifactStore(root).read(project) }
         } finally { root.toFile().deleteRecursively(); project.toFile().deleteRecursively() }
     }

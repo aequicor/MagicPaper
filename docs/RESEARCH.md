@@ -49,22 +49,30 @@ Codex получает `readOnly` и `approvalPolicy=never`; набор MCP со
 | --- | --- |
 | macOS | Seatbelt через системный `sandbox-exec`, запрет записи по умолчанию; отдельная группа процессов. Системные вызовы смены группы/сессии и `posix_spawn` запрещены, чтобы потомки не отделялись. Java использует поддерживаемый запуск `fork`. Инструменты, которым обязательно нужен `posix_spawn`, могут не работать; ограничение показывается в результате. |
 | Linux | `bubblewrap` (`/usr/bin/bwrap` или `/bin/bwrap`), корень только для чтения, отдельные user/PID/IPC/network namespaces, без capabilities и вложенных user namespaces. Нужны разрешённые ядром user namespaces и версия bwrap с `--disable-userns`. Сеть отключена. |
-| Windows | JNA, 64-битная Windows и NTFS. `CreateRestrictedToken` с уникальным restricting SID запуска, удалёнными привилегиями и `WRITE_RESTRICTED`; SID получает ACL только на результаты. Отдельный desktop, наследуются только stdio, Job Object с `KILL_ON_JOB_CLOSE`, без breakaway. **Фактически не работает**: см. ниже. |
+| Windows | JNA, 64-битная Windows и NTFS. Токен запуска с низким уровнем целостности: `CreateRestrictedToken` c `DISABLE_MAX_PRIVILEGE` и `SetTokenInformation(TokenIntegrityLevel)` в Low. Чтение остаётся пользовательским, запись вверх запрещена: каталоги результатов на время проверки получают наследуемую метку Low, а проект и реальный `.git` остаются Medium. После проверки исходная метка возвращается и её восстановление доказывается. Отдельный desktop с меткой Low, наследуются только stdio, Job Object с `KILL_ON_JOB_CLOSE`, без breakaway. |
 
-**Текущее состояние Windows.** Процесс с токеном `WRITE_RESTRICTED` завершается
+**Почему не `WRITE_RESTRICTED`.** Процесс с токеном `WRITE_RESTRICTED` завершается
 `STATUS_DLL_INIT_FAILED` (`0xC0000142`) до первой инструкции. Воспроизведено с run SID,
-logon SID, `Everyone` и всеми группами самого токена в списке restricting SID, с выдачей
-run SID прав на `winsta0` и на отдельный desktop, с `CREATE_NO_WINDOW` и с `DETACHED_PROCESS`,
-для `powershell.exe` и для `cmd.exe`; та же подготовка с обычным токеном процесс запускает.
-`WindowsResearchSandbox.confinesWrites` сообщает об этом явно. Произвольные команды
-(`PROTECTED_PROJECT`) поэтому остаются отказанными: резервного запуска без изоляции нет.
-`GIT_READ_ONLY` и `METADATA_READ_ONLY` — точный allowlist аргументов, усиленный
-`--no-optional-locks`, пустым `core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1`
-и `GIT_CONFIG_GLOBAL=NUL`, — больше не требуют пробы песочницы и на Windows выполняются без
-файловой политики, которую платформа всё равно не может обеспечить. Решение пользователя
-от 22 сентября 2026 года; на Linux и macOS эти команды по-прежнему идут в bwrap/Seatbelt
-с проектом только для чтения. Долг и требуемое решение механизма изоляции —
-в разделе «Долги» [STUDIO-ARCHITECTURE.md](STUDIO-ARCHITECTURE.md).
+logon SID, `Everyone`, `RESTRICTED_CODE` и всеми группами самого токена в списке restricting
+SID, с выдачей run SID прав на `winsta0` и на отдельный desktop, с `CREATE_NO_WINDOW` и с
+`DETACHED_PROCESS`, для `powershell.exe`, `java.exe`, `cmd.exe` и обёртки `Git\cmd\git.exe`;
+та же подготовка с обычным токеном процесс запускает. Консоль такому процессу недоступна
+в принципе: её выделение требует объекта, который может записать только SYSTEM, поэтому
+дерево консольных процессов не стартует ни с каким набором restricting SID кроме SYSTEM,
+а SYSTEM обнулил бы саму защиту. Метка целостности — штатный механизм Windows, который
+изоляцию записи сохраняет и деревья процессов не ломает: `ResearchSandboxNativeTest` на
+реальной ОС подтверждает отказы записи исходников и `.git`, запись артефакта, hardlink и
+symlink, отмену, повтор и восстановление после краха, поэтому
+`WindowsResearchSandbox.confinesWrites` остаётся `true`.
+
+Read-only Git (`GIT_READ_ONLY`, `METADATA_READ_ONLY`) больше не требует пробы песочницы ни
+на какой платформе: это точный allowlist аргументов, усиленный `--no-optional-locks`, пустым
+`core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1` и `GIT_CONFIG_GLOBAL=NUL`,
+а экран проекта, ожидание worktree и возобновление агента читают Git раньше любого запуска.
+Отказ песочницы по-прежнему оставляет произвольные команды (`PROTECTED_PROJECT`)
+отказанными: резервного запуска без изоляции нет. Платформа, которая не может ограничить
+запись вовсе (`ResearchSandbox.confinesWrites = false`), выполняет такие чтения без файловой
+политики и не делает вид, что они изолированы.
 
 Новые артефакты разрешены только в стандартных каталогах рядом с обнаруженными
 манифестами, включая модули:
@@ -138,17 +146,40 @@ Windows/Linux. Приведённые нативные тесты сохраня
 Перед слиянием включить последние коммиты локального `main` и повторить затронутые
 проверки. Публикация в GitHub не требуется.
 
+Windows-приёмка выполнена фактически 22 сентября 2026 года (Windows 11, x64, NTFS) на ветке
+`fix/restore-child-sessions-after-crash`: `.\gradlew.bat :magic-agent:checks:impl:jvmTest
+-Pmagicpaper.research.native=true --rerun-tasks` — 85 тестов, 0 отказов, 1 пропущен (Unix-only).
+Проходят `ResearchSandboxNativeTest` (проба песочницы, отказы записи/удаления/переименования
+исходников и `.git`, запись артефакта, hardlink и symlink, потомки после завершения и отмены,
+повторные проверки, восстановление после краха отдельной JVM), `NativeCheckProcessNativeTest`,
+`CheckBinaryNativeTest` и `NativeCheckReceiptTest`. Дополнительно подтверждён фактический
+Git-read через обёртку `Git\cmd\git.exe` в реальном репозитории: `git --version`,
+`rev-parse --is-inside-work-tree` и `symbolic-ref --quiet --short HEAD` возвращают код 0 — это
+те же команды, которыми `GitTaskWorkspace.availability` решает доступность worktree-режима.
+Эта цепочка целиком закреплена opt-in тестом `:magic-agent:runtime:impl:jvmTest
+-Pmagicpaper.research.native=true --tests '*GitTaskWorkspaceAvailabilityNativeTest'*`: настоящий
+репозиторий, настоящий владелец проверок и настоящая песочница обязаны дать `available = true`.
+Linux по-прежнему не запускался; macOS в этом прогоне не проверялась.
+
 ## Сверка с контрактами платформ
 
-Проверены флаги `DISABLE_MAX_PRIVILEGE` и `WRITE_RESTRICTED`, независимая проверка
-restricting SID и отдельный desktop из [CreateRestrictedToken](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken).
-Токен имеет требуемые `TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY` для
+Проверены флаги `DISABLE_MAX_PRIVILEGE` и `TokenIntegrityLevel`, состав метки `S:(ML;OICI;NW;;;LW)`,
+доступ `WRITE_OWNER` для понижения метки и отдельный desktop из [CreateRestrictedToken](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken)
+и [TOKEN_MANDATORY_LABEL](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_mandatory_label).
+`WRITE_RESTRICTED` с уникальным restricting SID на Windows не применяется: выделение консоли требует
+объекта, доступного на запись только SYSTEM, поэтому любое дерево консольных процессов (обёртка
+`Git\cmd\git.exe`, `cmd`, Gradle) умирало с `STATUS_DLL_INIT_FAILED` (0xC0000142) до первой команды,
+проба песочницы никогда не подтверждала защиту, и все sandbox-проверки — включая Git-чтения, от которых
+зависит доступность worktree-режима — оставались заблокированными. Наборы restricting SID
+(Everyone, RESTRICTED_CODE, logon SID) этот отказ не снимают; проверено фактическим запуском.
+Токен имеет требуемые `TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY` для
 [CreateProcessAsUserW](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessasuserw);
-поток стартует suspended и возобновляется после назначения в Job Object. Проверены
+дескриптор, возвращённый `CreateRestrictedToken`, не может понизить собственный уровень, поэтому метка
+ставится на его полную копию. Поток стартует suspended и возобновляется после назначения в Job Object. Проверены
 [список наследуемых handle](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute),
 [структура ограничений Job Object](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information)
-и [структура ACE](https://learn.microsoft.com/en-us/windows/win32/api/accctrl/ns-accctrl-explicit_access_w).
-Ошибка привилегий запуска, ACL или файловой системы блокирует проверку; приложение
+и [метка целостности](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control).
+Ошибка привилегий запуска, метки или файловой системы блокирует проверку; приложение
 не использует другой способ запуска с повышенными правами.
 
 Параметры namespace, bind mount, `--die-with-parent`, `--disable-userns` и сброс

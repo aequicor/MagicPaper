@@ -69,10 +69,10 @@ class NativeCheckReceiptTest {
         assertTrue(linux.windowed(3).contains(listOf("--bind", "/", "/")))
         assertFalse(linux.contains("--ro-bind")); assertFalse(linux.contains("--unshare-net")); assertFalse(linux.contains("--new-session"))
     }
-    @Test fun windowsAuthorityBundleRetainsExactOriginalsAndInheritanceProtection() {
-        val original = WindowsCheckAclReceipt("receipt", "S-1-5-21-123", listOf("C:\\fixture"), listOf(
-            WindowsCheckAclSnapshot("C:\\fixture", "volume-file-id", "D:PAI(A;OICI;FA;;;SY)"),
-            WindowsCheckAclSnapshot("C:\\fixture\\result.txt", "volume-file-id-2", "D:AI(A;ID;FA;;;SY)")))
-        assertEquals(original, Json.decodeFromString(WindowsCheckAclReceipt.serializer(), Json.encodeToString(WindowsCheckAclReceipt.serializer(), original)))
+    @Test fun windowsAuthorityBundleRetainsExactOriginalLabels() {
+        val original = WindowsCheckLabelReceipt("receipt", listOf("C:\\fixture"), listOf(
+            WindowsCheckLabelSnapshot("C:\\fixture", "volume-file-id", ""),
+            WindowsCheckLabelSnapshot("C:\\fixture\\result.txt", "volume-file-id-2", "S:AI(ML;OICIID;NW;;;LW)")))
+        assertEquals(original, Json.decodeFromString(WindowsCheckLabelReceipt.serializer(), Json.encodeToString(WindowsCheckLabelReceipt.serializer(), original)))
     }
 }

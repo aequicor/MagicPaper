@@ -14,7 +14,6 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -72,10 +71,12 @@ class ReadOnlyGitWithoutSandboxProbeNativeTest {
 
     @Test fun platformsThatConfineWritesStillBindReadOnlyGitIntoTheSandbox() {
         // The relaxation belongs to a platform that cannot confine writes at all; it must not be
-        // readable as a general exemption from the filesystem policy.
+        // readable as a general exemption from the filesystem policy. Windows confines writes with a
+        // low-integrity token — the native sandbox suite asserts the refusals on a real OS — so it keeps
+        // the policy, and flipping this back to false means the sandbox stopped confining writes there.
         assertTrue(LinuxResearchSandbox.confinesWrites)
         assertTrue(MacResearchSandbox.confinesWrites)
-        assertFalse(WindowsResearchSandbox.confinesWrites,
-            "A working Windows write restriction must flip this back and give read-only Git its filesystem policy again")
+        assertTrue(WindowsResearchSandbox.confinesWrites,
+            "Without write confinement on Windows read-only Git would lose its filesystem policy too")
     }
 }
