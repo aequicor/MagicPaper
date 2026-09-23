@@ -155,14 +155,18 @@ internal class CheckInputJournal(private val events: EventJournal, private val p
         var result = CommandCheckMachine.initial(workspace)
         var sequence = 0L
         val ids = mutableSetOf<String>()
-        observed.records.forEach { record ->
+        observed.records.forEachIndexed { index, record ->
             check(record.stream == stream && record.seq > sequence && record.seq <= observed.revision.seq && record.operation == OPERATION)
             val envelope = json.decodeFromString(Envelope.serializer(), record.detail)
             check(envelope.id.isNotBlank() && ids.add(envelope.id) && envelope.epoch == observed.revision.resetEpoch)
             val before = result
             val input = readInput(envelope)
             val next = CommandCheckMachine.reduce(before, input)
-            check(next.effects.none { it is CommandCheckMachine.Effect.Reject })
+            // Names the refused record by position, input kind and reason — never its command or paths — so a
+            // log line alone says which history the reducer could not accept.
+            val refused = next.effects.filterIsInstance<CommandCheckMachine.Effect.Reject>().firstOrNull()
+            check(refused == null) { "Replay refused record ${index + 1} of ${observed.records.size}: " +
+                "${CommandCheckMachine.space.name(input).name} (${refused?.reason})" }
             MachineTransitionLog.replay(CommandCheckMachine.id, CommandCheckMachine.space, before, input, next.state, next.effects)
             result = next.state
             sequence = record.seq

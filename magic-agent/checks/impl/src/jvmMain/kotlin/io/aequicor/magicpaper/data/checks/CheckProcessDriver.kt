@@ -42,7 +42,10 @@ internal class CheckNotDispatched(val safeReason: String, val restoredAuthority:
     IllegalStateException(safeReason, cause)
 internal class CheckTimedOut : IllegalStateException("Проверка остановлена по таймауту")
 internal class CheckOutputLimitExceeded : IllegalStateException("Вывод команды превышает допустимый размер")
-internal class CheckPreparationCancelled(val original: kotlinx.coroutines.CancellationException) :
-    kotlinx.coroutines.CancellationException("Check cancelled before native preparation") {
+/** Cancelled before the process was released. When a native process had already been prepared, the adapter
+ *  stopped it and [restoredAuthority] proves every acquired permission was restored. */
+internal class CheckPreparationCancelled(val original: kotlinx.coroutines.CancellationException,
+    val restoredAuthority: String? = null) :
+    kotlinx.coroutines.CancellationException("Check cancelled before its process was released") {
     init { initCause(original) }
 }

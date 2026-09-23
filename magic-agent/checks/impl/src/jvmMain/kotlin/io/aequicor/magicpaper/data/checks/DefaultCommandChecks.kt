@@ -98,7 +98,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                     val metadata = prepareGitMetadata(entry.journal, normalized)
                     currentCoroutineContext().ensureActive()
                     parentAdmissionAttempted = true
-                    val transition = entry.journal.append(Input.Intent.Submit(normalized))
+                    val transition = admit(entry.journal, normalized)
                     if (transition.effects.isEmpty()) return@withLock checkNotNull(entry.journal.state.checks[normalized.ref]?.result)
                     val effect = transition.effects.single() as CommandCheckMachine.Effect.Prepare
                     execute(entry.journal, effect.command, metadata)
@@ -145,7 +145,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                 query.arguments(), policy = CheckPolicy.METADATA_READ_ONLY, outputMode = CheckOutputMode.BINARY_STDOUT,
                 protectedResource = parent.resource, metadataSource = CheckMetadataSource(parent.ref, query), affectedResources = parent.affectedResources)
             claim(child)
-            journal.append(Input.Intent.Submit(child))
+            admit(journal, child)
             val result = execute(journal, child)
             if (result.exitCode != 0 || result.blockedReason != null) {
                 AppLog.error("checks", "metadata.unavailable", mapOf("sessionId" to parent.ref.scope.sessionId,
@@ -156,6 +156,30 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             outputs[query] = checkNotNull(result.binaryOutput) { "Сведения Git не сохранены" }
         }
         return CheckGitMetadata(parent.ref, parent.resource, outputs.toMap())
+    }
+
+    /**
+     * Journals a Submit under the owner's lock. A cancellation can win the return of an append whose record is
+     * already durable; the journal then adopts the admission and rethrows. Nothing was prepared for it, so the
+     * call is settled as not dispatched here — left PREPARING it made every later check of the workspace BUSY,
+     * and after a restart UNKNOWN for good.
+     */
+    private suspend fun admit(journal: CheckInputJournal, command: CheckCommand): CommandCheckMachine.Transition {
+        val known = command.ref in journal.state.checks
+        try { return journal.append(Input.Intent.Submit(command)) }
+        catch (failure: Throwable) {
+            val admitted = journal.state.checks[command.ref]
+            if (failure is CancellationException && !known && !journal.state.persistenceUnknown && admitted != null &&
+                admitted.phase == CommandCheckMachine.Phase.PREPARING && admitted.process == null && admitted.authorityReceipt == null)
+                withContext(NonCancellable) {
+                    try { journal.append(Input.Fact.NotDispatched(command.ref, null, CheckResult("", null, "Проверка отменена до запуска"))) }
+                    catch (settleFailure: Throwable) {
+                        failure.addSuppressed(settleFailure)
+                        journal.uncertain(settleFailure)
+                    }
+                }
+            throw failure
+        }
     }
 
     private suspend fun execute(journal: CheckInputJournal, command: CheckCommand, metadata: CheckGitMetadata? = null): CheckResult {
@@ -190,9 +214,13 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                         prepared == null && failure is CheckNotDispatched -> journal.append(Input.Fact.NotDispatched(ref,
                             failure.restoredAuthority, CheckResult("", null, failure.safeReason)))
                         prepared == null && failure is CheckPreparationCancelled -> journal.append(Input.Fact.NotDispatched(ref,
-                            null, CheckResult("", null, "Проверка отменена до запуска")))
+                            failure.restoredAuthority, CheckResult("", null, "Проверка отменена до запуска")))
                         prepared == null && !preparationStarted && failure is CancellationException && journal.state.checks[ref]?.authorityReceipt == null ->
                             journal.append(Input.Fact.NotDispatched(ref, null, CheckResult("", null, "Проверка отменена до запуска")))
+                        // The final record is durable and the failure — a cancellation winning the return of that
+                        // very append — came after it. The check is settled; finishing it again would append a
+                        // second ArtifactsCommitted, which the reducer refuses, and fence the workspace.
+                        prepared != null && journal.state.checks[ref]?.phase == CommandCheckMachine.Phase.FINISHED -> Unit
                         prepared != null -> {
                             // Cancellation is observed and journaled before signalling a native process.
                             // A journal outage cannot suppress the independent native cleanup attempt.
@@ -206,7 +234,15 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                                 primary = combine(primary, stopFailure)
                                 journal.uncertain(stopFailure)
                             }
-                            if ((failure is CancellationException || failure is CheckTimedOut || failure is CheckOutputLimitExceeded) && !journal.state.persistenceUnknown && !journal.state.unknown) {
+                            val proof = cleanup
+                            if (proof != null && !journal.state.persistenceUnknown && journal.state.checks[ref]?.process == null) {
+                                // ProcessPrepared never became durable, so neither did the Release that names the
+                                // process: it was never let go. With its cleanup proven the call was not dispatched,
+                                // not an unknown outcome that no saved completion could ever resolve.
+                                journal.append(Input.Fact.NotDispatched(ref, proof.authorityRestored, CheckResult("", null,
+                                    if (failure is CancellationException) "Проверка отменена до запуска"
+                                    else "Проверка не запущена: подготовка недоступна")))
+                            } else if ((failure is CancellationException || failure is CheckTimedOut || failure is CheckOutputLimitExceeded) && !journal.state.persistenceUnknown && !journal.state.unknown) {
                                 val stopped = outcome ?: CheckResult(output, null,
                                     when (failure) {
                                         is CheckTimedOut -> "Проверка остановлена по таймауту"
@@ -418,7 +454,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
             // the next fresh request retries the probe immediately instead of waiting out the backoff.
             val probe = driver.createProbe(ref)
             check(probe.command.workspace == workspace && probe.command.ref == ref)
-            entry.journal.append(Input.Intent.Submit(probe.command))
+            admit(entry.journal, probe.command)
             val job = currentCoroutineContext().job
             running[ref] = job
             try {

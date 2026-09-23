@@ -12,11 +12,34 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class SandboxCheckHandoffTest {
+    @Test fun cancellationBeforeTheBlockRunsIsNotDispatched() = runBlocking {
+        val root = Files.createTempDirectory("check-handoff-entry-")
+        val workspace = Files.createDirectory(root.resolve("project"))
+        val driver = SandboxCheckDriver(root.resolve("checks"), 1000) { error("the native adapter must not be reached") }
+        var thrown: Throwable? = null
+        try {
+            val task = async {
+                // withContext checks cancellation on entry and then never runs its block.
+                currentCoroutineContext().cancel()
+                try {
+                    driver.prepare(CheckCommand(CheckRef(CheckScope("p", "s", "r", 0), "call"), workspace.toString(),
+                        listOf("git"), policy = CheckPolicy.MANAGED_WORKTREE), "receipt", CheckAuthorityRecorder { _, _ -> error("Unexpected ACL") })
+                } catch (failure: Throwable) { thrown = failure; throw failure }
+                Unit
+            }
+            assertFailsWith<CancellationException> { task.await() }
+            val cancelled = assertIs<io.aequicor.magicpaper.data.checks.CheckPreparationCancelled>(thrown,
+                "nothing was prepared, so the owner can record the call as not dispatched instead of unknown")
+            assertNull(cancelled.restoredAuthority)
+        } finally { driver.cleanup(); root.toFile().deleteRecursively() }
+    }
+
     @Test fun promptCancellationAtDispatcherReturnCannotLosePreparedProcess() = runBlocking {
         val root = Files.createTempDirectory("check-handoff-")
         val workspace = Files.createDirectory(root.resolve("project"))
         var stops = 0
         var releases = 0
+        var thrown: Throwable? = null
         lateinit var task: Deferred<Unit>
         val sandbox = object : ResearchSandbox {
             override fun prepare(command: List<String>, cwd: Path, environment: Map<String, String>, policy: ResearchWorkspacePolicy?,
@@ -42,12 +65,17 @@ class SandboxCheckHandoffTest {
             task = async(start = CoroutineStart.LAZY) {
                 val executable = Paths.get(System.getProperty("java.home"), "bin",
                     if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java").toString()
-                driver.prepare(CheckCommand(CheckRef(CheckScope("p", "s", "r", 0), "call"), workspace.toString(),
-                    listOf(executable), policy = CheckPolicy.MANAGED_WORKTREE), "receipt", CheckAuthorityRecorder { _, _ -> error("Unexpected ACL") })
+                // await() of a cancelled task reports the task's own cancellation, not what the driver threw.
+                try {
+                    driver.prepare(CheckCommand(CheckRef(CheckScope("p", "s", "r", 0), "call"), workspace.toString(),
+                        listOf(executable), policy = CheckPolicy.MANAGED_WORKTREE), "receipt", CheckAuthorityRecorder { _, _ -> error("Unexpected ACL") })
+                } catch (failure: Throwable) { thrown = failure; throw failure }
                 Unit
             }
             task.start()
             assertFailsWith<CancellationException> { task.await() }
+            assertEquals("authority", assertIs<io.aequicor.magicpaper.data.checks.CheckPreparationCancelled>(thrown).restoredAuthority,
+                "a stopped, never released process reaches the owner as not dispatched, with its cleanup proof")
             assertEquals(0, releases)
             assertEquals(1, stops)
             driver.cleanup()

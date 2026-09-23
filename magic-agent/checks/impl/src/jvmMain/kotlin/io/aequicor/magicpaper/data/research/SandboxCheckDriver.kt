@@ -32,10 +32,11 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
     private suspend fun prepareOwned(command: CheckCommand, receiptId: String,
         authority: io.aequicor.magicpaper.data.checks.CheckAuthorityRecorder, metadata: CheckGitMetadata?): PreparedCommandCheck {
         var acquired: PreparedCommandCheck? = null
+        // Read by the outer catch as well: a cancellation at the entry of withContext never runs the block.
+        var nativeEntered = false
         try { return withContext(Dispatchers.IO) {
         var scratch: Path? = null
         var native: PreparedCheckProcess? = null
-        var nativeEntered = false
         try {
             val project = Paths.get(command.workspace).toRealPath()
             require(!Paths.get(command.subdirectory).isAbsolute)
@@ -105,10 +106,23 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
         } } catch (failure: Throwable) {
             // Prompt cancellation on a dispatcher handoff happens outside the inner withContext body.
             // Retain the resource before that boundary and always attempt its cleanup here.
-            acquired?.let { resource ->
-                try { withContext(NonCancellable) { resource.stopAndConfirm(); resource.discard() } }
-                catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
+            val resource = acquired ?: run {
+                // Cancelled before the block reached the native adapter — at the entry of withContext, which then
+                // never runs it: nothing was prepared and no permission changed, so the call was not dispatched.
+                if (failure is CancellationException && failure !is CheckPreparationCancelled && !nativeEntered)
+                    throw CheckPreparationCancelled(failure)
+                throw failure
             }
+            val cleanup = try { withContext(NonCancellable) { resource.stopAndConfirm().also { resource.discard() } } }
+            catch (cleanupFailure: Throwable) {
+                if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+                throw failure
+            }
+            // Prepared, never released, stopped with its permissions restored: the owner records the call as not
+            // dispatched. A bare cancellation reads as an unknown outcome, and no completion is ever saved for a
+            // process that never ran, so it would fence every later check of the workspace across restarts.
+            if (failure is CancellationException && failure !is CheckPreparationCancelled)
+                throw CheckPreparationCancelled(failure, cleanup.authorityRestored)
             throw failure
         }
     }

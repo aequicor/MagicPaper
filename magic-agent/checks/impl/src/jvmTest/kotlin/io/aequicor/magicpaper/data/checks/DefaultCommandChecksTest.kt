@@ -12,6 +12,7 @@ class DefaultCommandChecksTest {
     private class Driver : CheckProcessDriver {
         var prepares = 0; var releases = 0; var stops = 0; var attestations = 0
         var prepareFailure: Throwable? = null
+        var recordsAuthority = false
         var cleanupFailure: Throwable? = null
         var onReleased: (() -> Unit)? = null
         var awaitCompletion: CompletableDeferred<Unit>? = null
@@ -33,6 +34,7 @@ class DefaultCommandChecksTest {
         }
         override suspend fun prepare(command: CheckCommand, receiptId: String, authority: CheckAuthorityRecorder): PreparedCommandCheck {
             prepares++
+            if (recordsAuthority) authority.record("acl", byteArrayOf(1))
             prepareFailure?.let { throw it }
             return object : PreparedCommandCheck {
                 override val receipt = CheckProcessReceipt(receiptId, "test-group", 123)
@@ -54,6 +56,79 @@ class DefaultCommandChecksTest {
         finally { Files.deleteIfExists(workspace) }
     }
     private fun command(path: String) = CheckCommand(CheckRef(CheckScope("project", "session", "request", 0), "call"), path, listOf("tool"))
+
+    // A project screen cancels its Git reads when the user navigates away. A cancellation after the adapter
+    // prepared the process, stopped it and restored its permissions is a call that was never dispatched; read
+    // as an unknown outcome it fenced every later check of the workspace, across restarts, because no
+    // completion is ever saved for a process that never ran.
+    @Test fun preparationCancelledWithProvenCleanupDoesNotFenceTheWorkspace() = runTest { fixture { path, events, payloads, driver ->
+        val owner = DefaultCommandChecks(events, payloads, driver)
+        driver.recordsAuthority = true
+        driver.prepareFailure = CheckPreparationCancelled(CancellationException("navigated away"), "authority-restored")
+        assertFailsWith<CancellationException> { owner.run(command(path)) }
+        driver.recordsAuthority = false; driver.prepareFailure = null
+        val next = command(path).let { it.copy(ref = it.ref.copy(callId = "next")) }
+        assertEquals(0, owner.run(next).exitCode)
+        assertEquals(0, DefaultCommandChecks(events, payloads, driver).run(next.copy(ref = next.ref.copy(callId = "restarted"))).exitCode)
+        assertEquals(2, driver.releases)
+    } }
+
+    @Test fun cancellationBeforeThePreparedProcessIsJournaledDoesNotFenceTheWorkspace() = runTest { fixture { path, _, payloads, driver ->
+        val actual = InMemoryEventJournal()
+        var appends = 0
+        val events = object : EventJournal by actual {
+            // Submit is the first record; the second is ProcessPrepared, cancelled before it lands.
+            override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+                if (++appends == 2) throw CancellationException("navigated away")
+                return actual.append(expected, operation, at, detail)
+            }
+        }
+        val owner = DefaultCommandChecks(events, payloads, driver)
+        assertFailsWith<CancellationException> { owner.run(command(path)) }
+        assertEquals(0, driver.releases, "a process whose preparation was never journaled is never released")
+        assertEquals(1, driver.stops)
+        val next = command(path).let { it.copy(ref = it.ref.copy(callId = "next")) }
+        assertEquals(0, owner.run(next).exitCode)
+        assertEquals(0, DefaultCommandChecks(actual, payloads, driver).run(next.copy(ref = next.ref.copy(callId = "restarted"))).exitCode)
+    } }
+
+    @Test fun cancellationAfterTheSubmitLandedDoesNotLeaveTheWorkspaceBusy() = runTest { fixture { path, _, payloads, driver ->
+        val actual = InMemoryEventJournal()
+        var appends = 0
+        val events = object : EventJournal by actual {
+            // The Submit is durable when the caller's cancellation wins the return; preparation never begins.
+            override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+                val record = actual.append(expected, operation, at, detail)
+                if (++appends == 1) throw CancellationException("navigated away")
+                return record
+            }
+        }
+        val owner = DefaultCommandChecks(events, payloads, driver)
+        assertFailsWith<CancellationException> { owner.run(command(path)) }
+        assertEquals(0, driver.prepares)
+        val next = command(path).let { it.copy(ref = it.ref.copy(callId = "next")) }
+        assertEquals(0, owner.run(next).exitCode)
+        assertEquals(0, DefaultCommandChecks(actual, payloads, driver).run(next.copy(ref = next.ref.copy(callId = "restarted"))).exitCode)
+    } }
+
+    @Test fun cancellationAfterTheFinalRecordLandedLeavesTheCheckFinished() = runTest { fixture { path, _, payloads, driver ->
+        val actual = InMemoryEventJournal()
+        var appends = 0
+        val events = object : EventJournal by actual {
+            // Submit, ProcessPrepared, Release, Exited, GroupStopped, AuthorityRestored, then ArtifactsCommitted:
+            // the last one is durable when the caller's cancellation wins the return.
+            override suspend fun append(expected: JournalRevision, operation: String, at: Long, detail: String): JournalRecord? {
+                val record = actual.append(expected, operation, at, detail)
+                if (++appends == 7) throw CancellationException("navigated away")
+                return record
+            }
+        }
+        val owner = DefaultCommandChecks(events, payloads, driver)
+        assertFailsWith<CancellationException> { owner.run(command(path)) }
+        val next = command(path).let { it.copy(ref = it.ref.copy(callId = "next")) }
+        assertEquals(0, owner.run(next).exitCode)
+        assertEquals(0, DefaultCommandChecks(actual, payloads, driver).run(next.copy(ref = next.ref.copy(callId = "restarted"))).exitCode)
+    } }
 
     @Test fun duplicateExactCallAndReopenReturnReceiptWithoutLaunchingAgain() = runTest { fixture { path, events, payloads, driver ->
         val owner = DefaultCommandChecks(events, payloads, driver)
