@@ -229,24 +229,17 @@ private fun runMagicPaperWindow(
             }
             val feedback = remember(window) { DesktopComputerFeedback() }
             DisposableEffect(feedback) { onDispose { feedback.close() } }
-            // Agent mini-panel: always-on-top overlay when the main window is minimized.
-            val codingService = remember(runtime) { runtime.koin.get<io.aequicor.magicpaper.ui.CodingService>() }
+            // Docked agent panel: an always-on-top tab on the screen edge while this window is
+            // minimized or unfocused and some session still works or waits for the reader.
+            // The panel observes the owner window and decides its own visibility.
             val agentPanel = remember(window, runtime) {
                 DesktopAgentPanel(
-                    codingServiceState = codingService.state,
-                    onSend = { text -> codingService.sendCodingPrompt(text) },
-                    onRestore = {
-                        state.isMinimized = false
-                        window.isVisible = true
-                        window.toFront()
-                        window.requestFocus()
-                    },
+                    owner = window,
+                    coding = runtime.koin.get<io.aequicor.magicpaper.ui.CodingService>(),
+                    placement = runtime.koin.get<io.aequicor.magicpaper.data.storage.KeyValueStore>(),
                 )
             }
             DisposableEffect(agentPanel) { onDispose { agentPanel.close() } }
-            LaunchedEffect(state.isMinimized) {
-                if (state.isMinimized) agentPanel.show() else agentPanel.hide()
-            }
             LaunchedEffect(computerState?.activity, compact) {
                 if (!compact) { feedback.close(); feedbackError = false }
                 else computerState?.activity?.let { activity ->

@@ -1,400 +1,428 @@
 package io.aequicor.magicpaper
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.awt.ComposeWindow
-import io.aequicor.magicpaper.designsystem.*
-import io.aequicor.magicpaper.domain.CodingMessage
+import io.aequicor.magicpaper.data.storage.KeyValueStore
+import io.aequicor.magicpaper.designsystem.PaperAgentDock
+import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedHeight
+import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedWidth
+import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedHeight
+import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedWidth
+import io.aequicor.magicpaper.designsystem.PaperAgentDockModel
+import io.aequicor.magicpaper.designsystem.PaperDockAuthor
+import io.aequicor.magicpaper.designsystem.PaperDockMessage
+import io.aequicor.magicpaper.designsystem.PaperTheme
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.ui.CodingService
+import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingState
-import kotlinx.coroutines.flow.StateFlow
-import java.awt.Color as AwtColor
-import java.nio.file.Path
+import io.aequicor.magicpaper.ui.screens.ActivityDot
+import io.aequicor.magicpaper.ui.screens.label
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.awt.Color
+import java.awt.Desktop
+import java.awt.Frame
+import java.awt.GraphicsEnvironment
+import java.awt.Rectangle
+import java.awt.Window
+import java.awt.event.WindowEvent
+import java.awt.event.WindowFocusListener
+import java.awt.event.WindowStateListener
+import javax.swing.SwingUtilities
+import kotlin.math.ceil
+import kotlin.math.roundToInt
+
+/** Which screen edge the dock hugs; the panel grows away from it. */
+internal enum class DockEdge { START, END }
 
 /**
- * Always-on-top overlay that shows agent activity when the main window is minimized.
- * Collapsed: a thin strip with a pulsing status dot.
- * Expanded on hover: a chat panel with recent messages and an input field.
- * Position is persisted along the screen edge.
+ * Host-only window geometry for the docked agent panel.
+ *
+ * The panel is the reader's view of a run while MagicPaper itself is away: it appears when the
+ * main window is minimized *or* has lost focus, and only while some session still needs the
+ * reader or is working. Idle sessions stay hidden so the screen edge is not covered for nothing.
+ *
+ * This class owns the AWT window, its size in device pixels and its remembered place on the
+ * edge. It never owns the run: sending, stopping and reading state belong to [CodingService],
+ * and every visual decision belongs to [PaperAgentDock].
  */
 internal class DesktopAgentPanel(
-    private val codingServiceState: StateFlow<CodingState>,
-    private val onSend: (String) -> Unit,
-    private val onRestore: () -> Unit,
+    private val owner: Window,
+    private val coding: CodingService,
+    private val placement: KeyValueStore,
 ) : AutoCloseable {
-    private var overlay: ComposeWindow? = null
-    private val positionFile: Path = agentPanelPositionFile()
-
-    fun show() {
-        val window = overlay ?: createWindow().also { overlay = it }
-        window.isVisible = true
+    private companion object {
+        const val PLACEMENT_KEY = "desktop.agentDock.placement"
+        const val DEFAULT_OFFSET = 0.34f
+        /** The dock shows a recent window of the transcript, not the whole journal. */
+        const val MAX_MESSAGES = 40
+        const val MAX_MESSAGE_CHARS = 2000
+        /** Most urgent first: the dock shows one session, so it shows the one that needs the reader. */
+        val URGENCY = listOf(
+            CodingSessionStatus.WORKING,
+            CodingSessionStatus.WAITING,
+            CodingSessionStatus.CONFIRMATION,
+            CodingSessionStatus.BLOCKED,
+            CodingSessionStatus.UNREAD,
+            CodingSessionStatus.NEEDS_TESTING,
+            CodingSessionStatus.QUEUED,
+            CodingSessionStatus.SCHEDULED,
+        )
     }
 
-    fun hide() {
-        overlay?.isVisible = false
+    /** What the dock shows; null hides it. One write per state change keeps invalidation cheap. */
+    private data class Snapshot(
+        val model: PaperAgentDockModel,
+        val status: CodingSessionStatus,
+        val sessionId: String,
+    )
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val snapshot = mutableStateOf<Snapshot?>(null)
+    private val expanded = mutableStateOf(false)
+    private val input = mutableStateOf("")
+    private val edge = mutableStateOf(DockEdge.START)
+
+    private var overlay: ComposeWindow? = null
+    /** Fraction of the free edge height above the panel, so the place survives a resolution change. */
+    private var offset = DEFAULT_OFFSET
+    private var ownerMinimized = false
+    private var ownerFocused = true
+    /** A failed overlay must not be retried on every state change. */
+    private var unavailable = false
+
+    private val stateListener = WindowStateListener { event ->
+        ownerMinimized = event.newState and Frame.ICONIFIED != 0
+        applyVisibility()
+    }
+    private val focusListener = object : WindowFocusListener {
+        override fun windowGainedFocus(event: WindowEvent) { ownerFocused = true; applyVisibility() }
+        override fun windowLostFocus(event: WindowEvent) { ownerFocused = false; applyVisibility() }
+    }
+
+    init {
+        restorePlacement()
+        ownerMinimized = (owner as? Frame)?.let { it.extendedState and Frame.ICONIFIED != 0 } ?: false
+        ownerFocused = owner.isFocused
+        owner.addWindowStateListener(stateListener)
+        owner.addWindowFocusListener(focusListener)
+        scope.launch {
+            coding.state.collect { state ->
+                snapshot.value = state.dockSnapshot()
+                // Window visibility is an AWT decision and belongs on the EDT.
+                SwingUtilities.invokeLater(::applyVisibility)
+            }
+        }
+        applyVisibility()
     }
 
     override fun close() {
+        scope.cancel()
+        owner.removeWindowStateListener(stateListener)
+        owner.removeWindowFocusListener(focusListener)
         overlay?.dispose()
         overlay = null
     }
 
-    private fun createWindow(): ComposeWindow {
-        val screen = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
-            .defaultScreenDevice.defaultConfiguration.bounds
-        val savedPosition = loadPosition()
-        val panelHeight = 600
-        val initialY = savedPosition ?: (screen.height - panelHeight) / 2
+    // region visibility
 
-        return ComposeWindow().apply {
-            name = "MagicPaperAgentPanel"
-            title = "MagicPaper · агент"
-            isUndecorated = true
-            isTransparent = true
-            background = AwtColor(0, 0, 0, 0)
-            isAlwaysOnTop = true
-            isAutoRequestFocus = false
-            focusableWindowState = true
-
-            val collapsedWidth = 48
-            setBounds(screen.x, initialY, collapsedWidth, panelHeight)
-
-            setContent {
-                PaperTheme {
-                    AgentPanelContent(
-                        codingState = codingServiceState,
-                        collapsedWidth = collapsedWidth.dp,
-                        expandedWidth = 380.dp,
-                        panelHeight = panelHeight.dp,
-                        onSend = onSend,
-                        onRestore = onRestore,
-                    )
-                }
-            }
-            isVisible = true
+    private fun applyVisibility() {
+        val wanted = snapshot.value != null && (ownerMinimized || !ownerFocused)
+        if (!wanted) {
+            overlay?.isVisible = false
+            return
         }
+        show()
     }
 
-    private fun loadPosition(): Int? = try {
-        val file = positionFile.toFile()
-        if (file.exists()) file.readText().trim().toIntOrNull() else null
-    } catch (_: Exception) { null }
-
-    private fun savePosition(y: Int) {
+    private fun show() {
+        if (unavailable) return
         try {
-            val file = positionFile.toFile()
-            file.parentFile?.mkdirs()
-            file.writeText(y.toString())
-        } catch (_: Exception) { /* ignore persistence failures */ }
-    }
-}
-
-private fun agentPanelPositionFile(): Path {
-    val base = System.getProperty("user.home", ".")
-    return Path.of(base, ".MagicPaper", "agent-panel-position.txt")
-}
-
-@Composable
-private fun AgentPanelContent(
-    codingState: StateFlow<CodingState>,
-    collapsedWidth: Dp,
-    expandedWidth: Dp,
-    panelHeight: Dp,
-    onSend: (String) -> Unit,
-    onRestore: () -> Unit,
-) {
-    val state by codingState.collectAsState()
-    val currentSession = state.coding.currentSession
-    val status = currentSession?.status ?: CodingSessionStatus.IDLE
-    val running = currentSession?.running == true
-    val messages = currentSession?.messages.orEmpty()
-    val sessionName = currentSession?.session?.name?.takeIf { it.isNotBlank() }
-        ?: currentSession?.session?.id?.take(8).orEmpty()
-
-    var expanded by remember { mutableStateOf(false) }
-    var inputText by remember { mutableStateOf("") }
-
-    val dotColor = statusDotColor(status)
-    val currentWidth = if (expanded) expandedWidth else collapsedWidth
-
-    Box(
-        modifier = Modifier
-            .width(currentWidth)
-            .height(panelHeight)
-            .pointerInput(expanded) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        when (event.type) {
-                            PointerEventType.Enter -> if (!expanded) expanded = true
-                            PointerEventType.Exit -> {
-                                val pos = event.changes.firstOrNull()?.position
-                                if (pos != null && (pos.x < 0 || pos.x > size.width || pos.y < 0 || pos.y > size.height)) {
-                                    expanded = false
-                                }
-                            }
-                        }
-                    }
-                }
+            val window = overlay ?: createOverlay().also { overlay = it }
+            // Every appearance starts as the narrow tab: the panel grows only under the pointer.
+            expanded.value = false
+            applyGeometry(window)
+            if (!window.isVisible) {
+                window.isVisible = true
+                AppLog.info("desktop_host", "agent.dock.shown", mapOf(
+                    "status" to snapshot.value?.status?.name.orEmpty(),
+                    "edge" to edge.value.name,
+                ))
             }
-    ) {
-        PaperSurface(
-            modifier = Modifier.fillMaxSize(),
-            kind = PaperSurfaceKind.RAISED,
-            shape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 12.dp, bottomEnd = 12.dp),
-        ) {
-            if (expanded) {
-                ExpandedPanelContent(
-                    messages = messages,
-                    sessionName = sessionName,
-                    status = status,
-                    inputText = inputText,
-                    onInputChange = { inputText = it },
-                    onSend = {
-                        if (inputText.isNotBlank()) {
-                            onSend(inputText.trim())
-                            inputText = ""
-                        }
-                    },
-                    onRestore = onRestore,
-                    dotColor = dotColor,
-                )
-            } else {
-                CollapsedPanelContent(
-                    dotColor = dotColor,
-                    running = running,
-                    sessionName = sessionName,
-                )
-            }
+        } catch (error: Exception) {
+            unavailable = true
+            overlay?.dispose()
+            overlay = null
+            AppLog.error("desktop_host", "agent.dock.show.failed", error,
+                mapOf("result" to "dock_disabled"))
         }
     }
-}
 
-@Composable
-private fun CollapsedPanelContent(
-    dotColor: Color,
-    running: Boolean,
-    sessionName: String,
-) {
-    val colors = LocalPaperColors.current
-    Column(
-        modifier = Modifier.fillMaxSize().padding(vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        PulsingDot(color = dotColor, active = running)
+    private fun createOverlay(): ComposeWindow = ComposeWindow().apply {
+        name = "MagicPaperAgentDock"
+        title = "MagicPaper · агент"
+        isUndecorated = true
+        isTransparent = true
+        background = Color(0, 0, 0, 0)
+        isAlwaysOnTop = true
+        // Appearing beside another application must not take focus from it; the composer
+        // takes focus only when the reader clicks into it.
+        isAutoRequestFocus = false
+        focusableWindowState = true
+        setContent { DockSurface() }
+    }
 
-        if (sessionName.isNotEmpty()) {
-            PaperText(
-                sessionName,
-                style = LocalPaperTypography.current.chrome,
-                color = colors.secondaryText,
-                modifier = Modifier.padding(horizontal = 4.dp),
+    @Composable
+    private fun DockSurface() {
+        PaperTheme {
+            val current = snapshot.value ?: return@PaperTheme
+            PaperAgentDock(
+                expanded = expanded.value,
+                onExpandedChange = ::setExpanded,
+                model = current.model,
+                dockedToStart = edge.value == DockEdge.START,
+                // The sidebar's own dot and label: one session never reads as two states.
+                indicator = { ActivityDot(current.status, size = 14) },
+                input = input.value,
+                onInputChange = { input.value = it },
+                onSend = ::send,
+                onStop = ::stop,
+                onOpenMainWindow = ::restoreOwner,
+                onDragBy = ::dragBy,
+                onDragEnd = ::persistPlacement,
             )
         }
+    }
 
-        PaperText(
-            "↗",
-            style = LocalPaperTypography.current.chrome,
-            color = colors.secondaryText,
+    private fun setExpanded(value: Boolean) {
+        if (expanded.value == value) return
+        expanded.value = value
+        overlay?.let(::applyGeometry)
+        AppLog.debug("desktop_host", "agent.dock.expansion", mapOf("expanded" to value.toString()))
+    }
+
+    // endregion
+
+    // region actions
+
+    private fun send() {
+        val current = snapshot.value ?: return
+        val text = input.value.trim()
+        if (text.isEmpty() || !current.model.canSend) return
+        input.value = ""
+        try {
+            coding.sendCodingPromptTo(current.sessionId, text)
+        } catch (error: Exception) {
+            // A rejected send must not lose what the reader typed.
+            input.value = text
+            AppLog.error("desktop_host", "agent.dock.send.failed", error,
+                mapOf("result" to "draft_restored"))
+        }
+    }
+
+    private fun stop() {
+        val current = snapshot.value ?: return
+        try {
+            coding.abortCodingSession(current.sessionId)
+        } catch (error: Exception) {
+            AppLog.error("desktop_host", "agent.dock.stop.failed", error)
+        }
+    }
+
+    private fun restoreOwner() {
+        try {
+            (owner as? Frame)?.let { frame ->
+                frame.extendedState = frame.extendedState and Frame.ICONIFIED.inv()
+            }
+            owner.isVisible = true
+            owner.toFront()
+            owner.requestFocus()
+            if (Desktop.isDesktopSupported()) {
+                val desktop = Desktop.getDesktop()
+                if (desktop.isSupported(Desktop.Action.APP_REQUEST_FOREGROUND)) desktop.requestForeground(true)
+            }
+        } catch (error: Exception) {
+            AppLog.error("desktop_host", "agent.dock.restore.failed", error,
+                mapOf("result" to "dock_stays_visible"))
+        }
+    }
+
+    // endregion
+
+    // region geometry
+
+    /**
+     * Size the window from the same display scale Compose uses for its density. Window bounds
+     * are device pixels while the dock is laid out in dp: guessing here clips the composer at
+     * 150 % scaling. Rounding up never clips; it can only leave a transparent pixel.
+     */
+    private fun applyGeometry(window: ComposeWindow) {
+        val usable = usableArea(window) ?: return
+        val scale = configuration()?.defaultTransform?.scaleX ?: 1.0
+        val open = expanded.value
+        val width = ceil((if (open) PaperAgentDockExpandedWidth else PaperAgentDockCollapsedWidth).value * scale)
+            .toInt().coerceIn(1, usable.width)
+        val height = ceil((if (open) PaperAgentDockExpandedHeight else PaperAgentDockCollapsedHeight).value * scale)
+            .toInt().coerceIn(1, usable.height)
+        val x = if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - width
+        val lowest = (usable.y + usable.height - height).coerceAtLeast(usable.y)
+        val y = (usable.y + ((usable.height - height) * offset).roundToInt()).coerceIn(usable.y, lowest)
+        window.setBounds(x, y, width, height)
+    }
+
+    /**
+     * The owner's screen, minus its taskbar/Dock insets: the panel lives where the app lives.
+     * A not-yet-displayable overlay reports no configuration of its own, so the owner's is the
+     * single source for both the usable area and the display scale.
+     */
+    private fun configuration() = owner.graphicsConfiguration
+        ?: overlay?.graphicsConfiguration
+        ?: GraphicsEnvironment.getLocalGraphicsEnvironment()?.defaultScreenDevice?.defaultConfiguration
+
+    private fun usableArea(window: Window): Rectangle? {
+        val configuration = configuration() ?: return null
+        val bounds = configuration.bounds ?: return null
+        val insets = try { window.toolkit.getScreenInsets(configuration) } catch (error: Exception) {
+            AppLog.error("desktop_host", "agent.dock.insets.failed", error, mapOf("result" to "full_screen"))
+            null
+        }
+        val left = insets?.left ?: 0
+        val right = insets?.right ?: 0
+        val top = insets?.top ?: 0
+        val bottom = insets?.bottom ?: 0
+        return Rectangle(
+            bounds.x + left,
+            bounds.y + top,
+            (bounds.width - left - right).coerceAtLeast(1),
+            (bounds.height - top - bottom).coerceAtLeast(1),
         )
     }
-}
 
-@Composable
-private fun ExpandedPanelContent(
-    messages: List<CodingMessage>,
-    sessionName: String,
-    status: CodingSessionStatus,
-    inputText: String,
-    onInputChange: (String) -> Unit,
-    onSend: () -> Unit,
-    onRestore: () -> Unit,
-    dotColor: Color,
-) {
-    val colors = LocalPaperColors.current
-    val spacing = LocalPaperSpacing.current
-    val scrollState = androidx.compose.foundation.rememberScrollState()
+    /**
+     * Move along the edge. Crossing the screen's middle re-anchors the panel to that edge, so
+     * the reader can park it left or right without a separate setting.
+     */
+    private fun dragBy(deltaX: Float, deltaY: Float) {
+        val window = overlay ?: return
+        val usable = usableArea(window) ?: return
+        val bounds = window.bounds
+        val lowest = (usable.y + usable.height - bounds.height).coerceAtLeast(usable.y)
+        val proposed = (bounds.y + deltaY.roundToInt()).coerceIn(usable.y, lowest)
+        val travel = usable.height - bounds.height
+        offset = if (travel > 0) (proposed - usable.y).toFloat() / travel else DEFAULT_OFFSET
+        val centre = bounds.x + bounds.width / 2 + deltaX.roundToInt()
+        edge.value = if (centre < usable.x + usable.width / 2) DockEdge.START else DockEdge.END
+        window.setLocation(
+            if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - bounds.width,
+            proposed,
+        )
+    }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            scrollState.animateScrollTo(scrollState.maxValue)
+    // endregion
+
+    // region remembered placement
+
+    private fun persistPlacement() {
+        val saved = "${edge.value.name}:$offset"
+        try {
+            placement.write(PLACEMENT_KEY, saved)
+        } catch (error: Exception) {
+            // The panel keeps working; only the next launch loses the place.
+            AppLog.error("desktop_host", "agent.dock.placement.save.failed", error)
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(spacing.sm).padding(bottom = spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PulsingDot(color = dotColor, active = status == CodingSessionStatus.WORKING, size = 10.dp)
-                Spacer(Modifier.width(spacing.xs))
-                PaperText(
-                    statusLabel(status),
-                    style = LocalPaperTypography.current.chrome,
-                    color = colors.secondaryText,
-                )
-            }
-            PaperText(
-                "↗ Развернуть",
-                style = LocalPaperTypography.current.chrome,
-                color = colors.action,
-                modifier = Modifier.paperClickable(onClick = onRestore),
-            )
-        }
-
-        // Session name
-        if (sessionName.isNotEmpty()) {
-            PaperText(
-                sessionName,
-                style = LocalPaperTypography.current.label,
-                color = colors.text,
-                modifier = Modifier.padding(horizontal = spacing.sm).padding(bottom = spacing.xs),
-            )
-        }
-
-        // Messages area
-        Box(
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = spacing.sm)
-                .clip(RoundedCornerShape(8.dp))
-                .background(colors.canvas.copy(alpha = 0.5f))
-                .padding(spacing.xs)
-                .verticalScroll(scrollState),
-        ) {
-            Column {
-                val visibleMessages = messages.takeLast(50).filter { !it.systemContext }
-                if (visibleMessages.isEmpty()) {
-                    PaperText(
-                        "Нет сообщений",
-                        style = LocalPaperTypography.current.body,
-                        color = colors.disabled,
-                        modifier = Modifier.padding(spacing.sm),
-                    )
-                } else {
-                    visibleMessages.forEach { message ->
-                        MessageBubble(message, colors)
-                        Spacer(Modifier.height(spacing.xxs))
-                    }
-                }
-            }
-        }
-
-        // Input area
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PaperInput(
-                value = inputText,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { PaperText("Сообщение агенту…", color = colors.disabled) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
-            )
-            Spacer(Modifier.width(spacing.xs))
-            PaperIconButton(label = "Отправить", onClick = onSend, modifier = Modifier.size(40.dp)) {
-                PaperText("→", role = PaperTextRole.CHROME)
-            }
-        }
+    private fun restorePlacement() {
+        val saved = try { placement.read(PLACEMENT_KEY) } catch (error: Exception) {
+            AppLog.error("desktop_host", "agent.dock.placement.load.failed", error,
+                mapOf("result" to "default_placement"))
+            null
+        } ?: return
+        val parts = saved.split(':')
+        if (parts.size != 2) return
+        val restoredEdge = DockEdge.values().firstOrNull { it.name == parts[0] } ?: return
+        val restoredOffset = parts[1].toFloatOrNull()?.coerceIn(0f, 1f) ?: return
+        edge.value = restoredEdge
+        offset = restoredOffset
     }
-}
 
-@Composable
-private fun MessageBubble(
-    message: CodingMessage,
-    colors: PaperColors,
-) {
-    val isUser = message.role == CodingRole.USER
-    val bgColor = if (isUser) colors.userMessageSurface else colors.agentMessageSurface
+    // endregion
 
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
-    ) {
-        Box(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .background(bgColor, RoundedCornerShape(8.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            PaperText(
-                message.text.take(500),
-                style = LocalPaperTypography.current.body,
-                color = colors.text,
+    // region projection
+
+    /**
+     * The session the dock speaks for. The selected one wins while it is not idle; otherwise the
+     * most urgent running session does, so background work stays visible when the reader left an
+     * idle session on screen.
+     */
+    private fun CodingState.dockSnapshot(): Snapshot? {
+        val session = dockSession() ?: return null
+        val status = session.status
+        val waiting = status == CodingSessionStatus.WAITING
+        return Snapshot(
+            model = PaperAgentDockModel(
+                statusLabel = status.label,
+                sessionLabel = session.session.name,
+                messages = session.dockMessages(),
+                liveDetail = session.liveDetail(),
+                busy = session.running || session.draft.active,
+                // A questionnaire is answered in the window that renders it; an input here
+                // would look like an answer and be discarded instead.
+                canSend = !waiting && !session.session.archived,
+                inputPlaceholder = when {
+                    waiting -> "Ответьте на вопрос в окне MagicPaper"
+                    session.session.archived -> "Сессия в архиве"
+                    else -> "Сообщение агенту…"
+                },
+                transcriptKey = session.session.id,
+            ),
+            status = status,
+            sessionId = session.session.id,
+        )
+    }
+
+    private fun CodingState.dockSession(): CodingSessionUi? {
+        // `coding` here is this CodingState's own projection, not the injected service.
+        val ui = this.coding
+        val live = ui.sessions.filter { !it.session.archived && it.status != CodingSessionStatus.IDLE }
+        ui.currentSession?.takeIf { !it.session.archived && it.status != CodingSessionStatus.IDLE }?.let { return it }
+        return live.minByOrNull { URGENCY.indexOf(it.status) }
+    }
+
+    private fun CodingSessionUi.dockMessages(): List<PaperDockMessage> = messages
+        .filterNot { it.systemContext }
+        .takeLast(MAX_MESSAGES)
+        .mapNotNull { message ->
+            val text = message.text.trim()
+            if (text.isEmpty()) null else PaperDockMessage(
+                id = message.id,
+                author = if (message.role == CodingRole.USER) PaperDockAuthor.USER else PaperDockAuthor.AGENT,
+                text = text.take(MAX_MESSAGE_CHARS),
             )
         }
+
+    /**
+     * What the run is doing right now. The saved transcript only gains a message when a step
+     * finishes, so a dock built from it alone would look frozen during a long run.
+     */
+    private fun CodingSessionUi.liveDetail(): String? {
+        val draft = this.draft
+        if (!running && !draft.active) return null
+        if (draft.awaitingApproval) return "Ждёт подтверждения действия"
+        if (draft.awaitingModel) return "Ожидает ответа модели"
+        draft.steps.lastOrNull { it.running }?.title?.takeIf { it.isNotBlank() }?.let { return it }
+        draft.reasoningSummary.takeIf { it.isNotBlank() }?.let { return it }
+        draft.steps.lastOrNull()?.title?.takeIf { it.isNotBlank() }?.let { return it }
+        draft.thinking.lineSequence().lastOrNull { it.isNotBlank() }?.let { return it.trim().take(160) }
+        return "Прогон выполняется"
     }
-}
 
-@Composable
-private fun PulsingDot(color: Color, active: Boolean, size: Dp = 12.dp) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (active) 1.3f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseScale",
-    )
-
-    Box(
-        modifier = Modifier.size(size).scale(if (active) scale else 1f).clip(CircleShape).background(color),
-    )
-}
-
-private fun statusDotColor(status: CodingSessionStatus): Color {
-    val colors = PaperColors()
-    return when (status) {
-        CodingSessionStatus.WORKING -> colors.activityRed
-        CodingSessionStatus.WAITING -> colors.activityYellow
-        CodingSessionStatus.CONFIRMATION -> colors.activityPurple
-        CodingSessionStatus.BLOCKED -> colors.error
-        CodingSessionStatus.QUEUED -> colors.disabled
-        CodingSessionStatus.SCHEDULED -> colors.activityBlue
-        CodingSessionStatus.UNREAD -> colors.activityPurple
-        CodingSessionStatus.NEEDS_TESTING -> colors.activityYellow
-        CodingSessionStatus.IDLE -> colors.activityGreen
-    }
-}
-
-private fun statusLabel(status: CodingSessionStatus): String = when (status) {
-    CodingSessionStatus.WORKING -> "Работает…"
-    CodingSessionStatus.WAITING -> "Ожидает ответа"
-    CodingSessionStatus.CONFIRMATION -> "Подтверждение"
-    CodingSessionStatus.BLOCKED -> "Ошибка"
-    CodingSessionStatus.QUEUED -> "В очереди"
-    CodingSessionStatus.SCHEDULED -> "Запланировано"
-    CodingSessionStatus.UNREAD -> "Непрочитано"
-    CodingSessionStatus.NEEDS_TESTING -> "Тестирование"
-    CodingSessionStatus.IDLE -> "Готов"
+    // endregion
 }
