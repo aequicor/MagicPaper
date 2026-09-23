@@ -332,6 +332,33 @@ class SessionTreeRuntimeTest {
         }
     } }
 
+    /**
+     * Relaunching a session after an interrupted run needs its exit proven and its unknown outcome decided by the user, the
+     * rule the native journal admits the next run by. A decided outcome relaunches and the run settles; an undecided one refuses.
+     */
+    @Test fun relaunchAfterAnInterruptedRunAcceptsAnOutcomeTheUserDecided() = runTest { withContext(Dispatchers.Default) {
+        for (decided in listOf(true, false)) {
+            val f = SessionOrganismTestFixture(); f.initialize()
+            val native = Runtime { emit(CodingEvent.Finished) }
+            val tree = connect(f, native)
+            val id = f.root.organismId!!
+            f.ports.cancelQuestions = { throw CancellationException("interrupted") }
+            assertFailsWith<CancellationException> { tree.withScope(f.root) {} }
+            assertEquals(SessionObservedState.UNKNOWN, f.store.get(id).sessions.getValue(f.root.id).observed)
+            f.ports.cancelQuestions = {}
+            val attempt = NativeRunRecoveryRef(CodingEngine.PI, f.root.id, "request", 0)
+            val decision = NativeRunRecoveryAcknowledgement("ack", attempt, "decision").takeIf { decided }
+            native.reconcileHandler = { throw NativeRunRecoveryRequired(NativeRunRecoverySnapshot(
+                listOf(NativeRunRecoveryItem(attempt, NativeRunOutcome.UNKNOWN, NativeRunTermination.STOPPED, decision)), false)) }
+            var relaunched = false
+            val result = runCatching { tree.withScope(f.root) { relaunched = true } }
+            val case = "decided=$decided"
+            assertEquals(decided, relaunched, case)
+            if (decided) assertEquals(SessionObservedState.COMPLETED, f.store.get(id).sessions.getValue(f.root.id).observed, case)
+            else assertIs<NativeRunRecoveryRequired>(result.exceptionOrNull(), case)
+        }
+    } }
+
     /** An auxiliary run stopped with its owner follows the same rule: a proven exit settles it, an unproven one does not. */
     @Test fun auxiliaryRunStoppedWithItsOwnerSettlesOnAProvenExit() = runTest { withContext(Dispatchers.Default) {
         for (termination in listOf(NativeRunTermination.STOPPED, NativeRunTermination.UNKNOWN)) {

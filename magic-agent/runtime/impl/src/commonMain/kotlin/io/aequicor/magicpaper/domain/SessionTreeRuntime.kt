@@ -125,7 +125,7 @@ class SessionTreeRuntime(
                 children.cancelAndJoin()
                 var uncertain = false
                 try { cancelQuestions(session.id) } catch (error: Exception) { uncertain = true; cleanup.record(session.id, "questions_revoke", error) }
-                try { runtime.reconcile(session.id) }
+                try { runtime.reconcileDecided(session.id) }
                 catch (recovery: NativeRunRecoveryRequired) {
                     // As for a session's own run: a stop its owner asked for is settled by a proven exit.
                     val owner = handle.auxiliary?.let { organisms.store.get(organismId).sessions[it.ownerSessionId] }
@@ -190,8 +190,7 @@ class SessionTreeRuntime(
         val recovery = runtime.recovery?.inspect(blocker.sessionId) ?: return null
         // A human already acknowledged item does not need a known outcome to count as resolved,
         // matching the same rule the native journal applies when restarting that same session.
-        val unresolved = recovery.persistenceUnknown || recovery.items.any { it.termination != NativeRunTermination.STOPPED ||
-            (it.outcome == NativeRunOutcome.UNKNOWN && it.acknowledgement == null) }
+        val unresolved = !recovery.decided
         return blocker.sessionId.takeIf { unresolved }
     }
 
@@ -254,9 +253,7 @@ class SessionTreeRuntime(
 
     private suspend fun acknowledgedDespiteUnknownOutcome(sessionId: String): Boolean {
         val recovery = runtime.recovery?.inspect(sessionId) ?: return false
-        return !recovery.persistenceUnknown && recovery.items.isNotEmpty() && recovery.items.all {
-            it.termination == NativeRunTermination.STOPPED && (it.outcome != NativeRunOutcome.UNKNOWN || it.acknowledgement != null)
-        }
+        return recovery.items.isNotEmpty() && recovery.decided
     }
 
     /**
@@ -332,7 +329,7 @@ class SessionTreeRuntime(
                 organisms.synchronizeLimits(current.organismId!!)
                 val interrupted = organisms.store.get(current.organismId!!).sessions.getValue(session.id)
                 if (interrupted.observed == SessionObservedState.UNKNOWN && interrupted.legacyAttempt == null) {
-                    requireNotNull(runtime) { "Движок недоступен для сверки" }.reconcile(session.id)
+                    requireNotNull(runtime) { "Движок недоступен для сверки" }.reconcileDecided(session.id)
                     organisms.store.reconcileInterruptedRun(current.organismId!!, session.id, interrupted.generation, interrupted.version)
                     // Сверка подтвердила остановку прежнего поколения: его удержанная папка больше не занята.
                     releaseRetainedRootLeases(session.id)
@@ -427,7 +424,7 @@ class SessionTreeRuntime(
             var outcomeUnknown: NativeRunRecoveryRequired? = null
             try { cancelQuestions(session.id) } catch (error: Exception) { uncertain = true; cleanup.record(session.id, "questions_revoke", error) }
             // Cancelling a coroutine is not proof that its native process or tool stopped.
-            try { runtime.reconcile(session.id) }
+            try { runtime.reconcileDecided(session.id) }
             catch (recovery: NativeRunRecoveryRequired) {
                 if (recovery.recovery.exitProven) outcomeUnknown = recovery
                 else { uncertain = true; cleanup.record(session.id, "native_reconcile", recovery) }
@@ -693,7 +690,7 @@ class SessionTreeRuntime(
             val activeIds = owned.map { it.first }.toSet()
             organisms.store.organisms.value.values.forEach { organism ->
                 organism.auxiliaryRuns.values.filter { it.ownerSessionId in ids && !it.settled && it.sessionId !in activeIds }.forEach { run ->
-                    val observed = try { cancelQuestions(run.sessionId); runtime.reconcile(run.sessionId); SessionObservedState.STOPPED }
+                    val observed = try { cancelQuestions(run.sessionId); runtime.reconcileDecided(run.sessionId); SessionObservedState.STOPPED }
                         catch (recovery: NativeRunRecoveryRequired) {
                             cleanup.record(run.sessionId, "auxiliary_reconcile", recovery)
                             if (organism.sessions[run.ownerSessionId]?.desired == SessionDesiredState.STOP) SessionObservedState.STOPPED else SessionObservedState.UNKNOWN
@@ -714,7 +711,7 @@ class SessionTreeRuntime(
                 if (!node.settled && id !in activeIds) {
                     val observed = try {
                         cancelQuestions(id)
-                        runtime.reconcile(id)
+                        runtime.reconcileDecided(id)
                         codingWorkspaces?.releaseStopped(id)
                         val leases = lock.withLock { retainedRootLeases.values.filter { it.sessionId == id } }
                         leases.forEach { lease ->
