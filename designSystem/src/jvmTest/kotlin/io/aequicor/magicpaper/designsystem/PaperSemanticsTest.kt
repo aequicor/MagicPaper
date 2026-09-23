@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.use
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -110,13 +111,13 @@ class PaperSemanticsTest {
             scene.sendKeyEvent(KeyEvent(Key.Spacebar, KeyEventType.KeyUp))
             assertEquals(2, clicks)
             compacting.value = true
-            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            applySnapshotChanges()
             scene.render(40_000_000).close()
             assertEquals("Сжатие контекста", control().config[SemanticsProperties.StateDescription])
             assertEquals(null, control().config.getOrNull(SemanticsProperties.ProgressBarRangeInfo))
             compacting.value = false
             fraction.value = null
-            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            applySnapshotChanges()
             scene.render(48_000_000).close()
             assertEquals("—", control().config[SemanticsProperties.StateDescription])
             assertEquals(null, control().config.getOrNull(SemanticsProperties.ProgressBarRangeInfo))
@@ -126,6 +127,22 @@ class PaperSemanticsTest {
     private fun ImageComposeScene.nodes(): List<SemanticsNode> {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
+    }
+
+    /**
+     * Tells the recomposer about state the test wrote, before the next frame. [ImageComposeScene] starts
+     * Compose's global snapshot manager, which sends the same notifications from the AWT thread and calls
+     * the observers only after releasing the snapshot lock: once it has taken a write,
+     * [Snapshot.sendApplyNotifications] returns at once, and a frame rendered before that thread reaches
+     * the recomposer keeps the old composition.
+     */
+    private fun applySnapshotChanges() {
+        Snapshot.sendApplyNotifications()
+        val deadline = System.nanoTime() + 5_000_000_000
+        while (Snapshot.isApplyObserverNotificationPending) {
+            assertTrue(System.nanoTime() < deadline, "Snapshot apply observers were still running after 5 s")
+            Thread.sleep(1)
+        }
     }
 
     @Test
