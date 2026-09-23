@@ -27,9 +27,11 @@ def nested_checkout(root, relative):
         return True
     return any((root.joinpath(*parts[:depth]) / '.git').exists() for depth in range(1, len(parts)))
 HOSTS = {':desktopApp', ':androidApp', ':webApp'}
-# Modules that declare only a jvm target. Reaching them from a source set that also
-# compiles for Android, JS or Wasm breaks those artifacts, so the edge is curated here.
-DESKTOP_ONLY = {':feature:coding:impl'}
+# Modules outside the magic-agent and backend-agents groups that declare only a jvm target.
+# Reaching one from a source set that also compiles for Android, JS or Wasm breaks those
+# artifacts. Both groups are desktop-only by membership (is_desktop_only), and no library
+# outside them is jvm-only today, so the set is empty; a new one is added here on purpose.
+DESKTOP_ONLY = set()
 JVM_SOURCE_SETS = {'jvmMain', 'jvmTest'}
 ARCHITECTURE_GROUPS = {'magic-common', 'magic-chat', 'magic-agent', 'backend-agents'}
 BACKEND_PUBLIC = {':backend-agents:api', ':backend-agents:factory'}
@@ -1106,11 +1108,12 @@ if '--self-test' in sys.argv:
         assert any('retired module directory' in error for error in violations(root))
     with TemporaryDirectory() as folder:
         root = Path(folder)
-        (root / 'feature/coding/impl').mkdir(parents=True)
-        (root / 'feature/coding/impl/build.gradle.kts').write_text('')
+        (root / 'magic-agent/runtime/impl').mkdir(parents=True)
+        (root / 'magic-agent/runtime/impl/build.gradle.kts').write_text('')
         app = root / 'app/build.gradle.kts'
         app.parent.mkdir(parents=True)
-        desktop_only = next(iter(DESKTOP_ONLY))
+        # A group member is desktop-only by membership; the explicit set holds the exceptions.
+        desktop_only = ':magic-agent:runtime:impl'
         for allowed in ('jvmMain', 'jvmTest'):
             app.write_text(f'kotlin {{ sourceSets {{ {allowed}.dependencies '
                            f'{{ implementation(project("{desktop_only}")) }} }} }}')

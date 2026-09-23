@@ -29,7 +29,7 @@ playwright = "1.62.0"
 html-validator = "26.9.16"
 compose-media-player = "0.11.4"
 # Переносимые бинарники поиска для нативных инструментов pi: find работает через fd,
-# grep — через rg (см. :feature:session:impl task bundleCodingSearchTools).
+# grep — через rg (см. :magic-agent:runtime:impl task bundleCodingSearchTools).
 coding-fd = "10.5.0"
 coding-ripgrep = "15.2.0"
 

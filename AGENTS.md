@@ -105,12 +105,20 @@ widens what a reader must hold in mind.
 | `:core:ai:api` | `LlmGateway`, `ModelDirectory`, `SearchEngine`, `SearchConnectionChecker`, `UsageLedger`, `UsageRepository`, `MediaGenerationGateway`, `DossierResearcher`, `OpenAiSubscriptionService` |
 | `:core:storage:api` | `KeyValueStore`, `SecretStore`, `MediaStore`, `DraftRepository`, `DraftBlobStore`, `NavigationSnapshotStore` |
 | `:core:model` | Serializable values and pure rules. No interfaces, no services. |
-| `:feature:tools:api` | `ToolDefinition` with the mode/authority matrix, `ToolCatalog`, `SessionToolCatalog`, `QuestionnaireContract`, `ToolRejections`, `CustomOrchestration`, `OrchestrationActions` |
-| `:feature:session:api` | Chat: `ChatService`, `ChatComponent`, `ChatRepository`, `ChatBackend`, `ChatPresentation`. Coding: `CodingFeature` with `CodingFeatureDependencies`, `CodingService`, `CodingComponent`, `CodingRuntime`, `CodingProjectRepository`, `PlanningRepository`, `PlanningWorkspace`, `TaskWorkspace`, `MilestoneVerifier`, `CodingPresentation`, plus the `Unavailable*` implementations |
+| `:magic-common:tools:api` | `ToolDefinition` with the mode/authority matrix, `ToolCatalog`, `SessionToolCatalog`, `QuestionnaireContract`, the rejections in `ToolRejections.kt`, `CustomOrchestration`, `OrchestrationActions` |
+| `:magic-common:transcript` | `ChatPresentation` and the rest of the session presentation shared by chat and project sessions |
+| `:magic-chat:api` | `ChatService`, `ChatComponent`, `ChatRepository`, `ChatBackend` |
+| `:magic-agent:runtime:api` | `CodingFeature` with `CodingFeatureDependencies`, `CodingService`, `CodingComponent`, `CodingRuntime`, `CodingProjectRepository`, `MilestoneVerifier`, `CodingPresentation`, `LayoutEditor`, plus `UnavailablePlanningGateway` and `UnavailableLayoutEditor` |
+| `:magic-agent:planning:api` | `PlanningRepository` |
+| `:magic-agent:workspace:api` | `PlanningWorkspace`, `TaskWorkspace`, plus `UnavailableTaskWorkspace` |
 | `:feature:settings:api` | `SettingsService`, `SettingsComponent`, `SettingsRepository`, `LlmProfileRepository`, `ModelPresentation` |
 | `:feature:plugins:api` | `MagicPlugin`, `PersistentPlugin`, `CodingSessionPanel`, `PluginService`, `PluginsComponent` |
 | `:feature:skills:api` | `SkillRepository`, `SkillLibrary`, `SkillCatalog`, `SkillInstructionRuntime`, `ProjectSkills`, `CodingRunObserver`, `SkillsComponent` |
 | `:feature:docs:api` | `DocRepository`, `DocsComponent` |
+
+The table names the most-used owners; `settings.gradle.kts` lists every module. The groups
+differ in reach: `magic-common` and `magic-chat` build for JVM, Android, JS and Wasm;
+`magic-agent` and `backend-agents` build for the JVM only.
 
 Where a new declaration belongs:
 
@@ -118,11 +126,12 @@ Where a new declaration belongs:
   `api`, its implementation in `impl`, the binding in `:app`.
 - A serializable value or a pure rule → `:core:model`, as a class or function.
 - Session presentation used by both an ordinary chat and a project session →
-  `:feature:transcript`. It is a plain module, not an api/impl pair, because both
+  `:magic-common:transcript`. It is a plain module, not an api/impl pair, because both
   implementations consume it and a feature implementation may not depend on another one.
-- Anything that needs an agent process, a plan, a worktree or the tool executor →
-  `:feature:coding:impl`. It declares only a jvm target; `:app` consumes it from
-  `jvmMain` alone, so Android and the browser never compile it.
+- Anything that needs an agent process, a plan, a worktree or the tool executor → the
+  `magic-agent` group, whose runtime is `:magic-agent:runtime:impl`. Its modules declare
+  only a jvm target; `:app` consumes them from `jvmMain` alone, so Android and the browser
+  never compile them.
 - State belongs to the service that owns it, never to a composable. A component reads
   state and dispatches actions; execution, drafts and background work stay in services
   that outlive the screen.
