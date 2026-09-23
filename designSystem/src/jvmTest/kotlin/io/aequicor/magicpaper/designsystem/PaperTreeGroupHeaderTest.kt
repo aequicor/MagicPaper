@@ -15,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -186,25 +188,39 @@ class PaperTreeGroupHeaderTest {
                     val layouts = mutableListOf<TextLayoutResult>()
                     assertTrue(titleNode.config[SemanticsActions.GetTextLayoutResult].action?.invoke(layouts) == true)
                     val layout = layouts.single()
-                    if (fontScale == 1f || fontScale == 2f) {
-                        val file = File("build/reports/paper-task-group-header/${platform.name.lowercase()}-${(fontScale * 100).toInt()}.png")
-                        file.parentFile.mkdirs()
-                        scene.render(224_000_000L).use { image ->
+                    val pixels = scene.render(224_000_000L).use { image ->
+                        if (fontScale == 1f || fontScale == 2f) {
+                            val file = File("build/reports/paper-task-group-header/${platform.name.lowercase()}-${(fontScale * 100).toInt()}.png")
+                            file.parentFile.mkdirs()
                             image.encodeToData()!!.use { file.writeBytes(it.bytes) }
                         }
+                        image.toComposeImageBitmap().toPixelMap()
                     }
                     assertEquals(1, layout.lineCount)
-                    // Compose 1.11.1 SkiaParagraph.isLineEllipsized is an unconditional
-                    // false stub. Assert actual line geometry and the requested overflow
-                    // instead; saved renders also expose the visible ellipsis for review.
                     val geometry = "platform=$platform fontScale=$fontScale control=$bounds " +
                         "text=$text status=$status layoutSize=${layout.size} " +
                         "constraints=${layout.layoutInput.constraints}"
-                    assertEquals(TextOverflow.Ellipsis, layout.layoutInput.overflow)
+                    // A long title does not end in an ellipsis: it is clipped at its own width and fades
+                    // into the paper there (PaperFadingText), and scrolls on hover. Saved renders show the fade.
+                    assertEquals(TextOverflow.Clip, layout.layoutInput.overflow)
                     assertTrue(layout.multiParagraph.intrinsics.maxIntrinsicWidth > text.width,
                         "This case must exercise a title wider than the available space; $geometry")
-                    assertTrue(layout.getLineLeft(0) >= 0f && layout.getLineRight(0) <= text.width + 1f,
-                        "The rendered title line must fit inside its allocated width; $geometry")
+                    assertTrue(layout.didOverflowWidth, "An overflowing title is what turns the fade on; $geometry")
+                    assertTrue(layout.size.width <= text.width + 1f,
+                        "The title is clipped at its allocated width; $geometry")
+                    // Ink is measured as distance from the row's paper just before the title. It is dense inside the
+                    // title and all but gone in its last two pixels, where a clipped glyph would otherwise be cut.
+                    val paper = pixels[text.left.toInt() - 2, text.center.y.toInt()]
+                    fun ink(columns: IntRange) = columns.maxOf { x ->
+                        (text.top.toInt() until text.bottom.toInt()).maxOf { y ->
+                            val c = pixels[x, y]
+                            abs(c.red - paper.red) + abs(c.green - paper.green) + abs(c.blue - paper.blue)
+                        }
+                    }
+                    val body = ink((text.left + text.width * 0.3f).toInt()..(text.left + text.width * 0.6f).toInt())
+                    val edge = ink((text.right.toInt() - 2) until text.right.toInt())
+                    assertTrue(body > 0.3f, "The title must be drawn at all; body=$body $geometry")
+                    assertTrue(edge <= body * 0.15f, "The title fades into the paper at its trailing edge; edge=$edge body=$body $geometry")
                     assertTrue(bounds.height >= rowHeight.value)
                     assertTrue(bounds.left >= 20f && bounds.right <= 192f)
                     assertTrue(status.left >= bounds.left + 6f, "Status follows the tree's leading guide")
