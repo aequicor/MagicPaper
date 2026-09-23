@@ -99,7 +99,12 @@ class RequestPinViewModelTest {
         }
     }
 
-    @Test fun chatAnswerUsesOverrideButPinsUseOperationalDefaultAndOldChatsAreLazy() = runTest {
+    /**
+     * Research chat has had no pinned-request surface since fb38f663, so the answer uses the chat's own model and no
+     * chat, opened or not, spends a model call on a pin summary (ChatResearchTest pins the same without a model). Pins
+     * a chat stored before that still go with the chat.
+     */
+    @Test fun chatAnswerUsesItsOverrideAndNoChatSpendsACallOnPinSummaries() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         var vm: DefaultChatService? = null
         try {
@@ -107,23 +112,23 @@ class RequestPinViewModelTest {
             val pins = JsonRequestPinRepository(f.kv, f.json)
             f.chats.save(ChatSession("older", "История", 0, 0,
                 messages = listOf(ChatMessage("old-input", ChatRole.USER, "Старый запрос", 0))))
+            pins.save(PinConversation("older"), listOf(RequestPinRecord(PinMessage("old-input", "Старый запрос", input = true),
+                "Старый запрос", analysed = true)))
             val model = f.prepareChat(requestPinRepository = pins).also { vm = it }
             assertTrue(f.calls.isEmpty(), "Unopened histories should not consume model calls")
             model.selectChatModel(ModelSelection("anthropic", "claude-sonnet-4-6"))
             model.send("Напиши стихотворение о дожде")
             advanceUntilIdle()
-            assertEquals(1, f.calls.count { it.id == "anthropic" })
-            assertEquals(1, f.calls.count { it.id == "openai" })
-            assertEquals("Краткий запрос", pins.load(PinConversation("first")).single().summary)
+            assertEquals(listOf("anthropic"), f.calls.map { it.id }, "The answer uses the chat's model and nothing summarises it")
             model.selectSession("older")
             advanceUntilIdle()
-            assertEquals(2, f.calls.count { it.id == "openai" })
             model.selectSession("first")
             advanceUntilIdle()
-            assertEquals(3, f.calls.size, "Reopening reuses successful analysis")
+            assertEquals(1, f.calls.size, "Opening chats requests no pin summaries")
+            assertTrue(pins.load(PinConversation("first")).isEmpty())
             model.deleteSession("older")
             advanceUntilIdle()
-            assertTrue(pins.load(PinConversation("older")).isEmpty())
+            assertTrue(pins.load(PinConversation("older")).isEmpty(), "A chat's stored pins go with it")
         } finally {
             vm?.close()
             Dispatchers.resetMain()
