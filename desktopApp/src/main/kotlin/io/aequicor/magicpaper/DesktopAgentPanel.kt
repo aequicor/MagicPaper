@@ -30,6 +30,7 @@ import java.awt.Color
 import java.awt.Desktop
 import java.awt.Frame
 import java.awt.GraphicsEnvironment
+import java.awt.Point
 import java.awt.Rectangle
 import java.awt.Window
 import java.awt.event.WindowEvent
@@ -64,6 +65,8 @@ internal class DesktopAgentPanel(
         /** The dock shows a recent window of the transcript, not the whole journal. */
         const val MAX_MESSAGES = 40
         const val MAX_MESSAGE_CHARS = 2000
+        /** Horizontal margin that must be crossed before the panel re-anchors to the other edge. */
+        const val EDGE_HYSTERESIS = 48
         /** Most urgent first: the dock shows one session, so it shows the one that needs the reader. */
         val URGENCY = listOf(
             CodingSessionStatus.WORKING,
@@ -91,6 +94,8 @@ internal class DesktopAgentPanel(
     private val edge = mutableStateOf(DockEdge.START)
 
     private var overlay: ComposeWindow? = null
+    /** Pointer offset from the window origin while dragging, in device pixels. */
+    private var grab: Point? = null
     /** Fraction of the free edge height above the panel, so the place survives a resolution change. */
     private var offset = DEFAULT_OFFSET
     private var ownerMinimized = false
@@ -187,16 +192,16 @@ internal class DesktopAgentPanel(
                 expanded = expanded.value,
                 onExpandedChange = ::setExpanded,
                 model = current.model,
-                dockedToStart = edge.value == DockEdge.START,
                 // The sidebar's own dot and label: one session never reads as two states.
-                indicator = { ActivityDot(current.status, size = 14) },
+                indicator = { ActivityDot(current.status, size = 16) },
                 input = input.value,
                 onInputChange = { input.value = it },
                 onSend = ::send,
                 onStop = ::stop,
                 onOpenMainWindow = ::restoreOwner,
+                onDragStart = ::dragStart,
                 onDragBy = ::dragBy,
-                onDragEnd = ::persistPlacement,
+                onDragEnd = ::dragEnd,
             )
         }
     }
@@ -306,23 +311,44 @@ internal class DesktopAgentPanel(
     }
 
     /**
-     * Move along the edge. Crossing the screen's middle re-anchors the panel to that edge, so
-     * the reader can park it left or right without a separate setting.
+     * Move along the edge by keeping the grabbed point under the pointer.
+     *
+     * The position is recomputed from the window's live origin on every event: while dragging,
+     * the window travels under the cursor, so deltas measured against the moving origin would
+     * feed back into the next event and make the panel jerk. Crossing the screen's middle by a
+     * decisive margin re-anchors the panel to that edge; the hysteresis keeps a wiggle around
+     * the middle from teleporting it.
      */
-    private fun dragBy(deltaX: Float, deltaY: Float) {
+    private fun dragStart(x: Float, y: Float) {
+        grab = Point(x.roundToInt(), y.roundToInt())
+    }
+
+    private fun dragBy(x: Float, y: Float) {
         val window = overlay ?: return
+        val held = grab ?: return
         val usable = usableArea(window) ?: return
-        val bounds = window.bounds
-        val lowest = (usable.y + usable.height - bounds.height).coerceAtLeast(usable.y)
-        val proposed = (bounds.y + deltaY.roundToInt()).coerceIn(usable.y, lowest)
-        val travel = usable.height - bounds.height
-        offset = if (travel > 0) (proposed - usable.y).toFloat() / travel else DEFAULT_OFFSET
-        val centre = bounds.x + bounds.width / 2 + deltaX.roundToInt()
-        edge.value = if (centre < usable.x + usable.width / 2) DockEdge.START else DockEdge.END
+        val origin = window.locationOnScreen
+        val pointerX = origin.x + x.roundToInt()
+        val pointerY = origin.y + y.roundToInt()
+        val height = window.bounds.height
+        val lowest = (usable.y + usable.height - height).coerceAtLeast(usable.y)
+        val target = (pointerY - held.y).coerceIn(usable.y, lowest)
+        val travel = usable.height - height
+        offset = if (travel > 0) (target - usable.y).toFloat() / travel else DEFAULT_OFFSET
+        val middle = usable.x + usable.width / 2
+        edge.value = when (edge.value) {
+            DockEdge.START -> if (pointerX > middle + EDGE_HYSTERESIS) DockEdge.END else DockEdge.START
+            DockEdge.END -> if (pointerX < middle - EDGE_HYSTERESIS) DockEdge.START else DockEdge.END
+        }
         window.setLocation(
-            if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - bounds.width,
-            proposed,
+            if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - window.bounds.width,
+            target,
         )
+    }
+
+    private fun dragEnd() {
+        grab = null
+        persistPlacement()
     }
 
     // endregion

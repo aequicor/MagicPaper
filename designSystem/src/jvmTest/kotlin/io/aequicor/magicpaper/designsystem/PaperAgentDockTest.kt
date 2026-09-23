@@ -109,6 +109,48 @@ class PaperAgentDockTest {
         } finally { onPaperUi { scene.close() } }
     }
 
+    @Test fun draggingTheTabMovesItWithoutExplodingItUnderTheCursor() {
+        val expanded = mutableStateOf(false)
+        val grabs = mutableListOf<Offset>()
+        val moves = mutableListOf<Offset>()
+        var releases = 0
+        val frames = Frames()
+        val scene = scene(400.dp, 500.dp) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                Box(Modifier.size(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight)) {
+                    Dock(expanded.value, { expanded.value = it }, busyModel,
+                        expandDelayMillis = 0L, collapseDelayMillis = 0L,
+                        onDragStart = { x, y -> grabs.add(Offset(x, y)) },
+                        onDragBy = { x, y -> moves.add(Offset(x, y)) },
+                        onDragEnd = { releases++ })
+                }
+            }
+        }
+        try {
+            frames.draw(scene)
+            onPaperUi {
+                scene.sendPointerEvent(PointerEventType.Press, Offset(21f, 44f), type = PointerType.Mouse)
+            }
+            // Past the touch slop, so this is a drag and not a click.
+            for (y in listOf(58f, 70f, 60f)) {
+                onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(21f, y), type = PointerType.Mouse) }
+                frames.draw(scene, 3)
+            }
+            onPaperUi {
+                assertEquals(1, grabs.size, "A drag past the slop must report its grab point")
+                assertTrue(moves.isNotEmpty(), "The host needs the pointer position to move its window")
+                // The dwell has long elapsed while the pointer sat on the tab: a drag must win.
+                assertFalse(expanded.value, "Dragging must not expand the panel under the cursor")
+            }
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Release, Offset(21f, 60f), type = PointerType.Mouse) }
+            frames.draw(scene)
+            onPaperUi {
+                assertEquals(1, releases, "Releasing ends the drag")
+                assertTrue(expanded.value, "Once the drag is over, the pointer under the tab opens it")
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
     /**
      * The dwell is wall-clock time, which a headless scene cannot advance deterministically, so
      * the contract is asserted on the published constants: they must be a real dwell, otherwise a
@@ -244,6 +286,9 @@ class PaperAgentDockTest {
         onInputChange: (String) -> Unit = {},
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
+        onDragStart: (Float, Float) -> Unit = { _, _ -> },
+        onDragBy: (Float, Float) -> Unit = { _, _ -> },
+        onDragEnd: () -> Unit = {},
         expandDelayMillis: Long = 0L,
         collapseDelayMillis: Long = 0L,
     ) {
@@ -251,7 +296,6 @@ class PaperAgentDockTest {
             expanded = expanded,
             onExpandedChange = onExpandedChange,
             model = model,
-            dockedToStart = true,
             indicator = {
                 PaperActivityIndicator(PaperActivityTone.WORKING, model.statusLabel,
                     running = model.busy, size = 14.dp)
@@ -261,6 +305,9 @@ class PaperAgentDockTest {
             onSend = onSend,
             onStop = onStop,
             onOpenMainWindow = {},
+            onDragStart = onDragStart,
+            onDragBy = onDragBy,
+            onDragEnd = onDragEnd,
             expandDelayMillis = expandDelayMillis,
             collapseDelayMillis = collapseDelayMillis,
         )

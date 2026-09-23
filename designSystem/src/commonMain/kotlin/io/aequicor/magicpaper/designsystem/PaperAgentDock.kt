@@ -1,7 +1,6 @@
 package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -31,7 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -57,14 +55,24 @@ import kotlinx.coroutines.delay
  * geometry, moves the window on [onDragBy] and decides when the dock is visible at all.
  */
 
-/** Collapsed tab width: wide enough to grab, narrow enough not to cover the screen edge. */
-public val PaperAgentDockCollapsedWidth: Dp = 26.dp
+/**
+ * Transparent ring the window reserves around the card so the elevation shadow is drawn in
+ * full. A shadow clipped by the window edge reads as a dirty rim, which is exactly what an
+ * edge dock must never show.
+ */
+public val PaperAgentDockShadowMargin: Dp = 8.dp
+
+/**
+ * Window footprints, shadow ring included: the host sizes its window from these, and the
+ * visible card floats [PaperAgentDockShadowMargin] inside. Collapsed tab: a 26 dp capsule.
+ */
+public val PaperAgentDockCollapsedWidth: Dp = 42.dp
 
 /** Collapsed tab height: a comfortable pointer and touch target. */
-public val PaperAgentDockCollapsedHeight: Dp = 72.dp
+public val PaperAgentDockCollapsedHeight: Dp = 88.dp
 
-public val PaperAgentDockExpandedWidth: Dp = 360.dp
-public val PaperAgentDockExpandedHeight: Dp = 460.dp
+public val PaperAgentDockExpandedWidth: Dp = 376.dp
+public val PaperAgentDockExpandedHeight: Dp = 476.dp
 
 /**
  * Hover dwell before the tab opens. A pointer crossing the screen edge on its way to another
@@ -102,8 +110,6 @@ public data class PaperAgentDockModel(
 )
 
 /**
- * @param dockedToStart true when the panel hugs the leading screen edge, so only the inner
- *   corners are rounded and the panel grows away from that edge.
  * @param expandDelayMillis hover dwell before expanding; a pointer crossing the edge must not
  *   throw a 360 dp panel over the user's other work.
  * @param collapseDelayMillis grace period after the pointer leaves, so travelling inside the
@@ -115,13 +121,13 @@ public fun PaperAgentDock(
     onExpandedChange: (Boolean) -> Unit,
     model: PaperAgentDockModel,
     modifier: Modifier = Modifier,
-    dockedToStart: Boolean = true,
     indicator: @Composable () -> Unit,
     input: String = "",
     onInputChange: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
     onOpenMainWindow: () -> Unit = {},
+    onDragStart: (Float, Float) -> Unit = { _, _ -> },
     onDragBy: (Float, Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {},
     expandDelayMillis: Long = PaperAgentDockExpandDelayMillis,
@@ -129,21 +135,18 @@ public fun PaperAgentDock(
 ) {
     val colors = LocalPaperColors.current
     val spacing = LocalPaperSpacing.current
-    val corner = 12.dp
-    val shape = if (dockedToStart) {
-        RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = corner, bottomEnd = corner)
-    } else {
-        RoundedCornerShape(topStart = corner, bottomStart = corner, topEnd = 0.dp, bottomEnd = 0.dp)
-    }
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
     // Who owns the open panel. A pointer that leaves retracts its own panel, but a keyboard or
     // touch activation has no pointer to leave with: only the reader closes that one, otherwise
     // activating the tab would flash the panel and take it away again.
     var openedByPointer by remember { mutableStateOf(false) }
+    // A drag must never fight the hover logic: without this, holding the tab for the dwell
+    // would explode it to full size under the moving cursor, mid-drag.
+    var dragging by remember { mutableStateOf(false) }
 
-    LaunchedEffect(hovered, expanded) {
-        if (!hovered || expanded) return@LaunchedEffect
+    LaunchedEffect(hovered, expanded, dragging) {
+        if (!hovered || expanded || dragging) return@LaunchedEffect
         // Dwell before opening: a pointer crossing the edge on its way to another application
         // must not throw a 360 dp panel over that work.
         delay(expandDelayMillis)
@@ -152,7 +155,7 @@ public fun PaperAgentDock(
             onExpandedChange(true)
         }
     }
-    LaunchedEffect(hovered, expanded) {
+    LaunchedEffect(hovered, expanded, dragging) {
         if (!expanded) {
             openedByPointer = false
             return@LaunchedEffect
@@ -162,7 +165,7 @@ public fun PaperAgentDock(
             openedByPointer = true
             return@LaunchedEffect
         }
-        if (!openedByPointer) return@LaunchedEffect
+        if (!openedByPointer || dragging) return@LaunchedEffect
         // Grace period, so travelling across the panel does not retract it.
         delay(collapseDelayMillis)
         if (!hovered) {
@@ -171,19 +174,32 @@ public fun PaperAgentDock(
         }
     }
 
-    val drag = Modifier.pointerInput(onDragBy, onDragEnd) {
+    // The host moves its own window. It receives the pointer's position inside this window,
+    // never deltas: the window travels under the cursor while dragging, so a delta measured
+    // against the moving origin would feed back and make the panel jerk.
+    val drag = Modifier.pointerInput(onDragStart, onDragBy, onDragEnd) {
         detectDragGestures(
-            onDragEnd = onDragEnd,
-            onDragCancel = onDragEnd,
-        ) { change, amount ->
+            onDragStart = { start ->
+                dragging = true
+                onDragStart(start.x, start.y)
+            },
+            onDragEnd = {
+                dragging = false
+                onDragEnd()
+            },
+            onDragCancel = {
+                dragging = false
+                onDragEnd()
+            },
+        ) { change, _ ->
             change.consume()
-            onDragBy(amount.x, amount.y)
+            onDragBy(change.position.x, change.position.y)
         }
     }
 
-    PaperSurface(
+    Box(
         modifier = modifier.fillMaxSize()
-            // Hover belongs to the whole panel, in both states: tracking it only on the tab
+            // Hover belongs to the whole window, in both states: tracking it only on the card
             // would drop the pointer the moment the panel grew, and retract it under the reader.
             .hoverable(hover)
             .onPreviewKeyEvent { event ->
@@ -194,18 +210,24 @@ public fun PaperAgentDock(
                     true
                 } else false
             },
-        kind = PaperSurfaceKind.RAISED,
-        shape = shape,
-        shadowElevation = 6.dp,
     ) {
-        if (expanded) {
-            DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
-                onOpenMainWindow, { onExpandedChange(false) }, drag)
-        } else {
-            DockCollapsed(model, colors, shape, indicator, drag) {
-                // An explicit activation is not pointer-owned, so it survives having no pointer.
-                openedByPointer = false
-                onExpandedChange(true)
+        // The card floats inside the shadow ring: one silhouette, fully rounded, no edge the
+        // window can clip and no hand-drawn outline fighting the surface.
+        PaperSurface(
+            Modifier.padding(PaperAgentDockShadowMargin).fillMaxSize(),
+            kind = PaperSurfaceKind.RAISED,
+            shape = RoundedCornerShape(12.dp),
+            shadowElevation = 4.dp,
+        ) {
+            if (expanded) {
+                DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
+                    onOpenMainWindow, { onExpandedChange(false) }, drag)
+            } else {
+                DockCollapsed(model, colors, indicator, drag) {
+                    // An explicit activation is not pointer-owned, so it survives having no pointer.
+                    openedByPointer = false
+                    onExpandedChange(true)
+                }
             }
         }
     }
@@ -215,20 +237,16 @@ public fun PaperAgentDock(
 private fun DockCollapsed(
     model: PaperAgentDockModel,
     colors: PaperColors,
-    shape: RoundedCornerShape,
     indicator: @Composable () -> Unit,
     drag: Modifier,
     onExpand: () -> Unit,
 ) {
     Box(
         Modifier.fillMaxSize()
-            .clip(shape)
-            // A hairline keeps the tab legible over a light desktop without a heavy frame.
-            .border(1.dp, colors.border, shape)
             .paperClickable(
                 role = androidx.compose.ui.semantics.Role.Button,
                 onClickLabel = "Открыть панель агента",
-                shape = shape,
+                shape = RoundedCornerShape(12.dp),
                 onClick = onExpand,
             )
             .then(drag)
@@ -371,7 +389,6 @@ private fun DockMessageRow(message: PaperDockMessage) {
         Box(
             Modifier.fillMaxWidth()
                 .background(colors.surface, RoundedCornerShape(10.dp))
-                .border(1.dp, colors.border, RoundedCornerShape(10.dp))
                 .padding(horizontal = spacing.sm, vertical = spacing.xs),
         ) {
             PaperMarkdown(message.text, compact = true)
@@ -382,7 +399,7 @@ private fun DockMessageRow(message: PaperDockMessage) {
 @Preview(name = "Dock collapsed · working", group = "Agent dock", widthDp = 26, heightDp = 72)
 @Composable
 public fun PaperAgentDockCollapsedPreview() = PaperTheme {
-    PaperAgentDock(expanded = false, onExpandedChange = {}, dockedToStart = true,
+    PaperAgentDock(expanded = false, onExpandedChange = {},
         model = PaperAgentDockModel(statusLabel = "работает", sessionLabel = "Восстановление сессий"),
         indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 12.dp) })
 }
@@ -390,7 +407,7 @@ public fun PaperAgentDockCollapsedPreview() = PaperTheme {
 @Preview(name = "Dock expanded · streaming", group = "Agent dock", widthDp = 360, heightDp = 460)
 @Composable
 public fun PaperAgentDockExpandedPreview() = PaperTheme {
-    PaperAgentDock(expanded = true, onExpandedChange = {}, dockedToStart = true,
+    PaperAgentDock(expanded = true, onExpandedChange = {},
         model = PaperAgentDockModel(
             statusLabel = "работает",
             sessionLabel = "Восстановление дочерних сессий после сбоя",
@@ -411,7 +428,7 @@ public fun PaperAgentDockExpandedPreview() = PaperTheme {
 @Preview(name = "Dock expanded · waiting", group = "Agent dock", widthDp = 360, heightDp = 460)
 @Composable
 public fun PaperAgentDockWaitingPreview() = PaperTheme {
-    PaperAgentDock(expanded = true, onExpandedChange = {}, dockedToStart = false,
+    PaperAgentDock(expanded = true, onExpandedChange = {},
         model = PaperAgentDockModel(
             statusLabel = "Ждём вашего ответа",
             sessionLabel = "Индикатор always-on-top",
@@ -428,7 +445,7 @@ public fun PaperAgentDockWaitingPreview() = PaperTheme {
 @Preview(name = "Dock expanded · empty", group = "Agent dock", widthDp = 360, heightDp = 460)
 @Composable
 public fun PaperAgentDockEmptyPreview() = PaperTheme {
-    PaperAgentDock(expanded = true, onExpandedChange = {}, dockedToStart = true,
+    PaperAgentDock(expanded = true, onExpandedChange = {},
         model = PaperAgentDockModel(statusLabel = "ждёт запроса", sessionLabel = "Новая сессия", canSend = false,
             inputPlaceholder = "Сессия недоступна для ввода"),
         indicator = { PaperActivityIndicator(PaperActivityTone.READY, "ждёт запроса", size = 12.dp) })
