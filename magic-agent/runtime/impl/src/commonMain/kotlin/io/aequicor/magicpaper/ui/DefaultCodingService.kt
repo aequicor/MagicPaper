@@ -2169,6 +2169,20 @@ class DefaultCodingService(
                         _state.update { it.copy(notice = "Не удалось сохранить промежуточный результат. Проверьте сессию после запуска.") }
                     }
                 }
+                // Mark the task worktree as unknown when the run is cancelled by user,
+                // so that resume can inspect the saved evidence instead of hitting NOT_READY.
+                val currentWorktree = session.taskWorktree
+                if (currentWorktree != null && currentWorktree.phase != TaskWorktreePhase.COMPLETE) {
+                    try {
+                        val revision = codingProjects?.states?.value?.get(project.id)?.childRevisions?.get("workspace:${session.id}")
+                        if (revision != null) {
+                            acceptCodingSession(session, CodingMachine.Fact.WorktreeProjected(
+                                CodingMachine.ref(session), null, revision, unknown = true))
+                        }
+                    } catch (failure: Exception) {
+                        AppLog.error("coding", "run.worktree-unknown.failed", failure, operationFields)
+                    }
+                }
                 throw e
             } catch (e: Exception) {
                 AppLog.error("coding", "run.failed", e, operationFields + ("causeType" to e::class.simpleName.orEmpty()))
