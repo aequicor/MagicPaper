@@ -43,6 +43,27 @@ class CheckOutputDecoderTest {
         assertEquals("", decoder.finish())
     }
 
+    @Test fun unfinishedLineIsReadableBeforeItEndsWithoutBeingConsumed() {
+        val decoder = CheckOutputDecoder(oem)
+        assertEquals("", decoder.accept("STARTED".toByteArray(), 7))
+        assertEquals("STARTED", decoder.unfinished())
+        assertEquals("STARTED done\n", decoder.accept(" done\n".toByteArray(), 6))
+        assertEquals("", decoder.unfinished())
+    }
+
+    @Test fun unfinishedLineWithholdsAHalfReceivedCharacterAndKeepsTheFallback() {
+        val decoder = CheckOutputDecoder(oem)
+        val check = "Готово ✓".toByteArray(Charsets.UTF_8)
+        decoder.accept(check, check.size - 1)
+        assertEquals("Готово ", decoder.unfinished())
+        decoder.accept(check.copyOfRange(check.size - 1, check.size), 1)
+        assertEquals("Готово ✓", decoder.unfinished())
+        val cmd = CheckOutputDecoder(oem)
+        val message = "Системе не удается".toByteArray(oem)
+        cmd.accept(message, message.size)
+        assertEquals("Системе не удается", cmd.unfinished())
+    }
+
     @Test fun withoutAFallbackInvalidBytesStayVisibleAsReplacements() {
         val text = decode(CheckOutputDecoder(null), "Путь\n".toByteArray(oem))
         assertTrue(text.endsWith("\n") && '�' in text, text)

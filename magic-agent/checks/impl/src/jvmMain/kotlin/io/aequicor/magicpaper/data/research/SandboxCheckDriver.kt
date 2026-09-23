@@ -199,18 +199,18 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
         override val receipt get() = process.receipt
         private val lock = Any()
         private val text = StringBuilder()
+        /** The line the command has not ended yet. Progress shows it; the output takes the line once it ends. */
+        private var unfinished = ""
         private val read = CompletableFuture<Unit>()
         private var released = false
         private var cleanup: CheckCleanup? = null
         private var attested: String? = null
         private val reader = Thread({
             try {
-                fun append(chunk: String) {
-                    if (chunk.isEmpty()) return
-                    synchronized(lock) {
-                        text.append(chunk)
-                        if (text.length > MAX_OUTPUT) text.delete(0, text.length - MAX_OUTPUT)
-                    }
+                fun append(chunk: String, tail: String) = synchronized(lock) {
+                    text.append(chunk)
+                    if (text.length > MAX_OUTPUT) text.delete(0, text.length - MAX_OUTPUT)
+                    unfinished = tail
                 }
                 val decoder = CheckOutputDecoder(if (WindowsExecutables.isWindows()) WindowsResearchSandbox.consoleCharset else null)
                 process.inputStream.use { input ->
@@ -218,9 +218,9 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
-                        append(decoder.accept(buffer, count))
+                        append(decoder.accept(buffer, count), decoder.unfinished())
                     }
-                    append(decoder.finish())
+                    append(decoder.finish(), "")
                 }
                 read.complete(Unit)
             } catch (failure: Throwable) { read.completeExceptionally(failure) }
@@ -240,7 +240,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             val completed = withTimeoutOrNull(timeoutMillis) {
                 while (process.isAlive) {
                     if (binary != null && Files.size(binary) > BinaryCheckOutputs.LIMIT) throw CheckOutputLimitExceeded()
-                    val current = synchronized(lock) { text.toString() }
+                    val current = synchronized(lock) { text.toString() + unfinished }
                     if (current != last) { progress(current); last = current }
                     if (!exited.isCompleted) withTimeoutOrNull(sampleMillis) { exited.await() }
                     // An exit signal that disagrees with isAlive must not turn this wait into a spin.

@@ -11,7 +11,8 @@ import java.nio.charset.CodingErrorAction
  * `cmd.exe` and other console programs write in the console's OEM code page (CP866 on a Russian system), and read as
  * UTF-8 their messages became unreadable. Output is decoded line by line, since a line comes from one program: a line
  * that is valid UTF-8 is read as UTF-8 and any other in [fallback]; without one it keeps UTF-8's replacement characters.
- * A carriage return ends a line too, so progress written in place still reaches the caller as it happens.
+ * A carriage return ends a line too, so progress written in place still reaches the caller as it happens, and
+ * [unfinished] shows a line that has not ended yet, such as a prompt or `printf STARTED`.
  */
 internal class CheckOutputDecoder(private val fallback: Charset?) {
     private val pending = ByteArrayOutputStream()
@@ -28,19 +29,31 @@ internal class CheckOutputDecoder(private val fallback: Charset?) {
 
     fun finish(): String = flush(pending.size())
 
+    /**
+     * The line not yet ended, read as it would be if it ended now; nothing is consumed. Later bytes of the same line
+     * can still change how it reads, so it is for showing progress, never for the output itself.
+     */
+    fun unfinished(): String {
+        val all = pending.toByteArray()
+        val whole = all.copyOf(all.size - incompleteUtf8Tail())
+        // A line that is already not UTF-8 reads in the fallback however it ends, so its last byte need not wait.
+        return utf8(whole) ?: String(if (fallback != null) all else whole, fallback ?: Charsets.UTF_8)
+    }
+
     private fun flush(length: Int): String {
         val all = pending.toByteArray()
         pending.reset()
         pending.write(all, length, all.size - length)
-        if (length == 0) return ""
-        val line = all.copyOf(length)
-        return try {
+        return if (length == 0) "" else decode(all.copyOf(length))
+    }
+
+    private fun decode(line: ByteArray): String = utf8(line) ?: String(line, fallback ?: Charsets.UTF_8)
+
+    private fun utf8(line: ByteArray): String? =
+        try {
             Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(line)).toString()
-        } catch (notUtf8: CharacterCodingException) {
-            String(line, fallback ?: Charsets.UTF_8)
-        }
-    }
+        } catch (notUtf8: CharacterCodingException) { null }
 
     /** Bytes at the end of a long line that begin a UTF-8 character not yet complete; they wait for the next read. */
     private fun incompleteUtf8Tail(): Int {
