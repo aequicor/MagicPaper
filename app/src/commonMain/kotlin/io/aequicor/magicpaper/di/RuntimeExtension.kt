@@ -17,6 +17,11 @@ import kotlinx.coroutines.withContext
  */
 internal interface RuntimeExtension {
     val id: String
+    /**
+     * Replays the feature's own saved state before [start]. The host runs it beside the owners it starts after
+     * assembly, so it reads only the hydrated settings and the feature's own storage, and launches nothing.
+     */
+    suspend fun restore() = Unit
     suspend fun start()
     fun updateConfiguration(state: SettingsState)
     suspend fun reload()

@@ -33,6 +33,39 @@ class ToolReceiptIntegrityTest {
         assertNotEquals(toolArgumentsFingerprint(one), toolArgumentsFingerprint(Json.parseToJsonElement("""{"b":[2,1],"a":{"z":3,"x":4}}""")))
     }
 
+    /** Every payload and receipt already stored carries a fingerprint of this exact text: the sorted tree's own `toString()`. */
+    @Test fun fingerprintHashesTheTextOfTheSortedTree() = runTest {
+        fun sorted(value: JsonElement): JsonElement = when (value) {
+            is JsonObject -> JsonObject(value.entries.sortedBy { it.key }.associate { it.key to sorted(it.value) })
+            is JsonArray -> JsonArray(value.map(::sorted))
+            else -> value
+        }
+        suspend fun sha256(text: String): String {
+            val digest = io.ktor.util.Digest("SHA-256")
+            digest += text.encodeToByteArray()
+            return digest.build().joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        }
+        val document = Json.parseToJsonElement("""{"b":[1,2.50,-0,1E3,true,null,"q\"b\\n\n\t\u0001é😀"],"a":{"z":{},"x":[],"é":"v"}}""")
+        val text = """{"a":{"x":[],"z":{},"é":"v"},"b":[1,2.50,-0,1E3,true,null,"q\"b\\n\n\t\u0001é😀"]}"""
+        assertEquals(text, sorted(document).toString())
+        assertEquals(sha256(text), toolArgumentsFingerprint(document))
+        val random = kotlin.random.Random(20260923)
+        val alphabet = listOf("a", "b", "Z", "_", "é", "Я", "😀", "\"", "\\", "\n", "\t", "\u0001", "\u001f", "\u007f", " ", "/", " ", "\uD800")
+        fun word() = (0 until random.nextInt(0, 6)).joinToString("") { alphabet.random(random) }
+        fun tree(depth: Int): JsonElement = when (if (depth == 0) random.nextInt(4) else random.nextInt(6)) {
+            0 -> JsonPrimitive(word())
+            1 -> JsonPrimitive(random.nextLong(-1_000_000, 1_000_000))
+            2 -> listOf(JsonPrimitive(random.nextBoolean()), JsonNull, JsonPrimitive(random.nextDouble())).random(random)
+            3 -> Json.parseToJsonElement(listOf("0.10", "-0", "1E-7", "12345678901234567890", "2.0").random(random))
+            4 -> JsonArray((0 until random.nextInt(0, 5)).map { tree(depth - 1) })
+            else -> JsonObject((0 until random.nextInt(0, 6)).associate { word() to tree(depth - 1) })
+        }
+        repeat(500) {
+            val arguments = tree(5)
+            assertEquals(sha256(sorted(arguments).toString()), toolArgumentsFingerprint(arguments), arguments.toString())
+        }
+    }
+
     @Test fun redactedArgumentsStillRejectDifferentSecretOnRetryAndReturnSafeResult() = runTest {
         val kv = InMemoryKeyValueStore()
         val store = StoredToolReceipts(kv)

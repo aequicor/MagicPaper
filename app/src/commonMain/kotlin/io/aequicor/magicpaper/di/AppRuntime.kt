@@ -72,14 +72,24 @@ class MagicPaperRuntime internal constructor(
                 phase("media") { media.refreshAvailability() }
                 // Track assembly ownership before dependent constructors can fail.
                 extensions = phase("assembly") { koin.get<RuntimeExtensions>().owners }
-                phase("media.recovery") { media.recoverPending() }
-                val settings = koin.get<SettingsService>().also { settingsService = it }
-                val chat = koin.get<ChatService>().also { chatService = it }
-                phase("settings.service") { settings.start() }
-                // Restored sessions need their skill adapters; restoration itself never launches a run.
-                phase("plugins") { koin.get<PluginService>().also { pluginService = it }.start() }
-                phase("chat") { chat.start() }
-                extensions.forEach { extension -> phase("extension.${extension.id}") { extension.start() } }
+                // Each feature replays its own journal while the owners below restore theirs: the replay needs only the
+                // settings hydrated above and launches nothing, and an owner that reads the feature meanwhile waits for
+                // it. A failure on either side cancels the other and fails the start as one.
+                val (settings, chat) = coroutineScope {
+                    val restores = extensions.map { extension -> async { phase("extension.${extension.id}.restore") { extension.restore() } } }
+                    phase("media.recovery") { media.recoverPending() }
+                    val settings = koin.get<SettingsService>().also { settingsService = it }
+                    val chat = koin.get<ChatService>().also { chatService = it }
+                    phase("settings.service") { settings.start() }
+                    // Restored sessions need their skill adapters; restoration itself never launches a run.
+                    phase("plugins") { koin.get<PluginService>().also { pluginService = it }.start() }
+                    phase("chat") { chat.start() }
+                    extensions.zip(restores).forEach { (extension, restore) ->
+                        restore.await()
+                        phase("extension.${extension.id}") { extension.start() }
+                    }
+                    settings to chat
+                }
                 scope.launch {
                     settings.state.collect { state ->
                         chat.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available, state.openAiSubscription.account?.signedIn == true)

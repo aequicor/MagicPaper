@@ -90,6 +90,14 @@ interface CodingFeature {
     val plugins: List<MagicPlugin>
 
     /**
+     * Replays the saved projects, sessions and histories into memory, and nothing more: it reads the
+     * hydrated settings and the feature's own journal and launches no work, so the host may run it
+     * beside other owners' restoration. A reader that arrives meanwhile waits for it; [start] finishes
+     * it first if the host did not.
+     */
+    suspend fun restore() = Unit
+
+    /**
      * Recovers orchestration and child-session projections. `AppRuntime` calls this before
      * `CodingService.start()` consumes durable run checkpoints; the order is load-bearing.
      */

@@ -90,4 +90,8 @@ tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
+    systemProperty("magicpaper.benchmark", providers.gradleProperty("magicpaper.benchmark").getOrElse("false"))
+    systemProperty("magicpaper.benchmark.data", providers.gradleProperty("magicpaper.benchmark.data").getOrElse(""))
+    // The desktop app runs with the JVM's default heap, a quarter of physical memory; a start over real data needs it.
+    if (providers.gradleProperty("magicpaper.benchmark").orNull == "true") maxHeapSize = "6g"
 }

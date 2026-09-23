@@ -68,6 +68,7 @@ internal class NativeRuntimeExtension(
     private var featureNeedsResume = false
     private var nativeNeedsResume = false
     private var computerNeedsResume = false
+    override suspend fun restore() = feature.restore()
     override suspend fun start() {
         // Recovery must rebuild planning before the service consumes saved run checkpoints.
         AppLog.phase("runtime", "agent.feature") { feature.start() }

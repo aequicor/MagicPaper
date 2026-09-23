@@ -57,6 +57,8 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
             DefaultCodingComponentFactory(service, deps.filePicker, deps.projectSkills)
         override val presentation: CodingPresentation = DefaultCodingPresentation
         override val plugins: List<MagicPlugin> = listOf(plugin)
+        // The journal replays once under its own lock: after restore() this phase only confirms it.
+        override suspend fun restore() = projects.start()
         override suspend fun start() {
             AppLog.phase("runtime", "agent.projects") { projects.start() }
             AppLog.phase("runtime", "agent.graph") { graph.start() }

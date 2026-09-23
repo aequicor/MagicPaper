@@ -7,14 +7,34 @@ import kotlinx.serialization.json.*
 /** Canonical object order makes aliases/order-independent retries identify the same command. */
 suspend fun toolArgumentsFingerprint(arguments: JsonElement): String {
     val digest = Digest("SHA-256")
-    digest += canonicalToolJson(arguments).toString().encodeToByteArray()
+    digest += StringBuilder().appendCanonical(arguments).toString().encodeToByteArray()
     return digest.build().toHexString()
 }
 
-private fun canonicalToolJson(value: JsonElement): JsonElement = when (value) {
-    is JsonObject -> JsonObject(value.entries.sortedBy { it.key }.associate { it.key to canonicalToolJson(it.value) })
-    is JsonArray -> JsonArray(value.map(::canonicalToolJson))
-    else -> value
+/**
+ * The text `toString()` gives the same tree with every object's keys sorted, written into one buffer. That `toString()`
+ * renders each nested value on its own and copies it into its parent, once per level: verifying a payload of tens of
+ * megabytes cost several times more than reading it. Every recorded fingerprint depends on this exact text, which
+ * `ToolReceiptIntegrityTest` holds to the tree's own rendering.
+ */
+private fun StringBuilder.appendCanonical(value: JsonElement): StringBuilder = apply {
+    when (value) {
+        is JsonObject -> {
+            append('{')
+            value.entries.sortedBy { it.key }.forEachIndexed { index, (key, item) ->
+                if (index > 0) append(',')
+                append(JsonPrimitive(key).toString()).append(':').appendCanonical(item)
+            }
+            append('}')
+        }
+        is JsonArray -> {
+            append('[')
+            value.forEachIndexed { index, item -> if (index > 0) append(','); appendCanonical(item) }
+            append(']')
+        }
+        // Quoted and escaped for a string; a number, boolean or null exactly as it was written.
+        is JsonPrimitive -> append(value.toString())
+    }
 }
 
 private val credentialField = Regex("(?i)^(?:authorization|proxy[_-]?authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|password|passwd|secret|client[_-]?secret|private[_-]?key|token|cookie|set[_-]?cookie)$")

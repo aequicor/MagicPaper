@@ -93,6 +93,10 @@ tasks.withType<Test>().configureEach {
         .getOrElse(rootProject.file("tools/paper-editor/build/compose/binaries/main/app/$launcher").absolutePath))
     systemProperty("magicpaper.pi.it", providers.gradleProperty("magicpaper.pi.it").getOrElse("false"))
     systemProperty("magicpaper.codex.it", providers.gradleProperty("magicpaper.codex.it").getOrElse("false"))
+    systemProperty("magicpaper.benchmark", providers.gradleProperty("magicpaper.benchmark").getOrElse("false"))
+    systemProperty("magicpaper.benchmark.data", providers.gradleProperty("magicpaper.benchmark.data").getOrElse(""))
+    // The desktop app runs with the JVM's default heap, a quarter of physical memory; a replay of real data needs it.
+    if (providers.gradleProperty("magicpaper.benchmark").orNull == "true") maxHeapSize = "6g"
 }
 
 // DesktopUiSkillIntegrationTest validates the tracked package outside this subproject.

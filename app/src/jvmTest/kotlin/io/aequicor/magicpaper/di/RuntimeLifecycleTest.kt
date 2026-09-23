@@ -131,6 +131,45 @@ class RuntimeLifecycleTest {
         } finally { runtime.close(); runtime.awaitClosed(); Dispatchers.resetMain() }
     }
 
+    @Test fun aFeatureReplaysItsJournalWhileTheOwnersAfterAssemblyRestoreAndStartsOnlyAfterIt() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val replayed = CompletableDeferred<Unit>()
+        val marker = io.aequicor.magicpaper.logging.AppLog.history().lastOrNull()
+        fun chatRestored() = io.aequicor.magicpaper.logging.AppLog.history().let { history ->
+            history.drop(history.indexOfFirst { it === marker } + 1)
+        }.any { it.component == "runtime" && it.event == "phase.finished" && it.fields["phase"] == "chat" }
+        val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()), bridge,
+            NavigationSessionConfig(), runtimeExtensions = { listOf(RestoringExtension(events) { replayed.await() }) })
+        try {
+            runtime.start()
+            withContext(Dispatchers.Default) { withTimeout(5_000) { while (!chatRestored()) delay(10) } }
+            assertEquals(RuntimeState.Loading, runtime.ready.value)
+            assertEquals(listOf("restore"), events.toList(), "the chat restored while the feature was still replaying")
+            replayed.complete(Unit)
+            assertEquals(RuntimeState.Ready, runtime.ready.first { it != RuntimeState.Loading })
+            assertEquals(listOf("restore", "restored", "start"), events.toList())
+        } finally { runtime.close(); runtime.awaitClosed(); Dispatchers.resetMain() }
+    }
+
+    @Test fun aFailedFeatureReplayFailsTheStartAndTheAssembledFeatureIsStillClosed() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var started = false
+        val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()), bridge,
+            NavigationSessionConfig(), runtimeExtensions = { listOf(RestoringExtension(events) { error("private-journal-value") }) },
+            onPlatformStarted = { started = true })
+        try {
+            runtime.start()
+            val failure = runtime.ready.first { it is RuntimeState.Failed } as RuntimeState.Failed
+            assertFalse(failure.message.contains("private-journal-value"))
+            assertFalse(started)
+            assertEquals(listOf("restore"), events.toList(), "a feature whose journal did not replay is never started")
+            runtime.close(); runtime.awaitClosed()
+            assertEquals(listOf("restore", "close"), events.toList())
+        } finally { runtime.close(); runtime.awaitClosed(); Dispatchers.resetMain() }
+    }
+
     @Test fun withoutAPlatformAssemblyNoExecutableCodingOwnerIsRegistered() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()), bridge, NavigationSessionConfig())
@@ -384,6 +423,22 @@ private class ResetExtension(override val id: String, private val events: Mutabl
     override suspend fun resumeAfterReset() { events += "$id.resume"; if (failResume) error("private resume") }
     override suspend fun pruneAfterReset() { events += "$id.prune" }
     override suspend fun close() { events += "$id.close"; if (failClose) error("private close") }
+}
+
+private class RestoringExtension(private val events: MutableList<String>, private val replay: suspend () -> Unit) : RuntimeExtension {
+    override val id = "restoring"
+    override suspend fun restore() { events += "restore"; replay(); events += "restored" }
+    override suspend fun start() { events += "start" }
+    override fun updateConfiguration(state: SettingsState) = Unit
+    override suspend fun reload() = Unit
+    override suspend fun clearProfileOverrides(profileId: String) = Unit
+    override suspend fun prepareForReset() = Unit
+    override suspend fun pauseForReset(discardUnresolvable: Boolean) = Unit
+    override suspend fun clearForReset() = Unit
+    override suspend fun eraseFilesForReset() = Unit
+    override suspend fun resumeAfterReset() = Unit
+    override suspend fun pruneAfterReset() = Unit
+    override suspend fun close() { events += "close" }
 }
 
 private class ResetFeature(private val events: MutableList<String>) : CodingFeature {

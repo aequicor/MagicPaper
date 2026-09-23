@@ -117,8 +117,9 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
                 val reading = TimeSource.Monotonic.markNow()
                 val stored = payloads.readAll(refs)
                 projectPayloadMillis += reading.elapsedNow().inWholeMilliseconds
-                for (recorded in stored) {
-                    val recordedInput = freeze(recorded)
+                // A payload read back is already the decoded form [freeze] would produce; freezing it again is one
+                // more encode and decode of every input, and a legacy import holds every history at once.
+                for (recordedInput in stored) {
                     val next = CodingMachine.reduce(state, recordedInput)
                     check(next.effects.none { it is CodingMachine.Effect.Reject }) { "Повреждён журнал проекта" }
                     MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, state, recordedInput, next.state, next.effects)
