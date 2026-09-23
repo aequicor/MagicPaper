@@ -83,6 +83,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
                 receiptId, ownedRoot.resolve("owned"), recorder)
             else sandbox().prepareBinary(arguments, cwd, effectiveEnvironment, policy,
                 receiptId, ownedRoot.resolve("owned"), binary, recorder)
+            logPrepared(command, executable, cwd, native.receipt.kind, sandbox().launchMethod(executable))
             CommandResource(native, scratch, policy, artifacts, before, timeoutMillis, binary, metadataRead,
                 BinaryCheckOutputs(ownedRoot.resolve("outputs"))) { resources.remove(receiptId) }.also {
                 resources[receiptId] = it
@@ -306,6 +307,27 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
         if (System.getProperty("os.name").startsWith("Mac"))
             put("JAVA_TOOL_OPTIONS", listOfNotNull(get("JAVA_TOOL_OPTIONS"), "-Djdk.lang.Process.launchMechanism=fork").joinToString(" "))
     }
+    /**
+     * How a command is about to run: how its program was found, how it is started, in which sandbox, under which policy
+     * and for how long at most. A check an agent or a user chose is an operation of its own and is recorded at INFO; the
+     * application's own Git plumbing runs dozens of commands per step and stays at DEBUG. Paths only reach TRACE.
+     */
+    private fun logPrepared(command: CheckCommand, executable: String, cwd: Path, kind: String, launch: String) {
+        val name = command.arguments.first()
+        val fields = mapOf("sessionId" to command.ref.scope.sessionId, "requestId" to command.ref.scope.requestId,
+            "mode" to command.policy.name, "format" to command.outputMode.name,
+            "executable" to (Paths.get(executable).fileName?.toString() ?: name),
+            "strategy" to when {
+                !name.contains('/') && !name.contains('\\') -> "path"
+                Paths.get(name).isAbsolute -> "absolute"
+                else -> "relative"
+            },
+            "action" to launch, "kind" to kind, "timeoutMs" to timeoutMillis.toString(),
+            "argumentCount" to (command.arguments.size - 1).toString())
+        if (name == "git") AppLog.debug("checks", "run.prepared", fields) else AppLog.info("checks", "run.prepared", fields)
+        AppLog.trace("checks", "run.prepared.detail", fields) { "executable=$executable\ncwd=$cwd" }
+    }
+
     internal fun resolveExecutable(name: String, cwd: Path, env: Map<String, String>): String {
         val windows = WindowsExecutables.isWindows()
         val extensions = WindowsExecutables.extensions(env.entries.firstOrNull { it.key.equals("PATHEXT", true) }?.value ?: DEFAULT_PATHEXT)

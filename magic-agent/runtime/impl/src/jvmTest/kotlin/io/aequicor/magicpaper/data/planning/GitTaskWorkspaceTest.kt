@@ -362,6 +362,45 @@ class GitTaskWorkspaceTest {
         assertContains(blockedDetail, "blocked: Команда проверки не найдена: python3")
     } }
 
+    /** Every step between the start and the outcome is in the log, under one operation: commit, snapshots, each check. */
+    @Test fun verificationRecordsEachStepFromTheCommitToTheOutcome() = runTest { fixture {
+        val runner = object : CommandChecks by gitChecks {
+            private val results = mutableMapOf<CheckRef, CheckResult>()
+            override suspend fun run(command: CheckCommand): CheckResult =
+                if (command.outputMode != CheckOutputMode.TEXT) gitChecks.run(command)
+                else {
+                    if (command.arguments.first() == "write-stray-file") File(command.workspace, "stray.txt").writeText("x")
+                    CheckResult("ok", 0).also { results[command.ref] = it }
+                }
+            override suspend fun inspect(ref: CheckRef) = results[ref] ?: gitChecks.inspect(ref)
+        }
+        val checked = port(runner)
+        val task = open()
+        File(task.path, "result.txt").writeText("pending result")
+        val record = prepare(task)
+        val level = AppLog.level
+        AppLog.level = LogLevel.INFO
+        try {
+            fun steps(from: Int) = AppLog.history().drop(from).filter { it.component == "coding.worktree" &&
+                (it.event.startsWith("verification.") || it.event.startsWith("check.")) }
+            val passingFrom = AppLog.history().size
+            checked.verify(record.copy(checks = listOf(listOf("gradlew.bat", "test"))), "passing-verification")
+            val passing = steps(passingFrom)
+            assertEquals(listOf("verification.started", "verification.snapshot", "check.started", "check.finished",
+                "verification.snapshot", "verification.finished"), passing.map { it.event })
+            assertEquals(record.mergeCommit.take(12), passing.first().fields["commit"], "the verified commit is named")
+            assertEquals("handoff_checks", passing.first().fields["mode"])
+            assertEquals(listOf("before", "after"), passing.filter { it.event == "verification.snapshot" }.map { it.fields["phase"] })
+            assertEquals("gradlew.bat", passing.single { it.event == "check.started" }.fields["executable"])
+            assertEquals("passed", passing.last().fields["result"])
+            assertEquals(1, passing.map { it.fields["operationId"] }.toSet().size, "every step names the same operation")
+            assertTrue(passing.all { it.fields["operationId"]?.startsWith("id-") == true && it.fields["entityId"] != null })
+            val changingFrom = AppLog.history().size
+            assertFails { checked.verify(record.copy(checks = listOf(listOf("write-stray-file"))), "changing-verification") }
+            assertEquals("files_changed", steps(changingFrom).last().fields["result"])
+        } finally { AppLog.level = level }
+    } }
+
     @Test fun checkCancellationPreservesUnknownLeaseWithoutDelivery() = runTest { fixture {
         val cancellation = CancellationException("Check cancelled")
         var cancelledRef: CheckRef? = null

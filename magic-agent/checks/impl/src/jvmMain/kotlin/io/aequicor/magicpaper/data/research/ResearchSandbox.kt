@@ -10,6 +10,8 @@ internal interface ResearchSandbox {
      * confinement its protection would be an assumption rather than an enforced property.
      */
     val confinesWrites: Boolean get() = true
+    /** How [program] is started, for diagnostics: `direct`, or the interpreter it needs, such as `cmd` for a batch file. */
+    fun launchMethod(program: String): String = "direct"
     fun prepare(command: List<String>, cwd: Path, environment: Map<String, String>, policy: ResearchWorkspacePolicy?,
         receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess
 

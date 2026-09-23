@@ -247,22 +247,41 @@ class GitTaskWorkspace(
         head(dir)
     }
 
+    /**
+     * Verification runs the checks the agent handed off in the managed copy of the merged result. Each step is recorded
+     * so a failure can be explained from the log alone: which commit, which copy snapshot before and after, which
+     * program each check ran and how it ended, and the outcome. The `checks` owner records how each command was
+     * launched under the same operation id (its `requestId`).
+     */
     override suspend fun verify(record: TaskWorktree, operation: TaskWorkspaceOperation) = owned(record, operation, TaskWorktreeMachine.Operation.VERIFY) {
         val dir = managed(record)
-        val before = verificationSnapshot(dir.path, commands())
-        AppLog.info("coding.worktree", "verification.started", mapOf("entityId" to record.taskId, "count" to record.checks.size.toString()))
+        val step = mapOf("operationId" to operation.pending.id, "sessionId" to operation.owner.sessionId, "entityId" to record.taskId)
+        val started = System.nanoTime()
+        fun elapsed(since: Long) = ((System.nanoTime() - since) / 1_000_000).toString()
+        fun finished(result: String, extra: Map<String, String> = emptyMap()) = AppLog.info("coding.worktree", "verification.finished",
+            step + mapOf("result" to result, "count" to record.checks.size.toString(), "durationMs" to elapsed(started)) + extra)
+        suspend fun snapshot(phase: String): String {
+            val at = System.nanoTime()
+            return verificationSnapshot(dir.path, commands()).also {
+                AppLog.info("coding.worktree", "verification.snapshot", step + mapOf("phase" to phase, "durationMs" to elapsed(at)))
+            }
+        }
+        AppLog.info("coding.worktree", "verification.started", step + mapOf("commit" to record.mergeCommit.take(12),
+            "count" to record.checks.size.toString(), "mode" to "handoff_checks"))
+        val before = snapshot("before")
         for ((index, args) in record.checks.withIndex()) {
             require(args.isNotEmpty() && args.none { '\u0000' in it }) { "Некорректная команда проверки" }
-            val started = System.nanoTime()
+            // Ключи вне allowlist AppLog санитируются до `[redacted]`: программу называет имя файла, аргументы и вывод — только TRACE.
+            val check = step + mapOf("index" to index.toString(), "executable" to programName(args.first()),
+                "argumentCount" to (args.size - 1).toString())
+            AppLog.info("coding.worktree", "check.started", check)
+            val at = System.nanoTime()
             val result = commands().check(dir, args)
             val code = result.exitCode
             val status = if (result.blockedReason != null) "blocked" else if (code == 0) "passed" else "failed"
-            // Ключи вне allowlist AppLog санитируются до `[redacted]`: программу называет имя файла, аргументы и вывод — только TRACE.
-            AppLog.info("coding.worktree", "check.finished", mapOf("entityId" to record.taskId, "index" to index.toString(),
-                "result" to code.toString(), "status" to status, "executable" to programName(args.first()),
-                "argumentCount" to (args.size - 1).toString(), "durationMs" to ((System.nanoTime() - started) / 1_000_000).toString(),
-                "bytes" to result.output.toByteArray(Charsets.UTF_8).size.toString()))
-            if (status != "passed") AppLog.trace("coding.worktree", "check.output", mapOf("entityId" to record.taskId, "index" to index.toString())) {
+            AppLog.info("coding.worktree", "check.finished", check + mapOf("result" to code.toString(), "status" to status,
+                "durationMs" to elapsed(at), "bytes" to result.output.toByteArray(Charsets.UTF_8).size.toString()))
+            if (status != "passed") AppLog.trace("coding.worktree", "check.output", check) {
                 buildString {
                     append("command: ").append(checkCommandLine(args).take(TRACE_COMMAND))
                     result.blockedReason?.let { append("\nblocked: ").append(it.take(TRACE_COMMAND)) }
@@ -270,6 +289,7 @@ class GitTaskWorkspace(
                 }
             }
             if (code != 0 || result.blockedReason != null) {
+                finished(if (status == "blocked") "check_blocked" else "check_failed", mapOf("index" to index.toString()))
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
                 val detail = checkFailureDetail(result.output)
                 throw TaskWorktreeVerificationFailed(buildString {
@@ -279,9 +299,12 @@ class GitTaskWorkspace(
                 })
             }
         }
-        if (verificationSnapshot(dir.path, commands()) != before)
+        if (snapshot("after") != before) {
+            finished("files_changed")
             throw TaskWorktreeVerificationFailed("Проверка изменила файлы задачи; нужна повторная приёмка")
+        }
         clean(dir, TASK_COPY)
+        finished("passed")
     }
 
     override suspend fun delivered(record: TaskWorktree): Boolean = reading(record.sourcePath) {

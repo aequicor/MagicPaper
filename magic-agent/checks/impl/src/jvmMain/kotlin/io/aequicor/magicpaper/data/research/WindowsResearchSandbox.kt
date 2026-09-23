@@ -80,7 +80,7 @@ internal object WindowsResearchSandbox : ResearchSandbox {
      */
     internal fun commandLine(command: List<String>, systemRoot: String?): Pair<String, String> {
         val arguments = command.joinToString(" ", transform = ::quote)
-        if (!command.first().endsWith(".cmd", true) && !command.first().endsWith(".bat", true)) return command.first() to arguments
+        if (!runsThroughCmd(command.first())) return command.first() to arguments
         require(command.none { it.any { c -> c in "&|<>^%!\"\r\n" } }) { "Спецсимволы в аргументах batch-проверки недопустимы" }
         val shell = systemRoot.orEmpty().ifBlank { "C:\\Windows" } + "\\System32\\cmd.exe"
         return shell to quote(shell) + " /d /s /c \"" + arguments + "\""
@@ -94,6 +94,9 @@ internal object WindowsResearchSandbox : ResearchSandbox {
         val page = kernel.getFunction("GetOEMCP").invokeInt(emptyArray())
         try { Charset.forName("cp$page") } catch (unsupported: IllegalArgumentException) { null }
     }
+
+    private fun runsThroughCmd(program: String) = program.endsWith(".cmd", true) || program.endsWith(".bat", true)
+    override fun launchMethod(program: String) = if (runsThroughCmd(program)) "cmd" else "direct"
 
     internal fun quote(arg: String): String = buildString {
         append('"')

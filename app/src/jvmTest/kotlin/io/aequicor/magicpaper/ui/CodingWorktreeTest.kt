@@ -177,6 +177,9 @@ class CodingWorktreeTest {
         val traced = AppLog.history().last { it.component == "coding.worktree" && it.event == "handoff.checks" }
         assertEquals("check[0]: gradlew.bat test --tests \"Suite Test\"", traced.detail)
         assertEquals(recorded.fields["entityId"], traced.fields["entityId"])
+        val merged = AppLog.history().last { it.component == "coding.worktree" && it.event == "merge.accepted" }
+        assertEquals("task", merged.fields["mode"])
+        assertEquals(recorded.fields["entityId"], merged.fields["entityId"], "the accepted merge belongs to the handed-off task")
     } }
 
     @Test fun continuedTaskRecordsDestinationDistanceItCouldNotClose() = runTest { fixture { service, runtime, port, repo ->
