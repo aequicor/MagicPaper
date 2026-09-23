@@ -106,6 +106,8 @@ internal class UnixResearchProcess private constructor(
         catch (_: java.util.concurrent.TimeoutException) { false }
     override fun exitValue(): Int = if (completion.isDone) completion.get() else throw IllegalThreadStateException("Process is alive")
     override fun isAlive() = !completion.isDone
+    /** Completes with [completion]; the default parks a pool thread in [waitFor] until then. */
+    override fun onExit(): CompletableFuture<Process> = completion.handle { _, _ -> this }
     override fun pid() = childPid.toLong()
     override fun toHandle(): ProcessHandle = ProcessHandle.of(pid()).orElseThrow { IllegalStateException("Process exited") }
     override fun destroy() { synchronized(lifetime) { signalGroup(15); namespace?.terminate() } }

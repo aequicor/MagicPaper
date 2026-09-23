@@ -217,7 +217,7 @@ internal object ResearchCrashFixture {
 
 /** Real OS fixtures use the application owner, including journaled metadata preparation. */
 private class NativeCheckFixture(root: Path, sandbox: () -> ResearchSandbox = { ResearchSandbox.current() }) {
-    private val driver = SandboxCheckDriver(root, 30_000, sandbox)
+    private val driver = SandboxCheckDriver(root, 30_000, sandbox = sandbox)
     private val owner = DefaultCommandChecks(InMemoryEventJournal(), InMemoryKeyValueStore(), driver)
     val progress = MutableStateFlow(CheckResult("", null))
     suspend fun run(project: Path, sessionId: String, arguments: List<String>): CheckResult = coroutineScope {

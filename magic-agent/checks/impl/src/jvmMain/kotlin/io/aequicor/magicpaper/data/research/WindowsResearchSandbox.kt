@@ -349,6 +349,8 @@ internal object WindowsResearchSandbox : ResearchSandbox {
         override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = try { completion.get(timeout, unit); true } catch (_: java.util.concurrent.TimeoutException) { false }
         override fun exitValue(): Int = if (completion.isDone) completion.get() else throw IllegalThreadStateException("Process is alive")
         override fun isAlive() = !completion.isDone
+        /** Completes with [completion]; the default parks a pool thread in [waitFor] until then. */
+        override fun onExit(): CompletableFuture<Process> = completion.handle { _, _ -> this }
         override fun pid() = receipt.pid
         override fun toHandle(): ProcessHandle = ProcessHandle.of(pid()).orElseThrow { IllegalStateException("Process exited") }
         override fun destroy() { synchronized(lifetime) { if (!handlesClosed) bool(kernel, "TerminateJobObject", job, 1) } }

@@ -5,6 +5,7 @@ import io.aequicor.magicpaper.data.coding.WindowsExecutables
 import io.aequicor.magicpaper.domain.checks.*
 import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.*
+import kotlinx.coroutines.future.asDeferred
 import java.io.File
 import java.io.IOException
 import java.nio.file.*
@@ -14,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Filesystem policy and native process adaptation. Admission and recovery are owned by DefaultCommandChecks. */
 internal class SandboxCheckDriver(private val root: Path, private val timeoutMillis: Long,
+    private val sampleMillis: Long = SAMPLE_MILLIS,
     private val sandbox: () -> ResearchSandbox = { ResearchSandbox.current() }) : CheckProcessDriver {
     private val resources = ConcurrentHashMap<String, PreparedCommandCheck>()
     override suspend fun prepare(command: CheckCommand, receiptId: String,
@@ -84,7 +86,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             else sandbox().prepareBinary(arguments, cwd, effectiveEnvironment, policy,
                 receiptId, ownedRoot.resolve("owned"), binary, recorder)
             logPrepared(command, executable, cwd, native.receipt.kind, sandbox().launchMethod(executable))
-            CommandResource(native, scratch, policy, artifacts, before, timeoutMillis, binary, metadataRead,
+            CommandResource(native, scratch, policy, artifacts, before, timeoutMillis, sampleMillis, binary, metadataRead,
                 BinaryCheckOutputs(ownedRoot.resolve("outputs"))) { resources.remove(receiptId) }.also {
                 resources[receiptId] = it
                 acquired = it
@@ -191,7 +193,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
 
     private class CommandResource(private val process: PreparedCheckProcess, private val scratch: Path,
         private val policy: ResearchWorkspacePolicy?, private val artifacts: ResearchArtifactStore,
-        private val before: ResearchArtifactStore.Snapshot?, private val timeoutMillis: Long,
+        private val before: ResearchArtifactStore.Snapshot?, private val timeoutMillis: Long, private val sampleMillis: Long,
         private val binary: Path?, private val metadataRead: Boolean, private val binaryOutputs: BinaryCheckOutputs,
         private val onDiscard: () -> Unit) : PreparedCommandCheck {
         override val receipt get() = process.receipt
@@ -232,12 +234,17 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
         override suspend fun awaitResult(progress: (String) -> Unit): CheckResult = withContext(Dispatchers.IO) {
             check(released)
             var last = ""
+            // Exit ends the wait at once: a fixed 50 ms sleep added ~40 ms to every ~90 ms read-only Git query.
+            // The period now only paces the output limit and progress; the outcome is still read below.
+            val exited = process.onExit().handle { _, _ -> }.asDeferred()
             val completed = withTimeoutOrNull(timeoutMillis) {
                 while (process.isAlive) {
                     if (binary != null && Files.size(binary) > BinaryCheckOutputs.LIMIT) throw CheckOutputLimitExceeded()
                     val current = synchronized(lock) { text.toString() }
                     if (current != last) { progress(current); last = current }
-                    delay(50)
+                    if (!exited.isCompleted) withTimeoutOrNull(sampleMillis) { exited.await() }
+                    // An exit signal that disagrees with isAlive must not turn this wait into a spin.
+                    else if (process.isAlive) delay(sampleMillis)
                 }
                 true
             } ?: false
@@ -371,6 +378,8 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
     companion object {
         const val MAX_OUTPUT = 64_000
         private const val MAX_NAME = 120
+        /** How often a running command's output limit and progress are sampled; its exit is not waited out. */
+        private const val SAMPLE_MILLIS = 50L
         const val DEFAULT_PATHEXT = ".EXE;.CMD;.BAT"
 
         /**

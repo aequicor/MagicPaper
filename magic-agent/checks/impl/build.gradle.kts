@@ -16,9 +16,11 @@ kotlin {
             implementation(libs.kotlinx.coroutinesTest)
             implementation(project(":core:storage:api"))
         }
+        jvmTest.dependencies { implementation(project(":core:storage:impl")) }
     }
 }
 
 tasks.withType<Test>().configureEach {
     systemProperty("magicpaper.research.native", providers.gradleProperty("magicpaper.research.native").getOrElse("false"))
+    systemProperty("magicpaper.benchmark", providers.gradleProperty("magicpaper.benchmark").getOrElse("false"))
 }
