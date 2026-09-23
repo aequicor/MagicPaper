@@ -49,8 +49,17 @@ class OwnedGitMetadataPolicyTest {
                 assertEquals(listOf(standardOutput.parent), value.writable)
                 assertFalse(value.writable.any { it.startsWith(project) })
                 assertEquals("0", environment["GIT_OPTIONAL_LOCKS"])
-                assertEquals("1", environment["GIT_CONFIG_NOSYSTEM"])
                 assertFalse("GIT_INDEX_FILE" in environment)
+                // Конфиг пользователя решает форму данных репозитория (окончания строк, атрибуты,
+                // safe.directory, фильтры): отключать его нельзя, закалываются исполняемые ключи.
+                assertNull(environment["GIT_CONFIG_NOSYSTEM"])
+                assertNull(environment["GIT_CONFIG_GLOBAL"])
+                val injected = (0 until checkNotNull(environment["GIT_CONFIG_COUNT"]).toInt())
+                    .associate { environment.getValue("GIT_CONFIG_KEY_$it") to environment.getValue("GIT_CONFIG_VALUE_$it") }
+                assertEquals("false", injected["core.fsmonitor"])
+                assertEquals("true", injected["core.editor"])
+                assertEquals("false", injected["commit.gpgSign"])
+                assertEquals("never", injected["protocol.allow"])
                 val output = if (command.contains("ls-files")) "dist/user.txt\u0000" else git.toString() + "\n"
                 return completed(receiptId, "") { Files.write(standardOutput, output.encodeToByteArray()) }
             }

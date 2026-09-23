@@ -67,8 +67,17 @@ symlink, отмену, повтор и восстановление после �
 
 Read-only Git (`GIT_READ_ONLY`, `METADATA_READ_ONLY`) больше не требует пробы песочницы ни
 на какой платформе: это точный allowlist аргументов, усиленный `--no-optional-locks`, пустым
-`core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`, `GIT_CONFIG_NOSYSTEM=1` и `GIT_CONFIG_GLOBAL=NUL`,
+`core.hooksPath`, `GIT_OPTIONAL_LOCKS=0` и закалёнными исполняемыми ключами конфига
+(`SandboxCheckDriver.hardenedGitConfiguration`: `core.fsmonitor=false`, `core.editor=true`,
+`sequence.editor=true`, `commit.gpgSign=false`, `tag.gpgSign=false`, `protocol.allow=never`,
+`core.quotepath=false`),
 а экран проекта, ожидание worktree и возобновление агента читают Git раньше любого запуска.
+Системный и глобальный конфиг пользователя остаются в силе: они решают преобразование окончаний
+строк, файл атрибутов, `safe.directory` и фильтры, то есть какие байты Git считает неизменными.
+Их отключение (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`) заставляло приложение видеть
+CRLF-чекаут как незакоммиченные изменения и коммитить в управляемой копии байты без принятой у
+пользователя нормализации; согласие с git пользователя закрепляет
+`GitConfigurationAgreementNativeTest`, а закалённые ключи — `OwnedGitMetadataPolicyTest`.
 Отказ песочницы по-прежнему оставляет произвольные команды (`PROTECTED_PROJECT`)
 отказанными: резервного запуска без изоляции нет. Платформа, которая не может ограничить
 запись вовсе (`ResearchSandbox.confinesWrites = false`), выполняет такие чтения без файловой
@@ -160,6 +169,21 @@ Git-read через обёртку `Git\cmd\git.exe` в реальном реп�
 -Pmagicpaper.research.native=true --tests '*GitTaskWorkspaceAvailabilityNativeTest'*`: настоящий
 репозиторий, настоящий владелец проверок и настоящая песочница обязаны дать `available = true`.
 Linux по-прежнему не запускался; macOS в этом прогоне не проверялась.
+
+Windows-приёмка конфигурации Git выполнена 23 сентября 2026 года (Windows 11, x64, NTFS,
+системный `core.autocrlf=true`, в рабочем репозитории 1826 файлов `i/lf w/crlf`) на ветке
+`fix/restore-child-sessions-after-crash`: `.\gradlew.bat :magic-agent:checks:impl:jvmTest
+:magic-agent:runtime:impl:jvmTest -Pmagicpaper.research.native=true` — `:magic-agent:checks:impl`
+90 тестов, 0 отказов, 1 пропущен (Unix-only); `:magic-agent:runtime:impl` 1194 теста, 8 отказов —
+те же, что в задокументированной Windows-базе (семь `TaskWorktreeIntegrationChecksTest` и
+`ResearchCheckBridgeTest.piProtocolReusesTheNativeCallIdAcrossWireRetries`), новых нет.
+`GitConfigurationAgreementNativeTest` подтверждает на настоящем репозитории, что read-only
+`status --porcelain --untracked-files=all` приложения даёт тот же вердикт, что и `git status`
+пользователя, на чекауте с преобразованием окончаний строк; с отключённым системным и глобальным
+конфигом тот же тест красный (`expected:<[]> but was:<[M source.txt]>`).
+`GitTaskWorkspaceTest.realCheckOwnerDeliversATaskThroughNativeGit` проводит задачу через штатного
+владельца проверок — `worktree add`, `add`, `commit`, `merge --ff-only` с закалённым конфигом —
+и доставляет результат в исходную папку. Linux и macOS в этом прогоне не проверялись.
 
 ## Сверка с контрактами платформ
 

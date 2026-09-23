@@ -1,5 +1,6 @@
 package io.aequicor.magicpaper.data.planning
 
+import io.aequicor.magicpaper.data.checks.createCommandChecks
 import io.aequicor.magicpaper.domain.*
 import io.aequicor.magicpaper.domain.tools.ToolExecutionContext
 import io.aequicor.magicpaper.domain.tools.ToolRole
@@ -13,6 +14,7 @@ import io.aequicor.magicpaper.domain.checks.*
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import org.junit.Assume.assumeTrue
 import kotlin.test.*
 
 class GitTaskWorkspaceTest {
@@ -299,11 +301,40 @@ class GitTaskWorkspaceTest {
 
     @Test fun dirtyIndexAndUntrackedFilesBlockPreparation() = runTest { fixture {
         source.resolve("untracked").writeText("user")
-        assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }
+        val unstaged = assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }
+        // Отказ обязан назвать папку и путь: иначе пользователь проверяет свой Git и не находит изменений.
+        assertContains(unstaged.message.orEmpty(), "исходная папка проекта")
+        assertContains(unstaged.message.orEmpty(), "?? untracked")
         git(source, "add", "untracked")
-        assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }
+        val staged = assertFailsWith<IllegalArgumentException> { port.describe(project, "s", "r", "label") }
+        assertContains(staged.message.orEmpty(), "A  untracked")
         assertEquals("user", source.resolve("untracked").readText())
     } }
+
+    /**
+     * Настоящая ОС: доставка идёт через штатного владельца проверок, то есть git-команды приложения
+     * получают его окружение (песочницу для чтения и закалённый конфиг для записи). Фикстура выше
+     * подменяет владельца файловым протоколом, поэтому без этого теста запись через реальную
+     * песочницу не проверена: `-Pmagicpaper.research.native=true`.
+     */
+    @Test fun realCheckOwnerDeliversATaskThroughNativeGit() = runTest {
+        assumeTrue(System.getProperty("magicpaper.research.native") == "true")
+        fixture {
+            val checks = createCommandChecks(InMemoryEventJournal(), InMemoryKeyValueStore(),
+                File(root, "native-checks").toPath(), 120_000)
+            try {
+                val real = port(checks)
+                var task = real.describe(project, "session", "native", "Task native")
+                real.open(task)
+                File(task.path).resolve("base.txt").writeText("agent\n")
+                task = task.copy(resultCommit = real.capture(task), targetCommit = real.target(task))
+                task = task.copy(mergeCommit = checkNotNull(real.integrate(task)))
+                real.deliver(task)
+                assertEquals("agent\n", source.resolve("base.txt").readText())
+                assertEquals(task.mergeCommit, git(source, "rev-parse", "HEAD"))
+            } finally { checks.close() }
+        }
+    }
 
     @Test fun nonGitDetachedAndUnbornProjectsAreUnavailable() = runTest { fixture {
         val empty = File(root, "empty").apply { mkdirs() }

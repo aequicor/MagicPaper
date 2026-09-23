@@ -67,8 +67,8 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             val environment = (if (protected) environment(scratch) else managedEnvironment()) + command.environment
             val effectiveEnvironment = if (!metadataRead && command.arguments.first() != "git") environment else environment.toMutableMap().apply {
                 keys.removeIf { it.startsWith("GIT_", ignoreCase = true) }
-                put("GIT_OPTIONAL_LOCKS", "0"); put("GIT_CONFIG_NOSYSTEM", "1"); put("GIT_TERMINAL_PROMPT", "0")
-                put("GIT_CONFIG_GLOBAL", if (System.getProperty("os.name").startsWith("Windows")) "NUL" else "/dev/null")
+                put("GIT_OPTIONAL_LOCKS", "0"); put("GIT_TERMINAL_PROMPT", "0")
+                putAll(hardenedGitConfiguration)
                 putAll(command.environment)
             }
             val executable = resolveExecutable(command.arguments.first(), cwd, effectiveEnvironment)
@@ -306,6 +306,34 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
     companion object {
         const val MAX_OUTPUT = 64_000
         const val DEFAULT_PATHEXT = ".EXE;.CMD;.BAT"
+
+        /**
+         * Системный и глобальный конфиг Git остаются источником формы данных репозитория: `core.autocrlf`,
+         * `core.eol`, `core.attributesFile`, `safe.directory` и фильтры (git-lfs) решают, какие байты Git
+         * считает неизменными. Их отключение (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`) приводило к тому,
+         * что приложение видело CRLF-чекаут как незакоммиченные изменения, которых Git пользователя не
+         * показывает, и коммитило в управляемой копии байты без принятой у пользователя нормализации.
+         * Поэтому закалываются только ключи, способные запустить внешнюю программу или уйти в транспорт;
+         * `core.hooksPath=` и `--no-pager` уже стоят в каждой команде приложения и имеют приоритет выше
+         * этих значений. Передаются они через `GIT_CONFIG_*`, чтобы грамматика аргументов
+         * (`isCheckGitReadArguments`) и идентичность команд в журнале не менялись.
+         */
+        private val hardenedGitConfiguration: Map<String, String> = listOf(
+            "core.fsmonitor" to "false", // демон fsmonitor — внешняя программа
+            "core.editor" to "true", // редактор сообщения коммита
+            "sequence.editor" to "true", // редактор списка интерактивного переноса
+            "commit.gpgSign" to "false", // подпись запускает gpg.program
+            "tag.gpgSign" to "false",
+            "protocol.allow" to "never", // транспортный помощник, credential.helper и core.sshCommand не запускаются
+            "core.quotepath" to "false", // пути в диагностике читаемы без восьмеричных экранировок
+        ).let { pairs ->
+            buildMap {
+                put("GIT_CONFIG_COUNT", pairs.size.toString())
+                pairs.forEachIndexed { index, (key, value) ->
+                    put("GIT_CONFIG_KEY_$index", key); put("GIT_CONFIG_VALUE_$index", value)
+                }
+            }
+        }
         private fun deleteScratch(path: Path) {
             require(!Files.isSymbolicLink(path) && !WindowsResearchSandbox.unsafeLink(path))
             check(path.toFile().deleteRecursively()) { "Check scratch cleanup failed" }

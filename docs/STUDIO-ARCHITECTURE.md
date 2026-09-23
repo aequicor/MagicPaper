@@ -537,9 +537,10 @@ JS/Wasm компиляция и проверка модульных границ
   возврата родительской метки для доказательства недостаточно.
   Решение пользователя от 22 сентября 2026 года сохранено: `PROTECTED_PROJECT` по-прежнему требует
   probe и отказывает при его провале, а `GIT_READ_ONLY` и `METADATA_READ_ONLY` — точный allowlist
-  аргументов с `--no-optional-locks`, пустым `core.hooksPath`, `GIT_OPTIONAL_LOCKS=0`,
-  `GIT_CONFIG_NOSYSTEM=1` и `GIT_CONFIG_GLOBAL=NUL` — пробой не блокируются, поэтому отказ
-  песочницы не отнимает у экрана проекта, ожидания worktree и возобновления агента чтения Git.
+  аргументов с `--no-optional-locks`, пустым `core.hooksPath` и `GIT_OPTIONAL_LOCKS=0` — пробой
+  не блокируются, поэтому отказ песочницы не отнимает у экрана проекта, ожидания worktree и
+  возобновления агента чтения Git. Отключение системного и глобального конфига из этого решения
+  снято 23 сентября 2026 года — см. следующий пункт.
   На Linux/macOS эти команды по-прежнему идут в bwrap/Seatbelt с проектом только для чтения.
   Закреплено `ReadOnlyGitWithoutSandboxProbeNativeTest`, `WindowsCheckAuthorityNativeTest`,
   `WindowsCheckLabelRestoreTest` и `GitTaskWorkspaceAvailabilityNativeTest`. Worktree-режим был
@@ -547,6 +548,49 @@ JS/Wasm компиляция и проверка модульных границ
   `CheckOutcomeUnknown` и постоянно возвращала «Проверка Git временно недоступна», журнал
   проверок уходил в `effects_blocked`, и любой запуск сессии падал с «Завершение проверки не
   подтверждено».
+
+- Конфигурация Git пользователя больше не отключается (23 сентября 2026). `GIT_CONFIG_NOSYSTEM=1`
+  и `GIT_CONFIG_GLOBAL=NUL` убирали не только исполняемые ключи, но и форму данных репозитория:
+  `core.autocrlf`, `core.eol`, `core.attributesFile`, `safe.directory` и фильтры (git-lfs). На
+  Windows-репозитории с системным `core.autocrlf=true` (1826 файлов `i/lf w/crlf`) любое сравнение
+  содержимого — устаревший кэш stat, IDE, сборка, «racy»-метка после записи индекса самим
+  приложением — давало статусу приложения изменённые файлы там, где git пользователя не показывает
+  ничего: `GitTaskWorkspace.clean` отказывала «Сначала сохраните незакоммиченные изменения», и
+  worktree-режим не запускался. Воспроизведено на реальном репозитории: `git hash-object README.md`
+  даёт `5f0557a0…` с конфигом пользователя и `dac0030d…` в окружении приложения. Тот же корень
+  затрагивал запись: `add`/`commit`/`merge` в управляемой копии нормализовали байты не так, как git
+  пользователя. Решение: системный и глобальный конфиг остаются, а закалываются только ключи,
+  способные запустить внешнюю программу или уйти в транспорт, — `core.fsmonitor=false`,
+  `core.editor=true`, `sequence.editor=true`, `commit.gpgSign=false`, `tag.gpgSign=false`,
+  `protocol.allow=never`, `core.quotepath=false` — через `GIT_CONFIG_*`
+  (`SandboxCheckDriver.hardenedGitConfiguration`), поэтому грамматика аргументов
+  (`isCheckGitReadArguments`) и идентичность команд в журнале не изменились; `core.hooksPath=` и
+  `--no-pager` по-прежнему стоят в каждой команде приложения и имеют приоритет выше этих значений.
+  Принятое следствие: фильтры из конфига пользователя (git-lfs) выполняются и при read-only
+  сравнении содержимого — это поведение обычного `git status` пользователя; произвольная команда
+  из чужого репозитория так не появляется, потому что `filter.*` без `.gitattributes` не применяется,
+  а аргументы ограничены allowlist. Отказ `clean` теперь называет папку и пути
+  (`GitTaskWorkspace.dirtyEntries`), а не требует спасти неназванные изменения.
+  Проверено 23 сентября 2026 на Windows 11 x64 (системный `core.autocrlf=true`):
+  `:magic-agent:checks:impl:jvmTest -Pmagicpaper.research.native=true` — 90 тестов, 0 отказов,
+  1 пропущен; `:magic-agent:runtime:impl:jvmTest` с тем же флагом — 1194 теста, 8 отказов, все из
+  Windows-базы ниже (`LongMessageRenderTest` из замера 22 сентября в этом прогоне не воспроизвёлся);
+  `./gradlew jvmTest --continue` — те же шесть модулей и те же имена отказов, что в базе ниже,
+  новых нет. `GitConfigurationAgreementNativeTest` красный без этого решения
+  (`expected:<[]> but was:<[M source.txt]>`) и зелёный с ним; запись через штатного владельца
+  проверок проводит `GitTaskWorkspaceTest.realCheckOwnerDeliversATaskThroughNativeGit`.
+
+- `verifyModuleArchitecture` и `verifySurfaceMap` падают на Windows с русской локалью
+  (23 сентября 2026, не связано с изменениями конфига Git): `locale.getpreferredencoding()` =
+  `cp1251`, `sys.flags.utf8_mode` = 0. `docs/verify-module-architecture.py` пишет фикстуры
+  self-test без `encoding=` (строка 736: `catalogue.write_text('| Машина | Модуль |…')`), а читает
+  их с `encoding="utf-8"` → `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xcc in position 2`
+  (0xCC — «М» в cp1251). `docs/desktop-ui/verify-map.py` читает исходники `p.read_text()` без
+  `encoding=` → `UnicodeDecodeError: 'charmap' codec can't decode byte 0x98`. Обе задачи входят в
+  `checkMigrationJvm`, поэтому на такой машине он не проходит целиком независимо от состава
+  изменений; `verifyDesignSystem` при этом PASS. Не исправлено здесь: это отдельный дефект
+  верификаторов, а не набора про config Git. Лечение — явный `encoding="utf-8"` во всех
+  `read_text`/`write_text` обоих скриптов.
 
 - Исходные отказы Windows, не связанные с этим набором изменений (воспроизведены на HEAD с
   убранными правками): `:magic-agent:runtime:impl:jvmTest` — 1193 теста, 8 отказов. Семь в

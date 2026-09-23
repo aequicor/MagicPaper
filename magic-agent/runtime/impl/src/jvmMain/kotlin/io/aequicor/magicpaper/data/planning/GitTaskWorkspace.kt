@@ -82,7 +82,7 @@ class GitTaskWorkspace(
 
     override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String): TaskWorktree = reading(project.path) {
         val source = File(git(File(project.path), "rev-parse", "--show-toplevel").trim()).canonicalFile
-        clean(source)
+        clean(source, SOURCE_FOLDER)
         val target = git(source, "symbolic-ref", "--short", "HEAD").trim()
         val base = git(source, "rev-parse", "HEAD").trim()
         val slot = File(root, hash(source.path + ":" + sessionId)).canonicalFile
@@ -97,17 +97,17 @@ class GitTaskWorkspace(
         // Reject a changed source before creating/switching any managed worktree or branch.
         require(git(source, "symbolic-ref", "--short", "HEAD").trim() == record.targetBranch &&
             head(source) == record.baseCommit) { "Исходная ветка изменилась после подготовки задачи" }
-        clean(source)
+        clean(source, SOURCE_FOLDER)
         if (dir.exists()) {
             val branch = git(dir, "symbolic-ref", "--short", "HEAD").trim()
             if (branch == record.branch) {
                 reconcile(record)
                 require(git(dir, "rev-parse", "HEAD").trim() == record.baseCommit) { "Подготовленная ветка задачи изменилась" }
-                clean(dir)
+                clean(dir, TASK_COPY)
                 return@owned
             }
             require(record.reuseBranch.isNotBlank() && branch == record.reuseBranch) { "Рабочая копия принадлежит другой задаче" }
-            clean(dir)
+            clean(dir, TASK_COPY)
             require(git(dir, "rev-parse", "HEAD").trim() == record.reuseCommit) { "Сохранённая рабочая копия изменена" }
             git(dir, "switch", "-c", record.branch, record.baseCommit)
         } else {
@@ -155,7 +155,7 @@ class GitTaskWorkspace(
     override suspend fun target(record: TaskWorktree): String = reading(record.sourcePath) {
         val source = File(record.sourcePath)
         require(git(source, "symbolic-ref", "--short", "HEAD").trim() == record.targetBranch) { "Верните исходную ветку ${record.targetBranch} и повторите слияние" }
-        clean(source)
+        clean(source, SOURCE_FOLDER)
         git(source, "rev-parse", "HEAD").trim()
     }
 
@@ -222,7 +222,7 @@ class GitTaskWorkspace(
                 else if (!continueRebase(dir)) return@owned null
             }
             if (!ancestor(dir, record.targetCommit, "HEAD")) {
-                clean(dir)
+                clean(dir, TASK_COPY)
                 if (ancestor(dir, "HEAD", record.targetCommit)) git(dir, "merge", "--ff-only", record.targetCommit)
                 else {
                     // Первая точка до переноса сохраняется в общем репозитории: она доказывает, что исходный
@@ -265,7 +265,7 @@ class GitTaskWorkspace(
         }
         if (verificationSnapshot(dir.path, commands()) != before)
             throw TaskWorktreeVerificationFailed("Проверка изменила файлы задачи; нужна повторная приёмка")
-        clean(dir)
+        clean(dir, TASK_COPY)
     }
 
     override suspend fun delivered(record: TaskWorktree): Boolean = reading(record.sourcePath) {
@@ -280,7 +280,7 @@ class GitTaskWorkspace(
         if (target(record) != record.targetCommit) throw TaskDestinationChanged()
         val dir = managed(record)
         require(git(dir, "rev-parse", "HEAD").trim() == record.mergeCommit) { "Проверенный результат изменился" }
-        clean(dir)
+        clean(dir, TASK_COPY)
         require(ancestor(dir, record.targetCommit, record.mergeCommit)) { "Слияние больше не продолжает исходную ветку" }
         git(File(record.sourcePath), "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", record.mergeCommit)
         checkpoint("delivered")
@@ -305,10 +305,20 @@ class GitTaskWorkspace(
     private fun managed(record: TaskWorktree, mustExist: Boolean = true): File = File(record.path).canonicalFile.also {
         require(it.parentFile == root.canonicalFile && (!mustExist || it.isDirectory)) { "Рабочая копия недоступна или не принадлежит приложению" }
     }
-    private suspend fun clean(dir: File) {
-        require(git(dir, "status", "--porcelain", "--untracked-files=all").isBlank()) { "Сначала сохраните незакоммиченные изменения" }
+    /**
+     * Отказ называет папку и конкретные пути: без них пользователь проверяет свой Git, не видит
+     * изменений и не может отличить незакоммиченную правку в копии задачи от грязной исходной папки.
+     */
+    private suspend fun clean(dir: File, subject: String) {
+        val dirty = git(dir, "status", "--porcelain", "--untracked-files=all")
+        require(dirty.isBlank()) { "Сначала сохраните незакоммиченные изменения ($subject): ${dirtyEntries(dirty)}" }
         for (name in listOf("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"))
-            require(!markerPath(dir, name).exists()) { "Сначала завершите текущую Git-операцию" }
+            require(!markerPath(dir, name).exists()) { "Сначала завершите текущую Git-операцию ($subject): $name" }
+    }
+    private fun dirtyEntries(status: String): String {
+        val entries = status.lineSequence().map { it.trimEnd() }.filter { it.isNotBlank() }.toList()
+        val shown = entries.take(DIRTY_ENTRY_LIMIT).joinToString("; ") { PlanningDiagnostics.redact(it).take(DIRTY_ENTRY_LENGTH) }
+        return if (entries.size > DIRTY_ENTRY_LIMIT) "$shown; всего ${entries.size}" else shown
     }
     /** Git keeps per-operation markers in the linked worktree's own directory, not in the shared one. */
     private suspend fun markerPath(dir: File, name: String): File {
@@ -434,6 +444,10 @@ class GitTaskWorkspace(
 }
 
 private const val CHECK_OUTPUT_DETAIL = 2000
+private const val DIRTY_ENTRY_LIMIT = 8
+private const val DIRTY_ENTRY_LENGTH = 160
+private const val SOURCE_FOLDER = "исходная папка проекта"
+private const val TASK_COPY = "рабочая копия задачи"
 private const val REBASE_STEP_LIMIT = 64
 private const val BRANCH_PREFIX = "magicpaper/worktree-"
 private const val BRANCH_SLUG_LIMIT = 48
