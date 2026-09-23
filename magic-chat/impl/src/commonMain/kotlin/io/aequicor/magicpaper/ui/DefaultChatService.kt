@@ -734,11 +734,23 @@ class DefaultChatService(
                 AppLog.info("chat", "send.cancelled", operationFields)
                 throw cancelled
             } catch (failure: Exception) {
+                // Отказ транспорта — это сбой модели, а не исследования. Подтверждённый отказ
+                // (ответ провайдера получен) останавливает запрос известным сбоем с понятной
+                // причиной; потерянный ответ сохраняет карантин «неизвестного исхода».
+                val rejection = failure.transportRejection()
+                if (rejection != null) modelReplyFailed = true
                 stoppedFailure = if (modelReplyFailed) ChatMachine.Failure.MODEL else ChatMachine.Failure.RESEARCH
-                if (recorder.draft(false).failedMessage == null) recorder.apply(CodingEvent.Failed("Не удалось завершить исследование"))
-                AppLog.error("chat", "send.failed", operationFields + mapOf("phase" to if (modelReplyFailed) "model" else "research", "causeType" to failure::class.simpleName.orEmpty()))
-                _state.update { it.copy(notice = if (modelReplyFailed) "$RESEARCH_MODEL_FAILURE. Проверьте подключение к модели. Можно проверить сохранённый ответ или оставить запрос без продолжения."
-                    else "Не удалось завершить запрос. Можно проверить сохранённый ответ или оставить запрос без продолжения.") }
+                if (recorder.draft(false).failedMessage == null)
+                    recorder.apply(CodingEvent.Failed(if (modelReplyFailed) RESEARCH_MODEL_FAILURE else "Не удалось завершить исследование"))
+                AppLog.error("chat", "send.failed", operationFields + mapOf("phase" to if (modelReplyFailed) "model" else "research",
+                    "causeType" to failure::class.simpleName.orEmpty()) +
+                    (rejection?.let { mapOf("status" to it.statusCode.toString()) } ?: emptyMap()))
+                _state.update { it.copy(notice = when {
+                    rejection?.confirmedRejection == true -> "$RESEARCH_MODEL_FAILURE. Проверьте подключение к модели и повторите запрос."
+                    rejection != null -> "$RESEARCH_MODEL_FAILURE. Исход обращения не подтверждён. Можно проверить сохранённый ответ или оставить запрос без продолжения."
+                    modelReplyFailed -> "$RESEARCH_MODEL_FAILURE. Проверьте подключение к модели. Можно проверить сохранённый ответ или оставить запрос без продолжения."
+                    else -> "Не удалось завершить запрос. Можно проверить сохранённый ответ или оставить запрос без продолжения."
+                }) }
             } finally {
                 withContext(NonCancellable) {
                     var deferredEffects = emptyList<ChatMachine.Effect>()

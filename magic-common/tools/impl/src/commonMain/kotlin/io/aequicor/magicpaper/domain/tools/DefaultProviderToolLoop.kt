@@ -87,7 +87,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
                     val modelEffect = durable.commit(ProviderToolMachine.Intent.RequestModel(attempt)).single() as ProviderToolMachine.Effect.InvokeModel
                     val turn = try { gateway.turn(profile, messages, definitions, exchanges) }
                     catch (failure: Exception) {
-                        durable.failure("provider", failure !is UnsupportedOperationException)
+                        durable.failure("provider", providerOutcomeUnknown(failure))
                         throw failure
                     }
                     val calls = turn.calls.map { ProviderToolMachine.Call(it.id, it.name, toolArgumentsFingerprint(it.arguments)) }
@@ -121,8 +121,8 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
                                 if (outcome != null) durable.recordToolOutcome(call.id, outcome)
                             } } catch (failure: Exception) {
                                 cancelled.addSuppressed(failure)
-                                AppLog.error("provider_tools", "cancelled_tool_outcome_unknown", mapOf("runId" to runId,
-                                    "cause" to failure::class.simpleName.orEmpty()))
+                                AppLog.error("provider_tools", "cancelled_tool_outcome_unknown",
+                                    diagnosticFields(failure, runId))
                             }
                             throw cancelled
                         } catch (failure: Exception) {
@@ -145,7 +145,9 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
                 // handoff after restart. An unrelated UNKNOWN tool never has such an output reference.
                 if (durable.state.phase in setOf(ProviderToolMachine.Phase.OUTPUT_PENDING, ProviderToolMachine.Phase.OUTPUT_WRITING)) durable.outputUnknown()
                 else durable.failure("execution", durable.state.phase in setOf(ProviderToolMachine.Phase.MODEL_PENDING, ProviderToolMachine.Phase.TOOL_PENDING))
-                AppLog.error("provider_tools", "run_failed", mapOf("runId" to runId, "cause" to failure::class.simpleName.orEmpty(), "phase" to durable.state.phase.name))
+                AppLog.error("provider_tools", "run_failed", diagnosticFields(failure, runId) +
+                    mapOf("phase" to durable.state.phase.name,
+                        "outcome" to if (durable.state.phase == ProviderToolMachine.Phase.UNKNOWN) "unknown" else "failed"))
                 throw ProviderToolRunFailure(if (durable.state.phase == ProviderToolMachine.Phase.UNKNOWN)
                     "Исход предыдущего действия не подтверждён. Проверьте результат перед новым запросом."
                     else "Не удалось завершить запрос с инструментами. Проверьте подключение и параметры запроса.", failure)
@@ -153,7 +155,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: ProviderToolRunFailure) { throw failure }
         catch (failure: Exception) {
-            AppLog.error("provider_tools", "request_start_failed", mapOf("runId" to runId, "cause" to failure::class.simpleName.orEmpty()))
+            AppLog.error("provider_tools", "request_start_failed", diagnosticFields(failure, runId))
             throw ProviderToolRunFailure("Не удалось прочитать или сохранить состояние запроса. Проверьте доступность хранилища и повторите попытку.", failure)
         } finally { active.update { it - runId } }
     }
@@ -165,7 +167,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
                 providerOutputDigest(ref.runId, ref.attempt, ref.identity, it.text) == ref.digest }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            AppLog.error("provider_tools", "output_read_failed", mapOf("runId" to ref.runId, "cause" to failure::class.simpleName.orEmpty()))
+            AppLog.error("provider_tools", "output_read_failed", diagnosticFields(failure, ref.runId))
             null
         }
     }
@@ -174,7 +176,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
         tools.receipt(id)?.phase?.takeIf { it in setOf(ToolPhase.SUCCEEDED, ToolPhase.FAILED, ToolPhase.CANCELLED, ToolPhase.UNKNOWN) }
     } catch (cancelled: CancellationException) { throw cancelled }
     catch (failure: Exception) {
-        AppLog.error("provider_tools", "receipt_read_failed", mapOf("cause" to failure::class.simpleName.orEmpty()))
+        AppLog.error("provider_tools", "receipt_read_failed", diagnosticFields(failure))
         null
     }
 
@@ -273,7 +275,8 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
             try { withContext(NonCancellable) { commit(ProviderToolMachine.Fact.Failed(operation, unknown)) } }
             catch (failure: Exception) {
                 markUnknown()
-                AppLog.error("provider_tools", "failure_record_unknown", mapOf("cause" to failure::class.simpleName.orEmpty(), "operation" to operation))
+                AppLog.error("provider_tools", "failure_record_unknown", diagnosticFields(failure, runId) +
+                    mapOf("operation" to operation))
             }
         }
         suspend fun cancel() {
@@ -281,7 +284,7 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
             try { commit(ProviderToolMachine.Intent.Cancel) }
             catch (failure: Exception) {
                 markUnknown()
-                AppLog.error("provider_tools", "cancellation_record_unknown", mapOf("cause" to failure::class.simpleName.orEmpty()))
+                AppLog.error("provider_tools", "cancellation_record_unknown", diagnosticFields(failure, runId))
             }
         }
     }
@@ -294,3 +297,26 @@ class DefaultProviderToolLoop(private val gateway: LlmGateway, private val journ
 }
 
 private class ProviderToolRunFailure(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
+/**
+ * Обращение к модели не выполняет внешних действий, кроме списания токенов. Полученный отказ
+ * провайдера подтверждает, что ответа нет: запрос заканчивается `FAILED`, и человек может
+ * повторить его без восстановления «неизвестного исхода». Потеря ответа (таймаут, обрыв
+ * соединения, `408`/`5xx`) и неподтверждённая запись оставляют `UNKNOWN`.
+ */
+internal fun providerOutcomeUnknown(failure: Exception): Boolean = when {
+    // Шлюз не поддерживает протокол инструментов: обращение к провайдеру не выполнялось.
+    failure is UnsupportedOperationException -> false
+    else -> failure.transportRejection()?.confirmedRejection != true
+}
+
+/**
+ * Безопасные метаданные сбоя для журнала: идентификатор запроса, класс причины и статус ответа
+ * провайдера. Сообщение исключения намеренно не передаётся: `LlmTransportException` несёт в нём
+ * фрагмент тела ответа провайдера, который не принадлежит ни журналу, ни интерфейсу.
+ */
+internal fun diagnosticFields(failure: Throwable, runId: String = ""): Map<String, String> = buildMap {
+    if (runId.isNotBlank()) put("runId", runId)
+    put("causeType", failure::class.simpleName.orEmpty())
+    failure.transportRejection()?.let { put("status", it.statusCode.toString()) }
+}

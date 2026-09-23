@@ -273,7 +273,7 @@ class DefaultRuntimeQuestionnaireService(
     }
     private fun report(operation: String, failure: Throwable) {
         // Exception messages may contain storage payloads. Diagnostics include only the type.
-        AppLog.error("questionnaire", "operation_failed", mapOf("operation" to operation, "cause" to failure::class.simpleName.orEmpty(),
+        AppLog.error("questionnaire", "operation_failed", mapOf("operation" to operation, "causeType" to failure::class.simpleName.orEmpty(),
             "outcome" to if (machine.persistenceUnknown) "unknown" else "unchanged"))
     }
 }

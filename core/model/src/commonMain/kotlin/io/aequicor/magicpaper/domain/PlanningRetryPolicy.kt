@@ -9,7 +9,31 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 
 class LlmTransportException(val statusCode: Int, val retryAfter: String?, detail: String) :
-    IllegalStateException("HTTP $statusCode: $detail" + retryAfter?.let { "\nRetry-After: $it" }.orEmpty())
+    IllegalStateException("HTTP $statusCode: $detail" + retryAfter?.let { "\nRetry-After: $it" }.orEmpty()) {
+    /**
+     * Провайдер получил запрос и ответил отказом: ответа модели не существует, поэтому повтор
+     * не удваивает внешний эффект. `408` и `5xx` означают потерянный ответ — их исход остаётся
+     * неподтверждённым, как и в `HttpMediaGenerationGateway`.
+     */
+    val confirmedRejection: Boolean get() = statusCode in 400..499 && statusCode != 408
+}
+
+/**
+ * Отказ транспорта в цепочке причин. Владелец операции различает подтверждённый отказ провайдера
+ * и потерю ответа по статусу, а не по разбору сообщений, которые содержат тело ответа провайдера.
+ * Обход ограничен: петля причин не должна превращаться в вечный цикл.
+ */
+fun Throwable.transportRejection(): LlmTransportException? {
+    val seen = mutableSetOf<Throwable>()
+    var current: Throwable? = this
+    repeat(8) {
+        val failure = current ?: return null
+        if (failure is LlmTransportException) return failure
+        if (!seen.add(failure)) return null
+        current = try { failure.cause } catch (inspection: Throwable) { null }
+    }
+    return null
+}
 
 /** A rejected result needs another worker turn; unavailable verification only needs another check. */
 fun StageAttempt.retryAfterUserAction(): StageAttempt = copy(
