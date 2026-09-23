@@ -202,16 +202,22 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
         private var attested: String? = null
         private val reader = Thread({
             try {
-                process.inputStream.reader(Charsets.UTF_8).use { input ->
-                    val buffer = CharArray(4096)
+                fun append(chunk: String) {
+                    if (chunk.isEmpty()) return
+                    synchronized(lock) {
+                        text.append(chunk)
+                        if (text.length > MAX_OUTPUT) text.delete(0, text.length - MAX_OUTPUT)
+                    }
+                }
+                val decoder = CheckOutputDecoder(if (WindowsExecutables.isWindows()) WindowsResearchSandbox.consoleCharset else null)
+                process.inputStream.use { input ->
+                    val buffer = ByteArray(4096)
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
-                        synchronized(lock) {
-                            text.append(buffer, 0, count)
-                            if (text.length > MAX_OUTPUT) text.delete(0, text.length - MAX_OUTPUT)
-                        }
+                        append(decoder.accept(buffer, count))
                     }
+                    append(decoder.finish())
                 }
                 read.complete(Unit)
             } catch (failure: Throwable) { read.completeExceptionally(failure) }

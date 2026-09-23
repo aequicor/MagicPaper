@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.data.research
 
 import com.sun.jna.*
+import java.nio.charset.Charset
 import com.sun.jna.ptr.IntByReference
 import com.sun.jna.ptr.PointerByReference
 import java.io.InputStream
@@ -83,6 +84,15 @@ internal object WindowsResearchSandbox : ResearchSandbox {
         require(command.none { it.any { c -> c in "&|<>^%!\"\r\n" } }) { "Спецсимволы в аргументах batch-проверки недопустимы" }
         val shell = systemRoot.orEmpty().ifBlank { "C:\\Windows" } + "\\System32\\cmd.exe"
         return shell to quote(shell) + " /d /s /c \"" + arguments + "\""
+    }
+
+    /**
+     * The code page console programs write in when their output is a pipe: a new console starts on the OEM code page.
+     * Null when Java has no decoder for it; output then keeps UTF-8's replacement characters.
+     */
+    internal val consoleCharset: Charset? by lazy {
+        val page = kernel.getFunction("GetOEMCP").invokeInt(emptyArray())
+        try { Charset.forName("cp$page") } catch (unsupported: IllegalArgumentException) { null }
     }
 
     internal fun quote(arg: String): String = buildString {
