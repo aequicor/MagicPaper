@@ -370,15 +370,17 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
                     noDispatchAcknowledgements = state.noDispatchAcknowledgements - session.id))
             }
             is Fact.TitleRequested -> {
-                val session = requireSession(state, input.session)
+                val session = requireTitledSession(state, input.session)
                 require(input.requestId.isNotBlank())
                 if (!session.needsShortTitle()) Transition(state)
                 else Transition(state.copy(titleRequests = state.titleRequests + (session.id to input.requestId)))
             }
             is Fact.PromptNamed -> change(state, input.session) { it.namedFromPrompt(input.prompt, input.localSummaryAllowed) }
-            is Fact.TitleObserved -> change(state, input.session) {
-                if (state.titleRequests[it.id] != input.requestId || !it.needsShortTitle()) it
-                else it.copy(shortTitle = compactSessionTitle(input.title).orEmpty())
+            is Fact.TitleObserved -> {
+                val session = requireTitledSession(state, input.session)
+                val titled = if (state.titleRequests[session.id] != input.requestId || !session.needsShortTitle()) session
+                    else session.copy(shortTitle = compactSessionTitle(input.title).orEmpty())
+                Transition(state.copy(sessions = state.sessions + (session.id to titled)))
             }
             is Fact.PlanSessionBound -> change(state, input.session) {
                 val planning = input.role == CodingSessionRole.ORCHESTRATOR
@@ -397,6 +399,9 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
 
     private fun requireSession(state: State, ref: SessionRef): CodingSession =
         requireNotNull(state.session(ref)) { "Сессия удалена или её запуск изменился" }
+    /** A title names the session, not a launch: the first launch advances the generation while the model is naming it. */
+    private fun requireTitledSession(state: State, ref: SessionRef): CodingSession =
+        requireNotNull(state.sessions[ref.id]) { "Сессия удалена" }
     private fun requireRun(state: State, ref: RunRef): Run = requireNotNull(state.run(ref)) { "Запрос уже заменён" }
     private fun requireRunSession(state: State, ref: RunRef): CodingSession {
         val run = requireRun(state, ref)

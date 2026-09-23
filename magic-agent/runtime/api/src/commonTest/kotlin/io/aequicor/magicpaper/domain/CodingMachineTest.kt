@@ -250,6 +250,21 @@ class CodingMachineTest {
         assertEquals("", late.sessions.getValue(session.id).shortTitle)
     }
 
+    @Test fun titleOutlivesTheFirstLaunchThatAdvancedTheSessionWhileTheModelNamedIt() {
+        val asked = CodingMachine.ref(session)
+        val organism = SessionOrganism("organism", project.id, session.id, createdAt = 2,
+            sessions = mapOf(session.id to SessionNode(session.id, SessionKind.ZYGOTE, session.name, generation = 1, mode = CodingInteractionMode.CODE)))
+        val launched = apply(running(), CodingMachine.Fact.OrganismProjected(organism, CodingMachine.ChildRevision("organism", 1, 0, "input")))
+        assertEquals(1, launched.sessions.getValue(session.id).runtimeGeneration)
+        val requested = apply(launched, CodingMachine.Fact.TitleRequested(asked, "title"))
+        val stale = apply(requested, CodingMachine.Fact.TitleObserved(asked, "older", "Older title"))
+        assertEquals("", stale.sessions.getValue(session.id).shortTitle, "the request id, not the launch, makes an answer late")
+        val titled = apply(stale, CodingMachine.Fact.TitleObserved(asked, "title", "Generated title"))
+        assertEquals("Generated title", titled.sessions.getValue(session.id).shortTitle)
+        rejected(apply(requested, CodingMachine.Intent.DeleteSession(launched.sessions.getValue(session.id).let(CodingMachine::ref))),
+            CodingMachine.Fact.TitleObserved(asked, "title", "Generated title"))
+    }
+
     @Test fun unknownPersistenceRejectsAllCommandsAndProducesNoExecution() {
         val unknown = apply(running(), CodingMachine.Fact.PersistenceUnknown)
         for (input in listOf<CodingMachine.Input>(CodingMachine.Intent.Pause(unknown.ref()),

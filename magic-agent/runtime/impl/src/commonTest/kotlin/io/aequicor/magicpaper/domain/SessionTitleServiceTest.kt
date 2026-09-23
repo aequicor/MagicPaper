@@ -62,6 +62,22 @@ class SessionTitleServiceTest {
         }
 
         fun stored(): CodingSession = runBlocking { projects.sessions(project.id).single() }
+
+        /** What the first launch does to a root session: its organism adopts it at generation 1. */
+        suspend fun launch(sessionId: String) {
+            val session = projects.sessions(project.id).single { it.id == sessionId }
+            val organism = SessionOrganism("organism", project.id, sessionId, createdAt = 2, sessions = mapOf(sessionId to
+                SessionNode(sessionId, SessionKind.ZYGOTE, session.name, generation = 1, mode = CodingInteractionMode.CODE)))
+            projects.dispatch(project.id, CodingMachine.Fact.OrganismProjected(organism, CodingMachine.ChildRevision("organism", 1, 0, "launch")))
+        }
+    }
+
+    @Test fun titleLandsWhenTheFirstLaunchStartsWhileTheModelIsNamingTheSession() {
+        lateinit var f: Fixture
+        f = Fixture { f.launch("root"); "Исправить автонейминг" }
+        f.sync(CodingSession("root", project.id, "Новая сессия", 1), user("автонейминг теряет названия новых сессий"))
+        assertEquals(1, f.stored().runtimeGeneration)
+        assertEquals("Исправить автонейминг", f.stored().shortTitle)
     }
 
     @Test fun titlesEveryStartedRootIncludingPlainCodingSessions() {
