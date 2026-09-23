@@ -4,7 +4,7 @@ This group has JVM targets only. `:api` is engine-neutral: the descriptor and
 capabilities that configure an engine, the adapter and lifecycle contracts, and the host
 ports an engine is given. It declares nothing named after one engine; `Pi*` and `Codex*`
 types (`PiLaunchRequest`, `PiInstallation`, `CodexRunRequest`, `CodexClient` and the like)
-live in `:pi` and `:codex`, and `docs/verify-module-architecture.py` rejects one in `:api`.
+live in `:pi` and `:codex`, and `tools/verify/verify-module-architecture.py` rejects one in `:api`.
 `:factory` is its only construction entry point; it returns API types and hides both
 implementation modules from consumers. Only `:magic-agent:runtime:impl` consumes the factory.
 Neither backend implementation depends on features, application tools, storage,
@@ -137,7 +137,7 @@ Checks:
 
 ```sh
 ./gradlew :backend-agents:api:jvmTest :backend-agents:lifecycle:impl:jvmTest :backend-agents:pi:jvmTest :backend-agents:codex:jvmTest :backend-agents:claude:jvmTest :backend-agents:factory:jvmTest :backend-agents:pi:nodeProtocolTest
-python3 docs/verify-module-architecture.py --self-test
+python3 tools/verify/verify-module-architecture.py --self-test
 ```
 
 Protocol tests cover model limits, reasoning, usage and malformed wire events;

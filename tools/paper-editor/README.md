@@ -103,9 +103,8 @@ Canvas получает растровые изображения из изол�
   :mission-visualization:engine:ir:jvmTest :mission-visualization:engine:frontend:jvmTest \
   :mission-visualization:engine:backend-compose:jvmTest :mission-visualization:shared:jvmTest \
   :tools:paper-editor:createDistributable
-python3 docs/verify-module-architecture.py --self-test
-python3 docs/desktop-ui/verify-design-system.py --self-test
-python3 docs/desktop-ui/verify-map.py --self-test
+python3 tools/verify/verify-module-architecture.py --self-test
+python3 tools/verify/verify-design-system.py --self-test
 ```
 
 Рендеры: `tools/paper-plugin/build/reports/paper-plugin/`; JUnit-отчёты лежат в обычных

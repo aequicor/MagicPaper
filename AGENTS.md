@@ -133,7 +133,7 @@ modules piecemeal.
 - A machine declares its state space: an owner's `reduce` implements `Machine<State, Input,
   Effect>` from `:core:state-machine:api`, declares a `StateSpace`, and has a test running
   `verifyStateSpace` over it. `docs/STATE-SPACES.md` says how and lists every machine;
-  `docs/verify-module-architecture.py` fails a reducer that has none of the three.
+  `tools/verify/verify-module-architecture.py` fails a reducer that has none of the three.
 - A defect in behavior a machine owns is fixed declaration first: read the machine's tree,
   name the gap or contradiction, fix the `StateSpace` and get a red test, and only then change
   `reduce` and its service. The order and the list of gap kinds are in
@@ -242,7 +242,7 @@ abstraction and structured events rather than scattered `println` or payload dum
 For interface work, read and apply `skills/magicpaper-desktop-ui/SKILL.md` and
 `docs/desktop-ui/BRANDBOOK.md`. All new reusable visual and interactive components
 belong to `:designSystem`; application screens and plugins consume its Paper API.
-Run `python3 docs/desktop-ui/verify-design-system.py --self-test` and relevant
+Run `python3 tools/verify/verify-design-system.py --self-test` and relevant
 Gradle checks. Keep user-facing copy limited to labels, actions, results,
 validation and information needed for decisions; implementation explanations
 belong in code.

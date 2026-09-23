@@ -16,44 +16,29 @@ subprojects {
     }
 }
 
+// Both verifiers are tooling, not documentation, so they live in tools/verify/. They gate `check`,
+// not compilation: a missing interpreter or script must not stop an ordinary build or app run.
 val verifyDesignSystem by tasks.registering(Exec::class) {
     group = "verification"
     description = "Reject Material and raw interactive primitives outside the Paper design system."
-    commandLine("python3", rootProject.file("docs/desktop-ui/verify-design-system.py"), "--self-test")
+    commandLine("python3", rootProject.file("tools/verify/verify-design-system.py"), "--self-test")
     workingDir(rootDir)
-}
-subprojects {
-    if (name != "designSystem") {
-        tasks.configureEach {
-            if (name == "check" || name.startsWith("compile") && name.contains("Kotlin")) {
-                dependsOn(rootProject.tasks.named("verifyDesignSystem"))
-            }
-        }
-    }
-}
-
-val verifySurfaceMap by tasks.registering(Exec::class) {
-    group = "verification"
-    description = "Validate Paper surface bindings across all feature and application modules."
-    commandLine("python3", rootProject.file("docs/desktop-ui/verify-map.py"), "--self-test")
-    workingDir(rootDir)
-    dependsOn(verifyDesignSystem)
 }
 
 val verifyModuleArchitecture by tasks.registering(Exec::class) {
     group = "verification"
     description = "Check API/implementation dependency boundaries across all nested modules."
-    commandLine("python3", rootProject.file("docs/verify-module-architecture.py"), "--self-test")
+    commandLine("python3", rootProject.file("tools/verify/verify-module-architecture.py"), "--self-test")
     workingDir(rootDir)
 }
 subprojects {
-    tasks.matching { it.name == "check" }.configureEach { dependsOn(verifyModuleArchitecture) }
+    tasks.matching { it.name == "check" }.configureEach { dependsOn(verifyDesignSystem, verifyModuleArchitecture) }
 }
 
 val checkMigrationJvm by tasks.registering {
     group = "verification"
     description = "Run JVM tests for every application, infrastructure and feature module."
-    dependsOn(verifyDesignSystem, verifySurfaceMap, verifyModuleArchitecture)
+    dependsOn(verifyDesignSystem, verifyModuleArchitecture)
     dependsOn(subprojects.filter { it.path !in setOf(":androidApp", ":webApp", ":desktopApp") && it.buildFile.isFile }.map { "${it.path}:jvmTest" })
     dependsOn(":desktopApp:test", ":backend-agents:pi:nodeProtocolTest")
 }

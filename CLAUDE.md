@@ -11,7 +11,7 @@ hope that a check is quick:
 
 | Check | Cost | What it establishes |
 | --- | --- | --- |
-| `python3 docs/verify-module-architecture.py --self-test` | ~1 s | Module graph, platform boundary, effect and planning-purity rules. Not a dry run: it scans the real tree and fails every Gradle `check` task |
+| `python3 tools/verify/verify-module-architecture.py --self-test` | ~1 s | Module graph, platform boundary, effect and planning-purity rules. Not a dry run: it scans the real tree and fails every Gradle `check` task |
 | `:core:model:jvmTest` | seconds | 196 tests: values, pure rules, machines |
 | `:feature:tools:impl:jvmTest` | seconds | Tool catalogue and the access matrix pin |
 | `:feature:settings:impl:jvmTest` | ~20 s | 56 tests, including settings renders |
