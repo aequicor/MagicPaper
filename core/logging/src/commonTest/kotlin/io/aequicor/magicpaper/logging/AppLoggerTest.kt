@@ -92,6 +92,14 @@ class AppLoggerTest {
         assertFalse(log.history().any { "secret" in it.line() })
     }
 
+    /** What a verification checked is a commit; its id is kept, a branch name or message given in its place is not. */
+    @Test fun theVerifiedCommitIsKeptButFreeTextInItsPlaceIsRefused() {
+        val log = AppLogger(sink = AppLogSink {})
+        log.info("coding.worktree", "verification.started", mapOf("commit" to "4b78c1ce0a1f"))
+        log.info("coding.worktree", "verification.started", mapOf("commit" to "исправить автонейминг"))
+        assertEquals(listOf("4b78c1ce0a1f", "[redacted]"), log.history().map { it.fields["commit"] })
+    }
+
     @Test fun aCauseTypeThatIsNotAClassNameIsRefusedNotPublished() {
         val log = AppLogger(sink = AppLogSink {})
         log.error("checks", "output_unavailable", mapOf("causeType" to "the user typed secret words"))

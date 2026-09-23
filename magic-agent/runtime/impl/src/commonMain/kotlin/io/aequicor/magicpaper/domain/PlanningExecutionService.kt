@@ -563,15 +563,28 @@ class PlanningExecutionService(
         }
     }
 
+    /**
+     * After the handoff checks passed, a plan's merged result is also reviewed by the judge model against the plan's
+     * acceptance criteria, and the copy must be unchanged by that review. Both ends are logged beside the checks'
+     * `verification.*` steps, under the plan and the task.
+     */
     private suspend fun verifyTaskDelivery(id: String, task: TaskWorktree, judge: LlmProfile) {
         val plan = store.planFor(id) ?: error("План удалён")
         check(canRun(id)) { "План остановлен" }
+        val fields = mapOf("planId" to id, "entityId" to task.taskId, "commit" to task.mergeCommit.take(12),
+            "mode" to "model_review", "provider" to judge.provider.name, "model" to judge.modelId)
+        io.aequicor.magicpaper.logging.AppLog.info("planning.execution", "verification.review.started",
+            fields + ("count" to plan.acceptanceCriteria().size.toString()))
         val snapshot = workspaces.verificationSnapshot(task.path) ?: error("Проверка результата недоступна")
         val attempt = checkNotNull(plan.finalAttempt).copy(verificationSnapshot = snapshot)
         val (record, verdict) = reviewAcceptance(plan, Milestone("task-delivery", "Проверка слияния", description = plan.goal),
             attempt, task.path, plan.acceptanceCriteria(), attempt.report, judge)
         val saved = checkNotNull(store.command(id, PlanningMachine.Fact.MergeAcceptanceRecorded(runRef(id), PlanningMachine.AttemptRef.from(attempt), record, stamp())).finalAttempt)
-        val valid = verdict.passed && verdict.issue == null && workspaces.verificationSnapshot(task.path) == snapshot
+        val unchanged = workspaces.verificationSnapshot(task.path) == snapshot
+        val valid = verdict.passed && verdict.issue == null && unchanged
+        io.aequicor.magicpaper.logging.AppLog.info("planning.execution", "verification.review.finished", fields + mapOf(
+            "result" to if (valid) "passed" else "failed",
+            "reason" to when { !verdict.passed -> "verdict"; verdict.issue != null -> "issue"; !unchanged -> "files_changed"; else -> "none" }))
         if (saved.mergeProgress == MergeProgress.AwaitingVerdict)
             transitionFinal(id, saved, FinalAttemptMutation.DeliveryFinished(valid))
         check(valid) { "Проверка слияния не пройдена. Продолжите работу над планом" }

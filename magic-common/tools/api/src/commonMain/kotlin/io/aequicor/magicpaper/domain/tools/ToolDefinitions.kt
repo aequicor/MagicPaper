@@ -26,7 +26,9 @@ data class ToolExecutionContext(
             session.interactionMode, session.planId, stageId = session.stageId, parentSessionId = session.parentSessionId,
             organismId = session.organismId, runtimeGeneration = session.runtimeGeneration,
             planningRulesSnapshot = session.planningRulesSnapshot,
-            taskWorktreeId = session.taskWorktree?.takeIf { it.taskId == session.pendingRun?.runId }?.taskId)
+            // A continuation, clarification or conflict repair is a fresh request of the same task.
+            taskWorktreeId = session.taskWorktree?.takeIf { task ->
+                session.pendingRun?.let { it.workspaceTaskId ?: it.runId } == task.taskId }?.taskId)
     }
 }
 

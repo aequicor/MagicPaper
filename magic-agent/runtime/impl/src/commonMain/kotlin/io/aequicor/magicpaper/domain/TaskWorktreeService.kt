@@ -186,6 +186,8 @@ class TaskWorktreeService(
                     handles = TaskWorkspaceLeases(execution = lease)) }
                 verifyMerged(record)
                 record = accept(project.id, sessionId, TaskWorktreeMachine.Input.Intent.AcceptMerge(taskId, generation, record.mergeCommit))
+                AppLog.info("coding.worktree", "merge.accepted", mapOf("sessionId" to sessionId, "entityId" to taskId,
+                    "commit" to record.mergeCommit.take(12), "mode" to if (planAccepted) "plan" else "task"))
                 execution { taskLease ->
                     leased(project.copy(id = "task-delivery-$sessionId", path = record.sourcePath), sessionId, SOURCE_FOLDER) { sourceLease ->
                         if (!planAccepted) check(parent(project.id, sessionId).pendingRun?.intent == ExecutionIntent.RUN) { "Задача остановлена" }

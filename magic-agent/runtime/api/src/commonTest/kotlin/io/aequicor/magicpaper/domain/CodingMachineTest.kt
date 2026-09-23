@@ -288,6 +288,26 @@ class CodingMachineTest {
         assertTrue(recovered.unknownChildren.isEmpty())
     }
 
+    @Test fun workspaceFactOutlivesTheLaunchThatAdvancedTheSessionAfterTheTaskWasBound() {
+        val bound = CodingMachine.ref(session)
+        val task = TaskWorktree("task", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.CONFLICT)
+        val revision = CodingMachine.ChildRevision("workspace", 1, 0, "one")
+        val projected = apply(running(), CodingMachine.Fact.WorktreeProjected(bound, task, revision))
+        val organism = SessionOrganism("organism", project.id, session.id, createdAt = 2,
+            sessions = mapOf(session.id to SessionNode(session.id, SessionKind.ZYGOTE, session.name, generation = 1, mode = CodingInteractionMode.CODE)))
+        val launched = apply(projected, CodingMachine.Fact.OrganismProjected(organism, CodingMachine.ChildRevision("organism", 1, 0, "input")))
+        assertEquals(1, launched.sessions.getValue(session.id).runtimeGeneration)
+        // A repair that never handed off leaves the task bound to the launch before it.
+        val noted = apply(launched, CodingMachine.Fact.WorktreeProjected(bound, task.copy(error = "Конфликт требует продолжения"),
+            revision.copy(seq = 2, inputId = "two")))
+        assertEquals("Конфликт требует продолжения", noted.sessions.getValue(session.id).taskWorktree?.error)
+        val uncertain = apply(noted, CodingMachine.Fact.WorktreeProjected(bound, null, revision.copy(seq = 3, inputId = "three"), unknown = true))
+        assertEquals(setOf("workspace:${session.id}"), uncertain.unknownChildren, "an unknown outcome still blocks the next launch")
+        assertEquals(noted, apply(noted, CodingMachine.Fact.WorktreeProjected(bound, task, revision)), "the revision, not the launch, orders child facts")
+        rejected(apply(noted, CodingMachine.Intent.DeleteSession(CodingMachine.ref(noted.sessions.getValue(session.id)))),
+            CodingMachine.Fact.WorktreeProjected(bound, task, revision.copy(seq = 4, inputId = "four")))
+    }
+
     @Test fun lateCompleteTaskCannotOverwriteNewTaskAndLateStopCannotClearUnknown() {
         val task = TaskWorktree("old", "/project", "main", "base", "/task", "branch", phase = TaskWorktreePhase.COMPLETE)
         val revision = CodingMachine.ChildRevision("workspace", 1, 0, "one")

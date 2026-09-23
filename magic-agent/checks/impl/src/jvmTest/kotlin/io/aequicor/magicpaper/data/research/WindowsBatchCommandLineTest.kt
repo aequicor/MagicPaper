@@ -35,6 +35,12 @@ class WindowsBatchCommandLineTest {
         assertEquals("\"C:\\tools\\npm.CMD\" \"test\"", commandRunByCmd(line))
     }
 
+    @Test fun launchMethodInTheLogIsTheOneTheCommandLineUses() {
+        assertEquals("cmd", WindowsResearchSandbox.launchMethod("C:\\p\\gradlew.bat"))
+        assertEquals("cmd", WindowsResearchSandbox.launchMethod("C:\\tools\\npm.CMD"))
+        assertEquals("direct", WindowsResearchSandbox.launchMethod("C:\\Git\\cmd\\git.exe"))
+    }
+
     @Test fun programIsStartedDirectlyWithQuotedArguments() {
         val (application, line) = WindowsResearchSandbox.commandLine(listOf("C:\\Git\\cmd\\git.exe", "status", "a b"), systemRoot = "C:\\Windows")
         assertEquals("C:\\Git\\cmd\\git.exe", application)

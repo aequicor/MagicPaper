@@ -5,6 +5,7 @@ import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.data.coding.*
 import io.aequicor.magicpaper.domain.planning.*
 import io.aequicor.magicpaper.util.Id
+import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -97,6 +98,12 @@ class PlanningExecutionServiceTest {
         assertEquals(listOf("/task"), applied)
         assertFalse("/fake" in runtime.executionPaths)
         assertEquals(1, delivered)
+        // The judge's review of the merged result is a verification step of its own, logged beside the checks'.
+        val review = AppLog.history().filter { it.component == "planning.execution" && it.event.startsWith("verification.review") }.takeLast(2)
+        assertEquals(listOf("verification.review.started", "verification.review.finished"), review.map { it.event })
+        assertEquals("model_review", review.first().fields["mode"])
+        assertEquals(listOf("passed", "none"), listOf(review.last().fields["result"], review.last().fields["reason"]))
+        assertEquals("plan", AppLog.history().last { it.component == "coding.worktree" && it.event == "merge.accepted" }.fields["mode"])
         service.shutdown()
     }
 
