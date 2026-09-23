@@ -42,7 +42,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -2273,7 +2272,9 @@ class DefaultCodingService(
         val jobs = codingJobs.value.values.toList()
         jobs.forEach { it.cancel() }
         jobs.joinAll()
-        scope.cancel()
+        // Joined, not just cancelled: the archive ticker's producer runs on Dispatchers.Default and would
+        // otherwise finish after shutdown returned, resuming its collector on Main from that thread.
+        scope.coroutineContext[Job]?.cancelAndJoin()
     }
 
     override fun respondCodingApproval(id: String, decision: io.aequicor.magicpaper.domain.CodingApprovalDecision) {

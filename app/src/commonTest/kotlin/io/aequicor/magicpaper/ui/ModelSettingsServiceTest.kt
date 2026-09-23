@@ -26,40 +26,43 @@ class ModelSettingsServiceTest {
 
     @Test fun newChatsUseProviderWithoutAssigningTheDesktopEngineDefault() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        var chat: DefaultChatService? = null
         try {
             val fixture = ModelSettingsFixture()
             fixture.seed()
             fixture.settings.save(fixture.settings.load().copy(defaultCodingEngine = CodingEngine.CODEX))
-            val vm = fixture.prepareChat()
+            val vm = fixture.prepareChat().also { chat = it }
             vm.newSession()
             advanceUntilIdle()
             assertNull(vm.state.value.current?.engine)
             assertEquals(CodingEngine.CODEX, fixture.settings.load().defaultCodingEngine)
-        } finally { Dispatchers.resetMain() }
+        } finally { chat?.close(); Dispatchers.resetMain() }
     }
 
     @Test fun providerChatPreservesAnExistingDesktopEngineIdentity() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        var chat: DefaultChatService? = null
         try {
             val fixture = ModelSettingsFixture()
             fixture.seed()
             fixture.chats.save(checkNotNull(fixture.chats.session("first")).copy(
                 engine = CodingEngine.CODEX, nativeSessionId = "saved-native-conversation"))
-            val vm = fixture.prepareChat()
+            val vm = fixture.prepareChat().also { chat = it }
             vm.send("Начать")
             advanceUntilIdle()
             assertEquals(CodingEngine.CODEX, fixture.chats.session("first")?.engine)
             assertEquals("saved-native-conversation", fixture.chats.session("first")?.nativeSessionId)
             assertEquals(CodingEngine.PI, fixture.settings.load().defaultCodingEngine)
             assertTrue(fixture.calls.isNotEmpty(), "The saved engine identity does not prevent provider chat")
-        } finally { Dispatchers.resetMain() }
+        } finally { chat?.close(); Dispatchers.resetMain() }
     }
 
     @Test fun chatSelectionIsImmediateAndDoesNotChangeDefaultOrProvider() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        var chat: DefaultChatService? = null
         try {
             val fixture = ModelSettingsFixture()
-            val vm = fixture.prepareChat()
+            val vm = fixture.prepareChat().also { chat = it }
             val before = fixture.profiles.load()
             val settings = vm.state.value.settings
             val choice = ModelSelection("openai", "variant:precise", EffortSelection.of(ReasoningEffort.HIGH))
@@ -70,7 +73,7 @@ class ModelSettingsServiceTest {
             assertEquals(choice, fixture.chats.session("first")?.modelSelection)
             vm.newSession()
             assertEquals("gpt-5.4", vm.state.value.current?.modelSelection?.modelId)
-        } finally { Dispatchers.resetMain() }
+        } finally { chat?.close(); Dispatchers.resetMain() }
     }
     @Test fun oneButtonGeneratesAllFavoritesThroughTheOperationalDefault() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))

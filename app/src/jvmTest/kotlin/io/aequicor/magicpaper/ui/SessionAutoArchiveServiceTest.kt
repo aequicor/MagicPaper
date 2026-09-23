@@ -7,7 +7,13 @@ import io.aequicor.magicpaper.domain.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.*
 import kotlin.test.*
 
@@ -142,5 +148,55 @@ class SessionAutoArchiveServiceTest {
             ticks.emit(Unit); runCurrent()
             assertTrue(f.chats.session("first")!!.archived)
         } finally { chat.close(); Dispatchers.resetMain() }
+    }
+
+    /**
+     * The default ticker waits on Dispatchers.Default. A stop that returns before it has finished leaves that thread
+     * resuming the collector on Main afterwards, which raced resetMain in RequestPinViewModelTest.
+     */
+    @Test fun codingShutdownReturnsOnlyAfterTheTickerStopped() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture(); f.seed()
+        val ticker = HeldTicker()
+        val coding = DefaultCodingService(f.settings, f.profiles, f.kv, f.json, settingsCommands = f.testSettingsCommands(),
+            codingProjects = journalCodingProjects(f.kv, f.json, f.chatJournal, Dispatchers.Main, JsonCodingProjectRepository(f.kv, f.json)),
+            usage = f.usage, workerDispatcher = Dispatchers.Main, archiveTicks = ticker.ticks)
+        try {
+            coding.start(); runCurrent()
+            assertStopWaitsFor(ticker) { coding.shutdownCoding() }
+        } finally { ticker.release.complete(Unit); Dispatchers.resetMain() }
+    }
+
+    @Test fun chatCloseReturnsOnlyAfterTheTickerStopped() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val f = ModelSettingsFixture(); f.seed()
+        val ticker = HeldTicker()
+        val chat = DefaultChatService(testGatewayRuntime(f.gateway, f.search, EmbeddedDocRepository()), f.chatStore,
+            f.settings, f.profiles, null, workerDispatcher = Dispatchers.Main, archiveTicks = ticker.ticks)
+        try {
+            chat.start(); runCurrent()
+            assertStopWaitsFor(ticker) { chat.close() }
+        } finally { ticker.release.complete(Unit); Dispatchers.resetMain() }
+    }
+
+    /** A ticker on Dispatchers.Default, like the default one, whose stop the test holds open. */
+    private class HeldTicker {
+        val started = CompletableDeferred<Unit>()
+        val stopping = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val ticks = flow<Unit> {
+            started.complete(Unit)
+            try { awaitCancellation() }
+            finally { stopping.complete(Unit); withContext(NonCancellable) { release.await() } }
+        }.flowOn(Dispatchers.Default)
+    }
+
+    private suspend fun TestScope.assertStopWaitsFor(ticker: HeldTicker, stop: suspend () -> Unit) {
+        ticker.started.await()
+        val stopped = launch { stop() }
+        ticker.stopping.await()
+        assertFalse(stopped.isCompleted, "The owner stopped while its ticker was still finishing on another thread")
+        ticker.release.complete(Unit)
+        stopped.join()
     }
 }
