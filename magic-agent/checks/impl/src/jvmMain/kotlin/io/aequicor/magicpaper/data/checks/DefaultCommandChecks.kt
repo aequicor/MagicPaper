@@ -260,9 +260,14 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
                     journal.uncertain(cleanupFailure)
                 }
             }
-            AppLog.error("checks", "run.failed", primary, mapOf("sessionId" to ref.scope.sessionId, "requestId" to ref.scope.requestId,
+            val fields = mapOf("sessionId" to ref.scope.sessionId, "requestId" to ref.scope.requestId,
                 "callId" to ref.callId, "causeType" to primary.javaClass.simpleName,
-                "result" to if (journal.state.unknown) "unknown" else "stopped"))
+                "result" to if (journal.state.unknown) "unknown" else "stopped")
+            // Cancellation is control flow: a caller that went away and left the check settled is not a failure.
+            // A cleanup failure combined into it, or an outcome left unknown, still is.
+            if (primary === failure && failure is CancellationException && !journal.state.unknown && !journal.state.persistenceUnknown)
+                AppLog.info("checks", "run.cancelled", fields)
+            else AppLog.error("checks", "run.failed", primary, fields)
             if (primary is CancellationException) throw primary
             if ((failure is CheckNotDispatched || failure is CheckTimedOut || failure is CheckOutputLimitExceeded) && !journal.state.unknown)
                 return checkNotNull(journal.state.checks[ref]?.result)

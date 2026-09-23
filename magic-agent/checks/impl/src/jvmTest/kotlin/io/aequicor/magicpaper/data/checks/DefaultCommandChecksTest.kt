@@ -2,6 +2,8 @@ package io.aequicor.magicpaper.data.checks
 
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.checks.*
+import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.LogLevel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.runTest
 import java.io.IOException
@@ -73,6 +75,41 @@ class DefaultCommandChecksTest {
         assertEquals(0, owner.run(next).exitCode)
         assertEquals(0, DefaultCommandChecks(events, payloads, driver).run(next.copy(ref = next.ref.copy(callId = "restarted"))).exitCode)
         assertEquals(2, driver.releases)
+    } }
+
+    /**
+     * A project screen cancels its Git reads whenever the user creates a session or navigates away, so a cancellation
+     * that left the check settled is control flow, not a failure: it was logged as ERROR on every such step. A
+     * cancellation whose process stop could not be confirmed is still an unknown outcome and stays an error.
+     */
+    @Test fun settledCancellationIsRecordedAsCancelledAndOnlyAnUnknownOneAsAFailure() = runTest { fixture { path, events, payloads, driver ->
+        val level = AppLog.level
+        AppLog.level = LogLevel.INFO
+        try {
+            for (cleanupFails in listOf(false, true)) {
+                val owner = DefaultCommandChecks(events, payloads, driver)
+                driver.awaitCompletion = CompletableDeferred()
+                driver.cleanupFailure = if (cleanupFails) IOException("process group still alive") else null
+                val released = CompletableDeferred<Unit>()
+                driver.onReleased = { released.complete(Unit) }
+                val before = AppLog.history().size
+                val call = command(path).let { it.copy(ref = it.ref.copy(callId = "navigated-$cleanupFails")) }
+                val job = launch(Dispatchers.Default) { owner.run(call) }
+                released.await()
+                job.cancelAndJoin()
+                val entries = AppLog.history().drop(before).filter { it.component == "checks" }
+                if (!cleanupFails) {
+                    assertEquals(listOf("run.cancelled"), entries.map { it.event }, "a settled cancellation is not a failure")
+                    assertEquals(LogLevel.INFO, entries.single().level)
+                    assertEquals("stopped", entries.single().fields["result"])
+                } else {
+                    val failed = entries.single { it.event == "run.failed" }
+                    assertEquals(LogLevel.ERROR, failed.level)
+                    assertEquals("unknown", failed.fields["result"])
+                    assertTrue(entries.none { it.event == "run.cancelled" })
+                }
+            }
+        } finally { AppLog.level = level }
     } }
 
     @Test fun cancellationBeforeThePreparedProcessIsJournaledDoesNotFenceTheWorkspace() = runTest { fixture { path, _, payloads, driver ->
