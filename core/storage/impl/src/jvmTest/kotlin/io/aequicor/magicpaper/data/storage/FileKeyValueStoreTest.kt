@@ -2,8 +2,10 @@ package io.aequicor.magicpaper.data.storage
 
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -40,6 +42,36 @@ class FileKeyValueStoreTest {
         store.write(key, "updated")
         assertEquals("updated", legacy.readText())
         assertEquals("updated", FileKeyValueStore(root).read(key))
+        assertTrue(root.listFiles().orEmpty().none { it.extension == "pending" })
+    }
+
+    @Test
+    fun batchReadMatchesSingleReadsIncludingMissingAndLongKeys() = withRoot { root ->
+        val keys = (0 until 100).map { "payload:$it" } + ("long:" + "x".repeat(300))
+        val store = FileKeyValueStore(root)
+        keys.forEachIndexed { index, key -> if (index % 7 != 0) store.write(key, "value-$index") }
+        val reopened = FileKeyValueStore(root)
+        val requested = keys + "absent" + keys.first()
+        assertEquals(requested.distinct().associateWith(reopened::read), reopened.readAll(requested))
+        assertEquals(mapOf("payload:1" to "value-1"), reopened.readAll(listOf("payload:1")))
+        assertTrue(reopened.readAll(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun identicalRewriteKeepsTheCommittedFileAndChangedValueReplacesIt() = withRoot { root ->
+        val store = FileKeyValueStore(root)
+        store.write("projection", "same")
+        val committed = File(root, "projection.json").toPath()
+        val identity = Files.readAttributes(committed, BasicFileAttributes::class.java).fileKey()
+        store.write("projection", "same")
+        if (identity != null) assertEquals(identity, Files.readAttributes(committed, BasicFileAttributes::class.java).fileKey())
+        store.write("projection", "diff")
+        assertEquals("diff", FileKeyValueStore(root).read("projection"))
+        if (identity != null) assertNotEquals(identity, Files.readAttributes(committed, BasicFileAttributes::class.java).fileKey())
+        // A key missing from the manifest is still recorded when its bytes are already on disk.
+        File(root, "adopted.json").writeText("value")
+        store.write("adopted", "value")
+        assertTrue("adopted" in File(root, "manifest.txt").readLines())
         assertTrue(root.listFiles().orEmpty().none { it.extension == "pending" })
     }
 

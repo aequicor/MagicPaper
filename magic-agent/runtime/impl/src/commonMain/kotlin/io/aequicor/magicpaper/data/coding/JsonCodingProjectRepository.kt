@@ -261,10 +261,21 @@ class JsonCodingProjectRepository(
         // Every dispatch to any project checkpoints here, so reuse the class's own read cache
         // instead of re-reading and re-decoding the whole (every-project, every-session) blob
         // from disk on each call; only the changed project's rows actually move.
-        val projects = all().filterNot { it.id == project.id } + project
-        val sessions = allSessions().filterNot { it.projectId == project.id } + state.sessions.values
-        store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects))
-        store.write(KEY_SESSIONS, json.encodeToString(sessionsSerializer, sessions))
+        val savedProjects = all()
+        val savedSessions = allSessions()
+        // Restoring checkpoints every project in turn. Re-encoding the whole every-project session
+        // list (megabytes) when this project's rows already match it only costs time and a rewrite.
+        if (project !in savedProjects || savedSessions.filter { it.projectId == project.id }.toSet() != state.sessions.values.toSet()) {
+            val projects = savedProjects.filterNot { it.id == project.id } + project
+            val sessions = savedSessions.filterNot { it.projectId == project.id } + state.sessions.values
+            // A failed write leaves the caches empty, so the next checkpoint compares with what is on disk.
+            _projectsCache = null; _sessionsCache = null
+            store.write(KEY_PROJECTS, json.encodeToString(projectsSerializer, projects))
+            store.write(KEY_SESSIONS, json.encodeToString(sessionsSerializer, sessions))
+            // Prime the cache with what was just written instead of re-reading it, so the next
+            // checkpoint (there is one after every dispatch to any project) also skips the re-read.
+            _projectsCache = projects.sortedByDescending { it.createdAt }; _sessionsCache = sessions
+        }
         store.write(clearedKey(project.id), "true")
         val previousHistories = _lastHistories[project.id]
         val previousRemoved = _lastRemovedMessages[project.id]
@@ -276,9 +287,6 @@ class JsonCodingProjectRepository(
         _lastHistories[project.id] = state.histories; _lastRemovedMessages[project.id] = state.removedMessages
         state.removedSessions.forEach { id -> store.delete(logKey(project.id, id)); store.delete("coding-orchestration-$id"); store.delete("coding-orchestration-$id-backup") }
         state.orchestrations.values.forEach { saveOrchestration(it) }
-        // Prime the cache with what was just written instead of invalidating it, so the next
-        // checkpoint (there is one after every dispatch to any project) also skips the re-read.
-        _projectsCache = projects.sortedByDescending { it.createdAt }; _sessionsCache = sessions
     }
 
     // ---- Миграция -----------------------------------------------------------

@@ -82,13 +82,16 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
         for ((stream, snapshot) in journal.snapshotAll().filterKeys { it.startsWith(PREFIX) }.toSortedMap()) {
             validate(stream, snapshot)
             var state = CodingMachine.initial()
-            for (record in snapshot.records) {
-                val envelope = json.decodeFromString(Envelope.serializer(), record.detail)
-                val recordedInput = freeze(payloads.read(envelope.ref))
-                val next = CodingMachine.reduce(state, recordedInput)
-                check(next.effects.none { it is CodingMachine.Effect.Reject }) { "Повреждён журнал проекта" }
-                MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, state, recordedInput, next.state, next.effects)
-                state = next.state
+            // Each input is its own payload record: read a batch together rather than one round trip per input.
+            for (batch in snapshot.records.chunked(REPLAY_BATCH)) {
+                val refs = batch.map { json.decodeFromString(Envelope.serializer(), it.detail).ref }
+                for (stored in payloads.readAll(refs)) {
+                    val recordedInput = freeze(stored)
+                    val next = CodingMachine.reduce(state, recordedInput)
+                    check(next.effects.none { it is CodingMachine.Effect.Reject }) { "Повреждён журнал проекта" }
+                    MachineTransitionLog.replay(CodingMachine.id, CodingMachine.space, state, recordedInput, next.state, next.effects)
+                    state = next.state
+                }
             }
             val id = checkNotNull(state.project).id
             check(stream(id) == stream && identitiesAvailable(id, state, recovered)) { "Неверная принадлежность проекта" }
@@ -189,6 +192,8 @@ class CodingJournalStore(private val checkpoints: CodingCheckpointStore, private
     companion object {
         private const val PREFIX = "coding-workflow:"
         private const val OPERATION = "coding.input.v1"
+        /** Bounds how many payloads, some of them tens of megabytes, a replay holds at once. */
+        private const val REPLAY_BATCH = 64
         fun stream(projectId: String) = PREFIX + projectId.encodeToByteArray().joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     }
 }

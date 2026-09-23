@@ -5,13 +5,16 @@ import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 
 /**
  * Десктопное хранилище: папка ~/.MagicPaper в домашнем каталоге пользователя.
  * Не требует прав администратора (изолированная среда пользователя);
  * удаляется вместе с папкой при деинсталляции.
  */
-class FileKeyValueStore internal constructor(private val root: File) : KeyValueStore {
+class FileKeyValueStore internal constructor(private val root: File) : BatchReadKeyValueStore {
 
     constructor(rootName: String = ".MagicPaper") : this(File(System.getProperty("user.home"), rootName))
 
@@ -24,8 +27,32 @@ class FileKeyValueStore internal constructor(private val root: File) : KeyValueS
         file(key).takeIf { it.isFile }?.readText()
     }
 
+    /**
+     * Journal replays read every payload they ever stored, one file each. Where an open is slow
+     * (on-access antivirus scanning on Windows, a spinning disk) reading them one after another
+     * held application start for tens of seconds, so the opens overlap. Holding the monitor keeps
+     * every writer out until the whole batch is read.
+     */
+    override fun readBatch(keys: Collection<String>): Map<String, String?> = synchronized(this) {
+        val distinct = keys.distinct()
+        if (distinct.size < 2) return distinct.associateWith(::read)
+        val readers = Executors.newFixedThreadPool(minOf(distinct.size, READ_PARALLELISM)) { task ->
+            Thread(task, "key-value-read").apply { isDaemon = true }
+        }
+        try {
+            val reads = distinct.map { key -> readers.submit(Callable { file(key).takeIf { it.isFile }?.readText() }) }
+            distinct.zip(reads).associate { (key, read) ->
+                key to try { read.get() } catch (failure: ExecutionException) { throw failure.cause ?: failure }
+            }
+        } finally { readers.shutdownNow() }
+    }
+
     override fun write(key: String, value: String) = synchronized(this) {
-        atomicWrite(file(key), value)
+        val target = file(key)
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        // Checkpoints re-project state that is usually unchanged. Rewriting identical bytes costs a
+        // flush, a rename and, on Windows, a fresh antivirus scan of the new file, for nothing.
+        if (!holds(target, bytes)) atomicWrite(target, bytes)
         if (keySet.add(key)) saveManifest()
     }
 
@@ -59,17 +86,22 @@ class FileKeyValueStore internal constructor(private val root: File) : KeyValueS
         return File(root, "$digest.data")
     }
 
+    private companion object { const val READ_PARALLELISM = 16 }
+
     private fun loadManifest(): List<String> =
         runCatching { manifest.readLines().filter { it.isNotBlank() } }.getOrDefault(emptyList())
 
     private fun saveManifest() {
-        atomicWrite(manifest, keySet.joinToString("\n"))
+        atomicWrite(manifest, keySet.joinToString("\n").toByteArray(Charsets.UTF_8))
     }
 
-    private fun atomicWrite(target: File, value: String) {
+    private fun holds(target: File, bytes: ByteArray): Boolean =
+        target.length() == bytes.size.toLong() && target.isFile && target.readBytes().contentEquals(bytes)
+
+    private fun atomicWrite(target: File, bytes: ByteArray) {
         val tmp = File.createTempFile("write-", ".pending", root)
         try {
-            FileOutputStream(tmp).use { output -> output.write(value.toByteArray(Charsets.UTF_8)); output.fd.sync() }
+            FileOutputStream(tmp).use { output -> output.write(bytes); output.fd.sync() }
             try {
                 Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             } catch (_: java.nio.file.AtomicMoveNotSupportedException) {

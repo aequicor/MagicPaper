@@ -9,6 +9,9 @@ import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -22,10 +25,21 @@ class FileDurableByteStore(private val root: File) : DurableByteStore {
         val directory = File(root, area.storeName)
         if (!directory.exists()) emptyList() else {
             val files = directory.listFiles() ?: throw java.io.IOException("Cannot list records")
-            files.filter { it.isFile && it.extension == "data" }.map { it.readBytes() }
+            // The event journal keeps one file per record, so a scan is thousands of opens. Where an
+            // open is slow (on-access antivirus scanning on Windows, a spinning disk) reading them one
+            // after another held application start for tens of seconds; overlapping the opens hides
+            // that latency. The store mutex is still held, so no write interleaves with the scan.
+            coroutineScope {
+                files.filter { it.extension == "data" }
+                    .map { file -> async(scanDispatcher) { if (file.isFile) file.readBytes() else null } }
+                    .awaitAll().filterNotNull()
+            }
         }
     }
-    private companion object { val locks = java.util.concurrent.ConcurrentHashMap<String, Mutex>() }
+    private companion object {
+        val locks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+        val scanDispatcher = Dispatchers.IO.limitedParallelism(16, "durable-store-scan")
+    }
 
 
     override suspend fun read(area: StorageArea, key: String): ByteArray? = access("read", StorageException.Kind.READ) {
@@ -67,7 +81,7 @@ class FileDurableByteStore(private val root: File) : DurableByteStore {
         return File(File(root, area.storeName), "$name.data")
     }
 
-    private suspend fun <T> access(operation: String, kind: StorageException.Kind, action: () -> T): T =
+    private suspend fun <T> access(operation: String, kind: StorageException.Kind, action: suspend () -> T): T =
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 try { action() }

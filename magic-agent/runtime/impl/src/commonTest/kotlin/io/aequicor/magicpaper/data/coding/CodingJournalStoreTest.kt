@@ -40,6 +40,33 @@ class CodingJournalStoreTest {
             CodingMachine.Intent.CreateSession(CodingSession(id, projectId, "Session", 1, engine = CodingEngine.PI)))
         suspend fun size(id: String = "project") = journal.backing.read(CodingJournalStore.stream(id)).size
     }
+    @Test fun restartReplaysEveryInputAndLeavesUnchangedProjectionsUnwritten() = runTest {
+        val backing = InMemoryKeyValueStore()
+        val written = mutableListOf<String>()
+        val storage = object : KeyValueStore by backing {
+            override fun write(key: String, value: String) { written += key; backing.write(key, value) }
+        }
+        val json = Json { encodeDefaults = true }
+        val journal = InMemoryEventJournal()
+        fun open() = CodingJournalStore(JsonCodingProjectRepository(storage, json), journal,
+            StoredCodingPayloads(storage, json, Dispatchers.Unconfined), json, Dispatchers.Unconfined)
+        val first = open()
+        // More inputs per project than one replay batch holds.
+        for (project in listOf("a", "b")) {
+            first.dispatch(project, CodingMachine.Intent.CreateProject(CodingProject(project, "Project $project", "/fixture", 1)))
+            repeat(70) { index -> first.dispatch(project, CodingMachine.Intent.CreateSession(
+                CodingSession("$project-$index", project, "Session $index", index.toLong(), engine = CodingEngine.PI))) }
+        }
+        written.clear()
+        val restarted = open(); restarted.start()
+        assertEquals(first.states.value, restarted.states.value)
+        assertEquals(listOf("a-69", "a-68"), restarted.sessions("a").take(2).map { it.id })
+        assertTrue(written.none { it == "coding-projects" || it == "coding-sessions" }, written.toString())
+        restarted.dispatch("a", CodingMachine.Intent.CreateSession(CodingSession("a-new", "a", "New", 100, engine = CodingEngine.PI)))
+        assertEquals(1, written.count { it == "coding-sessions" })
+        val reopened = JsonCodingProjectRepository(storage, json)
+        assertEquals(restarted.states.value.values.flatMap { it.sessions.values }.toSet(), reopened.all().flatMap { reopened.sessions(it.id) }.toSet())
+    }
     @Test fun exactLostAcknowledgementCommitsOneInputAndRestartsWithoutEffects() = runTest {
         val f = Fixture(); f.create(); f.journal.loseAck = true
         f.add()

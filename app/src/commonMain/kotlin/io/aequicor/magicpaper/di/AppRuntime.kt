@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.*
 import org.koin.core.Koin
 import org.koin.core.module.Module
 import org.koin.dsl.koinApplication
+import kotlin.time.TimeSource
 
 data class NavigationSessionConfig(
     val journalKey: String = "main",
@@ -54,24 +55,35 @@ class MagicPaperRuntime internal constructor(
         if (starting != null || closed) return
         AppLog.info("runtime", "start")
         starting = scope.launch {
+            val started = TimeSource.Monotonic.markNow()
+            // Each owner replays its whole saved history here. How long each one takes depends on
+            // the machine's storage far more than on its CPU, so every phase reports its duration.
+            suspend fun <T> phase(name: String, block: suspend () -> T): T {
+                val mark = TimeSource.Monotonic.markNow()
+                return block().also {
+                    AppLog.info("runtime", "phase.finished", mapOf("phase" to name, "elapsedMs" to mark.elapsedNow().inWholeMilliseconds.toString()))
+                }
+            }
             try {
                 // Migrate and hydrate saved credentials before any runtime can restore work.
-                koin.get<SettingsRepository>().load()
-                koin.get<LlmProfileRepository>().load()
-                koin.get<UsageLedger>().start()
-                koin.get<SkillCommands>().start()
+                phase("settings") {
+                    koin.get<SettingsRepository>().load()
+                    koin.get<LlmProfileRepository>().load()
+                }
+                phase("usage") { koin.get<UsageLedger>().start() }
+                phase("skills") { koin.get<SkillCommands>().start() }
                 val media = koin.get<MediaGenerationService>().also { mediaService = it }
-                media.refreshAvailability()
+                phase("media") { media.refreshAvailability() }
                 // Track assembly ownership before dependent constructors can fail.
-                extensions = koin.get<RuntimeExtensions>().owners
-                media.recoverPending()
+                extensions = phase("assembly") { koin.get<RuntimeExtensions>().owners }
+                phase("media.recovery") { media.recoverPending() }
                 val settings = koin.get<SettingsService>().also { settingsService = it }
                 val chat = koin.get<ChatService>().also { chatService = it }
-                settings.start()
+                phase("settings.service") { settings.start() }
                 // Restored sessions need their skill adapters; restoration itself never launches a run.
-                koin.get<PluginService>().also { pluginService = it }.start()
-                chat.start()
-                extensions.forEach { it.start() }
+                phase("plugins") { koin.get<PluginService>().also { pluginService = it }.start() }
+                phase("chat") { chat.start() }
+                extensions.forEach { extension -> phase("extension.${extension.id}") { extension.start() } }
                 scope.launch {
                     settings.state.collect { state ->
                         chat.updateConfiguration(state.settings, state.llmProfiles, state.openAiSubscription.available, state.openAiSubscription.account?.signedIn == true)
@@ -80,7 +92,7 @@ class MagicPaperRuntime internal constructor(
                 }
                 onPlatformStarted()
                 _ready.value = RuntimeState.Ready
-                AppLog.info("runtime", "ready")
+                AppLog.info("runtime", "ready", mapOf("elapsedMs" to started.elapsedNow().inWholeMilliseconds.toString()))
             } catch (error: CancellationException) {
                 throw error
             } catch (failure: Exception) {

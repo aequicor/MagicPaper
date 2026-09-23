@@ -33,16 +33,23 @@ internal class UsageInputJournal(
         validateSnapshot(snapshot)
         var restored = UsageMachine.initial()
         val seen = mutableSetOf<String>()
-        for (record in snapshot.records) {
-            val ref = json.decodeFromString(Ref.serializer(), record.detail)
-            require(seen.add(ref.id)) { "Duplicate usage input" }
-            val input = readInput(ref)
-            require(record.at == input.stamp.at) { "Changed usage input time" }
-            val before = restored
-            val next = UsageMachine.reduce(before, input)
-            check(next.rejection == null) { "Invalid usage history" }
-            MachineTransitionLog.replay(UsageMachine.id, UsageMachine.space, before, input, next.state, next.effects())
-            restored = next.state
+        // Every usage fact keeps its own payload record; reading a batch together lets the store
+        // overlap the reads instead of paying one storage round trip per fact on every start.
+        for (batch in snapshot.records.chunked(REPLAY_BATCH)) {
+            val refs = batch.map { record -> json.decodeFromString(Ref.serializer(), record.detail).also {
+                require(seen.add(it.id)) { "Duplicate usage input" }
+                validateIdentity(it)
+            } }
+            val raws = payloads.readAll(refs.map { PREFIX + it.id })
+            for ((record, ref) in batch.zip(refs)) {
+                val input = decodeInput(ref, raws[PREFIX + ref.id])
+                require(record.at == input.stamp.at) { "Changed usage input time" }
+                val before = restored
+                val next = UsageMachine.reduce(before, input)
+                check(next.rejection == null) { "Invalid usage history" }
+                MachineTransitionLog.replay(UsageMachine.id, UsageMachine.space, before, input, next.state, next.effects())
+                restored = next.state
+            }
         }
         state = restored
         prefix = snapshot.records.toList()
@@ -155,8 +162,15 @@ internal class UsageInputJournal(
     }
 
     private suspend fun readInput(ref: Ref): UsageMachine.Input {
+        validateIdentity(ref)
+        return decodeInput(ref, payloads.read(PREFIX + ref.id))
+    }
+
+    private fun validateIdentity(ref: Ref) =
         require(ref.id.isNotBlank() && ref.id.all { it.isLetterOrDigit() || it == '-' }) { "Invalid usage input identity" }
-        val raw = checkNotNull(payloads.read(PREFIX + ref.id)) { "Missing usage payload" }
+
+    private suspend fun decodeInput(ref: Ref, stored: String?): UsageMachine.Input {
+        val raw = checkNotNull(stored) { "Missing usage payload" }
         check(digest(raw) == ref.digest) { "Changed usage payload" }
         val payload = json.decodeFromString(Payload.serializer(), raw)
         require(payload.stream == STREAM && payload.input.stamp.id == ref.id) { "Foreign usage input" }
@@ -182,5 +196,6 @@ internal class UsageInputJournal(
         const val STREAM = "usage-ledger"
         const val OPERATION = "usage.input.v1"
         const val PREFIX = "usage-input-"
+        private const val REPLAY_BATCH = 256
     }
 }

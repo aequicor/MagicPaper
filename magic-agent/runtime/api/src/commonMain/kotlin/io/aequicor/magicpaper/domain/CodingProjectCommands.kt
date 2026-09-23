@@ -22,6 +22,8 @@ suspend fun CodingProjectCommands.acceptSession(session: CodingSession, input: C
 interface CodingPayloadStore {
     suspend fun save(projectId: String, inputId: String, input: CodingMachine.Input): CodingInputRef
     suspend fun read(ref: CodingInputRef): CodingMachine.Input
+    /** The inputs of [refs], in order; a store that keeps one record per input may read them together. */
+    suspend fun readAll(refs: List<CodingInputRef>): List<CodingMachine.Input> = refs.map { read(it) }
     suspend fun clear()
 }
 

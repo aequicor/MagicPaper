@@ -173,6 +173,18 @@ class NavigationPresentationPersistenceTest {
         assertEquals(mapOf("fresh" to "fresh state"), persistenceStores(backend, "second").navigation.loadWithPresentations()?.presentations)
     }
 
+    @Test fun manyStatesLoadTogetherAndOnlyAReferencedDefectBlocksTheJournal() = runTest {
+        val backend = InMemoryDurableByteStore()
+        val states = (0 until 300).associate { "state-$it" to "scroll-$it" }
+        DurableNavigationSnapshotStore(backend).saveWithPresentations("journal", states)
+        backend.write(StorageArea.PRESENTATION, "stray", "not a state".encodeToByteArray())
+        assertEquals(NavigationSnapshotRecord("journal", states), DurableNavigationSnapshotStore(backend).loadWithPresentations())
+        backend.write(StorageArea.PRESENTATION, "state-7", "not a state".encodeToByteArray())
+        assertEquals(StorageException.Kind.CORRUPT, assertFailsWith<StorageException> { DurableNavigationSnapshotStore(backend).loadWithPresentations() }.kind)
+        backend.delete(StorageArea.PRESENTATION, "state-7")
+        assertEquals(StorageException.Kind.CORRUPT, assertFailsWith<StorageException> { DurableNavigationSnapshotStore(backend).loadWithPresentations() }.kind)
+    }
+
     @Test fun legacyInlineJournalRemainsReadableBeforeItsOwnerMigratesIt() = runTest {
         val backend = InMemoryDurableByteStore()
         val legacy = """{"visits":[],"presentation":{"visit":"legacy state"}}"""

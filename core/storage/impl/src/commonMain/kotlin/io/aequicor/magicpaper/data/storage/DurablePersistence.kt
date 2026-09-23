@@ -70,14 +70,31 @@ class DurableNavigationSnapshotStore(
             ?: fallbackJournalId?.let { backend.read(StorageArea.NAVIGATION, it) }
             ?: return@locked null
         val record = decodeNavigation(bytes)
-        val presentations = record.presentationReferences.associateWith { reference ->
-            val state = backend.read(StorageArea.PRESENTATION, reference)
-                ?: throw StorageException("read navigation state", StorageException.Kind.CORRUPT)
-            decodePresentation(state).also {
-                if (it.reference != reference) throw StorageException("read navigation reference", StorageException.Kind.CORRUPT)
-            }.snapshot
+        NavigationSnapshotRecord(record.snapshot, presentations(record.presentationReferences))
+    }
+
+    /**
+     * Every visit of a long history keeps its own state record, so reading them one key at a time
+     * was one storage round trip per visit before the first screen. A single area scan lets the
+     * backend read them together. Saves prune unreferenced states, so the scan reads little else;
+     * a record that cannot be decoded matters only when a visit refers to it.
+     */
+    private suspend fun presentations(references: Set<String>): Map<String, String> {
+        if (references.isEmpty()) return emptyMap()
+        val found = HashMap<String, String>()
+        var unreadable: StorageException? = null
+        for (raw in backend.values(StorageArea.PRESENTATION)) {
+            val state = try { decodePresentation(raw) } catch (failure: StorageException) {
+                unreadable = unreadable?.also { it.addSuppressed(failure) } ?: failure
+                continue
+            }
+            if (state.reference !in references) continue
+            val previous = found.put(state.reference, state.snapshot)
+            if (previous != null && previous != state.snapshot) throw StorageException("read navigation reference", StorageException.Kind.CORRUPT)
         }
-        NavigationSnapshotRecord(record.snapshot, presentations)
+        return references.associateWith { reference ->
+            found[reference] ?: throw StorageException("read navigation state", StorageException.Kind.CORRUPT, unreadable)
+        }
     }
     override suspend fun save(snapshot: String) = saveWithPresentations(snapshot, emptyMap())
     override suspend fun saveWithPresentations(snapshot: String, presentations: Map<String, String>) = locked {

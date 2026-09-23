@@ -38,6 +38,20 @@ class FileDurableByteStoreTest {
     }
 
     @Test
+    fun journalWithManyRecordFilesReopensWhole() = runTest {
+        val root = Files.createTempDirectory("magicpaper-journal-scan-").toFile()
+        try {
+            val first = desktopPersistenceStores(root)
+            val appended = (1..300).map { first.events.append("stream-${it % 3}", "op", it.toLong(), "detail-$it") }
+            first.navigation.saveWithPresentations("journal", (0 until 40).associate { "view-$it" to "state-$it" })
+            val reopened = desktopPersistenceStores(root)
+            val snapshots = reopened.events.snapshotAll()
+            assertEquals(appended.groupBy { it.stream }, snapshots.mapValues { it.value.records })
+            assertEquals(40, reopened.navigation.loadWithPresentations()?.presentations?.size)
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun resetEpochSurvivesReopeningAndRejectsWritersFromAnotherFileStore() = runTest {
         val root = Files.createTempDirectory("magicpaper-reset-epoch-").toFile()
         try {

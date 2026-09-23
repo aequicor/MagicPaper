@@ -40,6 +40,12 @@ class StoredCodingPayloads(private val store: KeyValueStore, private val json: J
     override suspend fun read(ref: CodingInputRef): CodingMachine.Input = withContext(dispatcher) {
         lock.withLock { decode(ref, store.read(key(ref)) ?: throw StorageException("coding-input-read", StorageException.Kind.CORRUPT)) }
     }
+    override suspend fun readAll(refs: List<CodingInputRef>): List<CodingMachine.Input> = withContext(dispatcher) {
+        lock.withLock {
+            val raws = store.readAll(refs.map(::key))
+            refs.map { ref -> decode(ref, raws[key(ref)] ?: throw StorageException("coding-input-read", StorageException.Kind.CORRUPT)) }
+        }
+    }
     private suspend fun decode(ref: CodingInputRef, raw: String): CodingMachine.Input {
         val element = try { json.parseToJsonElement(raw).jsonObject }
         catch (failure: Exception) { throw StorageException("coding-input-read", StorageException.Kind.CORRUPT, cause = failure) }
