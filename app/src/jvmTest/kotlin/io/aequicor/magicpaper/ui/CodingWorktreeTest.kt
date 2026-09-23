@@ -16,6 +16,7 @@ import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.logging.LogLevel
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
 import kotlin.test.*
@@ -166,6 +167,45 @@ class CodingWorktreeTest {
             runCurrent()
             block(service, runtime, port, projects)
         } finally { service?.close(); Dispatchers.resetMain() }
+    }
+
+    /**
+     * The Git probe is several journaled Git reads, about half a second each. The session list and a
+     * session switch show the last known answer instead of waiting for it; a switch refreshes it behind.
+     */
+    @Test fun sessionListAndSwitchDoNotWaitForGitProbe() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val answers = Channel<WorktreeAvailability>()
+        var probes = 0
+        var service: DefaultCodingService? = null
+        try {
+            val f = ModelSettingsFixture()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project); repo.saveSession(session)
+            val port = object : TaskWorkspace by Workspace() {
+                override suspend fun availability(project: CodingProject): WorktreeAvailability { probes++; return answers.receive() }
+            }
+            val events = InMemoryEventJournal()
+            val projects = journalCodingProjects(f.kv, f.json, journal = events, checkpoints = repo)
+            val worktrees = testTaskWorktreeService(projects, port, LocalPlanningWorkspace(), events, f.kv)
+            val opening = async { f.prepareCoding(Runtime(worktrees), projects, taskWorktrees = worktrees) }
+            runCurrent()
+            assertTrue(opening.isCompleted, "the list and the opened session are published before Git answers")
+            val opened = opening.await().also { service = it }
+            assertEquals(WorktreeAvailability(false, "Проверка Git…"), opened.state.value.coding.sessions.single().worktreeAvailability)
+            opened.activate("p", "s"); runCurrent()
+            assertEquals(1, probes, "a switch while the probe runs joins it instead of starting another")
+
+            answers.send(WorktreeAvailability(true)); runCurrent()
+            assertTrue(opened.state.value.coding.sessions.single().worktreeAvailability.available)
+            opened.activate("p", "s"); runCurrent()
+            assertEquals(2, probes, "a later switch refreshes the answer")
+            assertTrue(opened.state.value.coding.sessions.single().worktreeAvailability.available,
+                "the switch shows the last known answer while the refresh runs")
+
+            answers.send(WorktreeAvailability(false, "Выберите Git-ветку")); runCurrent()
+            assertEquals(WorktreeAvailability(false, "Выберите Git-ветку"), opened.state.value.coding.sessions.single().worktreeAvailability)
+        } finally { answers.close(); service?.close(); Dispatchers.resetMain() }
     }
 
     @Test fun nativeFinishedWithoutHandoffNeverMerges() = runTest { fixture { service, runtime, port, repo ->

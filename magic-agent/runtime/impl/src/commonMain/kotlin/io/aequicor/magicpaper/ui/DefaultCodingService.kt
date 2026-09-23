@@ -66,8 +66,6 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -401,6 +399,9 @@ class DefaultCodingService(
     /** Активные прогоны по идентификаторам кодинг-сессий (параллельно в разных сессиях). */
     private val codingJobs = MutableStateFlow<Map<String, Job>>(emptyMap())
     private val codingSessionLocks = MutableStateFlow<Map<String, Mutex>>(emptyMap())
+    /** The last Git answer per project, shown until a fresh probe replaces it. */
+    private val worktreeAvailabilities = MutableStateFlow<Map<String, WorktreeAvailability>>(emptyMap())
+    private val worktreeProbes = MutableStateFlow<Set<String>>(emptySet())
     private val closingState = MutableStateFlow(false)
     private var closing: Boolean
         get() = closingState.value
@@ -424,6 +425,7 @@ class DefaultCodingService(
             coding = it.coding.copy(projects = projects, sessions = sessions, projectStatuses = codingStatusSnapshot(projects, sessions),
                 nativeModelEngines = codingRuntime?.modelSources?.keys.orEmpty())) }
         AppLog.info("coding", "sessions.listed", mapOf("count" to projects.size.toString(), "sessionsCount" to sessions.size.toString()))
+        projects.forEach(::refreshWorktreeAvailability)
         when (val policy = settingsCommands.runtimePolicy()) {
             is SettingsRuntimePolicy.Confirmed -> codingRuntime?.computerUse?.configure(policy.settings.computerAccess, policy.settings.applicationAccess)
             SettingsRuntimePolicy.Unconfirmed -> {
@@ -454,7 +456,7 @@ class DefaultCodingService(
                 _state.update { state ->
                     val old = state.coding.sessions.associateBy { it.session.id }
                     val projected = sessions.map { saved ->
-                        val previous = old[saved.id] ?: CodingSessionUi(saved)
+                        val previous = old[saved.id] ?: withWorktreeAvailability(CodingSessionUi(saved))
                         withUnread(withPlanningState(previous.copy(session = saved,
                             messages = all[saved.projectId]?.histories?.get(saved.id).orEmpty())))
                     }
@@ -723,23 +725,56 @@ class DefaultCodingService(
         return projection.copy(runPhase = codingProjects?.states?.value?.get(item.session.projectId)?.runs?.get(item.session.id)?.phase)
     }
 
-    /** Every project's worktree probe and journal read run concurrently: each is its own I/O, not a shared resource. */
+    /** Rows come from the journal already held in memory; the Git answer arrives behind them, see [refreshWorktreeAvailability]. */
     private suspend fun loadCodingSessions(projects: List<CodingProject>): List<CodingSessionUi> {
         val repo = codingProjects ?: return emptyList()
-        return coroutineScope {
-            projects.map { project ->
-                async {
-                    val capability = AppLog.phase("coding", "worktree.availability", mapOf("projectId" to project.id)) {
+        return projects.flatMap { project ->
+            AppLog.phase("coding", "project.sessions", mapOf("projectId" to project.id)) {
+                repo.sessions(project.id).map { session ->
+                    withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id))))
+                }
+            }
+        }
+    }
+
+    private fun withWorktreeAvailability(item: CodingSessionUi): CodingSessionUi {
+        val known = worktreeAvailabilities.value[item.session.projectId] ?: return item
+        return if (known == item.worktreeAvailability) item else item.copy(worktreeAvailability = known)
+    }
+
+    /**
+     * Asks Git whether the project can take a task worktree, behind the list instead of in front of it: the probe
+     * is several journaled Git reads, about half a second each, and every session switch used to wait for all of
+     * them. One probe per project at a time; a switch while it runs joins it. It belongs to the service scope, so
+     * leaving a session no longer cancels a journaled read midway. Starting a run and the worktree switch still ask
+     * Git themselves before they act; this answer only drives what the row shows.
+     */
+    private fun refreshWorktreeAvailability(project: CodingProject) {
+        var claimed = false
+        worktreeProbes.update { running -> claimed = project.id !in running; running + project.id }
+        if (!claimed) return
+        scope.launch {
+            try {
+                val capability = try {
+                    AppLog.phase("coding", "worktree.availability", mapOf("projectId" to project.id)) {
                         taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
                     }
-                    AppLog.phase("coding", "project.sessions", mapOf("projectId" to project.id)) {
-                        repo.sessions(project.id).map { session ->
-                            withUnread(withPlanningState(CodingSessionUi(session, repo.messages(project.id, session.id), worktreeAvailability = capability)))
-                        }
-                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    AppLog.error("coding", "worktree.availability.failed", failure, mapOf("projectId" to project.id))
+                    WorktreeAvailability(false, "Проверка Git временно недоступна")
                 }
-            }.awaitAll().flatten()
+                publishWorktreeAvailability(project.id, capability)
+            } finally { worktreeProbes.update { it - project.id } }
         }
+    }
+
+    /** The answer belongs to the project, so every one of its rows shows it, and the next switch starts from it. */
+    private fun publishWorktreeAvailability(projectId: String, capability: WorktreeAvailability) {
+        worktreeAvailabilities.update { it + (projectId to capability) }
+        _state.update { state -> state.copy(coding = state.coding.copy(sessions = state.coding.sessions.map { row ->
+            if (row.session.projectId == projectId) withWorktreeAvailability(row) else row
+        })) }
     }
 
     /** Statuses are read off an already-built session list, not recomputed from the journal a second time. */
@@ -996,30 +1031,18 @@ class DefaultCodingService(
         val repo = codingProjects ?: return
         val project = repo.all().firstOrNull { it.id == projectId } ?: return
         val sessions = repo.sessions(projectId)
-        // The worktree probe (several sequential git spawns) and the sidebar rebuild are
-        // independent I/O; run them together and attach the probe result once both land,
-        // instead of paying for them back-to-back on every project switch.
-        val loaded: List<CodingSessionUi> = coroutineScope {
-            val capability = async {
-                AppLog.phase("coding", "worktree.availability", mapOf("projectId" to projectId)) {
-                    taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
+        // Every sidebar row needs its saved result, including sessions that are not selected.
+        val loaded: List<CodingSessionUi> = withContext(workerDispatcher) {
+            AppLog.phase("coding", "project.sessions", mapOf("projectId" to projectId, "count" to sessions.size.toString())) {
+                sessions.map { session ->
+                    val messages = repo.messages(projectId, session.id)
+                    withUnread(withPlanningState(CodingSessionUi(
+                        session = session,
+                        messages = messages,
+                        running = codingJobs.value[session.id]?.isActive == true,
+                    )))
                 }
             }
-            // Every sidebar row needs its saved result, including sessions that are not selected.
-            val rows = async(workerDispatcher) {
-                AppLog.phase("coding", "project.sessions", mapOf("projectId" to projectId, "count" to sessions.size.toString())) {
-                    sessions.map { session ->
-                        val messages = repo.messages(projectId, session.id)
-                        withUnread(withPlanningState(CodingSessionUi(
-                            session = session,
-                            messages = messages,
-                            running = codingJobs.value[session.id]?.isActive == true,
-                        )))
-                    }
-                }
-            }
-            val resolved = capability.await()
-            rows.await().map { it.copy(worktreeAvailability = resolved) }
         }
         currentCoroutineContext().ensureActive()
         _state.update { st ->
@@ -1031,15 +1054,17 @@ class DefaultCodingService(
             st.copy(
                 coding = st.coding.copy(
                     current = project,
+                    // The Git answer is read here, not when the rows were built: a probe that landed in between wins.
                     sessions = loaded.map { fresh -> st.coding.sessions.firstOrNull {
                         it.session.id == fresh.session.id && it.running
-                    } ?: fresh } + carried,
+                    } ?: withWorktreeAvailability(fresh) } + carried,
                     currentSessionId = st.coding.currentSessionId
                         .takeIf { it != null && it in loadedIds }
                         ?: loaded.firstOrNull()?.session?.id,
                 ),
             )
         }
+        refreshWorktreeAvailability(project)
     }
 
     private val deletingCodingProjects = MutableStateFlow<Set<String>>(emptySet())
@@ -1508,7 +1533,7 @@ class DefaultCodingService(
         val project = _state.value.coding.projects.firstOrNull { it.id == ui.session.projectId } ?: return
         scope.launch {
             val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
-            updateCodingSession(sessionId) { it.copy(worktreeAvailability = capability) }
+            publishWorktreeAvailability(project.id, capability)
             if (!capability.available) return@launch
             acceptCodingSession(ui.session, CodingMachine.Intent.SetWorktreeEnabled(CodingMachine.ref(ui.session), !ui.session.worktreeEnabled))
         }
@@ -2067,7 +2092,7 @@ class DefaultCodingService(
                 // не должна отправлять агента в исходную папку.
                 if ((request.worktreeEnabled == true || workspaceRecord != null) && current.interactionMode == CodingInteractionMode.CODE && current.stageId == null && current.sessionKind != SessionKind.SESSION) {
                     val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
-                    updateCodingSession(session.id) { it.copy(worktreeAvailability = capability) }
+                    publishWorktreeAvailability(project.id, capability)
                     if (workspaceRecord != null || capability.available) {
                         recorder.apply(CodingEvent.Notice("Подготовка worktree"))
                         workspaceRecord = checkNotNull(taskWorktrees).begin(project, session.id, checkNotNull(request.workspaceTaskId))
@@ -2393,9 +2418,10 @@ class DefaultCodingService(
         if (!started) { start(); return }
         val projects = codingProjects?.all().orEmpty()
         val sessions = loadCodingSessions(projects)
-        _state.update { old -> old.copy(coding = old.coding.copy(projects = projects, sessions = sessions,
+        _state.update { old -> old.copy(coding = old.coding.copy(projects = projects, sessions = sessions.map(::withWorktreeAvailability),
             current = old.coding.current?.takeIf { selected -> projects.any { it.id == selected.id } },
             currentSessionId = old.coding.currentSessionId?.takeIf { selected -> sessions.any { it.session.id == selected } })) }
+        projects.forEach(::refreshWorktreeAvailability)
     }
 
     override suspend fun activate(projectId: String?, sessionId: String?) {
