@@ -198,11 +198,14 @@ internal class DesktopAgentPanel(
 
     private fun applyVisibility() {
         val wanted = snapshot.value != null && (ownerMinimized || !ownerFocused)
-        if (!wanted) {
-            overlay?.isVisible = false
-            return
+        val window = overlay
+        when (dockVisibility(wanted, window != null, window?.isVisible == true)) {
+            DockVisibility.HIDDEN -> window?.isVisible = false
+            // A state emission arrives on every streamed token: an already-visible dock must
+            // keep its expansion instead of being reset to the tab below the reader's pointer.
+            DockVisibility.SHOW_COLLAPSED -> show()
+            DockVisibility.KEEP -> Unit
         }
-        show()
     }
 
     private fun show() {
@@ -421,6 +424,8 @@ internal class DesktopAgentPanel(
      * the middle from teleporting it.
      */
     private fun dragStart(x: Float, y: Float) {
+        boundsAnimation?.stop()
+        boundsAnimation = null
         grab = Point(x.roundToInt(), y.roundToInt())
     }
 
@@ -659,6 +664,21 @@ internal class DesktopAgentPanel(
 
     // endregion
 }
+
+/** What a state emission may do to the dock window. */
+internal enum class DockVisibility { HIDDEN, SHOW_COLLAPSED, KEEP }
+
+/**
+ * The dock's window outlives every state emission: showing it resets the reader's expansion,
+ * so an emission that arrives while it is already visible must leave it exactly as it is.
+ * Only a fresh appearance starts as the collapsed tab.
+ */
+internal fun dockVisibility(wanted: Boolean, windowCreated: Boolean, windowVisible: Boolean): DockVisibility =
+    when {
+        !wanted -> DockVisibility.HIDDEN
+        !windowCreated || !windowVisible -> DockVisibility.SHOW_COLLAPSED
+        else -> DockVisibility.KEEP
+    }
 
 /** Linear blend of two rectangles; [t] is already eased by the caller. */
 internal fun interpolateRect(from: Rectangle, to: Rectangle, t: Double): Rectangle {
