@@ -154,28 +154,21 @@ internal fun UnifiedSidebarItem.sidebarSubtitle(showProject: Boolean): String? =
     projectName.takeIf { showProject && !it.isNullOrBlank() },
 ).joinToString(" · ").takeIf { it.isNotBlank() }
 
-/** Keeps a runtime recency timestamp: creation first, then every visible status transition. */
+/**
+ * Keeps a runtime recency timestamp. A session rises only when it is created or starts working
+ * (a sent request); reading, finishing or waiting leave it in place, and stickiness keeps
+ * those sessions visible instead.
+ */
 internal class SessionRecencyTracker(private val now: () -> Long) {
     private val statuses = mutableMapOf<String, CodingSessionStatus>()
     private val activityTimes = mutableMapOf<String, Long>()
 
-    fun observe(
-        id: String,
-        status: CodingSessionStatus,
-        createdAt: Long,
-        persistedStatus: CodingSessionStatus? = null,
-        persistedStatusChangedAt: Long = 0,
-    ): Long {
+    /** [persistedActivityAt] is the durable position that survives a restart, at least creation. */
+    fun observe(id: String, status: CodingSessionStatus, persistedActivityAt: Long): Long {
         val previous = statuses.put(id, status)
-        return when {
-            previous == null -> activityTimes.getOrPut(id) {
-                if (persistedStatus == status && persistedStatusChangedAt > 0) persistedStatusChangedAt else createdAt
-            }
-            previous != status -> now().also { activityTimes[id] = it }
-            persistedStatus == status && persistedStatusChangedAt > activityTimes.getValue(id) ->
-                persistedStatusChangedAt.also { activityTimes[id] = it }
-            else -> activityTimes.getValue(id)
-        }
+        val started = previous != null && previous != status && status == CodingSessionStatus.WORKING
+        val time = if (started) now() else activityTimes[id] ?: persistedActivityAt
+        return maxOf(time, persistedActivityAt).also { activityTimes[id] = it }
     }
 }
 

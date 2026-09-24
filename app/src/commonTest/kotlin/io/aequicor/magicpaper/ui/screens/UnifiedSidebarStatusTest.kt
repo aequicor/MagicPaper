@@ -26,67 +26,70 @@ class UnifiedSidebarStatusTest {
     }
 
     @Test
-    fun newSessionsAreOrderedByCreationUntilTheirStatusChanges() {
+    fun sessionRisesOnlyWhenCreatedOrWhenItStartsWorking() {
         var now = 100L
         val tracker = SessionRecencyTracker { now }
 
-        val older = tracker.observe("older", CodingSessionStatus.IDLE, createdAt = 10)
-        val newer = tracker.observe("newer", CodingSessionStatus.IDLE, createdAt = 20)
+        val older = tracker.observe("older", CodingSessionStatus.IDLE, persistedActivityAt = 10)
+        val newer = tracker.observe("newer", CodingSessionStatus.IDLE, persistedActivityAt = 20)
         assertTrue(newer > older)
 
         now = 30
-        val changed = tracker.observe("older", CodingSessionStatus.WORKING, createdAt = 10)
-        assertTrue(changed > newer)
-        assertEquals(changed, tracker.observe("older", CodingSessionStatus.WORKING, createdAt = 10))
+        val started = tracker.observe("older", CodingSessionStatus.WORKING, persistedActivityAt = 10)
+        assertEquals(30, started)
+        assertTrue(started > newer)
+        assertEquals(started, tracker.observe("older", CodingSessionStatus.WORKING, persistedActivityAt = 10))
 
+        // Finishing, waiting for the user and reading the result keep the position.
         now = 40
-        assertEquals(now, tracker.observe("older", CodingSessionStatus.WAITING, createdAt = 10))
+        assertEquals(started, tracker.observe("older", CodingSessionStatus.WAITING, persistedActivityAt = 10))
+        now = 50
+        assertEquals(started, tracker.observe("older", CodingSessionStatus.UNREAD, persistedActivityAt = 10))
+        now = 60
+        assertEquals(started, tracker.observe("older", CodingSessionStatus.IDLE, persistedActivityAt = 10))
+        assertEquals(newer, tracker.observe("newer", CodingSessionStatus.UNREAD, persistedActivityAt = 20))
+        assertEquals(newer, tracker.observe("newer", CodingSessionStatus.IDLE, persistedActivityAt = 20))
+
+        now = 70
+        assertEquals(70, tracker.observe("newer", CodingSessionStatus.WORKING, persistedActivityAt = 20))
     }
 
     @Test
-    fun temporarilyMissingSessionKeepsItsActivityTimeWhenItReturns() {
-        var now = 30L
-        val tracker = SessionRecencyTracker { now }
-        tracker.observe("session", CodingSessionStatus.IDLE, createdAt = 10)
-        val workingAt = tracker.observe("session", CodingSessionStatus.WORKING, createdAt = 10)
-
-        // Repository refreshes can briefly omit a session while interruption is persisted.
-        now = 40
-        assertEquals(workingAt, tracker.observe("session", CodingSessionStatus.WORKING, createdAt = 10))
-        assertEquals(now, tracker.observe("session", CodingSessionStatus.IDLE, createdAt = 10))
-    }
-
-    @Test
-    fun restoredTrackerUsesPersistedStatusTransitionTime() {
+    fun restoredWorkingSessionKeepsItsPersistedPosition() {
         val tracker = SessionRecencyTracker { 100L }
 
-        assertEquals(
-            70L,
-            tracker.observe(
-                "session",
-                CodingSessionStatus.WAITING,
-                createdAt = 10,
-                persistedStatus = CodingSessionStatus.WAITING,
-                persistedStatusChangedAt = 70,
-            ),
-        )
+        assertEquals(70L, tracker.observe("session", CodingSessionStatus.WORKING, persistedActivityAt = 70))
     }
 
     @Test
-    fun trackerAcceptsStatusTimePersistedAfterItsFirstObservation() {
+    fun trackerAcceptsActivityPersistedAfterItsFirstObservation() {
         val tracker = SessionRecencyTracker { 100L }
-        assertEquals(10L, tracker.observe("session", CodingSessionStatus.WORKING, createdAt = 10))
+        assertEquals(10L, tracker.observe("session", CodingSessionStatus.WORKING, persistedActivityAt = 10))
 
-        assertEquals(
-            90L,
-            tracker.observe(
-                "session",
-                CodingSessionStatus.WORKING,
-                createdAt = 10,
-                persistedStatus = CodingSessionStatus.WORKING,
-                persistedStatusChangedAt = 90,
-            ),
+        assertEquals(90L, tracker.observe("session", CodingSessionStatus.WORKING, persistedActivityAt = 90))
+        assertEquals(90L, tracker.observe("session", CodingSessionStatus.IDLE, persistedActivityAt = 10))
+    }
+
+    @Test
+    fun archivingMovesToTheNextSessionAndSkipsTheLeavingSubtree() {
+        fun session(id: String, time: Long, children: List<UnifiedSidebarItem> = emptyList()) = UnifiedSidebarItem(
+            id, id, time, isCoding = true, projectName = "Project", projectId = "p", children = children,
         )
+        val chat = UnifiedSidebarItem("chat", "Chat", 5, isCoding = false)
+        val rows = sidebarFeedRows(groupUnifiedSidebarItems(listOf(
+            session("first", 10),
+            session("parent", 9, children = listOf(session("child", 8))),
+            chat,
+            session("last", 3),
+        )), emptySet())
+        fun next(id: String) = sessionAfterArchive(rows, rows.mapNotNull { it.session }.single { it.id == id })?.id
+
+        assertEquals("parent", next("first"))
+        assertEquals("chat", next("parent"))
+        assertEquals("chat", next("child"))
+        assertEquals("last", next("chat"))
+        assertEquals("chat", next("last"), "The last session hands the selection to the one above it")
+        assertEquals(null, sessionAfterArchive(sidebarFeedRows(groupUnifiedSidebarItems(listOf(chat)), emptySet()), chat))
     }
 
     @Test

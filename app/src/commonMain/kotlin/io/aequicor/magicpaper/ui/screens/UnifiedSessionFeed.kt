@@ -49,6 +49,23 @@ internal fun sidebarFeedRows(
     }
 }
 
+/**
+ * The session that takes over the selection when [archived] leaves the list: the next visible
+ * row below it, otherwise the nearest one above. Its own subtree may leave with it, so it is skipped.
+ */
+internal fun sessionAfterArchive(rows: List<SidebarFeedRow>, archived: UnifiedSidebarItem): UnifiedSidebarItem? {
+    fun keyOf(item: UnifiedSidebarItem) = "${if (item.isCoding) "coding" else "chat"}:${item.id}"
+    val leaving = buildSet {
+        fun collect(item: UnifiedSidebarItem) { add(keyOf(item)); item.children.forEach(::collect) }
+        collect(archived)
+    }
+    val sessions = rows.mapNotNull { it.session }
+    val index = sessions.indexOfFirst { keyOf(it) == keyOf(archived) }
+    if (index < 0) return null
+    return sessions.drop(index + 1).firstOrNull { keyOf(it) !in leaving }
+        ?: sessions.take(index).lastOrNull { keyOf(it) !in leaving }
+}
+
 @Composable
 internal fun UnifiedSessionFeed(
     groups: List<UnifiedSidebarGroup>,
@@ -72,6 +89,12 @@ internal fun UnifiedSessionFeed(
     val byKey = rows.associateBy { it.entry.key }
     fun retainViewport() {
         state.requestScrollToItem(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset)
+    }
+    // Archiving the open session moves the selection on instead of leaving an archived page open.
+    fun archive(item: UnifiedSidebarItem) {
+        val next = if (item.id == selectedId && item.isCoding == viewingCoding) sessionAfterArchive(rows, item) else null
+        onArchive(item)
+        next?.let { retainViewport(); onSelect(it.id, it.sourceId) }
     }
     // Hoist menus above lazy/pinned copies: scrolling cannot reset an open menu.
     var menuKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -131,7 +154,7 @@ internal fun UnifiedSessionFeed(
                             size = 24.dp,
                             onClick = {
                                 if (item.isCoding && item.codingStatus == CodingSessionStatus.WORKING) confirmArchive = item
-                                else onArchive(item)
+                                else archive(item)
                             },
                         )
                     }
@@ -151,7 +174,7 @@ internal fun UnifiedSessionFeed(
             title = "Архивировать сессию?",
             onDismissRequest = { confirmArchive = null },
             confirmLabel = "Остановить и архивировать",
-            onConfirm = { onArchive(item); confirmArchive = null },
+            onConfirm = { archive(item); confirmArchive = null },
             dismissLabel = "Отмена",
         ) {
             PaperText("Сессия «${item.displayName}» ещё работает. Она будет остановлена и заархивирована.")

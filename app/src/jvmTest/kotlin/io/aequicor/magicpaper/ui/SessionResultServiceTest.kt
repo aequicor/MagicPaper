@@ -26,6 +26,7 @@ class SessionResultServiceTest {
             val saved = JsonCodingProjectRepository(fixture.kv, fixture.json).sessions("p").single()
             assertEquals(CodingSessionStatus.NEEDS_TESTING, saved.lastStatus)
             assertTrue(saved.statusChangedAt > saved.createdAt)
+            assertEquals(saved.createdAt, saved.activatedAt, "Reading a result must not move the session up")
 
             first.close()
             val second = fixture.prepareCoding(

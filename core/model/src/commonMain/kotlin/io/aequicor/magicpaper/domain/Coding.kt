@@ -102,6 +102,11 @@ data class CodingSession(
     val lastStatus: CodingSessionStatus? = null,
     /** Time of [lastStatus]'s transition. Zero is a legacy marker and falls back to [createdAt]. */
     val statusChangedAt: Long = 0,
+    /**
+     * Sidebar recency: creation or the last transition into WORKING. Other status changes
+     * (reading, finishing) leave it alone. Zero is a legacy marker; see [sidebarActivityAt].
+     */
+    val activatedAt: Long = 0,
     /** Start of continuous readiness; null in older records until first observation. */
     val archiveReadySince: Long? = null,
     val mediaTools: SessionMediaTools = SessionMediaTools(),
@@ -841,6 +846,19 @@ fun CodingSession.sidebarTitle(): String = when {
     shortTitle.isBlank() -> name
     planningMode -> "\ud83d\uddd3\ufe0f $shortTitle"
     else -> shortTitle
+}
+
+/**
+ * Durable sidebar position: creation or the last start of work. A legacy record keeps its last
+ * status time until its next status change seeds [CodingSession.activatedAt] with it.
+ */
+fun CodingSession.sidebarActivityAt(): Long =
+    activatedAt.takeIf { it > 0 } ?: statusChangedAt.takeIf { it > 0 } ?: createdAt
+
+/** Folds a status observation into [CodingSession.activatedAt]; only a start of work moves it. */
+fun CodingSession.activatedAfter(status: CodingSessionStatus, at: Long): Long = when {
+    lastStatus != null && lastStatus != status && status == CodingSessionStatus.WORKING -> at
+    else -> sidebarActivityAt()
 }
 
 /**

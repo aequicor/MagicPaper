@@ -342,7 +342,8 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
             }
             is Fact.HistoryPublished -> Transition(publishHistory(state, input.session, input.messages))
             is Fact.StatusObserved -> change(state, input.session) { if (it.lastStatus == input.status) it else it.copy(lastStatus = input.status,
-                statusChangedAt = if (it.lastStatus == null) it.statusChangedAt.takeIf { at -> at > 0 } ?: it.createdAt else input.at) }
+                statusChangedAt = if (it.lastStatus == null) it.statusChangedAt.takeIf { at -> at > 0 } ?: it.createdAt else input.at,
+                activatedAt = it.activatedAfter(input.status, input.at)) }
             is Fact.ArchiveReadinessObserved -> change(state, input.session) {
                 if (it != input.expected || it.archived) it
                 else if (!input.ready) it.copy(archiveReadySince = null)

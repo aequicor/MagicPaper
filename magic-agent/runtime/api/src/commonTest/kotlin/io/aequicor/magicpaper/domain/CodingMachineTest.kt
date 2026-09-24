@@ -48,6 +48,29 @@ class CodingMachineTest {
         assertNull(apply(state, CodingMachine.Intent.SetProjectCodingModel(null)).project?.codingModel)
     }
 
+    @Test fun onlyAStartOfWorkMovesTheSidebarActivityTime() {
+        fun observe(state: CodingMachine.State, status: CodingSessionStatus, at: Long) =
+            apply(state, CodingMachine.Fact.StatusObserved(CodingMachine.ref(session), status, at))
+        val first = observe(ready(), CodingSessionStatus.WORKING, 10)
+        assertEquals(session.createdAt, first.sessions.getValue(session.id).activatedAt,
+            "The first observation seeds the record and does not look like new activity")
+        val unread = observe(first, CodingSessionStatus.UNREAD, 20)
+        val read = observe(unread, CodingSessionStatus.IDLE, 30)
+        assertEquals(session.createdAt, read.sessions.getValue(session.id).activatedAt)
+        assertEquals(30, read.sessions.getValue(session.id).statusChangedAt)
+        val sent = observe(read, CodingSessionStatus.WORKING, 40)
+        assertEquals(40, sent.sessions.getValue(session.id).activatedAt)
+        assertEquals(40, observe(sent, CodingSessionStatus.WAITING, 50).sessions.getValue(session.id).activatedAt)
+    }
+
+    @Test fun legacySessionKeepsItsLastStatusTimeAsItsSidebarPosition() {
+        val legacy = session.copy(lastStatus = CodingSessionStatus.UNREAD, statusChangedAt = 70)
+        assertEquals(70, legacy.sidebarActivityAt())
+        assertEquals(70, legacy.activatedAfter(CodingSessionStatus.IDLE, 90))
+        assertEquals(90, legacy.activatedAfter(CodingSessionStatus.WORKING, 90))
+        assertEquals(session.createdAt, session.sidebarActivityAt())
+    }
+
     @Test fun onlyAcceptedFreshRequestsProduceExecutionEffects() {
         val state = ready()
         val queued = apply(state, CodingMachine.Intent.Enqueue(CodingMachine.ref(session), request()))

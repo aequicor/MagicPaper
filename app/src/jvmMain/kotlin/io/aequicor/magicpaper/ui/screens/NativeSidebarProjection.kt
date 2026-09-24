@@ -74,13 +74,7 @@ internal fun rememberNativeSidebarItems(
                 val childItem = UnifiedSidebarItem(
                     id = childUi.session.id,
                     displayName = childUi.session.sidebarTitle(),
-                    sortTime = recencyTracker.observe(
-                        childUi.session.id,
-                        childUi.status,
-                        childUi.session.createdAt,
-                        childUi.session.lastStatus,
-                        childUi.session.statusChangedAt,
-                    ),
+                    sortTime = recencyTracker.observe(childUi.session.id, childUi.status, childUi.session.sidebarActivityAt()),
                     isCoding = true,
                     projectId = childUi.session.projectId,
                     codingStatus = childUi.status,
@@ -132,13 +126,9 @@ internal fun rememberNativeSidebarItems(
                     UnifiedSidebarItem(
                         id = sessionUi.session.id,
                         displayName = sessionUi.session.sidebarTitle(),
-                        sortTime = recencyTracker.observe(
-                            sessionUi.session.id,
-                            status,
-                            sessionUi.session.createdAt,
-                            sessionUi.session.lastStatus,
-                            sessionUi.session.statusChangedAt,
-                        ),
+                        // A task rises when any of its members starts working.
+                        sortTime = recencyTracker.observe(sessionUi.session.id, status,
+                            (memberUis + sessionUi).maxOf { it.session.sidebarActivityAt() }),
                         isCoding = true,
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
                         projectId = sessionUi.session.projectId,
@@ -152,13 +142,8 @@ internal fun rememberNativeSidebarItems(
                     UnifiedSidebarItem(
                         id = sessionUi.session.id,
                         displayName = sessionUi.session.sidebarTitle(),
-                        sortTime = recencyTracker.observe(
-                            sessionUi.session.id,
-                            sessionUi.status,
-                            sessionUi.session.createdAt,
-                            sessionUi.session.lastStatus,
-                            sessionUi.session.statusChangedAt,
-                        ),
+                        sortTime = recencyTracker.observe(sessionUi.session.id, sessionUi.status,
+                            sessionUi.session.sidebarActivityAt()),
                         isCoding = true,
                         projectName = coding.projects.firstOrNull { it.id == sessionUi.session.projectId }?.name,
                         projectId = sessionUi.session.projectId,

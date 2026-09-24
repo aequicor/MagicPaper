@@ -167,15 +167,18 @@ class UnifiedSessionFeedRenderTest {
     @Test fun wheelOverPinnedRowsContinuesScrollingAndHoverRevealsActions() {
         val state = LazyListState(firstVisibleItemIndex = 8)
         var archived: String? = null
+        var selectedAfterArchive: String? = null
         fun markUnread(item: UnifiedSidebarItem): UnifiedSidebarItem = item.copy(
             unread = item.id == "child-5",
             children = item.children.map(::markUnread),
         )
         val groups = sidebarPreviewGroups().map { group -> group.copy(items = group.items.map(::markUnread)) }
+        val rows = sidebarFeedRows(groups, emptySet())
+        val expectedNext = assertNotNull(sessionAfterArchive(rows, rows.mapNotNull { it.session }.single { it.id == "child-5" }))
         ImageComposeScene(320, 420) {
             PaperTheme {
                 UnifiedSessionFeed(groups, "child-5", true, emptySet(), {},
-                    { _, _ -> }, { archived = it.id }, {}, { _, _ -> }, state = state)
+                    { id, _ -> selectedAfterArchive = id }, { archived = it.id }, {}, { _, _ -> }, state = state)
             }
         }.use { scene ->
             scene.settle()
@@ -210,6 +213,7 @@ class UnifiedSessionFeedRenderTest {
             scene.save("hover-actions")
             assertTrue(archive.config[SemanticsActions.OnClick].action!!.invoke())
             assertEquals("child-5", archived)
+            assertEquals(expectedNext.id, selectedAfterArchive, "Archiving the open session opens the next one")
             repeat(8) {
                 scene.sendPointerEvent(PointerEventType.Scroll, Offset(160f, 30f), scrollDelta = Offset(0f, 4f),
                     type = PointerType.Mouse)
