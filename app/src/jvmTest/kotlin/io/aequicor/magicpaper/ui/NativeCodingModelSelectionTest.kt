@@ -130,6 +130,45 @@ class NativeCodingModelSelectionTest {
         } finally { Dispatchers.resetMain() }
     }
 
+    /**
+     * The person configures a session, sends it a task and asks for another session from the sidebar. Navigating to
+     * the project clears the open session, and a newer session that a background run touched later looks more recent;
+     * neither may decide the template. The mark survives a restart.
+     */
+    @Test fun newSessionTakesTheConfigurationOfTheSessionThePersonLastWorkedWith() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val f = ModelSettingsFixture(); f.seed()
+            val repo = JsonCodingProjectRepository(f.kv, f.json)
+            repo.save(project)
+            repo.saveSession(session)
+            val busy = CodingSession("busy", project.id, "Background", 5, engine = CodingEngine.CODEX, featureFlags = native,
+                lastStatus = CodingSessionStatus.IDLE, statusChangedAt = Long.MAX_VALUE / 2)
+            repo.saveSession(busy)
+            val service = f.prepareCoding(runtime, repo, models = catalog()); runCurrent()
+            service.activate(project.id, session.id); runCurrent()
+            service.selectNativeCodingModel(session.id, pick(astra, "ultra")); runCurrent()
+            service.changeCodingInteractionMode(session.id, CodingInteractionMode.RESEARCH); runCurrent()
+            service.setMediaToolEnabled(session.id, MediaKind.IMAGE, false); runCurrent()
+            service.sendCodingPromptTo(session.id, "Сделай задачу"); runCurrent()
+            service.close()
+
+            val restarted = f.prepareCoding(runtime, JsonCodingProjectRepository(f.kv, f.json), models = catalog()); runCurrent()
+            restarted.activate(project.id, null); runCurrent()
+            assertNull(restarted.state.value.coding.currentSessionId, "the sidebar route opens the project without a session")
+            val draft = assertNotNull(restarted.sessionCreationDraft(project.id))
+            draft.update(CodingEngine.CODEX); draft.awaitSaved()
+            var created: String? = null
+            restarted.createCodingSession(project.id) { created = it }
+            advanceUntilIdle()
+            val next = JsonCodingProjectRepository(f.kv, f.json).sessions(project.id).single { it.id == assertNotNull(created) }
+            assertEquals(pick(astra, "ultra"), next.codingModel)
+            assertEquals(CodingInteractionMode.RESEARCH, next.interactionMode)
+            assertEquals(SessionMediaTools(images = false), next.mediaTools)
+            restarted.close()
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun imageIsRejectedByTheModelsOwnDeclarationBeforeAnythingIsSent() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

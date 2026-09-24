@@ -12,15 +12,16 @@ class CodingSessionTemplateTest {
     private val fresh = CodingSession("new", "p", "Новая сессия", 20, engine = CodingEngine.CODEX,
         modelSelection = ModelSelection("favorite", "default"))
 
-    @Test fun openConversationWinsOverAMoreRecentOne() {
+    @Test fun lastUsedConversationWinsOverANewerOne() {
         val older = last.copy(id = "older", createdAt = 1)
         assertEquals("older", listOf(older, last).lastConversation("older")?.id)
         assertEquals("last", listOf(older, last).lastConversation(null)?.id)
     }
 
-    @Test fun recencyCountsTheLastStatusChangeNotOnlyCreation() {
-        val active = last.copy(id = "active", createdAt = 1, statusChangedAt = 50)
-        assertEquals("active", listOf(active, last).lastConversation("elsewhere")?.id)
+    @Test fun aBackgroundStatusChangeDoesNotMakeASessionTheTemplate() {
+        val busy = last.copy(id = "busy", createdAt = 1, statusChangedAt = 50)
+        assertEquals("last", listOf(busy, last).lastConversation(null)?.id)
+        assertEquals("last", listOf(busy, last).lastConversation("deleted")?.id, "a removed session falls back to the newest")
     }
 
     @Test fun planningStagesAndWorkersAreNeverTemplates() {
@@ -28,6 +29,7 @@ class CodingSessionTemplateTest {
         val stage = last.copy(id = "stage", createdAt = 99, stageId = "s", role = CodingSessionRole.WORKER)
         assertEquals("last", listOf(last, planning, stage).lastConversation("plan")?.id)
         assertNull(listOf(planning, stage).lastConversation(null))
+        assertFalse(planning.isConversation); assertFalse(stage.isConversation); assertTrue(last.isConversation)
     }
 
     @Test fun parametersCarryOverIntoTheNewSession() {

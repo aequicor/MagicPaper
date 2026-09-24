@@ -107,7 +107,7 @@ class DefaultCodingService(
         val selected = _state.value.coding.sessions.firstOrNull { it.session.id == sessionId } ?: return
         scope.launch {
             try {
-                acceptCodingSession(selected.session, CodingMachine.Intent.SetMediaTool(CodingMachine.ref(selected.session), kind, enabled))
+                rememberLastUsedSession(acceptCodingSession(selected.session, CodingMachine.Intent.SetMediaTool(CodingMachine.ref(selected.session), kind, enabled)))
                 AppLog.info("coding", "media.policy.changed", mapOf("sessionId" to sessionId,
                     "kind" to kind.name, "enabled" to enabled.toString()))
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -204,10 +204,30 @@ class DefaultCodingService(
                 _state.value.settings.defaultCodingEngine, scope, json)
         }
     }
+    /**
+     * The conversation a person last worked with in each project, kept across restarts: a new session there starts
+     * with its parameters. Configuring a session, sending it a task and creating it update the mark; opening one
+     * does not, and neither does a background run.
+     */
+    private fun lastUsedSessionId(projectId: String): String? = store.read(lastUsedSessionKey(projectId))
+    private fun rememberLastUsedSession(session: CodingSession) {
+        if (!session.isConversation) return
+        try { store.write(lastUsedSessionKey(session.projectId), session.id) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) {
+            AppLog.error("coding", "session.last-used.save.failed", failure, mapOf("projectId" to session.projectId, "sessionId" to session.id))
+            _state.update { it.copy(notice = "Не удалось запомнить параметры сессии для новых сессий.") }
+        }
+    }
+    private fun lastUsedSessionKey(projectId: String) = "coding-session-last-used:$projectId"
+
     private suspend fun removeSessionCreationDraft(projectId: String) {
         deletedDraftProjectIds += projectId
         sessionCreationDrafts.remove(projectId)?.revoke()
         _sessionCreationStatus.update { it - projectId }
+        try { store.delete(lastUsedSessionKey(projectId)) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { AppLog.error("coding", "session.last-used.remove.failed", failure, mapOf("projectId" to projectId)) }
         try { draftRepository.remove("coding-session-create:$projectId") }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
@@ -903,6 +923,7 @@ class DefaultCodingService(
         if ((!ui.session.planningMode || forProject) && !profile.supportsCoding) return
         val updated = ui.session.copy(modelSelection = selection, llmProfileId = selection.profileId)
         updateCodingSession(sessionId) { it.copy(session = updated) }
+        rememberLastUsedSession(updated)
         scope.launch {
             if (updated.stageId != null && updated.planId != null) {
                 val effort = EffortSelection.ofOrNull(ModelDefaults.capability(profile).resolveEffort(selection.effort).level)
@@ -942,6 +963,7 @@ class DefaultCodingService(
         }
         val updated = ui.session.copy(codingModel = selection)
         updateCodingSession(sessionId) { it.copy(session = updated) }
+        rememberLastUsedSession(updated)
         AppLog.info("coding", "model.native.selected", mapOf("sessionId" to sessionId, "engine" to selection.engine.name, "forProject" to forProject.toString()))
         scope.launch { acceptCodingSession(ui.session, CodingMachine.Intent.SetSessionCodingModel(CodingMachine.ref(ui.session), selection)) }
         if (forProject) {
@@ -1290,7 +1312,8 @@ class DefaultCodingService(
             draft.awaitSaved()
             val project = repo.all().firstOrNull { it.id == projectId }
             check(project != null && projectId !in deletingCodingProjects.value) { "Project unavailable" }
-            val template = repo.sessions(projectId).lastConversation(_state.value.coding.currentSessionId)
+            val lastUsed = lastUsedSessionId(projectId)
+            val template = repo.sessions(projectId).lastConversation(lastUsed)
             val session = CodingSession(id = Id.new(), projectId = projectId, name = "Новая сессия",
                 engine = point.value, createdAt = Id.now(),
                 codingModel = project.codingModel?.takeIf { it.engine == point.value },
@@ -1300,10 +1323,11 @@ class DefaultCodingService(
             AppLog.debug("coding", "session.parameters.inherited", mapOf("projectId" to projectId,
                 "templateSessionId" to (template?.id ?: "none"), "reason" to when {
                     template == null -> "no-conversation"
-                    template.id == _state.value.coding.currentSessionId -> "open-session"
-                    else -> "most-recent"
+                    template.id == lastUsed -> "last-used"
+                    else -> "newest"
                 }))
             repo.dispatch(projectId, CodingMachine.Intent.CreateSession(session))
+            rememberLastUsedSession(session)
             // The entity now exists. A later cleanup/presentation failure must not invite another create.
             _state.update { it.copy(coding = it.coding.copy(
                 sessions = it.coding.sessions.withSessionFirst(CodingSessionUi(session = session)),
@@ -1558,6 +1582,7 @@ class DefaultCodingService(
                 val updated = if (selected.session.organismId != null && planningChat != null)
                     planningChat.changeManagedInteractionMode(selected.session, mode)
                 else acceptCodingSession(selected.session, CodingMachine.Intent.ChangeMode(CodingMachine.ref(selected.session), mode))
+                rememberLastUsedSession(updated)
                 if (updated.interactionMode != CodingInteractionMode.CODE) codingRuntime?.computerUse?.disable(sessionId)
                 if (selected.session.interactionMode != updated.interactionMode) {
                     appendCodingMessage(updated, CodingMessage(Id.new(), CodingRole.AGENT,
@@ -1586,7 +1611,7 @@ class DefaultCodingService(
             val capability = taskWorktrees?.availability(project) ?: WorktreeAvailability(false, "Worktree недоступен на этой платформе")
             publishWorktreeAvailability(project.id, capability)
             if (!capability.available) return@launch
-            acceptCodingSession(ui.session, CodingMachine.Intent.SetWorktreeEnabled(CodingMachine.ref(ui.session), !ui.session.worktreeEnabled))
+            rememberLastUsedSession(acceptCodingSession(ui.session, CodingMachine.Intent.SetWorktreeEnabled(CodingMachine.ref(ui.session), !ui.session.worktreeEnabled)))
         }
     }
 
@@ -1596,6 +1621,7 @@ class DefaultCodingService(
             try {
                 val updated = acceptCodingSession(selected.session, CodingMachine.Intent.SetFeatureFlag(CodingMachine.ref(selected.session),
                     flag, !selected.session.featureFlags.resolve(_state.value.settings.featureFlags).isEnabled(flag)))
+                rememberLastUsedSession(updated)
                 // Sync to runtime if this is the active session
                 codingRuntime?.globalFeatureFlags = _state.value.settings.featureFlags
                 val flagEnabled = updated.featureFlags.resolve(_state.value.settings.featureFlags).isEnabled(flag)
@@ -1633,6 +1659,7 @@ class DefaultCodingService(
         if (text.isBlank() && attachments.isEmpty()) return
         val request = CodingRunCheckpoint(Id.new(), text.trim(), attachments, interactionMode = selected.interactionMode, worktreeEnabled = selected.worktreeEnabled)
         if (!validateInput(selected, attachments, request.messageId)) return
+        rememberLastUsedSession(selected)
         val composer = composerDrafts[sessionId]
         val version = composer?.version
         scope.launch {
