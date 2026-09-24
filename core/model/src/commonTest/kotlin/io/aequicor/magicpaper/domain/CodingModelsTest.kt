@@ -63,6 +63,18 @@ class CodingModelsTest {
         assertNull(plain.levelLabel(null), "a model without thinking has no level to show")
     }
 
+    @Test fun levelIsShownByTheEnginesNameWhileTheSelectionKeepsItsValue() {
+        val claude = CodingModel("anthropic", "opus", levels = listOf("high", "xhigh", "ultracode"), defaultLevel = "xhigh",
+            levelNames = mapOf("xhigh" to "extra"))
+        assertEquals("extra", claude.levelLabel("xhigh"))
+        assertEquals("по умолчанию: extra", claude.levelLabel(null))
+        assertEquals("ultracode", claude.levelLabel("ultracode"))
+        val selection = CodingModelSelection(CodingEngine.CLAUDE_CODE, "anthropic", "opus", "ultracode")
+        assertEquals(EffortSelection.of(ReasoningEffort.XHIGH), selection.displayEffort(), "ultracode runs at xhigh effort")
+        assertEquals("extra", ReasoningPresets.CLAUDE_CODE_EFFORT.levelName(ReasoningEffort.XHIGH))
+        assertEquals("xhigh", ReasoningPresets.OPENAI_EFFORT.levelName(ReasoningEffort.XHIGH), "other vendors keep the scale's name")
+    }
+
     @Test fun sessionsAndProjectsSavedBeforeNativeSelectionStillDecode() {
         val json = Json { ignoreUnknownKeys = true }
         val session = json.decodeFromString<CodingSession>("""{"id":"s","projectId":"p","name":"old","createdAt":1}""")

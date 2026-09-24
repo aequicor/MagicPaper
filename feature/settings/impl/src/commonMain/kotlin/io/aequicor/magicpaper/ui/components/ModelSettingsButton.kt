@@ -35,7 +35,7 @@ fun renderModelSettingsButton(
     val effort = selection?.effort ?: EffortSelection.Default
     val resolved = capability?.resolveEffort(effort)
     val effortLabel = if (effort == EffortSelection.Default) "Auto"
-        else resolved?.level?.shortLabel ?: "Auto"
+        else resolved?.level?.let { capability?.levelName(it) } ?: "Auto"
     Box(modifier) {
         PaperAction(
             onClick = { if (profile == null) onChoose() else expanded = true },

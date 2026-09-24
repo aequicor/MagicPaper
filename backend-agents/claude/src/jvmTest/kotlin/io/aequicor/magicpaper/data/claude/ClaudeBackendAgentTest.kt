@@ -164,7 +164,14 @@ exit 1""")
             val models = checkNotNull(f.agent().use { it.models }).models()
             assertEquals(listOf("fable", "opus", "sonnet", "haiku"), models.map { it.id })
             assertTrue(models.all { it.provider == "anthropic" })
-            assertEquals(listOf("low", "medium", "high"), models.single { it.id == "sonnet" }.levels)
+            val full = listOf("low", "medium", "high", "xhigh", "max", "ultracode")
+            listOf("fable", "opus", "sonnet").forEach { id ->
+                assertEquals(full, models.single { it.id == id }.levels, "$id resolves to an xhigh- and max-capable model")
+            }
+            assertEquals(mapOf("fable" to "high", "opus" to "medium", "sonnet" to "high"),
+                models.filter { it.supportsLevels }.associate { it.id to it.defaultLevel }, "The model's own effort when none is chosen")
+            assertEquals(listOf("low", "medium", "high", "extra", "max", "ultracode"),
+                models.single { it.id == "opus" }.let { opus -> opus.levels.map(opus::levelName) }, "Names as Claude's picker shows them")
             assertFalse(models.single { it.id == "haiku" }.supportsLevels)
         }
     }

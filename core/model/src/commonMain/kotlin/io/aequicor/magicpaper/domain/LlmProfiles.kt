@@ -190,8 +190,8 @@ data class LlmProfile(
         modelId: String = this.modelId,
     ): String {
         val resolved = resolveEffort(capability, modelId)
-        val shown = resolved.level?.shortLabel ?: EffortSelection.DEFAULT_LABEL
-        return if (resolved.clamped) "${resolved.requested?.shortLabel ?: shown}→$shown" else shown
+        val shown = resolved.level?.let(capability::levelName) ?: EffortSelection.DEFAULT_LABEL
+        return if (resolved.clamped) "${resolved.requested?.let(capability::levelName) ?: shown}→$shown" else shown
     }
 
     /**

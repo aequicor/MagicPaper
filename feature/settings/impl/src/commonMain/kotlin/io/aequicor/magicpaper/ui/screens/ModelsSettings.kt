@@ -150,8 +150,9 @@ private fun LibraryModelRow(profile: LlmProfile, model: String, state: SettingsS
                         PaperAction(onClick = { uriHandler.openUri(url) }) { PaperText("Источник ${index + 1}", style = paperTextStyle(PaperTextRole.LABEL)) }
                     }
                 }
-                val levels = ModelDefaults.capability(profile, model).selectableLevels
-                if (levels.isNotEmpty()) PaperText("Effort: ${levels.joinToString(" · ") { it.shortLabel }}", style = paperTextStyle(PaperTextRole.LABEL))
+                val capability = ModelDefaults.capability(profile, model)
+                val levels = capability.selectableLevels
+                if (levels.isNotEmpty()) PaperText("Effort: ${levels.joinToString(" · ") { capability.levelName(it) }}", style = paperTextStyle(PaperTextRole.LABEL))
                 PaperText("Контекст: ${fact?.contextWindow ?: "не указан"} · Максимальный ответ: ${fact?.maxOutputTokens ?: "не указан"}", style = paperTextStyle(PaperTextRole.LABEL))
                 PaperText("Настраиваемые параметры: ${fact?.supportedParameters?.joinToString()?.ifBlank { "не объявлены" } ?: "поставщик не указал"}", style = paperTextStyle(PaperTextRole.LABEL))
                 PaperText("Параметры по умолчанию: ${fact?.defaultParameters?.entries?.joinToString { "${it.key} = ${it.value}" }?.ifBlank { "поставщик не указал" } ?: "поставщик не указал"}", style = paperTextStyle(PaperTextRole.LABEL))

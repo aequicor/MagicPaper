@@ -24,8 +24,13 @@ data class CodingModel(
     /** Уровень, который движок применяет, когда пользователь ничего не выбрал; null — движок его не объявил. */
     val defaultLevel: String? = null,
     val acceptsImages: Boolean = false,
+    /** Как движок показывает уровень, если имя в его интерфейсе не совпадает со значением (Claude: `xhigh` — «extra»). */
+    val levelNames: Map<String, String> = emptyMap(),
 ) {
     val supportsLevels: Boolean get() = levels.isNotEmpty()
+
+    /** Имя уровня в интерфейсе движка; движку при этом уходит сам [level]. */
+    fun levelName(level: String): String = levelNames[level] ?: level
 
     /**
      * Подпись уровня для чипа и диалога: выбранный уровень либо реальное умолчание движка
@@ -33,8 +38,8 @@ data class CodingModel(
      */
     fun levelLabel(level: String?): String? = when {
         !supportsLevels -> null
-        level != null -> level
-        defaultLevel != null -> "по умолчанию: $defaultLevel"
+        level != null -> levelName(level)
+        defaultLevel != null -> "по умолчанию: ${levelName(defaultLevel)}"
         else -> "по умолчанию"
     }
 }

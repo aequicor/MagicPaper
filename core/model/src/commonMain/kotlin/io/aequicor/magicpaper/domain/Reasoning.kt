@@ -63,6 +63,8 @@ enum class ReasoningEffort(val wire: String, val label: String, val shortLabel: 
                 "min", "minimum" -> MINIMAL
                 "med", "mid", "middle" -> MEDIUM
                 "x_high", "extrahigh", "extra_high" -> XHIGH
+                // Claude Code: ultracode — это xhigh плюс оркестрация workflow, по усилию он равен xhigh.
+                "ultracode" -> XHIGH
                 "ultra", "maximum", "highest" -> MAX
                 "dynamic" -> AUTO
                 else -> null
@@ -193,6 +195,7 @@ sealed interface ReasoningCapability {
      * @param mandatory мышление нельзя выключить — уровень NONE не предлагается
      * @param overrides вендорские подмены, применяемые до поиска по расстоянию (Kimi K3: medium → high)
      * @param budget границы бюджета токенов для диалектов с бюджетом
+     * @param names имена уровней в словаре вендора, если он зовёт уровень иначе, чем шкала (Claude: xhigh — «extra»)
      */
     data class Controls(
         val values: Set<ReasoningEffort>,
@@ -201,8 +204,13 @@ sealed interface ReasoningCapability {
         val mandatory: Boolean = false,
         val overrides: Map<ReasoningEffort, ReasoningEffort> = emptyMap(),
         val budget: TokenRange? = null,
+        val names: Map<ReasoningEffort, String> = emptyMap(),
     ) : ReasoningCapability
 }
+
+/** Имя уровня для чипов: как его называет вендор модели, иначе привычное имя шкалы. */
+fun ReasoningCapability.levelName(level: ReasoningEffort): String =
+    (this as? ReasoningCapability.Controls)?.names?.get(level) ?: level.shortLabel
 
 /**
  * Что провайдер сам объявил о модели в своём каталоге (`/models`). Это факт,
@@ -259,6 +267,7 @@ fun ReasoningCapability.withDeclared(declared: DeclaredReasoning): ReasoningCapa
         mandatory = mandatory,
         overrides = controls?.overrides.orEmpty(),
         budget = controls?.budget,
+        names = controls?.names.orEmpty(),
     )
 }
 
@@ -390,10 +399,14 @@ object ReasoningPresets {
         dialect = WireDialect.EFFORT,
     )
 
-    /** Claude Code `--effort`: уровень выбирает сам CLI, если не задан; выключить мышление нельзя. */
+    /**
+     * Claude Code `--effort`: уровень выбирает сам CLI, если не задан; выключить мышление нельзя.
+     * В `--effort` уходит `xhigh`, а пикер Claude называет этот уровень «Extra».
+     */
     val CLAUDE_CODE_EFFORT = ReasoningCapability.Controls(
         values = setOf(ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.XHIGH, ReasoningEffort.MAX),
         dialect = WireDialect.EFFORT,
+        names = mapOf(ReasoningEffort.XHIGH to "extra"),
     )
 
     /** Самохостed-серверы с `reasoning_effort` (DeepSeek V4, Kimi, Qwen). */

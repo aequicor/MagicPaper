@@ -82,6 +82,24 @@ class ClaudeLaunchTest {
         assertEquals("high", args(EffortSelection.of(ReasoningEffort.HIGH)).let { it[it.indexOf("--effort") + 1] })
     }
 
+    @Test fun ultracodeRunsAtXhighWithTheSessionsWorkflowSetting() {
+        fun launch(level: String?, mode: CodingInteractionMode = CodingInteractionMode.CODE, engine: CodingEngine = CodingEngine.CLAUDE_CODE): ClaudeLaunch {
+            val choice = CodingModelSelection(engine, "anthropic", "opus", level)
+            val base = request(mode, profile(effort = choice.displayEffort()))
+            return ClaudeCommand.build("c", base.copy(session = base.session.copy(codingModel = choice)), files, ClaudeMcpServers.None, null)
+        }
+        val ultracode = launch("ultracode")
+        assertEquals("xhigh", ultracode.value("--effort"), "--effort does not take ultracode; it runs at xhigh")
+        assertEquals("""{"ultracode":true}""", ultracode.value("--settings"))
+        val xhigh = launch("xhigh")
+        assertEquals("xhigh", xhigh.value("--effort"))
+        assertTrue("--settings" !in xhigh.arguments, "Only ultracode turns on workflow orchestration")
+        val readOnly = launch("ultracode", CodingInteractionMode.PLANNING)
+        assertEquals("xhigh", readOnly.value("--effort"))
+        assertTrue("--settings" !in readOnly.arguments, "A read-only run has no Workflow tool to orchestrate with")
+        assertTrue("--settings" !in launch("ultracode", engine = CodingEngine.CODEX).arguments, "Another engine's choice is not Claude's mode")
+    }
+
     @Test fun ownSignInIsUsedUnlessTheProfileHoldsAKey() {
         assertTrue(ClaudeCommand.build("c", request(), files, ClaudeMcpServers.None, null).environment.isEmpty())
         val keyed = ClaudeCommand.build("c", request(profile = profile(key = "sk-1")), files, ClaudeMcpServers.None, null).environment

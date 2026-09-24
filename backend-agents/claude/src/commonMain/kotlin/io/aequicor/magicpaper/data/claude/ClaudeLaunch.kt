@@ -51,6 +51,13 @@ internal object ClaudeCommand {
     val WEB_TOOLS = listOf("WebSearch", "WebFetch")
 
     /**
+     * The CLI's ultracode level: xhigh effort plus standing dynamic-workflow orchestration. `--effort` does not take
+     * it; the CLI enables it per session through the `ultracode` settings key.
+     */
+    const val ULTRACODE = "ultracode"
+    private const val ULTRACODE_SETTINGS = """{"ultracode":true}"""
+
+    /**
      * Inherited settings that would route a subscription request elsewhere: a key or token bills the API, a base URL
      * or a cloud switch leaves Anthropic. A subscription run drops them, so the CLI answers on its own sign-in.
      */
@@ -78,7 +85,11 @@ internal object ClaudeCommand {
             add(executable)
             addAll(listOf("-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"))
             addAll(listOf("--model", request.profile.modelId))
-            request.profile.effort.level?.let(::effortName)?.let { addAll(listOf("--effort", it)) }
+            val ultracode = request.session.codingModel?.takeIf { it.engine == CodingEngine.CLAUDE_CODE }?.level == ULTRACODE
+            val effort = if (ultracode) effortName(ReasoningEffort.XHIGH) else request.profile.effort.level?.let(::effortName)
+            effort?.let { addAll(listOf("--effort", it)) }
+            // A read-only run is not offered the Workflow tool, so there ultracode can only mean its xhigh effort.
+            if (ultracode && !restricted) addAll(listOf("--settings", ULTRACODE_SETTINGS))
             addAll(listOf("--append-system-prompt-file", files.systemPrompt))
             if (restricted) {
                 addAll(listOf("--tools", READ_ONLY_TOOLS.joinToString(",")))

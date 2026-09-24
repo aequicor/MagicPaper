@@ -66,7 +66,7 @@ fun NativeCodingModelDialog(
                     "Сохранённой модели «${selection?.modelId}» нет в каталоге движка. Выберите другую или обновите список.",
                     role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
                 is CodingModelResolution.LevelUnsupported -> PaperText(
-                    "Модель ${current.model.name} не поддерживает уровень «${current.level}». Выберите один из доступных.",
+                    "Модель ${current.model.name} не поддерживает уровень «${current.model.levelName(current.level)}». Выберите один из доступных.",
                     role = PaperTextRole.LABEL, color = LocalPaperColors.current.secondaryText)
                 else -> Unit
             }
@@ -94,7 +94,7 @@ internal fun NativeLevelControl(model: CodingModel, level: String?, onSelect: (S
                 label = model.levelLabel(null).orEmpty(), modifier = Modifier.padding(0.dp))
             model.levels.forEach { candidate ->
                 PaperChoice(selected = level == candidate, onSelect = { onSelect(candidate) },
-                    label = candidate, modifier = Modifier.padding(0.dp))
+                    label = model.levelName(candidate), modifier = Modifier.padding(0.dp))
             }
         }
     }

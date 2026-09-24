@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.domain.EffortSelection
 import io.aequicor.magicpaper.domain.ReasoningCapability
+import io.aequicor.magicpaper.domain.levelName
 import io.aequicor.magicpaper.domain.resolveEffort
 import io.aequicor.magicpaper.domain.selectableLevels
 import io.aequicor.magicpaper.designsystem.*
@@ -18,7 +19,8 @@ import io.aequicor.magicpaper.designsystem.*
 /**
  * Управление усилием по возможностям конкретной модели: чип `default` и только
  * те уровни, которые модель объявила ([selectableLevels]). Имена — привычные
- * для других агентов: `off/min/low/medium/high/xhigh/max/auto`.
+ * для других агентов: `off/min/low/medium/high/xhigh/max/auto`, либо вендорские,
+ * если модель их объявила ([levelName]).
  * Слайдера нет: провайдеры принимают дискретные значения, а не числа.
  *
  * Унаследованный уровень (из профиля по умолчанию или из выбора для другой
@@ -63,7 +65,7 @@ fun renderEffortControl(
             levels.forEach { level ->
                 val value = EffortSelection.of(level)
                 EffortChip(
-                    title = level.shortLabel,
+                    title = capability.levelName(level),
                     value = value,
                     current = selection,
                     onSelect = onSelect,
