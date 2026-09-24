@@ -12,6 +12,9 @@ internal class OwnedGitCommands(private val checks: CommandChecks, private val r
     private val readOnly: Boolean = false,
     private val register: (CheckRef, Set<String>) -> Unit = { _, _ -> }) {
     private val sequence = AtomicInteger()
+    /** A command that may change files went past admission: a later refusal no longer means that nothing ran. */
+    @Volatile var changing = false
+        private set
     suspend fun read(dir: File, query: CheckGitReadQuery): ByteArray = execute(dir, query.arguments(),
         CheckPolicy.GIT_READ_ONLY, emptyMap())
     suspend fun write(dir: File, arguments: List<String>, environment: Map<String, String>): ByteArray = execute(dir,
@@ -44,9 +47,15 @@ internal class OwnedGitCommands(private val checks: CommandChecks, private val r
         val ref = CheckRef(scope, "$operationId:${sequence.incrementAndGet()}")
         val affected = affectedResources + dir.canonicalPath + gitMetadataResources(dir)
         register(ref, affected) // Before admission: release must never miss an uncertain command or destination.
-        return ref to checks.run(CheckCommand(ref, dir.canonicalPath, arguments, policy = policy,
-            outputMode = mode, environment = environment, protectedResource = resource, affectedResources = affected,
-            spawnGranted = spawnGranted))
+        val writes = policy != CheckPolicy.GIT_READ_ONLY
+        val result = try {
+            checks.run(CheckCommand(ref, dir.canonicalPath, arguments, policy = policy,
+                outputMode = mode, environment = environment, protectedResource = resource, affectedResources = affected,
+                spawnGranted = spawnGranted))
+        } catch (busy: CheckResourceBusy) { throw busy }
+        catch (failure: Throwable) { if (writes) changing = true; throw failure }
+        if (writes) changing = true
+        return ref to result
     }
     companion object {
         fun readOnly(checks: CommandChecks, path: String): OwnedGitCommands {

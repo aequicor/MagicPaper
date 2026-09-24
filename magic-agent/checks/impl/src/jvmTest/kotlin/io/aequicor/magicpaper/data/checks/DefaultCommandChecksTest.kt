@@ -351,6 +351,26 @@ class DefaultCommandChecksTest {
         assertNull(result?.exitCode); assertEquals("Проверка отменена", result?.blockedReason)
     } }
 
+    /** Task copies of one repository share its Git storage: a neighbour's running check refuses them before they start. */
+    @Test fun commandSharingAResourceWithAnotherWorkspacesRunningCheckIsBusyAndNeverStarts() = runTest { fixture { path, events, payloads, driver ->
+        val sibling = Files.createTempDirectory("check-owner-sibling-").toRealPath()
+        try {
+            val owner = DefaultCommandChecks(events, payloads, driver)
+            val released = CompletableDeferred<Unit>()
+            driver.onReleased = { released.complete(Unit) }
+            driver.awaitCompletion = CompletableDeferred()
+            val running = async { owner.run(command(path).copy(affectedResources = setOf(sibling.toString()))) }
+            released.await()
+            val neighbour = CheckCommand(CheckRef(CheckScope("project", "neighbour", "request", 0), "call"), sibling.toString(), listOf("tool"))
+            assertFailsWith<CheckResourceBusy> { owner.run(neighbour) }
+            assertEquals(1, driver.prepares)
+            checkNotNull(driver.awaitCompletion).complete(Unit)
+            assertEquals(0, running.await().exitCode)
+            // The refusal is journaled as not started, so a lease that registered the command can still be released.
+            assertNotNull(owner.inspect(neighbour.ref)?.blockedReason)
+        } finally { Files.deleteIfExists(sibling) }
+    } }
+
     @Test fun originalCancellationSurvivesCleanupFailureAndResetStaysBlocked() = runTest { fixture { path, events, payloads, driver ->
         val owner = DefaultCommandChecks(events, payloads, driver)
         val released = CompletableDeferred<Unit>()

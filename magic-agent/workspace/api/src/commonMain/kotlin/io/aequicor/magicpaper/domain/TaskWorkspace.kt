@@ -19,9 +19,10 @@ data class TaskCheckGrants(val spawning: Set<List<String>> = emptySet(), val ski
  * Папку удерживает другой исполнитель. Ожидание ограничено, поэтому занятая папка — действенная
  * ошибка с продолжением, а не каскадный отказ всех задач проекта: сохранённый результат задачи
  * переживает её, а «Продолжить» довершает Git-операцию без повторного прогона агента.
+ * Из операции [TaskWorkspace] эта ошибка означает, что ни одна команда, способная изменить файлы, не запускалась.
  */
-class TaskWorkspaceBusy(val path: String, folder: String) : IllegalStateException(
-    "$folder $path занята другой сессией. Дождитесь её завершения и нажмите «Продолжить»")
+class TaskWorkspaceBusy(val path: String, folder: String, cause: Throwable? = null) : IllegalStateException(
+    "$folder $path занята другой сессией. Дождитесь её завершения и нажмите «Продолжить»", cause)
 
 /** Live capabilities, the user's check grants among them, are never serialized or recovered from the task journal. */
 data class TaskWorkspaceLeases(val source: WorkspaceLease? = null, val execution: WorkspaceLease? = null,

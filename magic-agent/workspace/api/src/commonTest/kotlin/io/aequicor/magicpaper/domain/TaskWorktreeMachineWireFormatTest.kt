@@ -27,6 +27,7 @@ class TaskWorktreeMachineWireFormatTest {
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Imported",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Inspected",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectionUnknown",
+        "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectedUnapplied",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Integrated",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.NeighbourMissing",
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Opened",
@@ -53,11 +54,11 @@ class TaskWorktreeMachineWireFormatTest {
         "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Verify",
     )
 
-    /** A branch added later must be pinned here too: the hierarchy holds exactly 30 names. */
+    /** A branch added later must be pinned here too: the hierarchy holds exactly 31 names. */
     @Test fun everyBranchIsWrittenUnderItsPinnedName() {
         val sealed = TaskWorktreeMachine.Input.serializer().descriptor.getElementDescriptor(1)
         assertEquals(pinned, (0 until sealed.elementsCount).map { sealed.getElementName(it) }.toSet())
-        assertEquals(30, pinned.size)
+        assertEquals(31, pinned.size)
     }
 
     @Test fun everyBranchClassIsWrittenUnderItsOwnPinnedName() {
@@ -68,6 +69,7 @@ class TaskWorktreeMachineWireFormatTest {
             TaskWorktreeMachine.Input.Fact.Imported.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Imported",
             TaskWorktreeMachine.Input.Fact.Inspected.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Inspected",
             TaskWorktreeMachine.Input.Fact.InspectionUnknown.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectionUnknown",
+            TaskWorktreeMachine.Input.Fact.InspectedUnapplied.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectedUnapplied",
             TaskWorktreeMachine.Input.Fact.Integrated.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Integrated",
             TaskWorktreeMachine.Input.Fact.NeighbourMissing.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.NeighbourMissing",
             TaskWorktreeMachine.Input.Fact.Opened.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Opened",
@@ -93,7 +95,7 @@ class TaskWorktreeMachineWireFormatTest {
             TaskWorktreeMachine.Input.Intent.RevokeHandoff.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.RevokeHandoff",
             TaskWorktreeMachine.Input.Intent.Verify.serializer().descriptor.serialName to "io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Intent.Verify",
         )
-        assertEquals(30, owned.size)
+        assertEquals(31, owned.size)
         for ((written, name) in owned) assertEquals(name, written)
         assertEquals(pinned, owned.map { it.second }.toSet())
     }

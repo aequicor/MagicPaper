@@ -122,6 +122,10 @@ class TaskWorktreeSpaceTest {
             TaskWorktreeSpace.NEIGHBOUR_MISSING to Fact.NeighbourMissing("task"),
             TaskWorktreeSpace.RESTORED to Fact.Restored,
             TaskWorktreeSpace.PERSISTENCE_UNKNOWN_FACT to Fact.PersistenceUnknown,
+            TaskWorktreeSpace.UNAPPLIED_REFRESH to Fact.InspectedUnapplied("op", "task", Operation.REFRESH),
+            TaskWorktreeSpace.UNAPPLIED_CAPTURE to Fact.InspectedUnapplied("op", "task", Operation.CAPTURE),
+            TaskWorktreeSpace.UNAPPLIED_INTEGRATE to Fact.InspectedUnapplied("op", "task", Operation.INTEGRATE),
+            TaskWorktreeSpace.UNAPPLIED_OTHER to Fact.InspectedUnapplied("op", "task", Operation.VERIFY),
         ),
     )
 }

@@ -153,12 +153,17 @@ class DefaultTaskWorktreeOwner(
             if (failure is TaskWorktreeVerificationFailed && store.state.pending == null && !store.state.persistenceUnknown) throw failure
             // This port outcome is raised before fast-forward; a changed destination proves delivery did not start.
             val destinationChanged = operation.kind == TaskWorktreeMachine.Operation.DELIVER && failure is TaskDestinationChanged
-            try { withContext(NonCancellable) { store.dispatch(Input.Fact.Failed(operation.id, beforeEffect = !started || destinationChanged)) } }
+            // The port reports a busy folder only when no command that could change a file has started.
+            val busy = failure is TaskWorkspaceBusy
+            val untouched = !started || destinationChanged || busy
+            try { withContext(NonCancellable) { store.dispatch(Input.Fact.Failed(operation.id, beforeEffect = untouched)) } }
             catch (recordFailure: Exception) { failure.addSuppressed(recordFailure); store.uncertain(failure) }
             if (destinationChanged && !store.state.persistenceUnknown) throw failure
             AppLog.error("coding.worktree", "operation.failed", failure, mapOf("operationId" to operation.id,
                 "sessionId" to store.state.owner.sessionId, "phase" to operation.kind.name,
-                "causeType" to failure.javaClass.simpleName, "result" to if (started) "unknown" else "not_started"))
+                "causeType" to failure.javaClass.simpleName, "result" to if (untouched) "not_started" else "unknown"))
+            // A busy folder is an actionable outcome, not an unknown one: the parent tells the user to wait and continue.
+            if (busy && !store.state.persistenceUnknown) throw failure
             if (failure is CancellationException) throw failure
             throw TaskWorktreeOperationUnknown(failure)
         }
@@ -173,6 +178,11 @@ class DefaultTaskWorktreeOwner(
             when (val result = workspace.inspect(effect.record, effect.pending)) {
                 is TaskWorktreeInspection.Confirmed -> store.dispatch(Input.Fact.Inspected(result.proof))
                 TaskWorktreeInspection.Unknown -> store.dispatch(Input.Fact.InspectionUnknown(effect.pending.id))
+                TaskWorktreeInspection.Unapplied -> {
+                    store.dispatch(Input.Fact.InspectedUnapplied(effect.pending.id, effect.pending.taskId, effect.pending.kind))
+                    AppLog.info("coding.worktree", "inspection.unapplied", mapOf("operationId" to effect.pending.id,
+                        "sessionId" to store.state.owner.sessionId, "phase" to effect.pending.kind.name))
+                }
                 TaskWorktreeInspection.Missing -> store.dispatch(Input.Fact.NeighbourMissing(effect.record.taskId))
             }
         } catch (failure: Exception) {

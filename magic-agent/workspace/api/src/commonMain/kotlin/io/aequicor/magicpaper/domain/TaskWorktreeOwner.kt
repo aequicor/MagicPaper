@@ -56,5 +56,7 @@ data class TaskWorktreeProof(
 sealed interface TaskWorktreeInspection {
     data class Confirmed(val proof: TaskWorktreeProof) : TaskWorktreeInspection
     data object Unknown : TaskWorktreeInspection
+    /** The copy does not hold the operation's result; reported only for [TaskWorktreeMachine.RETRYABLE] operations. */
+    data object Unapplied : TaskWorktreeInspection
     data object Missing : TaskWorktreeInspection
 }

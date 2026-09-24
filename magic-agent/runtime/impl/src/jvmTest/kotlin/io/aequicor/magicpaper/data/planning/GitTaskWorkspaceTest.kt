@@ -905,6 +905,108 @@ class GitTaskWorkspaceTest {
         assertEquals("finished", source.resolve("agent.txt").readText())
     } }
 
+    @Test fun captureStoppedInTheCopyReturnsTheTaskOnContinuationInsteadOfStayingUnknown() = runTest { fixture {
+        val kv = InMemoryKeyValueStore()
+        val repo = JsonCodingProjectRepository(kv, Json { encodeDefaults = true; ignoreUnknownKeys = true })
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1, runtimeGeneration = 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        val service = worktreeService(repo, port, GitPlanningWorkspace(File(root, "leases"), authority))
+        val task = service.begin(project, "session", "request")
+        val dir = File(task.path)
+        dir.resolve("base.txt").writeText("agent\n")
+        git(dir, "commit", "-am", "agent")
+        source.resolve("base.txt").writeText("user\n")
+        git(source, "commit", "-am", "user")
+        assertTrue(port.refresh(task).pendingTransfer)
+        val ctx = ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE, runtimeGeneration = 1)
+        service.handoff(ctx, true, emptyList())
+        // The capture starts and stops on the unresolved transfer: no journaled outcome says what it left.
+        assertFailsWith<IllegalStateException> { service.complete(project, "session", "request", repair = { error("unexpected repair") }) }
+        assertEquals(TaskWorktreePhase.CAPTURING, repo.sessions(project.id).single().taskWorktree?.phase)
+        // The user's continuation reads the copy: nothing was captured, so the handed-off task is current again.
+        service.inspectTaskOutcome(project.id, "session")
+        val returned = checkNotNull(repo.sessions(project.id).single().taskWorktree)
+        assertEquals(TaskWorktreePhase.READY, returned.phase)
+        assertNull(returned.error)
+        // The resumed agent resolves the transfer and hands the task off again; it is delivered as usual.
+        dir.resolve("base.txt").writeText("user\nagent\n")
+        git(dir, "add", "base.txt")
+        repo.updateSession(project.id, "session") { it.copy(runtimeGeneration = 2) }
+        service.begin(project, "session", "request")
+        service.handoff(ctx.copy(runtimeGeneration = 2), true, emptyList())
+        assertEquals(TaskWorktreePhase.COMPLETE, service.complete(project, "session", "request", repair = { error("unexpected repair") }).phase)
+        assertEquals("user\nagent\n", source.resolve("base.txt").readText())
+    } }
+
+    /**
+     * Copies of one repository share its Git storage, so a neighbour's long check refuses this copy's commands before
+     * they start. Refused before anything could change a file, the capture is busy rather than unknown; refused after
+     * `git add`, it is unknown until the continuation reads the copy.
+     */
+    @Test fun captureRefusedByANeighboursCheckIsBusyBeforeAWriteAndRecoverableAfterIt() = runTest { fixture {
+        val kv = InMemoryKeyValueStore()
+        val repo = JsonCodingProjectRepository(kv, Json { encodeDefaults = true; ignoreUnknownKeys = true })
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1, runtimeGeneration = 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        var refuse: (List<String>) -> Boolean = { false }
+        val neighbourRunning = object : CommandChecks by gitChecks {
+            // The checks owner journals a refusal before admission, so the lease still sees the command settled.
+            private val refused = mutableMapOf<CheckRef, CheckResult>()
+            override suspend fun run(command: CheckCommand): CheckResult {
+                if (!refuse(command.arguments)) return gitChecks.run(command)
+                refused[command.ref] = CheckResult("", null, "Проверка не запущена: подготовка недоступна")
+                throw CheckResourceBusy()
+            }
+            override suspend fun inspect(ref: CheckRef) = refused[ref] ?: gitChecks.inspect(ref)
+        }
+        val refusing = port(neighbourRunning)
+        val service = worktreeService(repo, refusing, GitPlanningWorkspace(File(root, "leases"), registry(refusing)))
+        val task = service.begin(project, "session", "request")
+        File(task.path).resolve("result").writeText("kept")
+        val ctx = ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE, runtimeGeneration = 1)
+        service.handoff(ctx, true, emptyList())
+
+        refuse = { "add" in it }
+        val busy = assertFailsWith<TaskWorkspaceBusy> { service.complete(project, "session", "request", repair = { error("unexpected repair") }) }
+        assertContains(busy.message.orEmpty(), "занята другой сессией")
+        val waiting = checkNotNull(repo.sessions(project.id).single().taskWorktree)
+        assertEquals(TaskWorktreePhase.READY, waiting.phase, "the handed-off task is still current, not an unknown capture")
+
+        refuse = { "commit" in it }
+        assertFailsWith<IllegalStateException> { service.complete(project, "session", "request", repair = { error("unexpected repair") }) }
+        assertEquals(TaskWorktreePhase.CAPTURING, repo.sessions(project.id).single().taskWorktree?.phase)
+        refuse = { false }
+        service.inspectTaskOutcome(project.id, "session")
+        assertEquals(TaskWorktreePhase.READY, repo.sessions(project.id).single().taskWorktree?.phase)
+        assertEquals(TaskWorktreePhase.COMPLETE, service.complete(project, "session", "request", repair = { error("unexpected repair") }).phase)
+        assertEquals("kept", source.resolve("result").readText())
+    } }
+
+    @Test fun captureInterruptedAfterItsCommitIsConfirmedFromTheCopyAndDelivered() = runTest { fixture {
+        val kv = InMemoryKeyValueStore()
+        val repo = JsonCodingProjectRepository(kv, Json { encodeDefaults = true; ignoreUnknownKeys = true })
+        repo.save(project)
+        repo.saveSession(CodingSession("session", project.id, "Task", 1, runtimeGeneration = 1,
+            pendingRun = CodingRunCheckpoint("request", "do", worktreeEnabled = true)))
+        val leases = GitPlanningWorkspace(File(root, "leases"), authority)
+        val crashing = worktreeService(repo, port(checkpoint = { if (it == "captured") error("crash") }), leases)
+        val task = crashing.begin(project, "session", "request")
+        File(task.path).resolve("result").writeText("kept")
+        crashing.handoff(ToolExecutionContext(project.id, "session", "session", "request", ToolRole.CHAT, CodingInteractionMode.CODE, runtimeGeneration = 1), true, emptyList())
+        assertFailsWith<IllegalStateException> { crashing.complete(project, "session", "request", repair = { error("unexpected repair") }) }
+        // After a restart the continuation reads the copy: the commit is there, so it is the captured result.
+        val restarted = worktreeService(repo, port(), leases)
+        restarted.inspectTaskOutcome(project.id, "session")
+        val captured = checkNotNull(repo.sessions(project.id).single().taskWorktree)
+        assertEquals(TaskWorktreePhase.MERGING, captured.phase)
+        assertEquals(git(File(task.path), "rev-parse", "HEAD"), captured.resultCommit)
+        assertEquals(1, git(File(task.path), "rev-list", "--count", "${task.baseCommit}..HEAD").toInt())
+        assertEquals(TaskWorktreePhase.COMPLETE, restarted.complete(project, "session", "request", repair = { error("unexpected repair") }).phase)
+        assertEquals("kept", source.resolve("result").readText())
+    } }
+
     companion object {
         private fun git(dir: File, vararg args: String): String {
             val process = ProcessBuilder(listOf("git", "-c", "user.name=Test", "-c", "user.email=test@localhost", "-c", "commit.gpgSign=false") + args)

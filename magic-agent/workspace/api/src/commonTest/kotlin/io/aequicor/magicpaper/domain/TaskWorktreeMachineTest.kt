@@ -113,6 +113,40 @@ class TaskWorktreeMachineTest {
         }
     }
 
+    @Test fun unappliedRetryableOperationReturnsToItsRecordAndTheRestStayUnknown() {
+        // A capture that failed after it started: the user's continuation reads the copy and finds nothing captured.
+        val failed = next(next(ready(), Input.Intent.Capture("task", 1, "op")), Input.Fact.Failed("op", beforeEffect = false))
+        assertEquals(TaskWorktreeMachine.Stage.UNKNOWN, failed.stage)
+        reject(failed, Input.Fact.InspectedUnapplied("other", "task", Operation.CAPTURE), TaskWorktreeMachine.Reason.STALE)
+        reject(failed, Input.Fact.InspectedUnapplied("op", "task", Operation.INTEGRATE), TaskWorktreeMachine.Reason.STALE)
+        val retried = next(failed, Input.Fact.InspectedUnapplied("op", "task", Operation.CAPTURE))
+        assertEquals(TaskWorktreeMachine.Stage.IDLE, retried.stage)
+        assertEquals(ready().record, retried.record)
+        assertEquals(TaskWorktreePhase.CAPTURING, next(retried, Input.Intent.Capture("task", 1, "again")).record?.phase)
+        assertEquals(listOf(TaskWorktreeMachine.Effect.Reject(TaskWorktreeMachine.Reason.ALREADY_USED)),
+            TaskWorktreeMachine.reduce(retried, Input.Intent.Capture("task", 1, "op")).effects)
+
+        val integrating = next(next(merging(), Input.Intent.Integrate("task", 1, "op", "target")), Input.Fact.Restored)
+        assertEquals(merging().record, next(integrating, Input.Fact.InspectedUnapplied("op", "task", Operation.INTEGRATE)).record)
+        val refreshing = next(next(running(), Input.Intent.Refresh("task", 1, "op")), Input.Fact.Restored)
+        assertEquals(running().record, next(refreshing, Input.Fact.InspectedUnapplied("op", "task", Operation.REFRESH)).record)
+
+        // A legacy capture has no handoff to return to: its task goes back to the agent.
+        val legacy = next(TaskWorktreeMachine.initial(owner), Input.Fact.Imported(record().copy(phase = TaskWorktreePhase.CAPTURING, handoffGeneration = 1), 1))
+        val returned = next(legacy, Input.Fact.InspectedUnapplied("legacy-task-CAPTURE", "task", Operation.CAPTURE))
+        assertEquals(TaskWorktreePhase.RUNNING, returned.record?.phase)
+        assertNull(returned.record?.handoffGeneration)
+
+        for ((pending, kind) in listOf(
+            next(empty(), Input.Intent.Prepare(record(), 1, "op")) to Operation.OPEN,
+            next(merged(), Input.Intent.Verify("task", 1, "op")) to Operation.VERIFY,
+            next(accepted(), Input.Intent.Deliver("task", 1, "op")) to Operation.DELIVER,
+        )) reject(next(pending, Input.Fact.Restored), Input.Fact.InspectedUnapplied("op", "task", kind), TaskWorktreeMachine.Reason.UNKNOWN)
+        // Only an unknown operation can be forgotten; a live one still owns its outcome.
+        reject(next(ready(), Input.Intent.Capture("task", 1, "op")), Input.Fact.InspectedUnapplied("op", "task", Operation.CAPTURE),
+            TaskWorktreeMachine.Reason.STALE)
+    }
+
     @Test fun taskIdentitySurvivesNativeGenerationsAndOldHandoffCannotCapture() {
         val state = next(ready(), Input.Intent.BindRun("task", 2))
         assertEquals("task", state.record?.taskId)

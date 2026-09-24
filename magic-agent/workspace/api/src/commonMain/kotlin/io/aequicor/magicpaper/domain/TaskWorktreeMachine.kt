@@ -84,6 +84,12 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Failed") data class Failed(val operationId: String, val beforeEffect: Boolean) : Fact
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.Inspected") data class Inspected(val proof: TaskWorktreeProof) : Fact
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectionUnknown") data class InspectionUnknown(val operationId: String) : Fact
+            /**
+             * Read-only inspection found the operation's postcondition absent. Only an operation that resumes from any
+             * partial state it leaves ([RETRYABLE]) may then be forgotten: the record returns to its state before it.
+             */
+            @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.InspectedUnapplied") data class InspectedUnapplied(
+                val operationId: String, val taskId: String, val kind: Operation) : Fact
             /** Exact immutable completion artifact observed by the executor, never a Git postcondition guess. */
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.OutcomeRecovered") data class OutcomeRecovered(val outcome: Fact) : Fact
             @Serializable @SerialName("io.aequicor.magicpaper.domain.TaskWorktreeMachine.Input.Fact.NeighbourMissing") data class NeighbourMissing(val taskId: String) : Fact
@@ -151,6 +157,7 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
             if (input.operationId != state.pending?.id) return reject(Reason.STALE)
             return Transition(state.copy(unknown = true, record = state.record?.copy(error = UNKNOWN_NOTICE)))
         }
+        if (input is Input.Fact.InspectedUnapplied) return unapplied(state, input)
         if (input is Input.Intent.NoteFailure) {
             if (input.taskId != state.record?.taskId || input.message.isBlank()) return reject(Reason.INVALID)
             return Transition(state.copy(record = state.record?.copy(error = input.message)))
@@ -308,11 +315,34 @@ object TaskWorktreeMachine : Machine<TaskWorktreeMachine.State, TaskWorktreeMach
         }
     }
 
+    /**
+     * The next explicit continuation repeats the operation from what it left. A legacy capture has no recorded handoff
+     * to return to, so its task returns to the agent like any running task.
+     */
+    private fun unapplied(state: State, input: Input.Fact.InspectedUnapplied): Transition {
+        val pending = state.pending ?: return rejected(state, Reason.STALE)
+        val record = state.record ?: return rejected(state, Reason.MISSING)
+        if (!state.unknown || state.persistenceUnknown || input.operationId != pending.id || input.taskId != record.taskId ||
+            input.kind != pending.kind || pending.taskId != record.taskId) return rejected(state, Reason.STALE)
+        if (pending.kind !in RETRYABLE) return rejected(state, Reason.UNKNOWN)
+        val before = pending.before ?: return rejected(state, Reason.MISSING)
+        if (before.taskId != record.taskId) return rejected(state, Reason.STALE)
+        val restored = if (before.phase == TaskWorktreePhase.CAPTURING) before.copy(phase = TaskWorktreePhase.RUNNING, handoffGeneration = null) else before
+        return Transition(state.copy(record = restored.copy(error = null), pending = null, unknown = false,
+            completedOperations = state.completedOperations + pending.id))
+    }
+
     private fun validRecord(record: TaskWorktree) = record.taskId.isNotBlank() && record.sourcePath.isNotBlank() &&
         record.path.isNotBlank() && record.path != record.sourcePath && record.branch.isNotBlank() &&
         record.targetBranch.isNotBlank() && record.baseCommit.isNotBlank()
     private fun rejected(state: State, reason: Reason) = Transition(state, listOf(Effect.Reject(reason)))
     private val ACTIVE_PHASES = setOf(TaskWorktreePhase.RUNNING, TaskWorktreePhase.READY, TaskWorktreePhase.CONFLICT)
+    /**
+     * Operations that finish whatever an interrupted attempt left in the task copy, so a repeat is the same operation.
+     * Opening names a branch anew, verification runs arbitrary commands and delivery writes the user's folder: those
+     * are recovered only by proof of their outcome.
+     */
+    val RETRYABLE = setOf(Operation.REFRESH, Operation.CAPTURE, Operation.INTEGRATE)
     private const val UNKNOWN_NOTICE = "Исход операции с рабочей копией неизвестен. Проверьте сохранённый результат"
     private const val MISSING_NOTICE = "Рабочая копия недоступна. Проверьте папку задачи"
     private const val NO_HANDOFF_NOTICE = "Агент завершил ответ, не передав результат задачи, поэтому изменения не влиты. Уточните запрос и продолжите"

@@ -113,6 +113,45 @@ class TaskWorktreeJournalTest {
         assertEquals(1, f.workspace.writes); assertEquals(2, f.workspace.reads)
     }
 
+    @Test fun captureInspectedUnappliedSurvivesRestartAsTheHandedOffTaskAndCapturesAgain() = runTest {
+        val f = Fixture(); val service = f.owner(); service.prepare()
+        service.acceptWithLeases(owner, Input.Intent.Handoff("task", 1, true, emptyList()))
+        f.workspace.failure = IllegalStateException("failure after effect")
+        assertFailsWith<TaskWorktreeOperationUnknown> { service.acceptWithLeases(owner, Input.Intent.Capture("task", 1, "capture")) }
+        f.workspace.failure = null
+        f.workspace.evidence = { TaskWorktreeInspection.Unapplied }
+        val inspected = f.owner().acceptWithLeases(owner, Input.Intent.Inspect("task"))
+        assertFalse(inspected.unknown)
+        assertEquals(TaskWorktreePhase.READY, inspected.task?.phase)
+        assertNull(inspected.task?.error)
+        // The forgotten operation is durable: a restarted owner replays it and captures under a new operation.
+        val reopened = f.owner()
+        assertFalse(reopened.projection(owner).unknown)
+        assertEquals("result", reopened.acceptWithLeases(owner, Input.Intent.Capture("task", 1, "capture-again")).task?.resultCommit)
+        assertEquals(3, f.workspace.writes)
+    }
+
+    @Test fun busyFolderIsANotStartedOutcomeNotAnUnknownOne() = runTest {
+        val f = Fixture(); val service = f.owner(); service.prepare()
+        service.acceptWithLeases(owner, Input.Intent.Handoff("task", 1, true, emptyList()))
+        f.workspace.failure = TaskWorkspaceBusy(record().sourcePath, "Исходная папка проекта")
+        assertFailsWith<TaskWorkspaceBusy> { service.acceptWithLeases(owner, Input.Intent.Capture("task", 1, "capture")) }
+        val reopened = f.owner().projection(owner)
+        assertFalse(reopened.unknown)
+        assertEquals(TaskWorktreePhase.READY, reopened.task?.phase)
+        assertEquals(0, f.workspace.reads)
+    }
+
+    @Test fun unappliedEvidenceForAnOperationThatCannotRepeatStaysUnknown() = runTest {
+        val f = Fixture(); val service = f.owner(); service.projection(owner, generation = 1)
+        f.workspace.failure = IllegalStateException("failure after effect")
+        assertFailsWith<TaskWorktreeOperationUnknown> { service.acceptWithLeases(owner, Input.Intent.Prepare(record(), 1, "open")) }
+        f.workspace.failure = null
+        f.workspace.evidence = { TaskWorktreeInspection.Unapplied }
+        assertFailsWith<TaskWorktreeOperationUnknown> { service.acceptWithLeases(owner, Input.Intent.Inspect("task")) }
+        assertTrue(f.owner().projection(owner).unknown)
+    }
+
     @Test fun missingPayloadCorruptionAndChangedJournalPrefixFailClosed() = runTest {
         for (kind in listOf("missing", "corrupt", "prefix")) {
             val f = Fixture(); val service = f.owner(); service.prepare()

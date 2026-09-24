@@ -144,3 +144,9 @@ interface CommandChecks {
 
 class CheckOutcomeUnknown(cause: Throwable? = null) : IllegalStateException(
     "Завершение проверки не подтверждено. Повтор заблокирован до проверки её состояния.", cause)
+
+/**
+ * Refused before admission: a running command of another workspace declares a resource this one also affects — the
+ * Git storage shared by copies of one repository, for one. Nothing was started, so the caller may simply retry later.
+ */
+class CheckResourceBusy : IllegalStateException("Общие файлы рабочей копии заняты проверкой другой сессии")

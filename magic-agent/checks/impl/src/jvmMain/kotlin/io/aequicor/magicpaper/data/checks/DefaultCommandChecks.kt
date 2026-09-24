@@ -321,7 +321,7 @@ internal class DefaultCommandChecks(private val events: EventJournal, private va
         val resources = command.resources
         val active = activeCommands.values.toList()
         if (active.any { it.resource != command.resource && it.resources.any(resources::contains) })
-            throw CheckRejected(CommandCheckMachine.Reason.BUSY)
+            throw CheckResourceBusy()
         discover()
         for ((resource, entry) in entries) {
             // The same primary already serializes callers. A reservation for another primary

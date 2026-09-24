@@ -59,7 +59,13 @@ class GitTaskWorkspace(
         val affected = setOf(source.path, destination.path) + gitMetadataResources(source) + gitMetadataResources(destination)
         return authority.owned(held, CheckScope(operation.owner.projectId, operation.owner.sessionId,
             pending.id, pending.generation), "task-${pending.kind.name.lowercase()}", affected) { transport ->
-            withContext(Commands(transport)) { action() }
+            try { withContext(Commands(transport)) { action() } }
+            catch (busy: CheckResourceBusy) {
+                // Copies of one repository share its Git storage, and a neighbour's check can hold it for minutes.
+                // Refused before anything could change a file, the operation did not happen: it is busy, not unknown.
+                if (transport.changing) throw busy
+                throw TaskWorkspaceBusy(source.path, REPOSITORY, busy)
+            }
         }
     }
 
@@ -339,6 +345,51 @@ class GitTaskWorkspace(
         check(delivered(record)) { "Слияние не подтверждено" }
     }
 
+    /**
+     * Reads what an interrupted operation left, without changing Git or starting a check. A copy that holds an
+     * operation's postcondition proves its outcome. One that does not is reported unapplied only for an operation
+     * that resumes from whatever partial state it leaves ([TaskWorktreeMachine.RETRYABLE]); the rest stay unknown.
+     */
+    override suspend fun inspect(record: TaskWorktree, pending: TaskWorktreeMachine.Pending): TaskWorktreeInspection = reading(record.sourcePath) {
+        require(pending.taskId == record.taskId) { "Операция принадлежит другой задаче" }
+        val dir = managed(record, mustExist = false)
+        if (!dir.isDirectory) return@reading TaskWorktreeInspection.Missing
+        fun proof(resultCommit: String = "", targetCommit: String = "", mergeCommit: String = "") =
+            TaskWorktreeInspection.Confirmed(TaskWorktreeProof(pending.id, pending.taskId, pending.kind,
+                resultCommit = resultCommit, targetCommit = targetCommit, mergeCommit = mergeCommit))
+        val inspection = when (pending.kind) {
+            TaskWorktreeMachine.Operation.OPEN -> {
+                // A reused copy stays on the previous task's branch until the switch; only the new branch proves the open.
+                if (probe(dir, "symbolic-ref", "--quiet", "--short", "HEAD").second.trim() != record.branch) TaskWorktreeInspection.Unknown
+                else { reconcile(record); proof() }
+            }
+            TaskWorktreeMachine.Operation.REFRESH -> { reconcile(record); TaskWorktreeInspection.Unapplied }
+            TaskWorktreeMachine.Operation.CAPTURE -> {
+                reconcile(record)
+                // Capture commits whatever is left and returns HEAD: a settled copy already is that result.
+                if (settled(dir)) proof(resultCommit = head(dir)) else TaskWorktreeInspection.Unapplied
+            }
+            TaskWorktreeMachine.Operation.INTEGRATE -> {
+                reconcile(record)
+                if (record.targetCommit.isNotBlank() && settled(dir) && ancestor(dir, record.targetCommit, "HEAD") && resultKept(dir, record))
+                    proof(targetCommit = record.targetCommit, mergeCommit = head(dir))
+                else TaskWorktreeInspection.Unapplied
+            }
+            // A clean checkout does not prove that arbitrary checks finished.
+            TaskWorktreeMachine.Operation.VERIFY -> TaskWorktreeInspection.Unknown
+            TaskWorktreeMachine.Operation.DELIVER ->
+                if (delivered(record)) proof(mergeCommit = record.mergeCommit) else TaskWorktreeInspection.Unknown
+        }
+        AppLog.info("coding.worktree", "inspection.read", mapOf("operationId" to pending.id, "entityId" to record.taskId,
+            "phase" to pending.kind.name, "result" to when (inspection) {
+                is TaskWorktreeInspection.Confirmed -> "confirmed"
+                TaskWorktreeInspection.Unapplied -> "unapplied"
+                TaskWorktreeInspection.Unknown -> "unknown"
+                TaskWorktreeInspection.Missing -> "missing"
+            }))
+        inspection
+    }
+
     // Repositories whose registrations of erased copies are not yet pruned; a failed prune is retried by the next reset.
     private val unpruned = ConcurrentHashMap.newKeySet<String>()
 
@@ -457,22 +508,26 @@ class GitTaskWorkspace(
         error("Перенос ветки не завершён после $REBASE_STEP_LIMIT шагов")
     }
     /** The captured result must stay reachable; our own recorded pre-rebase point explains a rewritten history. */
-    private suspend fun requireResult(dir: File, record: TaskWorktree) {
-        val lost = { "Сохранённый результат задачи потерян из истории" }
-        require(record.resultCommit.isNotBlank(), lost)
-        if (ancestor(dir, record.resultCommit, "HEAD")) return
+    private suspend fun requireResult(dir: File, record: TaskWorktree) =
+        require(resultKept(dir, record)) { "Сохранённый результат задачи потерян из истории" }
+    private suspend fun resultKept(dir: File, record: TaskWorktree): Boolean {
+        if (record.resultCommit.isBlank()) return false
+        if (ancestor(dir, record.resultCommit, "HEAD")) return true
         val pre = preIntegrationRef(record)
         // This ref is created by this workspace immediately before it rewrites the task result.
         // It remains the authoritative proof even when a later destination rewrite means the
         // previous target is intentionally no longer an ancestor of the in-progress rebase HEAD.
         if (probe(dir, "show-ref", "--verify", "--quiet", pre).first == 0 &&
-            ancestor(dir, record.resultCommit, pre)) return
+            ancestor(dir, record.resultCommit, pre)) return true
         // Compatibility with a conflict started before pre-integration refs existed: while
         // rebase is active Git deliberately leaves the task branch at the captured result.
         val taskBranch = "refs/heads/${record.branch}"
-        require(rebaseInProgress(dir) && probe(dir, "show-ref", "--verify", "--quiet", taskBranch).first == 0 &&
-            ancestor(dir, record.resultCommit, taskBranch), lost)
+        return rebaseInProgress(dir) && probe(dir, "show-ref", "--verify", "--quiet", taskBranch).first == 0 &&
+            ancestor(dir, record.resultCommit, taskBranch)
     }
+    /** No transfer, merge or unsaved change is left in the copy: HEAD is all it holds. */
+    private suspend fun settled(dir: File) =
+        !rebaseInProgress(dir) && !mergeInProgress(dir) && git(dir, "status", "--porcelain").isBlank()
     private suspend fun preservePreIntegrationRef(dir: File, record: TaskWorktree) {
         val ref = preIntegrationRef(record)
         if (probe(dir, "show-ref", "--verify", "--quiet", ref).first != 0)
@@ -550,6 +605,8 @@ private const val DIRTY_ENTRY_LIMIT = 8
 private const val DIRTY_ENTRY_LENGTH = 160
 private const val SOURCE_FOLDER = "исходная папка проекта"
 private const val TASK_COPY = "рабочая копия задачи"
+/** Её Git-хранилище делят все копии задач репозитория; занятость называет папку, которую знает пользователь. */
+private const val REPOSITORY = "Исходная папка проекта"
 private const val REBASE_STEP_LIMIT = 64
 private const val BRANCH_PREFIX = "magicpaper/worktree-"
 private const val BRANCH_SLUG_LIMIT = 48

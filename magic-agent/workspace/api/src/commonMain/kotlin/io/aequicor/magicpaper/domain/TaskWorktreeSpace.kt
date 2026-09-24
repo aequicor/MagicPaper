@@ -33,7 +33,9 @@ import io.aequicor.magicpaper.machine.acceptance
  * validation, a reuse branch or commit that does not match the finished record, and the payload of a
  * completion (a blank commit, a negative distance). Recovery is declared for the seven completion
  * facts; a proof of a *verification* is refused in every position, because a clean checkout does not
- * prove that arbitrary commands finished. `Prepare` and `PrepareReuse` differ only in the reuse fields
+ * prove that arbitrary commands finished. An operation inspection found unapplied is forgotten only
+ * for a refresh, a capture or an integration, each in its own unknown position: those resume from
+ * whatever an interrupted attempt left, so the next continuation simply repeats them. `Prepare` and `PrepareReuse` differ only in the reuse fields
  * of the record; a finished record accepts only the second. `unknown-no-operation` is a neighbour that
  * went missing with nothing in flight: it recovers by inspection, and no recovery fact applies to it.
  * Nor does it express the text of a refusal, which is what the user reads: a `Capture` refused in
@@ -114,6 +116,10 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
     val NEIGHBOUR_MISSING = InputId("NeighbourMissing")
     val RESTORED = InputId("Restored")
     val PERSISTENCE_UNKNOWN_FACT = InputId("PersistenceUnknown")
+    val UNAPPLIED_REFRESH = InputId("UnappliedRefresh")
+    val UNAPPLIED_CAPTURE = InputId("UnappliedCapture")
+    val UNAPPLIED_INTEGRATE = InputId("UnappliedIntegrate")
+    val UNAPPLIED_OTHER = InputId("UnappliedOther")
 
     override val phases = listOf(
         UNINITIALIZED, EMPTY, OPENING, RUNNING,
@@ -174,6 +180,10 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
         InputSpec(NEIGHBOUR_MISSING, Branch.FACT),
         InputSpec(RESTORED, Branch.FACT),
         InputSpec(PERSISTENCE_UNKNOWN_FACT, Branch.FACT),
+        InputSpec(UNAPPLIED_REFRESH, Branch.FACT),
+        InputSpec(UNAPPLIED_CAPTURE, Branch.FACT),
+        InputSpec(UNAPPLIED_INTEGRATE, Branch.FACT),
+        InputSpec(UNAPPLIED_OTHER, Branch.FACT),
     )
 
     override val effects = listOf(EffectId("Execute"), EffectId("Inspect"), EffectId("Reject"))
@@ -227,32 +237,36 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
     //   45  NeighbourMissing
     //   46  Restored
     //   47  PersistenceUnknown
+    //   48  UnappliedRefresh
+    //   49  UnappliedCapture
+    //   50  UnappliedIntegrate
+    //   51  UnappliedOther
     override val accepts = acceptance(phases, inputs, listOf(
-        /* uninitialized          */ "000000000000000000110000000000000000000000000011",
-        /* empty                  */ "110000000000000000000000000000000000000000000011",
-        /* opening                */ "000000000000000001001000000011000000100000000111",
-        /* running                */ "001110011010000011000000000000000000000000000111",
-        /* refreshing             */ "000000000000000001000100000011000000100000000111",
-        /* ready                  */ "001110011110000011000000000000000000000000000111",
-        /* capturing              */ "000000000000000001000010000011000000100000000111",
-        /* merging                */ "001000010001100011000000000000000000000000000111",
-        /* integrating            */ "000000000000000001000001100011000000100000000111",
-        /* conflict               */ "001110010010100011000000000000000000000000000111",
-        /* merged                 */ "001000010001110011000000000000000000000000000111",
-        /* verifying              */ "000000000000000001000000011011000000100000000111",
-        /* verified               */ "001000010001111011000000000000000000000000000111",
-        /* verification-failed    */ "001001110000000011000000000000000000000000000111",
-        /* accepted               */ "001000010001111111000000000000000000000000000111",
-        /* delivering             */ "000000000000000001000000000111000000100000000111",
-        /* complete               */ "011000000000000011000000000000000000000000000111",
-        /* unknown-opening        */ "000000000000000011000000000000100000110000000111",
-        /* unknown-refreshing     */ "000000000000000011000000000000010000101000000111",
-        /* unknown-capturing      */ "000000000000000011000000000000001000100100000111",
-        /* unknown-integrating    */ "000000000000000011000000000000000100100010000111",
-        /* unknown-verifying      */ "000000000000000011000000000000000000100001100111",
-        /* unknown-delivering     */ "000000000000000011000000000000000001100000010111",
-        /* unknown-no-operation   */ "000000000000000011000000000000000000000000000111",
-        /* persistence-unknown    */ "000000000000000001000000000000000000000000000111",
+        /* uninitialized          */ "0000000000000000001100000000000000000000000000110000",
+        /* empty                  */ "1100000000000000000000000000000000000000000000110000",
+        /* opening                */ "0000000000000000010010000000110000001000000001110000",
+        /* running                */ "0011100110100000110000000000000000000000000001110000",
+        /* refreshing             */ "0000000000000000010001000000110000001000000001110000",
+        /* ready                  */ "0011100111100000110000000000000000000000000001110000",
+        /* capturing              */ "0000000000000000010000100000110000001000000001110000",
+        /* merging                */ "0010000100011000110000000000000000000000000001110000",
+        /* integrating            */ "0000000000000000010000011000110000001000000001110000",
+        /* conflict               */ "0011100100101000110000000000000000000000000001110000",
+        /* merged                 */ "0010000100011100110000000000000000000000000001110000",
+        /* verifying              */ "0000000000000000010000000110110000001000000001110000",
+        /* verified               */ "0010000100011110110000000000000000000000000001110000",
+        /* verification-failed    */ "0010011100000000110000000000000000000000000001110000",
+        /* accepted               */ "0010000100011111110000000000000000000000000001110000",
+        /* delivering             */ "0000000000000000010000000001110000001000000001110000",
+        /* complete               */ "0110000000000000110000000000000000000000000001110000",
+        /* unknown-opening        */ "0000000000000000110000000000001000001100000001110000",
+        /* unknown-refreshing     */ "0000000000000000110000000000000100001010000001111000",
+        /* unknown-capturing      */ "0000000000000000110000000000000010001001000001110100",
+        /* unknown-integrating    */ "0000000000000000110000000000000001001000100001110010",
+        /* unknown-verifying      */ "0000000000000000110000000000000000001000011001110000",
+        /* unknown-delivering     */ "0000000000000000110000000000000000011000000101110000",
+        /* unknown-no-operation   */ "0000000000000000110000000000000000000000000001110000",
+        /* persistence-unknown    */ "0000000000000000010000000000000000000000000001110000",
     ))
 
     private fun executing(kind: TaskWorktreeMachine.Operation) = when (kind) {
@@ -358,12 +372,20 @@ object TaskWorktreeSpace : StateSpace<TaskWorktreeMachine.State, TaskWorktreeMac
             is TaskWorktreeMachine.Input.Fact.Delivered -> RECOVERED_DELIVERED
             is TaskWorktreeMachine.Input.Fact.Imported, is TaskWorktreeMachine.Input.Fact.Failed,
             is TaskWorktreeMachine.Input.Fact.Inspected, is TaskWorktreeMachine.Input.Fact.InspectionUnknown,
+            is TaskWorktreeMachine.Input.Fact.InspectedUnapplied,
             is TaskWorktreeMachine.Input.Fact.OutcomeRecovered, is TaskWorktreeMachine.Input.Fact.NeighbourMissing,
             TaskWorktreeMachine.Input.Fact.Restored, TaskWorktreeMachine.Input.Fact.PersistenceUnknown -> RECOVERED_OTHER
         }
         is TaskWorktreeMachine.Input.Fact.NeighbourMissing -> NEIGHBOUR_MISSING
         TaskWorktreeMachine.Input.Fact.Restored -> RESTORED
         TaskWorktreeMachine.Input.Fact.PersistenceUnknown -> PERSISTENCE_UNKNOWN_FACT
+        // Only an operation that resumes from its own partial state can be forgotten; the rest are refused everywhere.
+        is TaskWorktreeMachine.Input.Fact.InspectedUnapplied -> when (input.kind) {
+            TaskWorktreeMachine.Operation.REFRESH -> UNAPPLIED_REFRESH
+            TaskWorktreeMachine.Operation.CAPTURE -> UNAPPLIED_CAPTURE
+            TaskWorktreeMachine.Operation.INTEGRATE -> UNAPPLIED_INTEGRATE
+            TaskWorktreeMachine.Operation.OPEN, TaskWorktreeMachine.Operation.VERIFY, TaskWorktreeMachine.Operation.DELIVER -> UNAPPLIED_OTHER
+        }
     }
 
     override fun name(effect: TaskWorktreeMachine.Effect): EffectId = when (effect) {
