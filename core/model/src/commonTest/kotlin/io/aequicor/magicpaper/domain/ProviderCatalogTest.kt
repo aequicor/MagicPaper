@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.domain
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertNotNull
 
@@ -68,6 +69,19 @@ class ProviderCatalogTest {
                 (it.defaultBaseUrl.isBlank() || it.defaultBaseUrl == plan.defaultBaseUrl)
         }
         assertEquals(plan.displayName, specForSavedProfile.displayName)
+    }
+
+    /** Отказ в доступе к модели чаще всего означает несовпадение ключа и адреса вендора. */
+    @Test
+    fun alternativeEndpointSwitchesBetweenTheGeneralAndTheCodingSurface() {
+        assertEquals("https://api.z.ai/api/coding/paas/v4",
+            ProviderCatalog.alternativeEndpoint("https://api.z.ai/api/paas/v4"))
+        assertEquals("https://api.z.ai/api/paas/v4",
+            ProviderCatalog.alternativeEndpoint("https://api.z.ai/api/coding/paas/v4/"))
+        assertEquals("https://open.bigmodel.cn/api/coding/paas/v4",
+            ProviderCatalog.alternativeEndpoint("https://open.bigmodel.cn/api/paas/v4"))
+        assertNull(ProviderCatalog.alternativeEndpoint("https://api.openai.com/v1"))
+        assertNull(ProviderCatalog.alternativeEndpoint(""))
     }
 
     @Test

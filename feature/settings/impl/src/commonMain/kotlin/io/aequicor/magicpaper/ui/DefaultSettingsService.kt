@@ -540,7 +540,7 @@ class DefaultSettingsService(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 providerFailed("draft_catalog", failure)
-                _state.update { it.copy(editorModelsError = failure.providerReason(
+                _state.update { it.copy(editorModelsError = failure.providerReason(draft,
                     "Не удалось загрузить список моделей. Повторите запрос.")) }
             } finally { _state.update { it.copy(editorModelsLoading = false) } }
         }
@@ -596,7 +596,7 @@ class DefaultSettingsService(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 providerFailed("connection_check", failure)
-                _state.update { it.copy(editorModelsError = failure.providerReason(
+                _state.update { it.copy(editorModelsError = failure.providerReason(draft,
                     "Проверка не удалась. Проверьте подключение и повторите запрос."), notice = null) }
             } finally { _state.update { it.copy(connectionTesting = false) } }
         }
@@ -611,9 +611,16 @@ class DefaultSettingsService(
     /**
      * Причина отказа провайдера словами приложения: у человека должно появиться действие
      * (сменить адрес подключения, модель или ключ), а не общий совет повторить запрос.
-     * Тело ответа провайдера в поле не попадает.
+     * Тело ответа провайдера в поле не попадает. Если провайдер отказал в доступе к модели,
+     * а у адреса вендора есть парный эндпоинт, поле называет и его: у Z.AI ключ подписки
+     * работает только на coding-адресе, а общий отвечает отказом даже при живой квоте.
      */
-    private fun Exception.providerReason(fallback: String): String = transportRejection()?.safeReason() ?: fallback
+    private fun Exception.providerReason(draft: LlmProfile, fallback: String): String {
+        val rejection = transportRejection() ?: return fallback
+        val alternative = if (rejection.blocksAutomaticRetry) ProviderCatalog.alternativeEndpoint(draft.baseUrl) else null
+        return if (alternative == null) rejection.safeReason()
+        else "${rejection.safeReason()} Ключ может работать на адресе $alternative."
+    }
 
     override fun exportProfile() {
         scope.launch {

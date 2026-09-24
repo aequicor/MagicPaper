@@ -132,7 +132,9 @@ object ProviderCatalog {
             type = ProviderType.OPENAI_COMPATIBLE,
             displayName = "Zhipu GLM",
             defaultBaseUrl = "https://api.z.ai/api/paas/v4",
-            keyHint = "…",
+            // Общий эндпоинт обслуживает ключ с балансом или пакетом ресурсов; ключ подписки
+            // на нём не работает (см. пресет Coding Plan ниже).
+            keyHint = "ключ API: баланс или пакет ресурсов",
             requiresKey = true,
             models = listOf(
                 // Ручка усилия у GLM зависит от поколения: 5.3 думает всегда и
@@ -242,6 +244,20 @@ object ProviderCatalog {
         spec?.models?.firstOrNull()?.id
             ?: all.firstOrNull { it.type == spec?.type }?.models?.firstOrNull()?.id
             ?: ""
+
+    /**
+     * Парный адрес того же вендора: у Z.AI ключ работает либо на общем эндпоинте (баланс и
+     * пакеты ресурсов), либо на coding-эндпоинте (подписка GLM Coding Plan), и отказ в доступе
+     * к модели чаще всего означает, что ключ и адрес не совпали. Правило знает оба региона
+     * (docs.z.ai/devpack/tool/others) и возвращает null для адреса не из этой пары.
+     */
+    fun alternativeEndpoint(baseUrl: String): String? {
+        val match = CODING_ENDPOINT_PAIR.matchEntire(baseUrl.trim()) ?: return null
+        val (root, coding, tail) = match.destructured
+        return root + (if (coding.isBlank()) "/coding" else "") + tail
+    }
+
+    private val CODING_ENDPOINT_PAIR = Regex("^(https://(?:api\\.z\\.ai|open\\.bigmodel\\.cn)/api)(/coding)?(/paas/v4)/?$")
 
     /** Подсказка «для какого это модельного ряда», чтобы не подставлять DeepSeek-модель в профиль OpenAI. */
     fun familyOf(modelId: String): String {

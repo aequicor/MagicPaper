@@ -44,6 +44,7 @@ class SettingsProviderOperationsTest {
     /**
      * Отказ провайдера в доступе к модели показывается в настройках действием: человек меняет
      * адрес подключения или модель, а не повторяет запрос, который провайдер отвергнет снова.
+     * Ключ GLM Coding Plan на общем адресе Z.AI — именно этот случай: поле называет парный адрес.
      */
     @Test fun providerRefusalIsShownAsAnActionNotAsARetry() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
@@ -54,12 +55,18 @@ class SettingsProviderOperationsTest {
                 throw LlmTransportException(429, null, "HTTP 429: PRIVATE_BALANCE_BODY",
                     ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT))
             }
-            fixture.service.testConnection(profile); runCurrent()
+            val zai = profile.copy(baseUrl = "https://api.z.ai/api/paas/v4")
+            fixture.service.testConnection(zai); runCurrent()
             val shown = fixture.service.state.value.editorModelsError.orEmpty()
-            assertContains(shown, "адрес подключения")
+            assertContains(shown, "https://api.z.ai/api/coding/paas/v4")
             assertFalse("PRIVATE_BALANCE_BODY" in shown, shown)
             assertFalse("Повторите позже" in shown, shown)
             assertFalse(fixture.service.state.value.connectionTesting)
+            // У адреса без пары подсказки нет: отказ остаётся действием без выдуманного адреса.
+            fixture.service.testConnection(profile); runCurrent()
+            val plain = fixture.service.state.value.editorModelsError.orEmpty()
+            assertContains(plain, "адрес подключения")
+            assertFalse("api.z.ai" in plain, plain)
         } finally { fixture.service.close(); Dispatchers.resetMain() }
     }
 
