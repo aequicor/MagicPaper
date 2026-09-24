@@ -81,4 +81,30 @@ class PlanningRetryPolicyTest {
         val once = PlanningRetryPolicy.decide(transient, 0, 3, now = 42L, jitter = 100L)
         assertEquals(once, PlanningRetryPolicy.decide(transient, 0, 3, now = 42L, jitter = 100L))
     }
+
+    @Test fun aReceivedRejectionIsConfirmedWhileALostAnswerIsNot() {
+        // Отказ, полученный от провайдера, доказывает отсутствие ответа: повтор не удваивает эффект.
+        listOf(400, 401, 403, 404, 422, 429).forEach { status ->
+            assertTrue(transport(status).confirmedRejection, "HTTP $status")
+        }
+        // Потерянный ответ (408, 5xx) может оказаться уже созданной и оплаченной генерацией.
+        listOf(408, 500, 502, 503, 504).forEach { status ->
+            assertFalse(transport(status).confirmedRejection, "HTTP $status")
+        }
+    }
+
+    @Test fun theTransportRejectionIsFoundThroughWrappersAndWithoutACycle() {
+        val rejection = transport(429)
+        assertSame(rejection, rejection.transportRejection())
+        assertSame(rejection, IllegalStateException("обёртка", IllegalStateException("внешняя", rejection)).transportRejection())
+        assertNull(IllegalStateException("без обращения к провайдеру").transportRejection())
+        assertNull(CyclicCause().transportRejection(), "Петля причин не должна останавливать обход")
+        var deep: Throwable = rejection
+        repeat(20) { deep = IllegalStateException("уровень $it", deep) }
+        assertNull(deep.transportRejection(), "Обход цепочки ограничен")
+    }
+
+    private class CyclicCause : IllegalStateException("цикл") { override val cause: Throwable get() = this }
+
+    private fun transport(status: Int) = LlmTransportException(status, null, "тело ответа провайдера")
 }

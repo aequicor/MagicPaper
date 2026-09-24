@@ -224,7 +224,12 @@ class RuntimeLifecycleTest {
             settings.resetSessions()
             resetFinished.await(); runCurrent()
 
-            assertEquals("Проекты, сессии и чаты удалены.", settings.state.first { it.notice != null }.notice)
+            // The service applies the dismissal and the reset result on its own dispatcher, so
+            // under load the stale "saved" notice can still be the current state when the reset
+            // completes. Waiting for any notice would then assert on the wrong one; wait for
+            // the reset's own notice, which is exactly what this line has always meant.
+            val resetNotice = "Проекты, сессии и чаты удалены."
+            assertEquals(resetNotice, settings.state.first { it.notice == resetNotice }.notice)
             assertTrue(checkNotNull(streamsAtErase) { "the reset erases worktrees and transcripts" }.all { it in SessionResetKeeps.streams },
                 "files go only once no record refers to them: $streamsAtErase")
             assertTrue(runtime.koin.get<ChatRepository>().sessions().isEmpty())

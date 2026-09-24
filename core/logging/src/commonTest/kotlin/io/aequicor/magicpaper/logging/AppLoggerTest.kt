@@ -87,6 +87,22 @@ class AppLoggerTest {
         }
     }
 
+    /**
+     * Идентификатор запроса и вызова инструмента — единственная связь записи с операцией;
+     * без них сбой в журнале нельзя соотнести ни с сессией, ни с вызовом.
+     */
+    @Test fun runAndCallIdentifiersStayInTheRecordAsOpaqueIds() {
+        val log = AppLogger(sink = AppLogSink {})
+        log.error("provider_tools", "run_failed", mapOf("runId" to "chat:private-session:private-request",
+            "callId" to "project/owner/request/call", "status" to "429", "causeType" to "LlmTransportException"))
+        val entry = log.history().single()
+        assertEquals(setOf("runId", "callId", "status", "causeType"), entry.fields.keys, entry.line())
+        assertTrue(entry.fields.getValue("runId").startsWith("id-"), entry.line())
+        assertTrue(entry.fields.getValue("callId").startsWith("id-"), entry.line())
+        assertEquals("429", entry.fields["status"])
+        listOf("private-session", "private-request", "project/owner").forEach { assertFalse(it in entry.line(), it) }
+    }
+
     /** Every failure logged without an exception passes the class of its cause this way, so it is part of the record. */
     @Test fun theClassOfACauseGivenAsAFieldIsKeptNotDropped() {
         val log = AppLogger(sink = AppLogSink {})

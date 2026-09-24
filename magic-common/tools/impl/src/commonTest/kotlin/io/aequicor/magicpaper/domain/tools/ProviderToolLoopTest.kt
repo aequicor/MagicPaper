@@ -2,6 +2,7 @@ package io.aequicor.magicpaper.domain.tools
 
 import io.aequicor.magicpaper.data.storage.*
 import io.aequicor.magicpaper.domain.*
+import io.aequicor.magicpaper.logging.AppLog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
@@ -90,6 +91,37 @@ class ProviderToolLoopTest {
         } }, InMemoryEventJournal())
         assertEquals("done", loop.run("run", profile, messages, tools))
         assertEquals(1, effects)
+    }
+
+    /**
+     * Отказ провайдера с полученным статусом не делает исход запроса неизвестным: ответа нет,
+     * поэтому чат останавливается известным сбоем модели, а не карантином «проверьте результат».
+     */
+    @Test fun aConfirmedProviderRejectionFailsTheRunWhileALostAnswerStaysUnknown() = runTest {
+        for ((status, phase) in listOf(
+            400 to ProviderToolMachine.Phase.FAILED,
+            429 to ProviderToolMachine.Phase.FAILED,
+            408 to ProviderToolMachine.Phase.UNKNOWN,
+            503 to ProviderToolMachine.Phase.UNKNOWN,
+        )) {
+            val journal = InMemoryEventJournal()
+            var calls = 0
+            val rejection = LlmTransportException(status, null, "private provider body")
+            val loop = testLoop(gateway { calls++; throw rejection }, journal)
+            val thrown = assertFailsWith<IllegalStateException> { loop.run("run-$status", profile, messages, session { error("unused") }) }
+            assertEquals(1, calls, "HTTP $status")
+            assertEquals(phase, loop.restore("run-$status").phase, "HTTP $status")
+            assertEquals(if (phase == ProviderToolMachine.Phase.FAILED) ProviderToolRecovery.Interrupted else ProviderToolRecovery.Unknown,
+                loop.inspect("run-$status"), "HTTP $status")
+            // Владелец чата классифицирует сбой по статусу, не читая тело ответа провайдера.
+            assertSame(rejection, thrown.transportRejection(), "HTTP $status")
+            val record = AppLog.history().last { it.component == "provider_tools" && it.event == "run_failed" }
+            assertEquals(rejection::class.simpleName, record.fields["causeType"], record.line())
+            assertEquals(status.toString(), record.fields["status"], record.line())
+            assertEquals(if (phase == ProviderToolMachine.Phase.UNKNOWN) "unknown" else "failed", record.fields["outcome"], record.line())
+            assertTrue(record.fields.getValue("runId").startsWith("id-"), record.line())
+            assertFalse("private provider body" in record.line(), record.line())
+        }
     }
 
     @Test fun unknownMutationStopsContinuationAndRestartDoesNotRepeatIt() = runTest {

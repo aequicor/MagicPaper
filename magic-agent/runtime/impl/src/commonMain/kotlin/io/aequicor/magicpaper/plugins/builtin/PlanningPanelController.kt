@@ -227,6 +227,6 @@ internal class PlanningPanelController(
 
     private fun reportFailure(operation: String, projectId: String?, failure: Exception, operationId: String? = null) {
         AppLog.error("planning-panel", "$operation.failed", mapOf("projectId" to projectId.orEmpty(),
-            "operationId" to operationId.orEmpty(), "cause" to failure::class.simpleName.orEmpty()))
+            "operationId" to operationId.orEmpty(), "causeType" to failure::class.simpleName.orEmpty()))
     }
 }

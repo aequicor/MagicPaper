@@ -171,7 +171,8 @@ internal expect fun platformEpochMillis(): Long
 internal expect fun platformWriteLog(line: String, error: Boolean)
 
 private const val MAX_SCAN = 65_536
-private val ids = setOf("operationId", "correlationId", "visitId", "sessionId", "projectId", "requestId", "profileId", "entityId", "journalId", "windowId", "tabId", "planId", "draftId")
+private val ids = setOf("operationId", "correlationId", "visitId", "sessionId", "projectId", "requestId", "runId", "callId",
+    "profileId", "entityId", "journalId", "windowId", "tabId", "planId", "draftId")
 private val numeric = setOf("attempt", "generation", "count", "durationMs", "elapsedMs", "bytes", "version", "limit", "entries", "index", "cursor", "epoch")
 /**
  * Числовые метрики без перечисления по имени: длительности (`…Ms`), счётчики токенов

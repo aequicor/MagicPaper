@@ -53,7 +53,7 @@ class PlanStrategyClassifier(
             AppLog.info("planning.strategy", "classification.superseded", fields)
             return false
         }
-        AppLog.info("planning.strategy", "strategy.selected", fields + mapOf("cause" to cause.name, "strategy" to strategy.name, "status" to status.name))
+        AppLog.info("planning.strategy", "strategy.selected", fields + mapOf("reason" to cause.name, "strategy" to strategy.name, "status" to status.name))
         return strategy == PlanRecoveryStrategy.EXISTING_BACKOFF
     }
 

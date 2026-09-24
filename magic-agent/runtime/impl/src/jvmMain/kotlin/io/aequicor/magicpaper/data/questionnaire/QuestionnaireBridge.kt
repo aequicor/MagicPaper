@@ -58,10 +58,10 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaireSer
                 AppLog.info("coding.questionnaire", "request.cancelled", mapOf("outcome" to "connection_closed"))
             }
             catch (failure: Exception) {
-                AppLog.error("coding.questionnaire", "request.crashed", mapOf("outcome" to "handler", "cause" to failure.javaClass.simpleName))
+                AppLog.error("coding.questionnaire", "request.crashed", mapOf("outcome" to "handler", "causeType" to failure.javaClass.simpleName))
                 try { reply(exchange, 500) }
                 catch (replyFailure: Exception) {
-                    AppLog.error("coding.questionnaire", "failure_response.failed", mapOf("outcome" to "connection_closed", "cause" to replyFailure.javaClass.simpleName))
+                    AppLog.error("coding.questionnaire", "failure_response.failed", mapOf("outcome" to "connection_closed", "causeType" to replyFailure.javaClass.simpleName))
                 }
             }
             finally { exchange.close() }
@@ -146,7 +146,7 @@ internal class QuestionnaireBridge(private val registry: RuntimeQuestionnaireSer
                 response.cancel(cancelled)
                 throw cancelled
             } catch (e: Exception) {
-                AppLog.error("coding.questionnaire", "request.failed", mapOf("operation" to method.orEmpty(), "outcome" to "rejected", "cause" to e.javaClass.simpleName))
+                AppLog.error("coding.questionnaire", "request.failed", mapOf("operation" to method.orEmpty(), "outcome" to "rejected", "causeType" to e.javaClass.simpleName))
                 buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("error", buildJsonObject {
                     put("code", -32602); put("message", if (e is ToolArgumentRejection) e.message.orEmpty() else "Не удалось обработать опросник. Проверьте состояние запроса.")
                 }) }

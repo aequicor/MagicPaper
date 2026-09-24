@@ -41,7 +41,7 @@ class DefaultToolEventHub(private val knownSecrets: () -> Set<String> = { emptyS
                 if (error is CancellationException) throw error
                 currentCoroutineContext().ensureActive()
                 AppLog.error("tools", "observer.failed", fields = mapOf("callId" to event.callId,
-                    "phase" to event.phase.name, "cause" to error::class.simpleName.orEmpty()))
+                    "phase" to event.phase.name, "causeType" to error::class.simpleName.orEmpty()))
                 observers.update { it - observer }
             }
         }
