@@ -129,6 +129,48 @@ class CodingMachineTest {
         assertEquals(ack, next.state.noDispatchAcknowledgements[session.id], "Parent admission is not native consumption")
     }
 
+    @Test fun deferRecoveryRecordsItsOwnNativeDecisionAndContinuationReusesOnlyIt() {
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val ref = unknown.ref()
+        val attempt = NativeRunRecoveryRef(CodingEngine.PI, session.id, ref.requestId, 0)
+        val deferred = apply(unknown, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), request().messageId,
+            decidedAttempt = attempt, decisionId = "decision"))
+        val deferredRun = deferred.runs.getValue(session.id)
+        assertEquals(attempt, deferredRun.abandonAttempt)
+        assertEquals("decision", deferredRun.abandonDecisionId)
+        assertNull(deferredRun.abandonNoDispatchProof)
+        assertTrue(deferred.sessions.getValue(session.id).pendingRun!!.stoppedByUser)
+        // Continuation settles with exactly the recorded decision: the acknowledgement fact matches only it.
+        val abandoning = apply(deferred, CodingMachine.Intent.Abandon(ref, "decision", attempt))
+        val acknowledged = apply(abandoning, CodingMachine.Fact.AbandonAcknowledged(ref,
+            NativeRunRecoveryAcknowledgement("ack", attempt, "decision")))
+        assertNull(acknowledged.sessions.getValue(session.id).pendingRun)
+        // The deferral records at most one decision, never a foreign session's and never a blank one.
+        rejected(unknown, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), request().messageId,
+            decidedAttempt = attempt, decisionId = null))
+        rejected(unknown, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), request().messageId,
+            decidedAttempt = attempt.copy(sessionId = "other"), decisionId = "decision"))
+        rejected(unknown, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), request().messageId,
+            decidedAttempt = attempt, decidedNoDispatch = NativeRunNoDispatchProof(CodingEngine.PI, session.id, ref.requestId, "proof", "epoch"),
+            decisionId = "decision"))
+    }
+
+    @Test fun deferredNoDispatchDecisionIsTheOnlyOneContinuationAccepts() {
+        val unknown = apply(running(), CodingMachine.Fact.Restored)
+        val ref = unknown.ref()
+        val proof = NativeRunNoDispatchProof(CodingEngine.PI, session.id, ref.requestId, "proof", "epoch")
+        val deferred = apply(unknown, CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session), request().messageId,
+            decidedNoDispatch = proof, decisionId = "decision"))
+        assertEquals(proof, deferred.runs.getValue(session.id).abandonNoDispatchProof)
+        assertNull(deferred.runs.getValue(session.id).abandonAttempt)
+        val decided = apply(deferred, CodingMachine.Intent.AbandonNotDispatched(ref, "decision", proof))
+        val acknowledged = apply(decided, CodingMachine.Fact.NoDispatchAcknowledged(ref,
+            NativeRunNoDispatchAcknowledgement("ack", proof, "decision")))
+        assertNull(acknowledged.sessions.getValue(session.id).pendingRun)
+        rejected(decided, CodingMachine.Fact.NoDispatchAcknowledged(ref,
+            NativeRunNoDispatchAcknowledgement("ack", proof, "foreign")))
+    }
+
     @Test fun recoveryConsumptionRequiresExactNativeConsumerAndSurvivesPreNativeFailure() {
         val unknown = apply(running(), CodingMachine.Fact.Restored)
         val oldRef = unknown.ref()

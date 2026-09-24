@@ -77,7 +77,10 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
         @Serializable @SerialName("BeginRepair") data class BeginRepair(val ref: RunRef, val requestId: String,
             val workspaceRevision: ChildRevision) : Intent
         @Serializable @SerialName("Pause") data class Pause(val ref: RunRef) : Intent
-        @Serializable @SerialName("DeferRecovery") data class DeferRecovery(val session: SessionRef, val messageId: String) : Intent
+        @Serializable @SerialName("DeferRecovery") data class DeferRecovery(val session: SessionRef, val messageId: String,
+            /** The native decision this deferral itself recorded: continuation must match it exactly, never invent a new one. */
+            val decidedAttempt: NativeRunRecoveryRef? = null, val decisionId: String? = null,
+            val decidedNoDispatch: NativeRunNoDispatchProof? = null) : Intent
         @Serializable @SerialName("Clarify") data class Clarify(val ref: RunRef, val request: CodingRunCheckpoint,
             val message: CodingMessage) : Intent
         @Serializable @SerialName("Abandon") data class Abandon(val ref: RunRef, val decisionId: String, val previous: NativeRunRecoveryRef) : Intent
@@ -239,6 +242,11 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
                 val session = requireSession(state, input.session)
                 val run = state.runs[session.id]
                 require(run?.phase !in setOf(Phase.RUNNING, Phase.STOPPING, Phase.ABANDONING)) { "Сначала остановите работу" }
+                require(!(input.decidedAttempt != null && input.decidedNoDispatch != null)) { "Восстановление содержит два разных решения" }
+                require((input.decisionId != null) == (input.decidedAttempt != null || input.decidedNoDispatch != null) &&
+                    input.decisionId?.isBlank() != true &&
+                    (input.decidedAttempt == null || input.decidedAttempt.sessionId == session.id) &&
+                    (input.decidedNoDispatch == null || input.decidedNoDispatch.sessionId == session.id)) { "Решение восстановления относится к другой сверке" }
                 val request = session.pendingRun ?: run {
                     require(run == null && session.queuedPrompts.isEmpty()) { "Сохранённый запрос изменился" }
                     val message = requireNotNull(state.histories[session.id].orEmpty().interruptedCodingRequest()
@@ -247,9 +255,12 @@ object CodingMachine : Machine<CodingMachine.State, CodingMachine.Input, CodingM
                 }
                 require(request.messageId == input.messageId) { "Сохранённый запрос изменился" }
                 val generation = run?.ref?.generation ?: (state.generations[session.id] ?: 0) + 1
-                // User deferral records no proof about the old external outcome, including legacy history.
-                val deferred = run ?: Run(RunRef(input.session, request.runId, generation,
-                    request.messageId, request.responseId, request.responseTimelineId), Phase.UNKNOWN)
+                // User deferral records no proof about the old external outcome, including legacy history,
+                // except the decision it recorded itself; continuation reuses that decision instead of a fresh one.
+                val deferred = (run ?: Run(RunRef(input.session, request.runId, generation,
+                    request.messageId, request.responseId, request.responseTimelineId), Phase.UNKNOWN)).let {
+                    if (input.decisionId == null) it else it.copy(abandonDecisionId = input.decisionId,
+                        abandonAttempt = input.decidedAttempt, abandonNoDispatchProof = input.decidedNoDispatch) }
                 Transition(state.copy(sessions = state.sessions + (session.id to session.copy(pendingRun =
                     request.copy(intent = ExecutionIntent.STOP, stoppedByUser = true))),
                     runs = state.runs + (session.id to deferred), generations = state.generations + (session.id to generation),

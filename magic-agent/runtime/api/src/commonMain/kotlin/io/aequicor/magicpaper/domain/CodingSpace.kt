@@ -255,7 +255,9 @@ object CodingSpace : StateSpace<CodingMachine.State, CodingMachine.Input, Coding
     // `SetWorktreeEnabled` refuse a queue and a run, and the first also an archived session.
     // `EditRequest` and `ReplaceHistory` are accepted only where the history is empty, which is what
     // the representatives send as `expected`. `Abandon` and `AbandonNotDispatched` are accepted from
-    // `INTERRUPTED` and `UNKNOWN`, and `DeferRecovery` from those two and from an unfinished history.
+    // `INTERRUPTED` and `UNKNOWN`, and `DeferRecovery` from those two and from an unfinished history;
+    // a deferral records the native decision it already made itself, and only that exact decision
+    // settles its run on continuation.
     // `NativeSessionBound` is accepted wherever a run stands and binds only a live one. The engine reports its session while
     // it runs, so the report can arrive after the run's owner settled the run by a stop, or by a restart that replaced its
     // generation. There it changes nothing: the stop or restart already decided the run, a replaced conversation must not be

@@ -363,11 +363,13 @@ class DefaultCodingService(
                         if (answer.skipped || "leave" in answer.selected) {
                             val source = session.session.pendingRun?.messageId
                                 ?: requireNotNull(session.messages.interruptedCodingRequest()).id
+                            // Leaving it stopped is itself the user's explicit review of the uncertain outcome;
+                            // without the recorded decisions, its working folder stays busy for every other session.
+                            val decided = acknowledgeNativeRecoveryQuietly(session.session, session.session.pendingRun?.runId)
                             acceptCodingSession(session.session,
-                                CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session.session), source))
-                            // Leaving it stopped is itself the user's explicit review of the uncertain
-                            // outcome; without this, its working folder stays busy for every other session.
-                            acknowledgeNativeRecoveryQuietly(session.session)
+                                CodingMachine.Intent.DeferRecovery(CodingMachine.ref(session.session), source,
+                                    decidedAttempt = decided.attempt, decisionId = decided.decisionId,
+                                    decidedNoDispatch = decided.proof))
                         } else resumeCodingSession(request.sessionId, answer.text, fromQuestionnaire = true)
                     }
                     else -> planningChat!!.submitInteraction(request, answers)
@@ -1708,7 +1710,7 @@ class DefaultCodingService(
                 startQueuedPrompt(sessionId)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                AppLog.error("coding", "run.clarify.failed", mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty()))
+                AppLog.error("coding", "run.clarify.failed", failure, mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty()))
                 _state.update { it.copy(notice = "Не удалось подтвердить продолжение. Проверьте сохранённый запрос и состояние сессии.") }
             } finally { clarifyingSessions.remove(sessionId) }
         }
@@ -1763,7 +1765,7 @@ class DefaultCodingService(
                 launchCodingRun(latest, fresh, recovering = true, resumeInstruction = withNote)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
-                AppLog.error("coding", "run.resume.failed", mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty()))
+                AppLog.error("coding", "run.resume.failed", failure, mapOf("sessionId" to sessionId, "causeType" to failure::class.simpleName.orEmpty()))
                 _state.update { it.copy(notice = "Не удалось подтвердить исход предыдущей работы. Сессия остаётся остановленной; сохранённый запрос доступен для восстановления.") }
             } finally { resumingSessions.remove(sessionId) }
         }
@@ -1824,22 +1826,44 @@ class DefaultCodingService(
         }
     }
 
+    /** The native decision a deferral recorded; continuation must match it exactly instead of inventing a fresh one. */
+    private class RecordedDecision(val attempt: NativeRunRecoveryRef? = null, val proof: NativeRunNoDispatchProof? = null,
+        val decisionId: String? = null)
+
     /** Best-effort: an unconfirmed native outcome must not block the "leave stopped" decision itself,
-     * only every other session's use of the same working folder until the native side catches up. */
-    private suspend fun acknowledgeNativeRecoveryQuietly(session: CodingSession) {
-        val recovery = codingRuntime?.recovery ?: return
+     * only every other session's use of the same working folder until the native side catches up.
+     * Every recorded acknowledgement is a pending decision the session's next native admission must carry
+     * exactly, and only the application's own continuation can carry one: a known outcome needs no
+     * decision at all, so acknowledging it would permanently fence the session's runs. Only what
+     * [NativeRunRecoverySnapshot.decided] still lacks — an outcome nobody can know, or a request proven
+     * never dispatched — is acknowledged here, with one decision the deferral records durably. */
+    private suspend fun acknowledgeNativeRecoveryQuietly(session: CodingSession, requestId: String?): RecordedDecision {
+        val recovery = codingRuntime?.recovery ?: return RecordedDecision()
+        var recorded = RecordedDecision()
         try {
             val snapshot = recovery.inspect(session.id)
-            if (snapshot.persistenceUnknown) return
-            snapshot.items.filter { it.acknowledgement == null }.forEach { item ->
+            if (snapshot.persistenceUnknown) return recorded
+            val decision = Id.new()
+            var decided = 0
+            snapshot.items.filter { it.acknowledgement == null && it.outcome == NativeRunOutcome.UNKNOWN }.forEach { item ->
                 val stopped = if (item.termination == NativeRunTermination.STOPPED) snapshot else recovery.stop(item.ref)
-                if (stopped.items.any { it.ref == item.ref && it.termination == NativeRunTermination.STOPPED })
-                    recovery.acknowledge(item.ref, Id.new())
+                if (stopped.items.any { it.ref == item.ref && it.termination == NativeRunTermination.STOPPED }) {
+                    recovery.acknowledge(item.ref, decision); decided++
+                    if (requestId == null || item.ref.requestId == requestId)
+                        recorded = RecordedDecision(attempt = item.ref, decisionId = decision)
+                }
             }
+            snapshot.noDispatch.filter { it.acknowledgement == null }.forEach { item ->
+                recovery.acknowledgeNoDispatch(item.proof, decision); decided++
+                if (recorded.decisionId == null && (requestId == null || item.proof.requestId == requestId))
+                    recorded = RecordedDecision(proof = item.proof, decisionId = decision)
+            }
+            if (decided > 0) AppLog.debug("coding", "recovery.defer.decided", mapOf("sessionId" to session.id, "count" to decided.toString()))
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             AppLog.error("coding", "recovery.defer.acknowledge.failed", mapOf("sessionId" to session.id, "causeType" to failure::class.simpleName.orEmpty()))
         }
+        return recorded
     }
 
     private suspend fun clearAcceptedComposer(draft: io.aequicor.magicpaper.ui.components.CodingComposerDraft?, version: Long) {
