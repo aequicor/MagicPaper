@@ -236,6 +236,7 @@ private fun runMagicPaperWindow(
                 DesktopAgentPanel(
                     owner = window,
                     coding = runtime.koin.get<io.aequicor.magicpaper.ui.CodingService>(),
+                    settings = runtime.koin.get<io.aequicor.magicpaper.ui.SettingsService>(),
                     placement = runtime.koin.get<io.aequicor.magicpaper.data.storage.KeyValueStore>(),
                 )
             }

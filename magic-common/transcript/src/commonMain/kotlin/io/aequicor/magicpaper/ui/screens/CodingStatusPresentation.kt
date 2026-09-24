@@ -19,7 +19,7 @@ val CodingSessionStatus.label: String
         CodingSessionStatus.NEEDS_TESTING -> "Работа завершена · нужна ручная проверка"
     }
 
-private val CodingSessionStatus.activityTone: PaperActivityTone
+public val CodingSessionStatus.activityTone: PaperActivityTone
     get() = when (this) {
         CodingSessionStatus.IDLE -> PaperActivityTone.READY
         CodingSessionStatus.UNREAD -> PaperActivityTone.UNREAD
@@ -28,6 +28,18 @@ private val CodingSessionStatus.activityTone: PaperActivityTone
         CodingSessionStatus.BLOCKED, CodingSessionStatus.WAITING, CodingSessionStatus.CONFIRMATION -> PaperActivityTone.ATTENTION
         CodingSessionStatus.QUEUED, CodingSessionStatus.SCHEDULED -> PaperActivityTone.QUEUED
     }
+
+/**
+ * One dot for the whole workspace: the most demanding session wins, so a single run in progress
+ * outranks a question, a question outranks unread results, and only a quiet workspace is green.
+ * Expressed over the per-session tones above, so a status never means two different colours.
+ */
+public fun aggregateDockTone(tones: Collection<PaperActivityTone>): PaperActivityTone = when {
+    PaperActivityTone.WORKING in tones -> PaperActivityTone.WORKING
+    PaperActivityTone.ATTENTION in tones -> PaperActivityTone.ATTENTION
+    PaperActivityTone.UNREAD in tones -> PaperActivityTone.UNREAD
+    else -> PaperActivityTone.READY
+}
 
 @Composable
 fun ActivityDot(status: CodingSessionStatus, modifier: Modifier = Modifier, size: Int = 10) {

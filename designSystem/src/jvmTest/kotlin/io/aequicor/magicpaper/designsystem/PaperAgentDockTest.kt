@@ -25,6 +25,10 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -44,12 +48,18 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperAgentDockTest {
     private companion object {
+        val sessions = listOf(
+            PaperDockSession("s1", "Восстановление дочерних сессий", PaperActivityTone.WORKING,
+                running = true, selected = true),
+            PaperDockSession("s2", "Индикатор always-on-top", PaperActivityTone.ATTENTION),
+            PaperDockSession("s3", "Панель агента", PaperActivityTone.UNREAD),
+        )
         val busyModel = PaperAgentDockModel(
+            sessions = sessions,
             statusLabel = "работает",
-            sessionLabel = "Восстановление дочерних сессий после сбоя",
             busy = true,
             liveDetail = "Читает SessionOrganismStore.kt",
-            transcriptKey = "session-1",
+            transcriptKey = "s1",
             messages = listOf(
                 PaperDockMessage("1", PaperDockAuthor.USER, "Почему сессии теряются после падения?"),
                 PaperDockMessage("2", PaperDockAuthor.AGENT,
@@ -58,9 +68,18 @@ class PaperAgentDockTest {
             ),
         )
         val waitingModel = busyModel.copy(
+            sessions = sessions.map { it.copy(selected = it.id == "s2") },
             statusLabel = "Ждём вашего ответа", busy = false, liveDetail = null,
             canSend = false, inputPlaceholder = "Ответьте на вопрос в окне MagicPaper",
+            transcriptKey = "s2",
         )
+    }
+
+    /** PaperBackground reads the lifecycle the way the application window provides it. */
+    private class DockLifecycleOwner : LifecycleOwner {
+        private val registry = LifecycleRegistry(this)
+        override val lifecycle: Lifecycle get() = registry
+        init { registry.currentState = Lifecycle.State.RESUMED }
     }
 
     @Test fun collapsedTabCarriesTheIndicatorAloneAndExpandsOnActivation() {
@@ -161,6 +180,31 @@ class PaperAgentDockTest {
             "Opening needs a dwell: $PaperAgentDockExpandDelayMillis")
         assertTrue(PaperAgentDockCollapseDelayMillis > PaperAgentDockExpandDelayMillis,
             "Retracting must be slower than opening: $PaperAgentDockCollapseDelayMillis")
+    }
+
+    @Test fun theSessionRailListsEverySessionAndSelectsOnActivation() {
+        val frames = Frames()
+        val selected = mutableListOf<String>()
+        val scene = scene(PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight) {
+            Dock(true, {}, busyModel, onSelectSession = { selected.add(it) })
+        }
+        try {
+            frames.draw(scene)
+            onPaperUi {
+                for (session in sessions) {
+                    assertTrue(scene.strings().any { it == session.name }, "The rail lists ${session.name}")
+                }
+                assertTrue(scene.row("Восстановление дочерних сессий")
+                    .config.getOrNull(SemanticsProperties.Selected) == true,
+                    "The session the dock chats with is marked selected")
+                scene.row("Индикатор always-on-top").config[SemanticsActions.OnClick].action!!.invoke()
+            }
+            frames.draw(scene)
+            onPaperUi {
+                assertEquals(listOf("s2"), selected, "Activating a row selects that session")
+                scene.capture(frames, "expanded-rail")
+            }
+        } finally { onPaperUi { scene.close() } }
     }
 
     @Test fun escapeCollapsesTheExpandedPanel() {
@@ -265,7 +309,7 @@ class PaperAgentDockTest {
     @Test fun anEmptyTranscriptSaysSoInsteadOfShowingABlankArea() {
         val frames = Frames()
         val scene = scene(PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight) {
-            Dock(true, {}, PaperAgentDockModel(statusLabel = "ждёт запроса", sessionLabel = "Новая сессия"))
+            Dock(true, {}, PaperAgentDockModel(statusLabel = "ждёт запроса"))
         }
         try {
             frames.draw(scene)
@@ -286,6 +330,7 @@ class PaperAgentDockTest {
         onInputChange: (String) -> Unit = {},
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
+        onSelectSession: (String) -> Unit = {},
         onDragStart: (Float, Float) -> Unit = { _, _ -> },
         onDragBy: (Float, Float) -> Unit = { _, _ -> },
         onDragEnd: () -> Unit = {},
@@ -305,6 +350,7 @@ class PaperAgentDockTest {
             onSend = onSend,
             onStop = onStop,
             onOpenMainWindow = {},
+            onSelectSession = onSelectSession,
             onDragStart = onDragStart,
             onDragBy = onDragBy,
             onDragEnd = onDragEnd,
@@ -324,7 +370,10 @@ class PaperAgentDockTest {
             (width.value * density).toInt().coerceAtLeast(1),
             (height.value * density).toInt().coerceAtLeast(1),
         ) {
-            CompositionLocalProvider(LocalDensity provides Density(density, fontScale)) {
+            CompositionLocalProvider(
+                LocalDensity provides Density(density, fontScale),
+                LocalLifecycleOwner provides DockLifecycleOwner(),
+            ) {
                 PaperTheme { content() }
             }
         }
@@ -349,6 +398,14 @@ class PaperAgentDockTest {
         fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
         return semanticsOwners.flatMap { walk(it.unmergedRootSemanticsNode) }
     }
+
+    /** A rail row is the clickable ancestor of its title, in the unmerged tree. */
+    private fun ImageComposeScene.row(name: String): SemanticsNode = nodes()
+        .filter { it.config.contains(SemanticsActions.OnClick) }
+        .single { row ->
+            fun walk(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::walk)
+            walk(row).any { it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> text.text == name } }
+        }
 
     private fun ImageComposeScene.actions() = nodes().filter { it.config.contains(SemanticsActions.OnClick) }
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -71,7 +72,7 @@ public val PaperAgentDockCollapsedWidth: Dp = 42.dp
 /** Collapsed tab height: a comfortable pointer and touch target. */
 public val PaperAgentDockCollapsedHeight: Dp = 88.dp
 
-public val PaperAgentDockExpandedWidth: Dp = 376.dp
+public val PaperAgentDockExpandedWidth: Dp = 448.dp
 public val PaperAgentDockExpandedHeight: Dp = 476.dp
 
 /**
@@ -83,19 +84,35 @@ public const val PaperAgentDockExpandDelayMillis: Long = 250L
 /** Grace period after the pointer leaves, so travelling inside the panel does not retract it. */
 public const val PaperAgentDockCollapseDelayMillis: Long = 400L
 
+/** Width of the session rail inside the expanded card: enough for a name and its dot. */
+private val DockSessionRailWidth = 148.dp
+
 public enum class PaperDockAuthor { USER, AGENT }
 
 /** One transcript row. Text is Markdown for the agent and literal for the reader's own input. */
 public data class PaperDockMessage(val id: String, val author: PaperDockAuthor, val text: String)
 
 /**
- * Everything the dock shows about one session. [liveDetail] is the run's current step; it is
- * what makes a collapsed or freshly expanded dock reflect work in progress rather than the
- * last saved message.
+ * One row of the dock's session list. The tone is the session's own, the same one the sidebar
+ * shows, so selecting a session here never repaints its state in another colour.
+ */
+public data class PaperDockSession(
+    val id: String,
+    val name: String,
+    val tone: PaperActivityTone,
+    val running: Boolean = false,
+    val selected: Boolean = false,
+)
+
+/**
+ * Everything the dock shows: the workspace's sessions and the chat of the selected one.
+ * [liveDetail] is the selected run's current step; it is what makes a collapsed or freshly
+ * expanded dock reflect work in progress rather than the last saved message.
  */
 public data class PaperAgentDockModel(
-    val statusLabel: String,
-    val sessionLabel: String,
+    val sessions: List<PaperDockSession> = emptyList(),
+    /** Status of the selected session, for the header and the collapsed tab's accessible name. */
+    val statusLabel: String = "",
     val messages: List<PaperDockMessage> = emptyList(),
     val liveDetail: String? = null,
     val busy: Boolean = false,
@@ -127,6 +144,9 @@ public fun PaperAgentDock(
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
     onOpenMainWindow: () -> Unit = {},
+    onSelectSession: (String) -> Unit = {},
+    /** The application's paper-animation setting: the dock's background is the window's own. */
+    animateBackground: Boolean = true,
     onDragStart: (Float, Float) -> Unit = { _, _ -> },
     onDragBy: (Float, Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {},
@@ -212,21 +232,25 @@ public fun PaperAgentDock(
             },
     ) {
         // The card floats inside the shadow ring: one silhouette, fully rounded, no edge the
-        // window can clip and no hand-drawn outline fighting the surface.
+        // window can clip and no hand-drawn outline fighting the surface. The surface is the
+        // application's canvas with its animated paper, so the dock reads as the same window.
         PaperSurface(
             Modifier.padding(PaperAgentDockShadowMargin).fillMaxSize(),
-            kind = PaperSurfaceKind.RAISED,
+            kind = PaperSurfaceKind.CANVAS,
             shape = RoundedCornerShape(12.dp),
             shadowElevation = 4.dp,
         ) {
-            if (expanded) {
-                DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
-                    onOpenMainWindow, { onExpandedChange(false) }, drag)
-            } else {
-                DockCollapsed(model, colors, indicator, drag) {
-                    // An explicit activation is not pointer-owned, so it survives having no pointer.
-                    openedByPointer = false
-                    onExpandedChange(true)
+            Box(Modifier.fillMaxSize()) {
+                PaperBackground(animateBackground, Modifier.matchParentSize())
+                if (expanded) {
+                    DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
+                        onOpenMainWindow, onSelectSession, { onExpandedChange(false) }, drag)
+                } else {
+                    DockCollapsed(model, colors, indicator, drag) {
+                        // An explicit activation is not pointer-owned, so it survives having no pointer.
+                        openedByPointer = false
+                        onExpandedChange(true)
+                    }
                 }
             }
         }
@@ -251,7 +275,8 @@ private fun DockCollapsed(
             )
             .then(drag)
             .semantics {
-                contentDescription = "Агент · ${model.sessionLabel}: ${model.statusLabel}"
+                val selected = model.sessions.firstOrNull { it.selected }
+                contentDescription = "Агент · ${selected?.name.orEmpty()}: ${model.statusLabel}"
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -270,10 +295,68 @@ private fun DockExpanded(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onOpenMainWindow: () -> Unit,
+    onSelectSession: (String) -> Unit,
     onCollapse: () -> Unit,
     drag: Modifier,
 ) {
-    Column(Modifier.fillMaxSize()) {
+    Row(Modifier.fillMaxSize()) {
+        // The window's own anatomy in miniature: a session rail beside the conversation, so
+        // switching sessions never means leaving the panel.
+        DockSessionList(model, onSelectSession, Modifier.width(DockSessionRailWidth).fillMaxHeight())
+        Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
+        DockConversation(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
+            onOpenMainWindow, onCollapse, drag, Modifier.weight(1f).fillMaxHeight())
+    }
+}
+
+/** The session rail: the sidebar's own row, narrowed to a dock column. */
+@Composable
+private fun DockSessionList(
+    model: PaperAgentDockModel,
+    onSelectSession: (String) -> Unit,
+    modifier: Modifier,
+) {
+    val spacing = LocalPaperSpacing.current
+    val colors = LocalPaperColors.current
+    Column(modifier) {
+        PaperText("Сессии", role = PaperTextRole.CHROME, color = colors.secondaryText,
+            modifier = Modifier.padding(horizontal = spacing.xs, vertical = spacing.xxs))
+        if (model.sessions.isEmpty()) {
+            PaperText("Нет сессий", role = PaperTextRole.CHROME, color = colors.disabled,
+                modifier = Modifier.padding(horizontal = spacing.xs))
+        } else {
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(model.sessions, key = { it.id }) { session ->
+                    PaperSessionRow(
+                        title = session.name,
+                        onClick = { onSelectSession(session.id) },
+                        selected = session.selected,
+                        indicator = {
+                            PaperActivityIndicator(session.tone, session.name, running = session.running)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DockConversation(
+    model: PaperAgentDockModel,
+    colors: PaperColors,
+    spacing: PaperSpacing,
+    indicator: @Composable () -> Unit,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+    onOpenMainWindow: () -> Unit,
+    onCollapse: () -> Unit,
+    drag: Modifier,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
         // The header doubles as the drag handle, the way a title bar does.
         Row(
             Modifier.fillMaxWidth().then(drag).padding(horizontal = spacing.sm, vertical = spacing.xs),
@@ -282,8 +365,6 @@ private fun DockExpanded(
             Box(Modifier.heightIn(min = 24.dp), contentAlignment = Alignment.Center) { indicator() }
             Spacer(Modifier.width(spacing.xs))
             Column(Modifier.weight(1f)) {
-                PaperFadingText(model.sessionLabel, style = LocalPaperTypography.current.label,
-                    color = colors.text, marqueeOnHover = true)
                 PaperFadingText(model.statusLabel, style = LocalPaperTypography.current.chrome,
                     color = colors.secondaryText, marqueeOnHover = true)
             }
@@ -396,24 +477,31 @@ private fun DockMessageRow(message: PaperDockMessage) {
     }
 }
 
-@Preview(name = "Dock collapsed · working", group = "Agent dock", widthDp = 26, heightDp = 72)
+private val previewSessions = listOf(
+    PaperDockSession("s1", "Восстановление дочерних сессий", PaperActivityTone.WORKING, running = true, selected = true),
+    PaperDockSession("s2", "Индикатор always-on-top", PaperActivityTone.ATTENTION),
+    PaperDockSession("s3", "Панель агента", PaperActivityTone.UNREAD),
+    PaperDockSession("s4", "Старая задача", PaperActivityTone.READY),
+)
+
+@Preview(name = "Dock collapsed · working", group = "Agent dock", widthDp = 42, heightDp = 88)
 @Composable
 public fun PaperAgentDockCollapsedPreview() = PaperTheme {
     PaperAgentDock(expanded = false, onExpandedChange = {},
-        model = PaperAgentDockModel(statusLabel = "работает", sessionLabel = "Восстановление сессий"),
-        indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 12.dp) })
+        model = PaperAgentDockModel(sessions = previewSessions, statusLabel = "работает"),
+        indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 16.dp) })
 }
 
-@Preview(name = "Dock expanded · streaming", group = "Agent dock", widthDp = 360, heightDp = 460)
+@Preview(name = "Dock expanded · streaming", group = "Agent dock", widthDp = 448, heightDp = 476)
 @Composable
 public fun PaperAgentDockExpandedPreview() = PaperTheme {
     PaperAgentDock(expanded = true, onExpandedChange = {},
         model = PaperAgentDockModel(
+            sessions = previewSessions,
             statusLabel = "работает",
-            sessionLabel = "Восстановление дочерних сессий после сбоя",
             busy = true,
             liveDetail = "Читает SessionOrganismStore.kt",
-            transcriptKey = "session-1",
+            transcriptKey = "s1",
             messages = listOf(
                 PaperDockMessage("1", PaperDockAuthor.USER, "Почему сессии теряются после падения?"),
                 PaperDockMessage("2", PaperDockAuthor.AGENT,
@@ -421,32 +509,32 @@ public fun PaperAgentDockExpandedPreview() = PaperTheme {
                 PaperDockMessage("3", PaperDockAuthor.USER, "Исправь порядок."),
             ),
         ),
-        indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 12.dp) },
+        indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 16.dp) },
         input = "Проверь ещё и планирование")
 }
 
-@Preview(name = "Dock expanded · waiting", group = "Agent dock", widthDp = 360, heightDp = 460)
+@Preview(name = "Dock expanded · waiting", group = "Agent dock", widthDp = 448, heightDp = 476)
 @Composable
 public fun PaperAgentDockWaitingPreview() = PaperTheme {
     PaperAgentDock(expanded = true, onExpandedChange = {},
         model = PaperAgentDockModel(
+            sessions = previewSessions.map { if (it.id == "s2") it.copy(selected = true) else it.copy(selected = false) },
             statusLabel = "Ждём вашего ответа",
-            sessionLabel = "Индикатор always-on-top",
-            transcriptKey = "session-2",
+            transcriptKey = "s2",
             canSend = false,
             inputPlaceholder = "Ответьте на вопрос в окне MagicPaper",
             messages = listOf(
                 PaperDockMessage("1", PaperDockAuthor.AGENT, "Нужно уточнение: показывать панель в покое или только во время прогона?"),
             ),
         ),
-        indicator = { PaperActivityIndicator(PaperActivityTone.ATTENTION, "Ждём вашего ответа", size = 12.dp) })
+        indicator = { PaperActivityIndicator(PaperActivityTone.ATTENTION, "Ждём вашего ответа", size = 16.dp) })
 }
 
-@Preview(name = "Dock expanded · empty", group = "Agent dock", widthDp = 360, heightDp = 460)
+@Preview(name = "Dock expanded · empty", group = "Agent dock", widthDp = 448, heightDp = 476)
 @Composable
 public fun PaperAgentDockEmptyPreview() = PaperTheme {
     PaperAgentDock(expanded = true, onExpandedChange = {},
-        model = PaperAgentDockModel(statusLabel = "ждёт запроса", sessionLabel = "Новая сессия", canSend = false,
+        model = PaperAgentDockModel(sessions = emptyList(), statusLabel = "ждёт запроса", canSend = false,
             inputPlaceholder = "Сессия недоступна для ввода"),
-        indicator = { PaperActivityIndicator(PaperActivityTone.READY, "ждёт запроса", size = 12.dp) })
+        indicator = { PaperActivityIndicator(PaperActivityTone.READY, "ждёт запроса", size = 16.dp) })
 }

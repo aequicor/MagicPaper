@@ -3,7 +3,10 @@ package io.aequicor.magicpaper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.awt.ComposeWindow
+import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.data.storage.KeyValueStore
+import io.aequicor.magicpaper.designsystem.PaperActivityTone
+import io.aequicor.magicpaper.designsystem.PaperActivityIndicator
 import io.aequicor.magicpaper.designsystem.PaperAgentDock
 import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedHeight
 import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedWidth
@@ -12,6 +15,7 @@ import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedWidth
 import io.aequicor.magicpaper.designsystem.PaperAgentDockModel
 import io.aequicor.magicpaper.designsystem.PaperDockAuthor
 import io.aequicor.magicpaper.designsystem.PaperDockMessage
+import io.aequicor.magicpaper.designsystem.PaperDockSession
 import io.aequicor.magicpaper.designsystem.PaperTheme
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
@@ -19,12 +23,15 @@ import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.ui.CodingService
 import io.aequicor.magicpaper.ui.CodingSessionUi
 import io.aequicor.magicpaper.ui.CodingState
-import io.aequicor.magicpaper.ui.screens.ActivityDot
+import io.aequicor.magicpaper.ui.SettingsService
+import io.aequicor.magicpaper.ui.screens.activityTone
+import io.aequicor.magicpaper.ui.screens.aggregateDockTone
 import io.aequicor.magicpaper.ui.screens.label
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.awt.Color
 import java.awt.Desktop
@@ -57,6 +64,7 @@ internal enum class DockEdge { START, END }
 internal class DesktopAgentPanel(
     private val owner: Window,
     private val coding: CodingService,
+    private val settings: SettingsService,
     private val placement: KeyValueStore,
 ) : AutoCloseable {
     private companion object {
@@ -83,8 +91,11 @@ internal class DesktopAgentPanel(
     /** What the dock shows; null hides it. One write per state change keeps invalidation cheap. */
     private data class Snapshot(
         val model: PaperAgentDockModel,
-        val status: CodingSessionStatus,
+        val tone: PaperActivityTone,
+        val toneLabel: String,
+        val anyRunning: Boolean,
         val sessionId: String,
+        val animate: Boolean,
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -92,6 +103,11 @@ internal class DesktopAgentPanel(
     private val expanded = mutableStateOf(false)
     private val input = mutableStateOf("")
     private val edge = mutableStateOf(DockEdge.START)
+    /**
+     * The session the dock reads and writes. It is the dock's own choice: selecting a row here
+     * must not move the main window's navigation behind the reader's back.
+     */
+    private val selectedSessionId = mutableStateOf<String?>(null)
 
     private var overlay: ComposeWindow? = null
     /** Pointer offset from the window origin while dragging, in device pixels. */
@@ -119,8 +135,10 @@ internal class DesktopAgentPanel(
         owner.addWindowStateListener(stateListener)
         owner.addWindowFocusListener(focusListener)
         scope.launch {
-            coding.state.collect { state ->
-                snapshot.value = state.dockSnapshot()
+            combine(coding.state, settings.state) { state, settingsState ->
+                state to settingsState.settings.paperAnimationEnabled
+            }.collect { (state, animate) ->
+                snapshot.value = state.dockSnapshot(animate)
                 // Window visibility is an AWT decision and belongs on the EDT.
                 SwingUtilities.invokeLater(::applyVisibility)
             }
@@ -157,7 +175,7 @@ internal class DesktopAgentPanel(
             if (!window.isVisible) {
                 window.isVisible = true
                 AppLog.info("desktop_host", "agent.dock.shown", mapOf(
-                    "status" to snapshot.value?.status?.name.orEmpty(),
+                    "tone" to snapshot.value?.tone?.name.orEmpty(),
                     "edge" to edge.value.name,
                 ))
             }
@@ -192,13 +210,17 @@ internal class DesktopAgentPanel(
                 expanded = expanded.value,
                 onExpandedChange = ::setExpanded,
                 model = current.model,
-                // The sidebar's own dot and label: one session never reads as two states.
-                indicator = { ActivityDot(current.status, size = 16) },
+                // One dot for the workspace: the most demanding session sets its colour.
+                indicator = {
+                    PaperActivityIndicator(current.tone, current.toneLabel, running = current.anyRunning, size = 16.dp)
+                },
                 input = input.value,
                 onInputChange = { input.value = it },
                 onSend = ::send,
                 onStop = ::stop,
                 onOpenMainWindow = ::restoreOwner,
+                onSelectSession = { selectedSessionId.value = it },
+                animateBackground = current.animate,
                 onDragStart = ::dragStart,
                 onDragBy = ::dragBy,
                 onDragEnd = ::dragEnd,
@@ -384,42 +406,63 @@ internal class DesktopAgentPanel(
     // region projection
 
     /**
-     * The session the dock speaks for. The selected one wins while it is not idle; otherwise the
-     * most urgent running session does, so background work stays visible when the reader left an
-     * idle session on screen.
+     * What the dock shows: every live session for the rail, the selected one's chat, and one
+     * aggregate tone for the tab. A quiet workspace keeps the screen edge to itself.
      */
-    private fun CodingState.dockSnapshot(): Snapshot? {
-        val session = dockSession() ?: return null
-        val status = session.status
+    private fun CodingState.dockSnapshot(animate: Boolean): Snapshot? {
+        // `coding` here is this CodingState's own projection, not the injected service.
+        val ui = this.coding
+        val live = ui.sessions.filter { !it.session.archived }
+        if (live.none { it.status != CodingSessionStatus.IDLE }) return null
+        val tone = aggregateDockTone(live.map { it.status.activityTone })
+        val selected = selectedSession(live, ui.currentSessionId)
+        val status = selected.status
         val waiting = status == CodingSessionStatus.WAITING
         return Snapshot(
             model = PaperAgentDockModel(
+                sessions = live.map { session ->
+                    PaperDockSession(
+                        id = session.session.id,
+                        name = session.session.name,
+                        tone = session.status.activityTone,
+                        running = session.running || session.draft.active,
+                        selected = session.session.id == selected.session.id,
+                    )
+                },
                 statusLabel = status.label,
-                sessionLabel = session.session.name,
-                messages = session.dockMessages(),
-                liveDetail = session.liveDetail(),
-                busy = session.running || session.draft.active,
+                messages = selected.dockMessages(),
+                liveDetail = selected.liveDetail(),
+                busy = selected.running || selected.draft.active,
                 // A questionnaire is answered in the window that renders it; an input here
                 // would look like an answer and be discarded instead.
-                canSend = !waiting && !session.session.archived,
-                inputPlaceholder = when {
-                    waiting -> "Ответьте на вопрос в окне MagicPaper"
-                    session.session.archived -> "Сессия в архиве"
-                    else -> "Сообщение агенту…"
-                },
-                transcriptKey = session.session.id,
+                canSend = !waiting,
+                inputPlaceholder = if (waiting) "Ответьте на вопрос в окне MagicPaper" else "Сообщение агенту…",
+                transcriptKey = selected.session.id,
             ),
-            status = status,
-            sessionId = session.session.id,
+            tone = tone,
+            toneLabel = toneLabel(tone),
+            anyRunning = live.any { it.running || it.draft.active },
+            sessionId = selected.session.id,
+            animate = animate,
         )
     }
 
-    private fun CodingState.dockSession(): CodingSessionUi? {
-        // `coding` here is this CodingState's own projection, not the injected service.
-        val ui = this.coding
-        val live = ui.sessions.filter { !it.session.archived && it.status != CodingSessionStatus.IDLE }
-        ui.currentSession?.takeIf { !it.session.archived && it.status != CodingSessionStatus.IDLE }?.let { return it }
-        return live.minByOrNull { URGENCY.indexOf(it.status) }
+    /** The dock's own selection wins; otherwise the window's session, otherwise the most urgent. */
+    private fun selectedSession(live: List<CodingSessionUi>, currentSessionId: String?): CodingSessionUi {
+        selectedSessionId.value?.let { id -> live.firstOrNull { it.session.id == id }?.let { return it } }
+        currentSessionId?.let { id -> live.firstOrNull { it.session.id == id }?.let { return it } }
+        return live.filter { it.status != CodingSessionStatus.IDLE }
+            .minByOrNull { URGENCY.indexOf(it.status) }
+            ?: live.first()
+    }
+
+    private fun toneLabel(tone: PaperActivityTone): String = when (tone) {
+        PaperActivityTone.WORKING -> "работает"
+        PaperActivityTone.ATTENTION -> "ждёт ответа"
+        PaperActivityTone.UNREAD -> "непрочитанное"
+        PaperActivityTone.NEEDS_TESTING -> "нужна проверка"
+        PaperActivityTone.QUEUED -> "в очереди"
+        PaperActivityTone.READY -> "свободен"
     }
 
     private fun CodingSessionUi.dockMessages(): List<PaperDockMessage> = messages
