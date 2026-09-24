@@ -117,6 +117,18 @@ class ClaudeStreamParserTest {
         assertContains(parser.result?.message.orEmpty(), "не авторизован")
     }
 
+    /** Claude Code 2.1.133 words an expired OAuth token this way; `auth status` still claims a login, so only the run proves it. */
+    @Test fun expiredOAuthTokenOffersTheSignInInsteadOfTheRawText() {
+        val parser = ClaudeStreamParser()
+        parser.all(
+            """{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue."}]},"error":"authentication_failed","is_api_error_message":true}""",
+            """{"duration_api_ms":0,"is_error":true,"subtype":"success","result":"Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.","type":"result","terminal_reason":"api_error"}""")
+        assertEquals(true, parser.result?.failed)
+        assertEquals(true, parser.result?.signedOut)
+        assertContains(parser.result?.message.orEmpty(), "не авторизован")
+        assertFalse(parser.result?.message.orEmpty().contains("401"), "The raw provider text is not the user-facing reason")
+    }
+
     @Test fun otherFailuresKeepOneShortLineAndNeverTheRawBody() {
         val parser = ClaudeStreamParser()
         parser.parse("""{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}""")

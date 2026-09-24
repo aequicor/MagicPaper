@@ -34,11 +34,24 @@ internal class ClaudeBackendAgent(
     override val history: NativeToolHistory? = null
     override val removal: NativeRemoval? = null
     override val models = NativeModelCatalog { ClaudeModelCatalog.models }
-    override val signIn: NativeSignIn = ClaudeSignIn(executable, environment.diagnostics)
+    private val claudeSignIn = ClaudeSignIn(executable, environment.diagnostics)
+    /**
+     * The CLI's `auth status` keeps claiming a login while its OAuth token is dead, so a run that failed on
+     * authentication downgrades the reported account until a sign-in or a successful run proves otherwise.
+     */
+    @Volatile private var authenticationFailed = false
+    override val signIn: NativeSignIn = object : NativeSignIn {
+        override suspend fun signIn(): EngineSignInResult = claudeSignIn.signIn().also {
+            if (it is EngineSignInResult.SignedIn) authenticationFailed = false
+        }
+    }
     override val completion: NativeCompletion =
         ClaudeCompletion(executable, File(root, "chat"), environment.diagnostics, environment.toolPresentation)
 
-    override suspend fun status() = executable.status()
+    override suspend fun status(): NativeInstallationStatus {
+        val status = executable.status()
+        return if (authenticationFailed && status.signedIn == true) status.copy(signedIn = false) else status
+    }
     override fun prepare() = flow { emit(status()) }
     override fun modelConnection(profile: LlmProfile) = NativeModelConnectionKind.DIRECT
     override fun modelProfile(profile: LlmProfile, mode: CodingInteractionMode, speedBoost: Boolean) = profile
@@ -127,14 +140,20 @@ internal class ClaudeBackendAgent(
                 mapOf("sessionId" to sessionId, "result" to "native_failure", "failure" to failure.javaClass.simpleName)) }
             return when {
                 result.aborted -> CodingEvent.Failed("Прогон прерван по команде пользователя.")
-                terminal?.signedOut == true -> CodingEvent.Failed(
-                    "Claude Code не авторизован. Войдите в аккаунт Claude или укажите ключ API в подключении Anthropic.",
-                    CodingRecovery.SignIn(descriptor.engine))
+                terminal?.signedOut == true -> {
+                    authenticationFailed = true
+                    CodingEvent.Failed(
+                        "Claude Code не авторизован. Войдите в аккаунт Claude или укажите ключ API в подключении Anthropic.",
+                        CodingRecovery.SignIn(descriptor.engine))
+                }
                 terminal?.failed == true -> terminal.message?.let { CodingEvent.Failed(it) }
                 result.launchError != null -> CodingEvent.Failed("Не удалось запустить Claude Code. Проверьте установку в настройках движков.")
                 terminal == null && result.exitCode != null && result.exitCode != 0 -> CodingEvent.Failed("Claude Code завершился с кодом ${result.exitCode}.")
                 terminal == null || !answer -> CodingEvent.Failed("Не удалось получить ответ движка. Проверьте подключение и продолжите сессию.")
-                else -> null
+                else -> {
+                    authenticationFailed = false
+                    null
+                }
             }
         } finally { running.remove(sessionId, execution) }
     }

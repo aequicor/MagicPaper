@@ -141,6 +141,32 @@ exit 1""")
         }
     }
 
+    @Test fun expiredOAuthTokenOffersSignInAndDowngradesTheReportedAccount() = kotlinx.coroutines.runBlocking {
+        if (windows) return@runBlocking
+        fixture().use { f ->
+            f.script("""
+case "${'$'}1" in
+  --version) echo '2.1.133 (Claude Code)'; exit 0;;
+  auth) echo '{ "loggedIn": true }'; exit 0;;
+esac
+cat > /dev/null
+cat <<'JSON'
+{"type":"system","subtype":"init","session_id":"n"}
+{"type":"result","is_error":true,"subtype":"success","result":"Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.","type":"result"}
+JSON
+exit 1""")
+            f.agent().use { agent ->
+                assertEquals(true, agent.status().signedIn, "The CLI's own status still claims a login")
+                val events = agent.run(f.request()).toList()
+                val failure = events.filterIsInstance<CodingEvent.Failed>().single()
+                assertContains(failure.message, "не авторизован")
+                assertEquals(CodingRecovery.SignIn(CodingEngine.CLAUDE_CODE), failure.recovery,
+                    "An expired token offers the engine's own sign-in instead of the raw provider text")
+                assertEquals(false, agent.status().signedIn, "A dead token must not be shown as a completed sign-in")
+            }
+        }
+    }
+
     @Test fun exitWithoutAResultIsNotPassedOffAsAnAnswer() {
         if (windows) return
         fixture().use { f ->

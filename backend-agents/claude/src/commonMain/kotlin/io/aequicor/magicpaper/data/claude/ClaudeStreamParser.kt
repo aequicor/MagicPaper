@@ -199,7 +199,10 @@ internal class ClaudeStreamParser(
             ?: "Claude Code завершил запрос с ошибкой без описания."
     }
 
-    private fun isSignedOut(text: String) = listOf("Not logged in", "/login", "Invalid API key").any { text.contains(it, ignoreCase = true) }
+    /** The CLI words a dead credential several ways: a missing login, a refused key, an expired OAuth token. */
+    private fun isSignedOut(text: String) = listOf("Not logged in", "/login", "Invalid API key",
+        "Failed to authenticate", "OAuth access token", "Re-authenticate", "API Error: 401")
+        .any { text.contains(it, ignoreCase = true) }
 
     private fun usage(source: String, tokens: TokenUsage): List<CodingEvent> {
         if (tokens.totalTokens.let { it == null || it == 0L } || !reported.add(source)) return emptyList()
