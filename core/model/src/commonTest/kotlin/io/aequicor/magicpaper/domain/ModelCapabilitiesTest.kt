@@ -18,6 +18,17 @@ class ModelCapabilitiesTest {
     }
 
     @Test
+    fun claudeCodeAliasesAreMultimodalClaudeModels() {
+        for (provider in listOf(ProviderType.ANTHROPIC_SUBSCRIPTION, ProviderType.ANTHROPIC)) {
+            for (id in listOf("opus", "Sonnet", "haiku", "fable", "opus[1m]", "opusplan")) {
+                assertTrue(ModelCapabilities.resolve(provider, id).vision, "$provider $id")
+            }
+        }
+        assertFalse(ModelCapabilities.resolve(ProviderType.OPENAI_COMPATIBLE, "sonnet").vision,
+            "Another provider's model of that name is not Claude")
+    }
+
+    @Test
     fun qwen37MultimodalSnapshotAndPlusSupportVision() {
         for (id in listOf("qwen3.7-max-2026-06-08", "qwen3.7-plus", "qwen3.7-plus-2026-05-26")) {
             assertTrue(ModelCapabilities.resolve(ProviderType.OPENAI_COMPATIBLE, id).vision, id)

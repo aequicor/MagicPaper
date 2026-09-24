@@ -131,11 +131,20 @@ internal class ClaudeCompletion(
         }
     }.toString()
 
+    /**
+     * The media type is the one of the bytes: the API rejects an image whose declared type differs from its content,
+     * and a format it does not take is named to the model instead of failing the whole answer.
+     */
     private fun image(url: String?): JsonObject? {
         val match = url?.let(DATA_URL::matchEntire) ?: return null
+        val data = match.groupValues[2]
+        val bytes = try { java.util.Base64.getMimeDecoder().decode(data) } catch (_: IllegalArgumentException) { return null }
+        val format = ClaudeImageFormat.of(bytes) ?: return buildJsonObject {
+            put("type", "text"); put("text", UNSUPPORTED_IMAGE)
+        }
         return buildJsonObject {
             put("type", "image")
-            putJsonObject("source") { put("type", "base64"); put("media_type", match.groupValues[1]); put("data", match.groupValues[2]) }
+            putJsonObject("source") { put("type", "base64"); put("media_type", format.mediaType); put("data", data) }
         }
     }
 
@@ -155,5 +164,7 @@ internal class ClaudeCompletion(
         const val COMPONENT = "coding.claude"
         const val STOP_GRACE_SECONDS = 2L
         val DATA_URL = Regex("^data:([^;,]+);base64,(.+)$", RegexOption.DOT_MATCHES_ALL)
+        const val UNSUPPORTED_IMAGE = "[Пользователь приложил изображение в формате, который Claude не принимает (нужны PNG, JPEG, GIF или WebP); " +
+            "оно не передано.]"
     }
 }

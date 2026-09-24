@@ -31,6 +31,31 @@ class MeteredRuntimeUsageTest {
         assertEquals(2, recorder.message("m", 1).steps.count { it.systemEvent?.phase == CompactionPhase.COMPLETED })
     }
 
+    @Test fun theWindowAnEngineReportedOutlastsANewRunAndACompaction() = runTest {
+        val usageStore = InMemoryKeyValueStore()
+        val ledger = UsageLedger(JsonUsageRepository(usageStore, Json), InMemoryEventJournal(), usageStore, Json)
+        var compact = false
+        val delegate = object : CodingRuntime by NoopCodingRuntime {
+            override fun run(project: CodingProject, session: CodingSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) = flow {
+                if (compact) emit(CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED)))
+                else emit(CodingEvent.ContextUpdated(5_000, 1_000_000))
+            }
+        }
+        val runtime = MeteredCodingRuntime(delegate, ledger)
+        val project = CodingProject("p", "P", "/fixture", 1)
+        val session = CodingSession("s", "p", "S", 1, engine = CodingEngine.CLAUDE_CODE)
+        // The profile's own limit bounds the application's requests; the engine keeps a larger conversation.
+        val profile = LlmProfile("p", "Claude", modelId = "opus", advanced = AdvancedLlmOptions(contextLimit = 128_000))
+        runtime.run(project, session, "first", profile, emptyList()).collect()
+        compact = true
+        runtime.run(project, session, "second", profile, emptyList()).collect()
+        val context = checkNotNull(ledger.state.value.contexts["coding:s"])
+        assertNull(context.used, "A compaction leaves the size unknown until the engine reports it")
+        assertEquals(1_000_000L, context.limit)
+        runtime.run(project, session, "other", profile.copy(modelId = "haiku"), emptyList()).collect()
+        assertEquals(128_000L, ledger.state.value.contexts["coding:s"]?.limit, "Another model's window is not carried over")
+    }
+
     @Test fun isolatesParallelStageContextAndDeduplicatesBridgeMetrics() = runTest {
         val usageStore = InMemoryKeyValueStore()
         val ledger = UsageLedger(JsonUsageRepository(usageStore, Json), InMemoryEventJournal(), usageStore, Json)

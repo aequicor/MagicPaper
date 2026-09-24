@@ -36,6 +36,24 @@ class ClaudeStreamParserTest {
         assertEquals("ok", events.filterIsInstance<CodingEvent.FinalText>().single().text)
     }
 
+    @Test fun theWindowIsKnownAtInitAndTheClisOwnFigureInTheResultWins() {
+        val parser = ClaudeStreamParser(contextWindow = 1_000_000)
+        assertEquals(listOf(CodingEvent.SessionStarted("s"), CodingEvent.ContextUpdated(null, 1_000_000)),
+            parser.parse("""{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}"""))
+        parser.parse("""{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":300,"output_tokens":2}}}""")
+        // A subagent on another model is in modelUsage too; the conversation's model decides the window.
+        val result = parser.parse("""{"type":"result","subtype":"success","is_error":false,"result":"ok","modelUsage":{""" +
+            """"claude-haiku-4-5":{"inputTokens":9,"contextWindow":200000},"claude-opus-5-5":{"inputTokens":300,"contextWindow":200000}}}""")
+        assertEquals(listOf(CodingEvent.ContextUpdated(300, 200_000), CodingEvent.AgentEnd), result)
+        val same = ClaudeStreamParser(contextWindow = 1_000_000).apply {
+            parse("""{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5[1m]"}""")
+        }.parse("""{"type":"result","is_error":false,"result":"ok","modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}""")
+        assertEquals(listOf<CodingEvent>(CodingEvent.AgentEnd), same, "An unchanged window is not reported again")
+        val unknown = ClaudeStreamParser().apply { parse("""{"type":"system","subtype":"init","session_id":"s"}""") }
+            .parse("""{"type":"result","is_error":false,"result":"ok","modelUsage":{"claude-x":{"contextWindow":200000}}}""")
+        assertEquals(CodingEvent.ContextUpdated(null, 200_000), unknown.first(), "Without an expected window the CLI's figure is the only one")
+    }
+
     @Test fun completeAssistantMessageAloneStillReportsUsage() {
         val events = ClaudeStreamParser().all(
             """{"type":"assistant","message":{"id":"m9","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}}""")

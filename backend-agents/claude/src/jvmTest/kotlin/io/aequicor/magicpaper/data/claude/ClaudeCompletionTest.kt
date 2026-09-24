@@ -81,6 +81,24 @@ class ClaudeCompletionTest {
         }
     }
 
+    @Test fun imageTypeIsTheBytesAndAnUnsupportedFormatIsNamedInsteadOfFailingTheAnswer() {
+        if (windows) return
+        fixture().use { f ->
+            f.script(answer)
+            f.complete(buildJsonArray {
+                addJsonObject { put("type", "text"); put("text", "Пользователь: сравни") }
+                // A JPEG sent as image/png would be refused by the API as a mismatched media type.
+                addJsonObject { put("type", "image"); put("url", "data:image/png;base64,/9j/4AAQ") }
+                addJsonObject { put("type", "image"); put("url", "data:image/bmp;base64,Qk0AAA==") }
+            })
+            val content = Json.parseToJsonElement(f.home.resolve("stdin").readText().trim()).jsonObject["message"]!!
+                .jsonObject["content"]!!.jsonArray.map { it.jsonObject }
+            assertEquals("image/jpeg", content[1]["source"]!!.jsonObject["media_type"]!!.jsonPrimitive.content)
+            assertEquals("text", content[2]["type"]!!.jsonPrimitive.content)
+            assertContains(content[2]["text"]!!.jsonPrimitive.content, "PNG, JPEG, GIF или WebP")
+        }
+    }
+
     @Test fun signedOutCliIsReportedAsTheFailureSignInResolves() {
         if (windows) return
         fixture().use { f ->

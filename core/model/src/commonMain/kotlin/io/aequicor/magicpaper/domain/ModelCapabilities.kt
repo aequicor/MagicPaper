@@ -46,6 +46,9 @@ data class ModelCapabilities(
         const val THINKING_QWEN_CHAT_TEMPLATE = "qwen-chat-template"
         const val THINKING_ZAI = "zai"
 
+        /** Имена моделей, которые Claude Code принимает в `--model` вместо полного идентификатора. */
+        private val CLAUDE_CODE_ALIASES = setOf("opus", "sonnet", "haiku", "fable", "opusplan", "best", "default")
+
         /**
          * Вычислить capabilities по провайдеру, идентификатору модели и (опционально)
          * base URL. Одна точка входа — все потребители вызывают [resolve].
@@ -89,13 +92,17 @@ data class ModelCapabilities(
          *  - GPT-4 и новее (gpt-4*, gpt-5*, o-серия);
          *  - Gemini (все поколения мультимодальные);
          *  - GLM-4V и новее, а также GLM-5.3-Flash (без «v» в имени);
-         *  - Grok с vision.
+         *  - Grok с vision;
+         *  - алиасы Claude Code (`opus`, `sonnet[1m]`…): CLI ведёт их на новейшую модель семейства.
          */
         private fun resolveVision(provider: ProviderType, family: String, id: String): Boolean = when {
             family == "qwen" && id.contains("-vl") -> true
             family == "qwen" && isQwenMultimodal(id) -> true
             // Claude 3+ (haiku-3, sonnet-3/4/5, opus-3/4)
             family == "claude" && id.any { it.isDigit() && it >= '3' } -> true
+            // У алиаса нет ни «claude», ни номера поколения, но за ним всегда мультимодальная модель Claude.
+            (provider == ProviderType.ANTHROPIC || provider == ProviderType.ANTHROPIC_SUBSCRIPTION) &&
+                id.removeSuffix("[1m]") in CLAUDE_CODE_ALIASES -> true
             // GPT-4+, o-серия
             id.startsWith("gpt-4") || id.startsWith("gpt-5") ||
                 id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> true

@@ -173,6 +173,9 @@ exit 1""")
             assertEquals(listOf("low", "medium", "high", "extra", "max", "ultracode"),
                 models.single { it.id == "opus" }.let { opus -> opus.levels.map(opus::levelName) }, "Names as Claude's picker shows them")
             assertFalse(models.single { it.id == "haiku" }.supportsLevels)
+            assertEquals(mapOf("fable" to 1_000_000, "opus" to 1_000_000, "sonnet" to 1_000_000, "haiku" to 200_000),
+                models.associate { it.id to it.contextWindow }, "The CLI's windows on Anthropic's API")
+            assertTrue(models.all { it.acceptsImages })
         }
     }
 

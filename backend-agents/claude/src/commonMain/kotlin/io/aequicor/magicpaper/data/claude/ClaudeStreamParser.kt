@@ -11,12 +11,15 @@ import kotlinx.serialization.json.*
  * stateful: it pairs a tool result with the call that started it and reports each model call's usage once,
  * whether the call arrived as partial stream events or only as a complete assistant message.
  * It never sees a process, a prompt or a credential; unknown and damaged lines produce nothing.
+ *
+ * [contextWindow] is the window expected for the model; the CLI's own figure in the result's `modelUsage`
+ * replaces it, since only the CLI knows what the account and the connection allow.
  */
 internal class ClaudeStreamParser(
     private val presentation: NativeToolPresentationResolver = NativeToolPresentationResolver { server, tool, _ ->
         NativeToolPresentation("$server:$tool", tool)
     },
-    private val contextWindow: Long? = null,
+    private var contextWindow: Long? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val tools = mutableMapOf<String, String>()
@@ -24,6 +27,8 @@ internal class ClaudeStreamParser(
     private var current: Call? = null
     private var sessionAnnounced = false
     private var terminal: Terminal? = null
+    private var model: String? = null
+    private var contextUsed: Long? = null
 
     /** Set once a `result` line was parsed: the only proof the engine finished, however the process exits. */
     val result: Terminal? get() = terminal
@@ -51,8 +56,15 @@ internal class ClaudeStreamParser(
     }
 
     private fun system(event: JsonObject): List<CodingEvent> = when (event.string("subtype")) {
-        "init" -> event.string("session_id")?.takeIf { it.isNotBlank() && !sessionAnnounced }
-            ?.let { sessionAnnounced = true; listOf(CodingEvent.SessionStarted(it)) }.orEmpty()
+        "init" -> {
+            model = event.string("model")?.takeIf { it.isNotBlank() }
+            buildList {
+                event.string("session_id")?.takeIf { it.isNotBlank() && !sessionAnnounced }
+                    ?.let { sessionAnnounced = true; add(CodingEvent.SessionStarted(it)) }
+                // The window is known before the first answer, so the meter never shows a limit the CLI does not use.
+                contextWindow?.let { add(CodingEvent.ContextUpdated(null, it)) }
+            }
+        }
         "status" -> if (event.string("status") == "compacting")
             listOf(CodingEvent.Compaction(CompactionStatus("", CompactionPhase.STARTED, "auto"))) else emptyList()
         "compact_boundary" -> listOf(CodingEvent.Compaction(CompactionStatus("", CompactionPhase.COMPLETED,
@@ -138,7 +150,23 @@ internal class ClaudeStreamParser(
         val text = event.string("result").orEmpty()
         val message = if (failed) failure(event, text) else null
         terminal = Terminal(failed, text, message, signedOut = failed && isSignedOut(text))
-        return listOf(CodingEvent.AgentEnd)
+        val window = reportedWindow(event["modelUsage"] as? JsonObject)?.takeIf { it != contextWindow }
+        return buildList {
+            window?.let { contextWindow = it; add(CodingEvent.ContextUpdated(contextUsed, it)) }
+            add(CodingEvent.AgentEnd)
+        }
+    }
+
+    /**
+     * The window of the conversation's own model; a subagent's model is counted in `modelUsage` too, so another
+     * model's entry is taken only when the conversation's model is absent from it.
+     */
+    private fun reportedWindow(usage: JsonObject?): Long? {
+        val windows = usage.orEmpty().mapNotNull { (id, entry) ->
+            (entry as? JsonObject)?.count("contextWindow")?.takeIf { it > 0 }?.let { id to it }
+        }
+        val own = model?.let { name -> windows.firstOrNull { it.first == name } ?: windows.firstOrNull { it.first == name.substringBefore('[') } }
+        return (own ?: windows.maxByOrNull { it.second })?.second
     }
 
     /** Safe one-line reason: the sign-in advice for a missing login, the CLI's own short text otherwise. */
@@ -156,6 +184,7 @@ internal class ClaudeStreamParser(
     private fun usage(source: String, tokens: TokenUsage): List<CodingEvent> {
         if (tokens.totalTokens.let { it == null || it == 0L } || !reported.add(source)) return emptyList()
         val used = (tokens.input ?: 0) + (tokens.cacheRead ?: 0) + (tokens.cacheWrite ?: 0)
+        contextUsed = used
         return listOf(CodingEvent.UsageObserved(tokens, source), CodingEvent.ContextUpdated(used, contextWindow))
     }
 

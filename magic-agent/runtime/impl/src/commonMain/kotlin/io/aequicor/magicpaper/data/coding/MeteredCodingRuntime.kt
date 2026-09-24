@@ -36,7 +36,12 @@ class MeteredCodingRuntime(private val delegate: CodingRuntime, private val ledg
         var compactionSerial = 0
         var compactionActive = false
         fun base(id: String) = UsageRecord(id, scope = owner, provider = profile?.provider?.name.orEmpty(), model = model, subscription = subscription)
-        suspend fun unknownContext() { owner.conversationId?.let { ledger.context(observation, ContextUsageSnapshot(it, model, limit = profile?.advanced?.safeContextLimit?.toLong())) } }
+        // The window an engine reported for this model outranks the profile's limit: an engine that keeps its own
+        // conversation (Claude Code) works with its own window, and a fresh run or a compaction must not undo that.
+        suspend fun unknownContext() { owner.conversationId?.let { id ->
+            val reported = ledger.state.value.contexts[id]?.takeIf { it.model == model }?.limit
+            ledger.context(observation, ContextUsageSnapshot(id, model, limit = reported ?: profile?.advanced?.safeContextLimit?.toLong()))
+        } }
         unknownContext()
         try {
             events.flowOn(UsageOwner(owner) + RuntimeUsageContext(ledger, owner, observation)).collect { raw ->

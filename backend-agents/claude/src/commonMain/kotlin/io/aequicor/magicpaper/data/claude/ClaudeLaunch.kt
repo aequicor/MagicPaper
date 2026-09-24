@@ -43,6 +43,19 @@ internal class ClaudeMcpServers(val document: JsonObject, val names: List<String
     }
 }
 
+/**
+ * The context window Claude Code works with. It is the CLI's, not the profile's context limit: the CLI keeps and
+ * compacts the conversation itself. A model with a native million-token window gets it on Anthropic's own API; through
+ * a gateway the CLI assumes the standard window (CLI 2.1.280).
+ */
+internal object ClaudeContext {
+    const val LONG = 1_000_000
+    const val STANDARD = 200_000
+
+    fun window(profile: LlmProfile, declared: Int?): Long? =
+        declared?.takeIf { it > 0 }?.let { if (ClaudeCommand.official(profile)) it else minOf(it, STANDARD) }?.toLong()
+}
+
 internal object ClaudeCommand {
     /** Built-in tools of a read-only run. Command execution is deliberately absent: Claude has no read-only shell. */
     val READ_ONLY_TOOLS = listOf("Read", "Grep", "Glob")
@@ -107,10 +120,17 @@ internal object ClaudeCommand {
             (request.tools.removedEnvironment + subscription) - request.tools.environment.keys)
     }
 
+    private fun base(profile: LlmProfile) = profile.baseUrl.trim().trimEnd('/').removeSuffix("/v1").trimEnd('/')
+
+    /** The run goes to Anthropic's own API rather than through a gateway at another address. */
+    fun official(profile: LlmProfile): Boolean = base(profile).let {
+        it.isEmpty() || it.substringAfter("://").substringBefore('/').equals(OFFICIAL_HOST, ignoreCase = true)
+    }
+
     /** A blank key leaves authentication to the CLI's own sign-in; a stored key overrides it for this run only. */
     private fun environment(profile: LlmProfile, servers: ClaudeMcpServers): Map<String, String> = buildMap {
-        val base = profile.baseUrl.trim().trimEnd('/').removeSuffix("/v1").trimEnd('/')
-        val official = base.isEmpty() || base.substringAfter("://").substringBefore('/').equals(OFFICIAL_HOST, ignoreCase = true)
+        val base = base(profile)
+        val official = official(profile)
         if (!official) put("ANTHROPIC_BASE_URL", base)
         if (profile.apiKey.isNotBlank()) {
             val direct = official || profile.authType == LlmAuthType.X_API_KEY

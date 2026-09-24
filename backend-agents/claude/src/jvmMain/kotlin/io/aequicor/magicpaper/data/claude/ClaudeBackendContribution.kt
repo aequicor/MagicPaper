@@ -108,7 +108,7 @@ internal class ClaudeBackendAgent(
         val attempt = lifecycle.events.admitLaunch(lifecycle.run)
         val execution = ClaudeProcessExecution(environment.processes, lifecycle.events, attempt)
         check(running.putIfAbsent(sessionId, execution) == null) { "Session is already running" }
-        val parser = ClaudeStreamParser(environment.toolPresentation, request.profile.advanced.safeContextLimit.toLong())
+        val parser = ClaudeStreamParser(environment.toolPresentation, contextWindow(request.profile))
         var answer = false
         try {
             if (sessionId in aborted) execution.abort()
@@ -144,6 +144,16 @@ internal class ClaudeBackendAgent(
     override fun close() { synchronized(lifecycleLock) { closed = true }; abortAll() }
     override suspend fun reconcile(sessionId: String) = withContext(Dispatchers.IO) { environment.processes.reconcile(sessionId) }
 
+    /**
+     * The window the CLI will use for this model. The profile's context limit bounds the application's own requests,
+     * not the CLI's conversation, so it is never offered as the window; an unknown model waits for the CLI's figure.
+     */
+    private fun contextWindow(profile: LlmProfile): Long? {
+        val declared = ClaudeModelCatalog.models.firstOrNull { it.id == profile.modelId }?.contextWindow
+            ?: profile.modelCatalog.firstOrNull { it.id == profile.modelId }?.contextWindow
+        return ClaudeContext.window(profile, declared)
+    }
+
     private fun sessionHome(id: String) = File(root, "session-configs/" + safe(id))
     private fun safe(id: String) = id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 
@@ -151,16 +161,23 @@ internal class ClaudeBackendAgent(
         if (attachments.isEmpty()) return prompt
         check(directory.mkdirs() || directory.isDirectory) { "Attachment directory is unavailable" }
         val files = attachments.map { attachment ->
-            val name = "${System.currentTimeMillis()}-" + attachment.name.replace(Regex("[^\\p{L}\\p{N}._\\-]+"), "_").take(120).ifBlank { "file" }
+            val format = if (attachment.kind == AttachmentKind.IMAGE) ClaudeImageFormat.of(attachment.bytes) else null
+            val safe = attachment.name.replace(Regex("[^\\p{L}\\p{N}._\\-]+"), "_").take(120).ifBlank { "file" }
+            val name = "${System.currentTimeMillis()}-" + (format?.let { ClaudeImageFormat.fileName(safe, it) } ?: safe)
             var file = File(directory, name)
             var count = 1
             while (file.exists()) file = File(directory, "${count++}-$name")
-            file.writeBytes(attachment.bytes); file
+            file.writeBytes(attachment.bytes)
+            file to (attachment.kind == AttachmentKind.IMAGE && format == null)
         }
         return buildString {
             append(prompt).append("\n\nК запросу приложены файлы (лежат вне папки проекта, пути абсолютные):\n")
-            files.forEach { append("- ").append(it.absolutePath).append('\n') }
-            append("Если файл нужен для задачи — прочитай его инструментом Read; изображения тоже читаются.")
+            files.forEach { (file, unreadable) ->
+                append("- ").append(file.absolutePath)
+                if (unreadable) append(" — изображение в формате, который Read не показывает как картинку (нужны PNG, JPEG, GIF или WebP)")
+                append('\n')
+            }
+            append("Если файл нужен для задачи — прочитай его инструментом Read; изображения PNG, JPEG, GIF и WebP он показывает как картинки.")
         }
     }
 }

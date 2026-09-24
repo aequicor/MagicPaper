@@ -31,7 +31,8 @@ class ClaudeCodeSubscription(private val agent: NativeAgentAdapter) : ClaudeSubs
                 else DeclaredReasoning(efforts = efforts, mandatory = true, default = model.defaultLevel?.let(ReasoningEffort::fromWire))
         }
         val metadata = catalog.associate { model ->
-            model.id to ProviderModel(model.id, model.name, supportedParameters = emptySet(), reasoning = declared[model.id])
+            model.id to ProviderModel(model.id, model.name, model.contextWindow, model.maxTokens, supportedParameters = emptySet(),
+                reasoning = declared[model.id])
         }
         return ModelDefaults.discover(ProviderType.ANTHROPIC_SUBSCRIPTION, catalog.map { it.id }, declared)
             .map { it.copy(metadata = metadata[it.id]) }

@@ -19,7 +19,7 @@ class ClaudeCodeSubscriptionTest {
         override val history: NativeToolHistory? = null
         override val removal: NativeRemoval? = null
         override val models = NativeModelCatalog {
-            listOf(CodingModel("anthropic", "opus", "Opus", levels = listOf("low", "high", "max", "ultracode"), defaultLevel = "high"),
+            listOf(CodingModel("anthropic", "opus", "Opus", 1_000_000, 128_000, listOf("low", "high", "max", "ultracode"), defaultLevel = "high"),
                 CodingModel("anthropic", "haiku", "Haiku"))
         }
         override val signIn = NativeSignIn { EngineSignInResult.SignedIn }
@@ -85,6 +85,9 @@ class ClaudeCodeSubscriptionTest {
             "A plain answer has no workflows, so ultracode is offered as the xhigh effort it runs at")
         assertEquals(ReasoningEffort.HIGH, opus.default, "The model's own effort is the default")
         assertEquals("extra", opus.levelName(ReasoningEffort.XHIGH), "xhigh is named as Claude's picker names it")
+        val fact = checkNotNull(models.single { it.id == "opus" }.metadata)
+        assertEquals(1_000_000, fact.contextWindow, "The model's own window reaches the profile, not a guessed limit")
+        assertEquals(128_000, fact.maxOutputTokens)
     }
 
     @Test fun signedOutCliReachesTheChatAsARejectionThatNamesSignIn() = runBlocking {

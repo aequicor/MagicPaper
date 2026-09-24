@@ -37,15 +37,18 @@ internal const val CLAUDE_CODING_INSTRUCTIONS =
  * effort at all). [ClaudeCommand.ULTRACODE] is the CLI's session mode of xhigh effort plus dynamic workflows, open
  * to every xhigh-capable model. The default is the model's own effort when none is chosen ("auto" in the CLI);
  * the names are the ones Claude's model picker shows.
+ *
+ * The context window and the answer limit are the CLI's own for that model on Anthropic's API; a run still takes the
+ * window the CLI reports in its result, which also reflects the account.
  */
 internal object ClaudeModelCatalog {
     const val PROVIDER = "anthropic"
     private val full = listOf("low", "medium", "high", "xhigh", "max", ClaudeCommand.ULTRACODE)
     private val names = mapOf("xhigh" to "extra")
     val models = listOf(
-        CodingModel(PROVIDER, "fable", "Fable", levels = full, defaultLevel = "high", acceptsImages = true, levelNames = names),
-        CodingModel(PROVIDER, "opus", "Opus", levels = full, defaultLevel = "medium", acceptsImages = true, levelNames = names),
-        CodingModel(PROVIDER, "sonnet", "Sonnet", levels = full, defaultLevel = "high", acceptsImages = true, levelNames = names),
-        CodingModel(PROVIDER, "haiku", "Haiku", acceptsImages = true),
+        CodingModel(PROVIDER, "fable", "Fable", ClaudeContext.LONG, 64_000, full, "high", acceptsImages = true, levelNames = names),
+        CodingModel(PROVIDER, "opus", "Opus", ClaudeContext.LONG, 128_000, full, "medium", acceptsImages = true, levelNames = names),
+        CodingModel(PROVIDER, "sonnet", "Sonnet", ClaudeContext.LONG, 64_000, full, "high", acceptsImages = true, levelNames = names),
+        CodingModel(PROVIDER, "haiku", "Haiku", ClaudeContext.STANDARD, 32_000, acceptsImages = true),
     )
 }
