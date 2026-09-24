@@ -3,6 +3,7 @@ package io.aequicor.magicpaper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.awt.ComposeWindow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.data.storage.KeyValueStore
 import io.aequicor.magicpaper.designsystem.PaperActivityTone
@@ -15,7 +16,6 @@ import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedWidth
 import io.aequicor.magicpaper.designsystem.PaperAgentDockMinSize
 import io.aequicor.magicpaper.designsystem.PaperAgentDockModel
 import io.aequicor.magicpaper.designsystem.PaperDockAuthor
-import io.aequicor.magicpaper.designsystem.PaperAgentDockShadowMargin
 import io.aequicor.magicpaper.designsystem.PaperDockMessage
 import io.aequicor.magicpaper.designsystem.PaperDockRecovery
 import io.aequicor.magicpaper.designsystem.PaperDockSession
@@ -38,7 +38,9 @@ import io.aequicor.magicpaper.ui.screens.activityTone
 import io.aequicor.magicpaper.ui.screens.aggregateDockTone
 import io.aequicor.magicpaper.ui.screens.label
 import io.aequicor.magicpaper.ui.components.isVisibleInChat
+import io.aequicor.magicpaper.ui.window.paperWindowFloatOnAllSpaces
 import io.aequicor.magicpaper.domain.sidebarTitle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +51,7 @@ import kotlinx.coroutines.launch
 import java.awt.Color
 import java.awt.Desktop
 import java.awt.Frame
+import java.awt.GraphicsConfiguration
 import java.awt.GraphicsEnvironment
 import java.awt.Point
 import java.awt.Rectangle
@@ -70,9 +73,15 @@ internal enum class DockEdge { START, END }
  * main window is minimized *or* has lost focus, and only while some session still needs the
  * reader or is working. Idle sessions stay hidden so the screen edge is not covered for nothing.
  *
- * This class owns the AWT window, its size in device pixels and its remembered place on the
- * edge. It never owns the run: sending, stopping and reading state belong to [CodingService],
- * and every visual decision belongs to [PaperAgentDock].
+ * This class owns the AWT window, its size and its remembered place on the edge. Window units
+ * are dp: Compose Desktop sizes windows one AWT unit per dp at every display scale (points on
+ * macOS, scaled user space on Windows), and [PaperAgentDock] reports pointer positions in dp.
+ * It never owns the run: sending, stopping and reading state belong to [CodingService], and
+ * every visual decision belongs to [PaperAgentDock].
+ *
+ * The window is the platform's floating panel rather than a second application window: a
+ * utility window has no taskbar button and no Alt+Tab entry on Windows and is an NSPanel outside
+ * the Dock's window list on macOS, where it also stays on every Space like Picture in Picture.
  */
 internal class DesktopAgentPanel(
     private val owner: Window,
@@ -102,9 +111,9 @@ internal class DesktopAgentPanel(
         )
         /** Horizontal margin that must be crossed before the panel re-anchors to the other edge. */
         const val EDGE_HYSTERESIS = 48
-        /** The expand/collapse morph: short enough to feel instant, long enough to read. */
-        const val BOUNDS_DURATION_MILLIS = 200_000_000.0
         const val BOUNDS_STEP_MILLIS = 16
+        /** Session ages are shown to the second, so the dock's clock ticks once a second while shown. */
+        const val CLOCK_TICK_MILLIS = 1000
         /** Most urgent first: the dock shows one session, so it shows the one that needs the reader. */
         val URGENCY = listOf(
             CodingSessionStatus.WORKING,
@@ -138,6 +147,11 @@ internal class DesktopAgentPanel(
     /** The reader's own size for the expanded card, remembered with the place on the edge. */
     private val expandedWidth = mutableStateOf(PaperAgentDockExpandedWidth)
     private val expandedHeight = mutableStateOf(PaperAgentDockExpandedHeight)
+    /** What the compact list last measured for its rows; the window follows it. */
+    private val collapsedHeight = mutableStateOf(PaperAgentDockCollapsedHeight)
+    /** The wall clock the dock counts session ages against; it ticks only while the dock is shown. */
+    private val now = mutableStateOf(System.currentTimeMillis())
+    private val clock = javax.swing.Timer(CLOCK_TICK_MILLIS) { now.value = System.currentTimeMillis() }
     /**
      * The session the dock reads and writes. It is the dock's own choice: selecting a row here
      * must not move the main window's navigation behind the reader's back.
@@ -146,14 +160,21 @@ internal class DesktopAgentPanel(
 
     private var overlay: ComposeWindow? = null
     private var boundsAnimation: javax.swing.Timer? = null
-    /** Pointer offset from the window origin while dragging, in device pixels. */
+    /** Pointer offset from the window origin while dragging, in window units. */
     private var grab: Point? = null
     /** Fraction of the free edge height above the panel, so the place survives a resolution change. */
     private var offset = DEFAULT_OFFSET
+    /**
+     * The display the reader dragged the dock to; null follows the main window's display. It is
+     * not remembered across launches: display identities do not survive a reconnect.
+     */
+    private var screen: GraphicsConfiguration? = null
     private var ownerMinimized = false
     private var ownerFocused = true
     /** A failed overlay must not be retried on every state change. */
     private var unavailable = false
+    /** Joining every Space is asked of AppKit once per native window. */
+    private var spacesRequested = false
 
     private val stateListener = WindowStateListener { event ->
         ownerMinimized = event.newState and Frame.ICONIFIED != 0
@@ -186,6 +207,7 @@ internal class DesktopAgentPanel(
 
     override fun close() {
         scope.cancel()
+        clock.stop()
         boundsAnimation?.stop()
         boundsAnimation = null
         owner.removeWindowStateListener(stateListener)
@@ -200,9 +222,12 @@ internal class DesktopAgentPanel(
         val wanted = snapshot.value != null && (ownerMinimized || !ownerFocused)
         val window = overlay
         when (dockVisibility(wanted, window != null, window?.isVisible == true)) {
-            DockVisibility.HIDDEN -> window?.isVisible = false
+            DockVisibility.HIDDEN -> {
+                clock.stop()
+                window?.isVisible = false
+            }
             // A state emission arrives on every streamed token: an already-visible dock must
-            // keep its expansion instead of being reset to the tab below the reader's pointer.
+            // keep its expansion instead of being reset to the list below the reader's pointer.
             DockVisibility.SHOW_COLLAPSED -> show()
             DockVisibility.KEEP -> Unit
         }
@@ -212,18 +237,22 @@ internal class DesktopAgentPanel(
         if (unavailable) return
         try {
             val window = overlay ?: createOverlay().also { overlay = it }
-            // Every appearance starts as the narrow tab: the panel grows only under the pointer.
+            // Every appearance starts as the compact list: the panel grows only under the pointer.
             expanded.value = false
             applyGeometry(window, animate = false)
             if (!window.isVisible) {
+                now.value = System.currentTimeMillis()
+                clock.start()
                 window.isVisible = true
                 AppLog.info("desktop_host", "agent.dock.shown", mapOf(
                     "tone" to snapshot.value?.tone?.name.orEmpty(),
                     "edge" to edge.value.name,
                 ))
+                floatOnAllSpaces(window)
             }
         } catch (error: Exception) {
             unavailable = true
+            clock.stop()
             overlay?.dispose()
             overlay = null
             AppLog.error("desktop_host", "agent.dock.show.failed", error,
@@ -231,18 +260,29 @@ internal class DesktopAgentPanel(
         }
     }
 
-    private fun createOverlay(): ComposeWindow = ComposeWindow().apply {
-        name = "MagicPaperAgentDock"
-        title = "MagicPaper · агент"
-        isUndecorated = true
-        isTransparent = true
-        background = Color(0, 0, 0, 0)
-        isAlwaysOnTop = true
-        // Appearing beside another application must not take focus from it; the composer
-        // takes focus only when the reader clicks into it.
-        isAutoRequestFocus = false
-        focusableWindowState = true
-        setContent { DockSurface() }
+    private fun createOverlay(): ComposeWindow = dockWindow().apply { setContent { DockSurface() } }
+
+    /**
+     * macOS keeps every window on the Space it opened on, so a reader who moves to another
+     * desktop would leave the dock behind. AppKit is messaged off the event thread: the request
+     * waits for AppKit's main thread, which may itself be waiting for this one. A refusal keeps
+     * the dock working on its own Space.
+     */
+    private fun floatOnAllSpaces(window: ComposeWindow) {
+        if (spacesRequested) return
+        spacesRequested = true
+        scope.launch {
+            try {
+                val joined = paperWindowFloatOnAllSpaces(window)
+                AppLog.debug("desktop_host", "agent.dock.spaces",
+                    mapOf("result" to if (joined) "all_spaces" else "no_spaces_on_platform"))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                AppLog.error("desktop_host", "agent.dock.spaces.failed", error,
+                    mapOf("result" to "current_space_only"))
+            }
+        }
     }
 
     @Composable
@@ -257,6 +297,7 @@ internal class DesktopAgentPanel(
                 indicator = {
                     PaperActivityIndicator(current.tone, current.toneLabel, running = current.anyRunning, size = 16.dp)
                 },
+                nowMillis = now.value,
                 input = input.value,
                 onInputChange = { input.value = it },
                 onSend = ::send,
@@ -267,6 +308,7 @@ internal class DesktopAgentPanel(
                 onCancelRecovery = { recover(it, cancel = true) },
                 onResizeWidthBy = ::resizeWidthBy,
                 onResizeHeightBy = ::resizeHeightBy,
+                onCollapsedHeightChange = ::setCollapsedHeight,
                 animateBackground = current.animate,
                 dockedToStart = edge.value == DockEdge.START,
                 onDragStart = ::dragStart,
@@ -281,6 +323,19 @@ internal class DesktopAgentPanel(
         expanded.value = value
         overlay?.let { applyGeometry(it, animate = snapshot.value?.animate == true) }
         AppLog.debug("desktop_host", "agent.dock.expansion", mapOf("expanded" to value.toString()))
+    }
+
+    /**
+     * The compact list grows and shrinks with its sessions and the text scale. The report
+     * arrives from Compose's layout pass, so the window is resized after it, not inside it. A
+     * change that lands during the collapse morph retargets it instead of cutting it short.
+     */
+    private fun setCollapsedHeight(height: Dp) {
+        if (collapsedHeight.value == height) return
+        collapsedHeight.value = height
+        SwingUtilities.invokeLater {
+            if (!expanded.value) overlay?.let { applyGeometry(it, animate = boundsAnimation != null) }
+        }
     }
 
     // endregion
@@ -342,23 +397,12 @@ internal class DesktopAgentPanel(
 
     // region geometry
 
-    /**
-     * Size the window from the same display scale Compose uses for its density. Window bounds
-     * are device pixels while the dock is laid out in dp: guessing here clips the composer at
-     * 150 % scaling. Rounding up never clips; it can only leave a transparent pixel.
-     */
     private fun applyGeometry(window: ComposeWindow, animate: Boolean) {
         val usable = usableArea(window) ?: return
-        val scale = configuration()?.defaultTransform?.scaleX ?: 1.0
         val open = expanded.value
-        val widthDp = if (open) expandedWidth.value else PaperAgentDockCollapsedWidth
-        val heightDp = if (open) expandedHeight.value else PaperAgentDockCollapsedHeight
-        val width = ceil(widthDp.value * scale).toInt().coerceIn(1, usable.width)
-        val height = ceil(heightDp.value * scale).toInt().coerceIn(1, usable.height)
-        val x = if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - width
-        val lowest = (usable.y + usable.height - height).coerceAtLeast(usable.y)
-        val y = (usable.y + ((usable.height - height) * offset).roundToInt()).coerceIn(usable.y, lowest)
-        applyBounds(window, Rectangle(x, y, width, height), animate)
+        val width = if (open) expandedWidth.value else PaperAgentDockCollapsedWidth
+        val height = if (open) expandedHeight.value else collapsedHeight.value
+        applyBounds(window, dockBounds(usable, width, height, edge.value, offset), animate)
     }
 
     /**
@@ -376,8 +420,7 @@ internal class DesktopAgentPanel(
         }
         val startedAt = System.nanoTime()
         boundsAnimation = javax.swing.Timer(BOUNDS_STEP_MILLIS) { _ ->
-            val t = ((System.nanoTime() - startedAt) / BOUNDS_DURATION_MILLIS.toDouble() / 1_000_000.0)
-                .coerceIn(0.0, 1.0)
+            val t = boundsProgress(System.nanoTime() - startedAt)
             window.bounds = interpolateRect(from, target, easeOut(t))
             if (t >= 1.0) {
                 boundsAnimation?.stop()
@@ -387,13 +430,24 @@ internal class DesktopAgentPanel(
     }
 
     /**
-     * The owner's screen, minus its taskbar/Dock insets: the panel lives where the app lives.
-     * A not-yet-displayable overlay reports no configuration of its own, so the owner's is the
-     * single source for both the usable area and the display scale.
+     * The display the reader dragged the dock to, otherwise the owner's: the panel lives where
+     * the app lives. A not-yet-displayable overlay reports no configuration of its own, so the
+     * owner's is the fallback, not the overlay's.
      */
-    private fun configuration() = owner.graphicsConfiguration
+    private fun configuration() = screen
+        ?: owner.graphicsConfiguration
         ?: overlay?.graphicsConfiguration
         ?: GraphicsEnvironment.getLocalGraphicsEnvironment()?.defaultScreenDevice?.defaultConfiguration
+
+    /** The display under a point in window units, as a status monitor snaps to the screen it is dropped on. */
+    private fun screenAt(point: Point): GraphicsConfiguration? = try {
+        GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
+            .map { it.defaultConfiguration }
+            .firstOrNull { it.bounds.contains(point) }
+    } catch (error: Exception) {
+        AppLog.error("desktop_host", "agent.dock.screens.failed", error, mapOf("result" to "current_screen"))
+        null
+    }
 
     private fun usableArea(window: Window): Rectangle? {
         val configuration = configuration() ?: return null
@@ -419,9 +473,11 @@ internal class DesktopAgentPanel(
      *
      * The position is recomputed from the window's live origin on every event: while dragging,
      * the window travels under the cursor, so deltas measured against the moving origin would
-     * feed back into the next event and make the panel jerk. Crossing the screen's middle by a
-     * decisive margin re-anchors the panel to that edge; the hysteresis keeps a wiggle around
-     * the middle from teleporting it.
+     * feed back into the next event and make the panel jerk. The dock reports the pointer in dp,
+     * which are the window's own units, so the grab point and the origin add up on any display
+     * scale. Crossing the screen's middle by a decisive margin re-anchors the panel to that edge;
+     * the hysteresis keeps a wiggle around the middle from teleporting it. Dragging onto another
+     * display moves the dock to that display's edges.
      */
     private fun dragStart(x: Float, y: Float) {
         boundsAnimation?.stop()
@@ -432,10 +488,14 @@ internal class DesktopAgentPanel(
     private fun dragBy(x: Float, y: Float) {
         val window = overlay ?: return
         val held = grab ?: return
-        val usable = usableArea(window) ?: return
         val origin = window.locationOnScreen
         val pointerX = origin.x + x.roundToInt()
         val pointerY = origin.y + y.roundToInt()
+        screenAt(Point(pointerX, pointerY))?.takeIf { it != configuration() }?.let { display ->
+            screen = display
+            AppLog.debug("desktop_host", "agent.dock.screen", mapOf("result" to "moved_to_display"))
+        }
+        val usable = usableArea(window) ?: return
         val height = window.bounds.height
         val lowest = (usable.y + usable.height - height).coerceAtLeast(usable.y)
         val target = (pointerY - held.y).coerceIn(usable.y, lowest)
@@ -458,26 +518,22 @@ internal class DesktopAgentPanel(
     }
 
     /**
-     * Grow or shrink the expanded card. The grip reports device pixels; the card is sized in dp,
-     * so the delta crosses the same display scale the window geometry uses. Docked to the start
-     * edge the free side is the right one, so a rightward drag widens; docked to the end edge it
-     * is the mirror image.
+     * Grow or shrink the expanded card. The grip reports dp, the window's own units. Docked to
+     * the start edge the free side is the right one, so a rightward drag widens; docked to the
+     * end edge it is the mirror image.
      */
-    private fun resizeWidthBy(dxPx: Float) = resizeBy(dxPx, 0f)
+    private fun resizeWidthBy(dx: Float) = resizeBy(dx, 0f)
 
-    private fun resizeHeightBy(dyPx: Float) = resizeBy(0f, dyPx)
+    private fun resizeHeightBy(dy: Float) = resizeBy(0f, dy)
 
-    private fun resizeBy(dxPx: Float, dyPx: Float) {
+    private fun resizeBy(dx: Float, dy: Float) {
         val window = overlay ?: return
         val usable = usableArea(window) ?: return
-        val scale = configuration()?.defaultTransform?.scaleX ?: 1.0
-        val maxWidth = (usable.width / scale).dp - PaperAgentDockShadowMargin * 2
-        val maxHeight = (usable.height / scale).dp - PaperAgentDockShadowMargin * 2
+        val maxWidth = usable.width.dp.coerceAtLeast(PaperAgentDockMinSize)
+        val maxHeight = usable.height.dp.coerceAtLeast(PaperAgentDockMinSize)
         val sign = if (edge.value == DockEdge.START) 1f else -1f
-        expandedWidth.value = (expandedWidth.value + (dxPx * sign / scale).dp)
-            .coerceIn(PaperAgentDockMinSize, maxWidth)
-        expandedHeight.value = (expandedHeight.value + (dyPx / scale).dp)
-            .coerceIn(PaperAgentDockMinSize, maxHeight)
+        expandedWidth.value = (expandedWidth.value + (dx * sign).dp).coerceIn(PaperAgentDockMinSize, maxWidth)
+        expandedHeight.value = (expandedHeight.value + dy.dp).coerceIn(PaperAgentDockMinSize, maxHeight)
         applyGeometry(window, animate = false)
     }
 
@@ -527,7 +583,6 @@ internal class DesktopAgentPanel(
         val selected = selectedSession(live, selectedId, ui.currentSessionId)
         val status = selected.status
         val waiting = status == CodingSessionStatus.WAITING
-        val now = System.currentTimeMillis()
         val recoveries = mutableMapOf<String, CodingRecovery>()
         return Snapshot(
             model = PaperAgentDockModel(
@@ -544,10 +599,14 @@ internal class DesktopAgentPanel(
                         running = session.running || session.draft.active,
                         selected = session.session.id == selected.session.id,
                         activityLabel = session.activityLabel(),
-                        ageLabel = ageLabel(session.session.statusChangedAt, now),
+                        statusLabel = session.status.label,
+                        // Zero marks a legacy record without a transition time.
+                        stateSinceMillis = session.session.statusChangedAt
+                            .takeIf { it > 0L } ?: session.session.createdAt,
                         needsYou = session.status in NEEDS_YOU,
                     )
                 },
+                workspaceTitle = ui.current?.name.orEmpty(),
                 statusLabel = status.label,
                 messages = selected.dockMessages(settings.hideSystemSteps, ui.pendingRecoveries, recoveries),
                 liveDetail = selected.liveDetail(),
@@ -599,16 +658,6 @@ internal class DesktopAgentPanel(
 
     private fun CodingSessionUi.pendingQuestion(): String? =
         interactions.firstOrNull()?.questions?.firstOrNull()?.title?.takeIf { it.isNotBlank() }
-
-    /** Age of the current state: a run's duration while working, a frozen span once done. */
-    private fun ageLabel(sinceMillis: Long, now: Long): String {
-        val seconds = ((now - sinceMillis) / 1000).coerceAtLeast(0)
-        return when {
-            seconds < 60 -> "$seconds с"
-            seconds < 3600 -> "${seconds / 60} мин"
-            else -> "${seconds / 3600} ч"
-        }
-    }
 
     /** [recoveries] collects the failure action behind each step id the dock will report back. */
     private fun CodingSessionUi.dockMessages(hideSystemSteps: Boolean, pending: Set<CodingRecovery>,
@@ -665,6 +714,31 @@ internal class DesktopAgentPanel(
     // endregion
 }
 
+/** The dock's title; also the NSWindow's identity for the Space request, so no other window may share it. */
+internal const val DOCK_WINDOW_TITLE = "MagicPaper · агент"
+
+/**
+ * The dock's window before it has content: the platform's floating panel. A utility window has
+ * no taskbar button or Alt+Tab entry on Windows and is an NSPanel outside the Dock's window list
+ * on macOS; the type is fixed before the window becomes displayable.
+ */
+internal fun dockWindow(): ComposeWindow = ComposeWindow().apply {
+    name = "MagicPaperAgentDock"
+    title = DOCK_WINDOW_TITLE
+    type = Window.Type.UTILITY
+    // An AppKit panel hides with its inactive application by default; this one exists for
+    // exactly the time MagicPaper is inactive.
+    rootPane.putClientProperty("Window.hidesOnDeactivate", false)
+    isUndecorated = true
+    isTransparent = true
+    background = Color(0, 0, 0, 0)
+    isAlwaysOnTop = true
+    // Appearing beside another application must not take focus from it; the composer
+    // takes focus only when the reader clicks into it.
+    isAutoRequestFocus = false
+    focusableWindowState = true
+}
+
 /** What a state emission may do to the dock window. */
 internal enum class DockVisibility { HIDDEN, SHOW_COLLAPSED, KEEP }
 
@@ -679,6 +753,28 @@ internal fun dockVisibility(wanted: Boolean, windowCreated: Boolean, windowVisib
         !windowCreated || !windowVisible -> DockVisibility.SHOW_COLLAPSED
         else -> DockVisibility.KEEP
     }
+
+/** The expand/collapse morph: short enough to feel instant, long enough to read. */
+internal const val DOCK_MORPH_NANOS = 200_000_000L
+
+/** How far the morph has run after [elapsedNanos], from 0 to 1. */
+internal fun boundsProgress(elapsedNanos: Long): Double =
+    (elapsedNanos.toDouble() / DOCK_MORPH_NANOS).coerceIn(0.0, 1.0)
+
+/**
+ * The dock's rectangle on the usable area of its display, in window units. The size is taken in
+ * dp as it is, since one dp is one window unit; rounding up never clips, it can only leave a
+ * transparent unit. The panel hugs [edge] and sits [offset] of the way down the free height, so
+ * a taller state grows around the same place and covers the shorter one it grew from.
+ */
+internal fun dockBounds(usable: Rectangle, width: Dp, height: Dp, edge: DockEdge, offset: Float): Rectangle {
+    val w = ceil(width.value).toInt().coerceIn(1, usable.width)
+    val h = ceil(height.value).toInt().coerceIn(1, usable.height)
+    val x = if (edge == DockEdge.START) usable.x else usable.x + usable.width - w
+    val lowest = (usable.y + usable.height - h).coerceAtLeast(usable.y)
+    val y = (usable.y + ((usable.height - h) * offset).roundToInt()).coerceIn(usable.y, lowest)
+    return Rectangle(x, y, w, h)
+}
 
 /** Linear blend of two rectangles; [t] is already eased by the caller. */
 internal fun interpolateRect(from: Rectangle, to: Rectangle, t: Double): Rectangle {

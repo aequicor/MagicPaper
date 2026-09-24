@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -30,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -38,13 +40,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -62,10 +74,12 @@ import kotlinx.coroutines.delay
 /**
  * The docked agent panel a host pins to a screen edge while its own window is away.
  *
- * Collapsed, it is a single activity indicator: the shape, tone and pulse are the sidebar's,
- * so one session never reads as two different states. Hovering expands it into the session
- * transcript and composer; leaving retracts it. The host owns the window: it supplies the
- * geometry, moves the window on [onDragBy] and decides when the dock is visible at all.
+ * Collapsed, it is a compact status list, the way a desktop agent monitor shows its agents:
+ * one line per session with something to report, its dot, what it is doing and how long it
+ * has been in that state. The dots are the sidebar's, so one session never reads as two
+ * different states. Hovering expands it into the session rail, transcript and composer;
+ * leaving retracts it. The host owns the window: it supplies the geometry, moves the window
+ * on [onDragBy], follows [onCollapsedHeightChange] and decides when the dock is visible at all.
  */
 
 /**
@@ -77,12 +91,19 @@ public val PaperAgentDockShadowMargin: Dp = 8.dp
 
 /**
  * Window footprints, shadow ring included: the host sizes its window from these, and the
- * visible card floats [PaperAgentDockShadowMargin] inside. Collapsed tab: a 26 dp capsule.
+ * visible card floats [PaperAgentDockShadowMargin] inside. The compact list keeps one width,
+ * so its columns do not move while sessions come and go.
  */
-public val PaperAgentDockCollapsedWidth: Dp = 42.dp
+public val PaperAgentDockCollapsedWidth: Dp = 288.dp
 
-/** Collapsed tab height: a comfortable pointer and touch target. */
-public val PaperAgentDockCollapsedHeight: Dp = 88.dp
+/**
+ * Compact footprint to open with: the header and one session. The list then reports its real
+ * height through `onCollapsedHeightChange`, since rows and text scale decide it.
+ */
+public val PaperAgentDockCollapsedHeight: Dp = 104.dp
+
+/** Sessions the compact list names; the rest are counted in one line, so the list stays compact. */
+public const val PaperAgentDockCompactRows: Int = 5
 
 public val PaperAgentDockExpandedWidth: Dp = 448.dp
 public val PaperAgentDockExpandedHeight: Dp = 476.dp
@@ -91,19 +112,29 @@ public val PaperAgentDockExpandedHeight: Dp = 476.dp
 public val PaperAgentDockMinSize: Dp = 320.dp
 
 /**
- * Hover dwell before the tab opens. A pointer crossing the screen edge on its way to another
- * application must not throw a 360 dp panel over that work.
+ * Hover dwell before the list opens. A pointer crossing the list on its way to another
+ * application must not throw a 448 dp panel over that work; the list is wider than an edge tab,
+ * so the crossing takes longer.
  */
-public const val PaperAgentDockExpandDelayMillis: Long = 250L
+public const val PaperAgentDockExpandDelayMillis: Long = 350L
 
 /** Grace period after the pointer leaves, so travelling inside the panel does not retract it. */
-public const val PaperAgentDockCollapseDelayMillis: Long = 400L
+public const val PaperAgentDockCollapseDelayMillis: Long = 500L
 
 /** Width of the session rail inside the expanded card: enough for a name and its dot. */
 private val DockSessionRailWidth = 148.dp
 
 /** The invisible strip on the free edges that resizes the expanded card. */
 private val DockResizeGrip = 6.dp
+
+/** The card's silhouette in both states, so collapsing and expanding read as one surface. */
+private val DockCardShape = RoundedCornerShape(12.dp)
+
+/**
+ * The compact list's leading column: the header's workspace dot and every row's session dot
+ * centre on one guide, and every title starts on the next.
+ */
+private val DockCompactDotSlot = 20.dp
 
 public enum class PaperDockAuthor { USER, AGENT }
 
@@ -123,6 +154,9 @@ public data class PaperDockStep(
 
 /** An action that resolves a failure, named by the host; [pending] while the host carries it out. */
 public data class PaperDockRecovery(val label: String, val pendingLabel: String, val pending: Boolean = false)
+
+/** Where a drag handle sits in the window; read by its gesture, never drawn, so no state. */
+private class DockHandleOrigin { var offset: Offset = Offset.Zero }
 
 /** Step actions reach the rows through the transcript without threading through every layout level. */
 private class DockRecoveryHandlers(val onRecovery: (String) -> Unit, val onCancel: (String) -> Unit)
@@ -157,9 +191,14 @@ public data class PaperDockSession(
     val selected: Boolean = false,
     /** The row's key value: what the session is doing right now, or the question it waits on. */
     val activityLabel: String? = null,
-    /** How long the session has been in its current state: "3 мин", "2 ч". */
-    val ageLabel: String? = null,
-    /** The session needs the reader: it sorts to the top and feeds the tab's badge. */
+    /** The session's own status, said when there is no [activityLabel] to show. */
+    val statusLabel: String = "",
+    /**
+     * When the session entered its current state, in epoch milliseconds: the dock counts the
+     * time from it against the host's `nowMillis`, so a waiting session's age keeps moving.
+     */
+    val stateSinceMillis: Long? = null,
+    /** The session needs the reader: it sorts to the top, is tinted and feeds the badge. */
     val needsYou: Boolean = false,
 )
 
@@ -170,6 +209,8 @@ public data class PaperDockSession(
  */
 public data class PaperAgentDockModel(
     val sessions: List<PaperDockSession> = emptyList(),
+    /** What the sessions belong to, named in the compact list's header: the open project. */
+    val workspaceTitle: String = "",
     /** Status of the selected session, for the header and the collapsed tab's accessible name. */
     val statusLabel: String = "",
     val messages: List<PaperDockMessage> = emptyList(),
@@ -190,8 +231,16 @@ public data class PaperAgentDockModel(
 )
 
 /**
- * @param expandDelayMillis hover dwell before expanding; a pointer crossing the edge must not
- *   throw a 360 dp panel over the user's other work.
+ * Pointer positions and resize deltas are reported in dp, the unit Compose Desktop sizes its
+ * windows in (one dp is one AWT window unit on every display scale), so a host moves and sizes
+ * its window with them directly.
+ *
+ * @param nowMillis the host's wall clock in epoch milliseconds; every session's age is counted
+ *   from its [PaperDockSession.stateSinceMillis] against it. Zero hides the ages.
+ * @param onCollapsedHeightChange the window footprint height, shadow ring included, the compact
+ *   list needs for its current rows at the current text scale.
+ * @param expandDelayMillis hover dwell before expanding; a pointer crossing the list must not
+ *   throw the full panel over the user's other work.
  * @param collapseDelayMillis grace period after the pointer leaves, so travelling inside the
  *   panel does not retract it.
  */
@@ -204,6 +253,7 @@ public fun PaperAgentDock(
     /** Which screen edge the host pinned the window to: the resize grip sits on the free side. */
     dockedToStart: Boolean = true,
     indicator: @Composable () -> Unit,
+    nowMillis: Long = 0L,
     input: String = "",
     onInputChange: (String) -> Unit = {},
     onSend: () -> Unit = {},
@@ -215,6 +265,7 @@ public fun PaperAgentDock(
     onCancelRecovery: (String) -> Unit = {},
     onResizeWidthBy: (Float) -> Unit = {},
     onResizeHeightBy: (Float) -> Unit = {},
+    onCollapsedHeightChange: (Dp) -> Unit = {},
     /** The application's paper-animation setting: the dock's background is the window's own. */
     animateBackground: Boolean = true,
     onDragStart: (Float, Float) -> Unit = { _, _ -> },
@@ -225,22 +276,31 @@ public fun PaperAgentDock(
 ) {
     val colors = LocalPaperColors.current
     val spacing = LocalPaperSpacing.current
+    val density = LocalDensity.current
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
     // Who owns the open panel. A pointer that leaves retracts its own panel, but a keyboard or
     // touch activation has no pointer to leave with: only the reader closes that one, otherwise
-    // activating the tab would flash the panel and take it away again.
+    // activating the list would flash the panel and take it away again.
     var openedByPointer by remember { mutableStateOf(false) }
-    // A drag must never fight the hover logic: without this, holding the tab for the dwell
+    // A drag must never fight the hover logic: without this, holding the list for the dwell
     // would explode it to full size under the moving cursor, mid-drag.
     var dragging by remember { mutableStateOf(false) }
+    // The compact row under the pointer when the dwell completes is the session the reader
+    // reached for, so the panel opens on its conversation.
+    var pointedSession by remember { mutableStateOf<String?>(null) }
+    val latestSelect by rememberUpdatedState(onSelectSession)
+    val latestHeight by rememberUpdatedState(onCollapsedHeightChange)
 
     LaunchedEffect(hovered, expanded, dragging) {
+        // Rows leave the composition with the list and never report the pointer leaving them.
+        if (expanded) pointedSession = null
         if (!hovered || expanded || dragging) return@LaunchedEffect
-        // Dwell before opening: a pointer crossing the edge on its way to another application
-        // must not throw a 360 dp panel over that work.
+        // Dwell before opening: a pointer crossing the list on its way to another application
+        // must not throw the full panel over that work.
         delay(expandDelayMillis)
         if (hovered) {
+            pointedSession?.let(latestSelect)
             openedByPointer = true
             onExpandedChange(true)
         }
@@ -266,25 +326,35 @@ public fun PaperAgentDock(
 
     // The host moves its own window. It receives the pointer's position inside this window,
     // never deltas: the window travels under the cursor while dragging, so a delta measured
-    // against the moving origin would feed back and make the panel jerk.
-    val drag = Modifier.pointerInput(onDragStart, onDragBy, onDragEnd) {
-        detectDragGestures(
-            onDragStart = { start ->
-                dragging = true
-                onDragStart(start.x, start.y)
-            },
-            onDragEnd = {
-                dragging = false
-                onDragEnd()
-            },
-            onDragCancel = {
-                dragging = false
-                onDragEnd()
-            },
-        ) { change, _ ->
-            change.consume()
-            onDragBy(change.position.x, change.position.y)
-        }
+    // against the moving origin would feed back and make the panel jerk. Every handle reports
+    // in the window's frame, not its own, so the host can tell which edge and display the
+    // pointer is over wherever the drag started.
+    val drag = Modifier.composed {
+        val handle = remember { DockHandleOrigin() }
+        Modifier.onGloballyPositioned { handle.offset = it.positionInRoot() }
+            .pointerInput(onDragStart, onDragBy, onDragEnd) {
+                fun report(point: Offset, to: (Float, Float) -> Unit) {
+                    val inWindow = handle.offset + point
+                    to(inWindow.x.toDp().value, inWindow.y.toDp().value)
+                }
+                detectDragGestures(
+                    onDragStart = { start ->
+                        dragging = true
+                        report(start, onDragStart)
+                    },
+                    onDragEnd = {
+                        dragging = false
+                        onDragEnd()
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        onDragEnd()
+                    },
+                ) { change, _ ->
+                    change.consume()
+                    report(change.position, onDragBy)
+                }
+            }
     }
 
     Box(
@@ -301,81 +371,241 @@ public fun PaperAgentDock(
                 } else false
             },
     ) {
-        // The card floats inside the shadow ring: one silhouette, fully rounded, no edge the
-        // window can clip and no hand-drawn outline fighting the surface. The surface is the
-        // application's canvas with its animated paper, so the dock reads as the same window.
-        PaperSurface(
-            Modifier.padding(PaperAgentDockShadowMargin).fillMaxSize(),
-            kind = PaperSurfaceKind.CANVAS,
-            shape = RoundedCornerShape(12.dp),
-            shadowElevation = 4.dp,
-        ) {
-            Box(Modifier.fillMaxSize()) {
-                // The dock is read while another application holds the keyboard focus, so its
-                // paper counts as foreground while the reader hovers it, not only while the
-                // dock window itself is focused.
-                val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
-                PaperBackground(animateBackground, Modifier.matchParentSize(),
-                    foreground = hovered || windowFocused)
-                if (expanded) {
-                    val latestRecovery by rememberUpdatedState(onRecovery)
-                    val latestCancel by rememberUpdatedState(onCancelRecovery)
-                    val recovery = remember { DockRecoveryHandlers({ latestRecovery(it) }, { latestCancel(it) }) }
-                    CompositionLocalProvider(LocalDockRecovery provides recovery) {
-                        DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
-                            onOpenMainWindow, onSelectSession, onResizeWidthBy, onResizeHeightBy,
-                            { onExpandedChange(false) }, drag, dockedToStart)
-                    }
-                } else {
-                    DockCollapsed(model, colors, indicator, drag) {
+        if (expanded) {
+            DockCard(Modifier.padding(PaperAgentDockShadowMargin).fillMaxSize(), animateBackground, hovered) {
+                val latestRecovery by rememberUpdatedState(onRecovery)
+                val latestCancel by rememberUpdatedState(onCancelRecovery)
+                val recovery = remember { DockRecoveryHandlers({ latestRecovery(it) }, { latestCancel(it) }) }
+                CompositionLocalProvider(LocalDockRecovery provides recovery) {
+                    DockExpanded(model, colors, spacing, indicator, nowMillis, input, onInputChange, onSend, onStop,
+                        onOpenMainWindow, onSelectSession, onResizeWidthBy, onResizeHeightBy,
+                        { onExpandedChange(false) }, drag, dockedToStart)
+                }
+            }
+        } else {
+            DockCard(
+                Modifier.fillMaxWidth()
+                    // Measured without a height limit, so the list reports what its rows need
+                    // even while the host's window still has the previous content's height.
+                    .wrapContentHeight(Alignment.Top, unbounded = true)
+                    .onSizeChanged { size -> latestHeight(with(density) { size.height.toDp() }) }
+                    .padding(PaperAgentDockShadowMargin),
+                animateBackground, hovered,
+            ) {
+                DockCompact(
+                    model = model,
+                    indicator = indicator,
+                    nowMillis = nowMillis,
+                    drag = drag,
+                    onOpen = {
                         // An explicit activation is not pointer-owned, so it survives having no pointer.
                         openedByPointer = false
                         onExpandedChange(true)
-                    }
-                }
+                    },
+                    onOpenSession = { id ->
+                        onSelectSession(id)
+                        openedByPointer = false
+                        onExpandedChange(true)
+                    },
+                    onPointAt = { id, pointed ->
+                        if (pointed) pointedSession = id
+                        else if (pointedSession == id) pointedSession = null
+                    },
+                )
             }
         }
     }
 }
 
+/**
+ * The card floats inside the shadow ring: one silhouette, fully rounded, no edge the window can
+ * clip and no hand-drawn outline fighting the surface. The surface is the application's canvas
+ * with its animated paper, so the dock reads as the same window in both states.
+ */
 @Composable
-private fun DockCollapsed(
-    model: PaperAgentDockModel,
-    colors: PaperColors,
-    indicator: @Composable () -> Unit,
-    drag: Modifier,
-    onExpand: () -> Unit,
+private fun DockCard(
+    modifier: Modifier,
+    animateBackground: Boolean,
+    hovered: Boolean,
+    content: @Composable () -> Unit,
 ) {
-    Box(
-        Modifier.fillMaxSize()
+    PaperSurface(modifier, kind = PaperSurfaceKind.CANVAS, shape = DockCardShape, shadowElevation = 4.dp) {
+        Box(Modifier.fillMaxSize()) {
+            // The dock is read while another application holds the keyboard focus, so its
+            // paper counts as foreground while the reader hovers it, not only while the
+            // dock window itself is focused.
+            val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+            PaperBackground(animateBackground, Modifier.matchParentSize(),
+                foreground = hovered || windowFocused)
+            content()
+        }
+    }
+}
+
+/**
+ * The resting state: a status board of the sessions that have something to report. A quiet
+ * session (ready, nothing unread) is left to the open panel's rail, so the list names only
+ * work in progress, questions and results. The whole list is a drag handle; rows keep their
+ * clicks, since a drag starts only past the touch slop.
+ */
+@Composable
+private fun DockCompact(
+    model: PaperAgentDockModel,
+    indicator: @Composable () -> Unit,
+    nowMillis: Long,
+    drag: Modifier,
+    onOpen: () -> Unit,
+    onOpenSession: (String) -> Unit,
+    onPointAt: (String, Boolean) -> Unit,
+) {
+    val colors = LocalPaperColors.current
+    val spacing = LocalPaperSpacing.current
+    val reporting = model.sessions.filter { it.tone != PaperActivityTone.READY }
+    val shown = reporting.take(PaperAgentDockCompactRows)
+    Column(Modifier.fillMaxWidth().then(drag).padding(vertical = spacing.xxs)) {
+        DockCompactHeader(model, indicator, onOpen)
+        shown.forEach { session ->
+            key(session.id) { DockCompactRow(session, nowMillis, onOpenSession, onPointAt) }
+        }
+        val hidden = reporting.size - shown.size
+        val footer = when {
+            reporting.isEmpty() -> "Нет активных сессий"
+            hidden > 0 -> "Ещё $hidden"
+            else -> null
+        }
+        if (footer != null) {
+            PaperText(footer, role = PaperTextRole.CHROME, color = colors.secondaryText, maxLines = 1,
+                modifier = Modifier.padding(start = spacing.sm + DockCompactDotSlot + spacing.xs,
+                    end = spacing.sm, top = spacing.xxs, bottom = spacing.xxs))
+        }
+    }
+}
+
+/** The list's title line: the workspace's one dot, its name and how many sessions need the reader. */
+@Composable
+private fun DockCompactHeader(
+    model: PaperAgentDockModel,
+    indicator: @Composable () -> Unit,
+    onOpen: () -> Unit,
+) {
+    val colors = LocalPaperColors.current
+    val spacing = LocalPaperSpacing.current
+    val shape = RoundedCornerShape(8.dp)
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = spacing.xxs)
+            .heightIn(min = 32.dp)
             .paperClickable(
                 role = androidx.compose.ui.semantics.Role.Button,
                 onClickLabel = "Открыть панель агента",
-                shape = RoundedCornerShape(12.dp),
-                onClick = onExpand,
+                shape = shape,
+                onClick = onOpen,
             )
-            .then(drag)
             .semantics {
                 val selected = model.sessions.firstOrNull { it.selected }
                 contentDescription = "Агент · ${selected?.name.orEmpty()}: ${model.statusLabel}"
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        // One glanceable column, Live-Activity style: how many sessions need the reader,
-        // above the workspace's aggregate state.
-        Column(horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)) {
-            if (model.attentionCount > 0) {
-                Box(Modifier.background(colors.action, CircleShape)
-                    .sizeIn(minWidth = 16.dp, minHeight = 16.dp)
-                    .padding(horizontal = 4.dp),
-                    contentAlignment = Alignment.Center) {
-                    PaperText("${model.attentionCount}", role = PaperTextRole.CHROME, color = colors.actionOn)
-                }
             }
-            indicator()
+            .padding(horizontal = spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(DockCompactDotSlot), contentAlignment = Alignment.Center) { indicator() }
+        Spacer(Modifier.width(spacing.xs))
+        PaperFadingText(model.workspaceTitle.ifBlank { "MagicPaper" }, Modifier.weight(1f),
+            color = colors.secondaryText, style = LocalPaperTypography.current.chrome)
+        if (model.attentionCount > 0) {
+            Spacer(Modifier.width(spacing.xs))
+            Box(Modifier.background(colors.action, CircleShape)
+                .sizeIn(minWidth = 18.dp, minHeight = 18.dp)
+                .padding(horizontal = 5.dp)
+                .semantics { contentDescription = "Ждут вас: ${model.attentionCount}" },
+                contentAlignment = Alignment.Center) {
+                PaperText("${model.attentionCount}", role = PaperTextRole.CHROME, color = colors.actionOn)
+            }
         }
     }
+}
+
+/**
+ * One session: its dot, its name with the age of its state on the right, and below what it is
+ * doing. A session that waits on the reader carries the attention tint across the whole row,
+ * so a question can never hide among running work.
+ */
+@Composable
+private fun DockCompactRow(
+    session: PaperDockSession,
+    nowMillis: Long,
+    onOpenSession: (String) -> Unit,
+    onPointAt: (String, Boolean) -> Unit,
+) {
+    val colors = LocalPaperColors.current
+    val spacing = LocalPaperSpacing.current
+    val chrome = LocalPaperTypography.current.chrome
+    val shape = RoundedCornerShape(8.dp)
+    val latestPointAt by rememberUpdatedState(onPointAt)
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = spacing.xxs)
+            .clip(shape)
+            .background(if (session.needsYou) colors.activityYellow.copy(alpha = 0.3f) else Color.Transparent)
+            // Tracked while the pointer event is dispatched, not from the hover flow, so the
+            // row is known by the time the dock's dwell decides to open.
+            .pointerInput(session.id) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        when (event.type) {
+                            PointerEventType.Enter -> latestPointAt(session.id, true)
+                            PointerEventType.Exit -> latestPointAt(session.id, false)
+                        }
+                    }
+                }
+            }
+            .paperClickable(
+                role = androidx.compose.ui.semantics.Role.Button,
+                onClickLabel = "Открыть сессию",
+                shape = shape,
+            ) { onOpenSession(session.id) }
+            .semantics { selected = session.selected }
+            .padding(horizontal = spacing.xs, vertical = 6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(Modifier.width(DockCompactDotSlot).heightIn(min = 16.dp), contentAlignment = Alignment.Center) {
+            PaperActivityIndicator(session.tone, session.statusLabel.ifBlank { session.name }, running = session.running)
+        }
+        Spacer(Modifier.width(spacing.xs))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PaperFadingText(session.name, Modifier.weight(1f), color = colors.text, style = chrome,
+                    marqueeOnHover = true)
+                session.elapsedLabel(nowMillis)?.let { elapsed ->
+                    Spacer(Modifier.width(spacing.xs))
+                    // Tabular figures keep the ticking age from shifting the title every second.
+                    PaperText(elapsed, style = chrome.copy(fontFeatureSettings = "tnum"),
+                        color = colors.secondaryText, maxLines = 1)
+                }
+            }
+            (session.activityLabel ?: session.statusLabel).takeIf { it.isNotBlank() }?.let { detail ->
+                PaperFadingText(detail, color = colors.secondaryText, style = chrome, marqueeOnHover = true)
+            }
+        }
+    }
+}
+
+private fun PaperDockSession.elapsedLabel(nowMillis: Long): String? =
+    stateSinceMillis?.takeIf { nowMillis > 0L }?.let { paperDockElapsed(nowMillis - it) }
+
+/**
+ * Time in the current state, read the way a status board counts it: 0:42, 12:05, 1:04:09.
+ * A day or more is said in days: seconds stop mattering long before that.
+ */
+internal fun paperDockElapsed(millis: Long): String {
+    val seconds = (millis / 1000).coerceAtLeast(0)
+    val days = seconds / 86_400
+    if (days > 0) return "$days д"
+    val hours = seconds / 3600
+    val minutes = (seconds % 3600) / 60
+    val rest = (seconds % 60).toString().padStart(2, '0')
+    return if (hours > 0) "$hours:${minutes.toString().padStart(2, '0')}:$rest" else "$minutes:$rest"
 }
 
 @Composable
@@ -384,6 +614,7 @@ private fun DockExpanded(
     colors: PaperColors,
     spacing: PaperSpacing,
     indicator: @Composable () -> Unit,
+    nowMillis: Long,
     input: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -404,7 +635,7 @@ private fun DockExpanded(
             Modifier.width(DockSessionRailWidth).fillMaxHeight().then(drag))
         Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
         Box(Modifier.weight(1f).fillMaxHeight()) {
-            DockConversation(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
+            DockConversation(model, colors, spacing, indicator, nowMillis, input, onInputChange, onSend, onStop,
                 onOpenMainWindow, onCollapse, drag, Modifier.fillMaxSize())
             // Resize grips on the two free edges; they sit over the card's padding, not controls.
             Box(Modifier.align(if (dockedToStart) Alignment.CenterEnd else Alignment.CenterStart)
@@ -413,7 +644,7 @@ private fun DockExpanded(
                 .pointerInput(onResizeWidthBy) {
                     detectDragGestures { change, amount ->
                         change.consume()
-                        onResizeWidthBy(amount.x)
+                        onResizeWidthBy(amount.x.toDp().value)
                     }
                 })
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(DockResizeGrip)
@@ -421,7 +652,7 @@ private fun DockExpanded(
                 .pointerInput(onResizeHeightBy) {
                     detectDragGestures { change, amount ->
                         change.consume()
-                        onResizeHeightBy(amount.y)
+                        onResizeHeightBy(amount.y.toDp().value)
                     }
                 })
         }
@@ -448,7 +679,7 @@ private fun DockSessionList(
                 items(model.sessions, key = { it.id }) { session ->
                     PaperSessionRow(
                         title = session.name,
-                        subtitle = session.activityLabel ?: session.ageLabel,
+                        subtitle = session.activityLabel ?: session.statusLabel.takeIf { it.isNotBlank() },
                         onClick = { onSelectSession(session.id) },
                         selected = session.selected,
                         indicator = {
@@ -467,6 +698,7 @@ private fun DockConversation(
     colors: PaperColors,
     spacing: PaperSpacing,
     indicator: @Composable () -> Unit,
+    nowMillis: Long,
     input: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -490,7 +722,7 @@ private fun DockConversation(
                     style = LocalPaperTypography.current.label, color = colors.text, marqueeOnHover = true)
                 PaperFadingText(
                     listOfNotNull(model.statusLabel, selectedSession?.activityLabel,
-                        selectedSession?.ageLabel).joinToString(" · "),
+                        selectedSession?.elapsedLabel(nowMillis)).joinToString(" · "),
                     style = LocalPaperTypography.current.chrome,
                     color = colors.secondaryText, marqueeOnHover = true)
             }
@@ -503,8 +735,9 @@ private fun DockConversation(
             PaperIconButton(label = "Открыть окно MagicPaper", onClick = onOpenMainWindow) {
                 PaperText("⤢", role = PaperTextRole.CHROME)
             }
+            // Back to the compact list, not off the screen: the minimise mark says so.
             PaperIconButton(label = "Свернуть панель", onClick = onCollapse) {
-                PaperText("‹", role = PaperTextRole.CHROME)
+                PaperText("—", role = PaperTextRole.CHROME)
             }
         }
 
@@ -687,18 +920,41 @@ private fun DockToolRow(step: PaperDockStep) {
     }
 }
 
+/** Preview clock: every age below is counted from here. */
+private const val PreviewNow = 1_000_000_000L
+
 private val previewSessions = listOf(
-    PaperDockSession("s1", "Восстановление дочерних сессий", PaperActivityTone.WORKING, running = true, selected = true),
-    PaperDockSession("s2", "Индикатор always-on-top", PaperActivityTone.ATTENTION),
-    PaperDockSession("s3", "Панель агента", PaperActivityTone.UNREAD),
-    PaperDockSession("s4", "Старая задача", PaperActivityTone.READY),
+    PaperDockSession("s2", "Индикатор always-on-top", PaperActivityTone.ATTENTION,
+        activityLabel = "Показывать панель в покое?", statusLabel = "Ждём вашего ответа",
+        stateSinceMillis = PreviewNow - 42_000, needsYou = true),
+    PaperDockSession("s1", "Восстановление дочерних сессий", PaperActivityTone.WORKING, running = true, selected = true,
+        activityLabel = "Читает SessionOrganismStore.kt", statusLabel = "работает",
+        stateSinceMillis = PreviewNow - 211_000),
+    PaperDockSession("s3", "Панель агента", PaperActivityTone.UNREAD,
+        statusLabel = "Работа завершена · результат не прочитан", stateSinceMillis = PreviewNow - 3_849_000),
+    PaperDockSession("s4", "Старая задача", PaperActivityTone.READY, statusLabel = "ждёт запроса"),
 )
 
-@Preview(name = "Dock collapsed · working", group = "Agent dock", widthDp = 42, heightDp = 88)
+@Preview(name = "Dock collapsed · status list", group = "Agent dock", widthDp = 288, heightDp = 200)
 @Composable
 public fun PaperAgentDockCollapsedPreview() = PaperTheme {
     PaperAgentDock(expanded = false, onExpandedChange = {},
-        model = PaperAgentDockModel(sessions = previewSessions, statusLabel = "работает"),
+        model = PaperAgentDockModel(sessions = previewSessions, workspaceTitle = "MagicPaper",
+            statusLabel = "работает", attentionCount = 2),
+        nowMillis = PreviewNow,
+        indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 16.dp) })
+}
+
+@Preview(name = "Dock collapsed · overflow", group = "Agent dock", widthDp = 288, heightDp = 300)
+@Composable
+public fun PaperAgentDockOverflowPreview() = PaperTheme {
+    val many = (1..8).map { index ->
+        PaperDockSession("w$index", "Этап $index · миграция журнала", PaperActivityTone.WORKING, running = true,
+            activityLabel = "Прогон выполняется", stateSinceMillis = PreviewNow - index * 61_000L)
+    }
+    PaperAgentDock(expanded = false, onExpandedChange = {},
+        model = PaperAgentDockModel(sessions = many, workspaceTitle = "MagicPaper", statusLabel = "работает"),
+        nowMillis = PreviewNow,
         indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 16.dp) })
 }
 
@@ -720,6 +976,7 @@ public fun PaperAgentDockExpandedPreview() = PaperTheme {
             ),
         ),
         indicator = { PaperActivityIndicator(PaperActivityTone.WORKING, "работает", running = true, size = 16.dp) },
+        nowMillis = PreviewNow,
         input = "Проверь ещё и планирование")
 }
 

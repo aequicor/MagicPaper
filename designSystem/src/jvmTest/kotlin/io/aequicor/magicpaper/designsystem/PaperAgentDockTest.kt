@@ -40,20 +40,24 @@ import kotlin.test.assertTrue
 /**
  * The dock is the only view of a run while the application window is away, so two failures are
  * user-visible bugs rather than cosmetics: a panel that does not fit the window its host sized
- * for it (the composer disappears off-screen), and a collapsed tab that renders a squeezed
- * session title beside the indicator.
+ * for it (the composer disappears off-screen), and a compact list that hides a session or its
+ * question.
  *
  * Renders are captured for inspection under `build/reports/agent-dock`.
  */
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class PaperAgentDockTest {
     private companion object {
+        const val NOW = 1_000_000_000L
         val sessions = listOf(
             PaperDockSession("s1", "Восстановление дочерних сессий", PaperActivityTone.WORKING,
-                running = true, selected = true),
-            PaperDockSession("s2", "Индикатор always-on-top", PaperActivityTone.ATTENTION),
-            PaperDockSession("s3", "Панель агента", PaperActivityTone.UNREAD),
+                running = true, selected = true, statusLabel = "работает", stateSinceMillis = NOW - 211_000),
+            PaperDockSession("s2", "Индикатор always-on-top", PaperActivityTone.ATTENTION,
+                statusLabel = "Ждём вашего ответа", stateSinceMillis = NOW - 42_000, needsYou = true),
+            PaperDockSession("s3", "Панель агента", PaperActivityTone.UNREAD,
+                statusLabel = "Работа завершена · результат не прочитан", stateSinceMillis = NOW - 3_849_000),
         )
+        val quiet = PaperDockSession("s4", "Старая задача", PaperActivityTone.READY, statusLabel = "ждёт запроса")
         val busyModel = PaperAgentDockModel(
             sessions = sessions,
             statusLabel = "работает",
@@ -82,28 +86,117 @@ class PaperAgentDockTest {
         init { registry.currentState = Lifecycle.State.RESUMED }
     }
 
-    @Test fun collapsedTabCarriesTheIndicatorAloneAndExpandsOnActivation() {
+    @Test fun theCompactListNamesTheSessionsWithSomethingToReportAndOpensOnActivation() {
         val expanded = mutableStateOf(false)
         val frames = Frames()
-        val scene = scene(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight) {
-            Dock(expanded.value, { expanded.value = it }, busyModel)
+        val model = busyModel.copy(sessions = sessions + quiet, workspaceTitle = "MagicPaper")
+        val scene = scene(PaperAgentDockCollapsedWidth, 300.dp) {
+            Dock(expanded.value, { expanded.value = it }, model)
         }
         try {
             frames.draw(scene)
             onPaperUi {
                 val texts = scene.texts()
-                assertTrue(texts.isEmpty(), "A collapsed tab must not render a title beside the dot: $texts")
-                val tab = scene.action("Открыть панель агента")
-                assertTrue(tab.config.getOrNull(SemanticsProperties.ContentDescription)!!
+                for (session in sessions) assertTrue(session.name in texts, "The list names ${session.name}: $texts")
+                assertFalse(quiet.name in texts, "A quiet session is left to the open panel's rail")
+                assertTrue("MagicPaper" in texts, "The header names the workspace")
+                assertTrue("3:31" in texts && "0:42" in texts && "1:04:09" in texts,
+                    "Every row counts the age of its state: $texts")
+                assertTrue("Ждём вашего ответа" in texts, "A row without live activity says its status")
+                val header = scene.action("Открыть панель агента")
+                assertTrue(header.config.getOrNull(SemanticsProperties.ContentDescription)!!
                     .any { "Восстановление дочерних сессий" in it && "работает" in it },
-                    "The tab's accessible name must carry the session and its status")
+                    "The header's accessible name must carry the session and its status")
                 assertFalse(expanded.value)
-                tab.config[SemanticsActions.OnClick].action!!.invoke()
+                header.config[SemanticsActions.OnClick].action!!.invoke()
             }
             frames.draw(scene)
-            onPaperUi { assertTrue(expanded.value, "Activating the tab must expand it without a pointer") }
+            onPaperUi { assertTrue(expanded.value, "Activating the header must expand it without a pointer") }
             scene.capture(frames, "collapsed")
         } finally { onPaperUi { scene.close() } }
+    }
+
+    @Test fun activatingARowOpensThatSession() {
+        val expanded = mutableStateOf(false)
+        val selected = mutableListOf<String>()
+        val frames = Frames()
+        val scene = scene(PaperAgentDockCollapsedWidth, 300.dp) {
+            Dock(expanded.value, { expanded.value = it }, busyModel, onSelectSession = { selected += it })
+        }
+        try {
+            frames.draw(scene)
+            onPaperUi { scene.row("Панель агента").config[SemanticsActions.OnClick].action!!.invoke() }
+            frames.draw(scene)
+            onPaperUi {
+                assertEquals(listOf("s3"), selected, "The row names the session it opens")
+                assertTrue(expanded.value, "Activating a row opens the panel on its conversation")
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
+    @Test fun overflowIsCountedInsteadOfListed() {
+        val frames = Frames()
+        val many = (1..8).map { index ->
+            PaperDockSession("w$index", "Этап $index", PaperActivityTone.WORKING, running = true,
+                stateSinceMillis = NOW - index * 1000L)
+        }
+        val scene = scene(PaperAgentDockCollapsedWidth, 400.dp) {
+            Dock(false, {}, PaperAgentDockModel(sessions = many, statusLabel = "работает"))
+        }
+        try {
+            frames.draw(scene)
+            onPaperUi {
+                val texts = scene.texts()
+                assertEquals(PaperAgentDockCompactRows, many.count { it.name in texts },
+                    "The list names at most $PaperAgentDockCompactRows sessions: $texts")
+                assertTrue("Ещё 3" in texts, "The rest are counted in one line: $texts")
+                scene.capture(frames, "collapsed-overflow")
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
+    /**
+     * The host sizes the compact window from the height the list reports. Anything the list
+     * draws below it is cut off by the window, so every row must fit the reported height at
+     * every display scale and text scale, and a longer list must report a taller window.
+     */
+    @Test fun theCompactListReportsTheHeightItNeedsAndFitsIt() {
+        for ((density, fontScale) in listOf(1f to 1f, 1.5f to 1f, 2f to 1f, 1f to 1.6f)) {
+            fun reported(model: PaperAgentDockModel): Dp {
+                val heights = mutableListOf<Dp>()
+                val frames = Frames()
+                val probe = scene(PaperAgentDockCollapsedWidth, 700.dp, density, fontScale) {
+                    Dock(false, {}, model, onCollapsedHeightChange = { heights += it })
+                }
+                try { frames.draw(probe) } finally { onPaperUi { probe.close() } }
+                return assertNotNull(heights.lastOrNull(), "The compact list must report its height")
+            }
+            val short = reported(busyModel.copy(sessions = sessions.take(1)))
+            val height = reported(busyModel)
+            assertTrue(height > short, "Two more rows need a taller window: $short -> $height")
+            val frames = Frames()
+            val scene = scene(PaperAgentDockCollapsedWidth, height, density, fontScale) { Dock(false, {}, busyModel) }
+            try {
+                frames.draw(scene)
+                onPaperUi {
+                    val bottom = height.value * density
+                    for (session in sessions) {
+                        val bounds = scene.row(session.name).boundsInRoot
+                        assertTrue(bounds.bottom <= bottom + 0.5f,
+                            "${session.name} is cut off at $density/$fontScale: ${bounds.bottom} > $bottom")
+                    }
+                    scene.capture(frames, "collapsed-density-$density-font-$fontScale")
+                }
+            } finally { onPaperUi { scene.close() } }
+        }
+    }
+
+    @Test fun agesReadLikeAStatusBoard() {
+        assertEquals("0:00", paperDockElapsed(-5_000))
+        assertEquals("0:42", paperDockElapsed(42_000))
+        assertEquals("12:05", paperDockElapsed(725_000))
+        assertEquals("1:04:09", paperDockElapsed(3_849_000))
+        assertEquals("2 д", paperDockElapsed(2 * 86_400_000L + 5_000))
     }
 
     @Test fun hoverOpensThePanelAndLeavingRetractsIt() {
@@ -120,15 +213,33 @@ class PaperAgentDockTest {
         }
         try {
             frames.draw(scene)
-            onPaperUi { assertFalse(expanded.value, "The dock starts as a tab") }
+            onPaperUi { assertFalse(expanded.value, "The dock starts as the compact list") }
             frames.move(scene, Offset(13f, 36f))
-            onPaperUi { assertTrue(expanded.value, "Hovering the tab must expand it") }
-            frames.move(scene, Offset(320f, 320f))
-            onPaperUi { assertFalse(expanded.value, "Leaving must retract the dock to the tab") }
+            onPaperUi { assertTrue(expanded.value, "Hovering the list must expand it") }
+            frames.move(scene, Offset(360f, 460f))
+            onPaperUi { assertFalse(expanded.value, "Leaving must retract the dock to the list") }
         } finally { onPaperUi { scene.close() } }
     }
 
-    @Test fun draggingTheTabMovesItWithoutExplodingItUnderTheCursor() {
+    @Test fun thePanelOpensOnTheSessionTheReaderPointsAt() {
+        val expanded = mutableStateOf(false)
+        val selected = mutableListOf<String>()
+        val frames = Frames()
+        val scene = scene(PaperAgentDockCollapsedWidth, 300.dp) {
+            Dock(expanded.value, { expanded.value = it }, busyModel, onSelectSession = { selected += it })
+        }
+        try {
+            frames.draw(scene)
+            val target = onPaperUi { scene.row("Индикатор always-on-top").boundsInRoot.center }
+            frames.move(scene, target)
+            onPaperUi {
+                assertTrue(expanded.value, "Dwelling on a row opens the panel")
+                assertEquals("s2", selected.lastOrNull(), "The panel opens on the row under the pointer")
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
+    @Test fun draggingTheListMovesItWithoutExplodingItUnderTheCursor() {
         val expanded = mutableStateOf(false)
         val grabs = mutableListOf<Offset>()
         val moves = mutableListOf<Offset>()
@@ -148,24 +259,53 @@ class PaperAgentDockTest {
         try {
             frames.draw(scene)
             onPaperUi {
-                scene.sendPointerEvent(PointerEventType.Press, Offset(21f, 44f), type = PointerType.Mouse)
+                scene.sendPointerEvent(PointerEventType.Press, Offset(60f, 28f), type = PointerType.Mouse)
             }
             // Past the touch slop, so this is a drag and not a click.
-            for (y in listOf(58f, 70f, 60f)) {
-                onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(21f, y), type = PointerType.Mouse) }
+            for (y in listOf(42f, 54f, 44f)) {
+                onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(60f, y), type = PointerType.Mouse) }
                 frames.draw(scene, 3)
             }
             onPaperUi {
                 assertEquals(1, grabs.size, "A drag past the slop must report its grab point")
                 assertTrue(moves.isNotEmpty(), "The host needs the pointer position to move its window")
-                // The dwell has long elapsed while the pointer sat on the tab: a drag must win.
+                // The dwell has long elapsed while the pointer sat on the list: a drag must win.
                 assertFalse(expanded.value, "Dragging must not expand the panel under the cursor")
             }
-            onPaperUi { scene.sendPointerEvent(PointerEventType.Release, Offset(21f, 60f), type = PointerType.Mouse) }
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Release, Offset(60f, 44f), type = PointerType.Mouse) }
             frames.draw(scene)
             onPaperUi {
                 assertEquals(1, releases, "Releasing ends the drag")
-                assertTrue(expanded.value, "Once the drag is over, the pointer under the tab opens it")
+                assertTrue(expanded.value, "Once the drag is over, the pointer under the list opens it")
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
+    /**
+     * A desktop host moves its window in window units, and Compose Desktop sizes windows one unit
+     * per dp. Reporting pixels would double every move on a 2x display, and the window would
+     * oscillate between two places under the cursor.
+     */
+    @Test fun dragPositionsAreReportedInDp() {
+        val grabs = mutableListOf<Offset>()
+        val moves = mutableListOf<Offset>()
+        val frames = Frames()
+        val scene = scene(PaperAgentDockCollapsedWidth, 300.dp, density = 2f) {
+            Dock(false, {}, busyModel, expandDelayMillis = 60_000L,
+                onDragStart = { x, y -> grabs.add(Offset(x, y)) },
+                onDragBy = { x, y -> moves.add(Offset(x, y)) })
+        }
+        try {
+            frames.draw(scene)
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Press, Offset(120f, 56f), type = PointerType.Mouse) }
+            for (y in listOf(90f, 120f)) {
+                onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(120f, y), type = PointerType.Mouse) }
+                frames.draw(scene, 2)
+            }
+            onPaperUi {
+                assertEquals(60f, grabs.single().x, 0.5f, "The grab point is in dp, not pixels")
+                assertEquals(60f, moves.last().y, 0.5f, "The pointer position is in dp, not pixels")
+                scene.sendPointerEvent(PointerEventType.Release, Offset(120f, 120f), type = PointerType.Mouse)
             }
         } finally { onPaperUi { scene.close() } }
     }
@@ -207,21 +347,23 @@ class PaperAgentDockTest {
         } finally { onPaperUi { scene.close() } }
     }
 
-    @Test fun theTabCarriesOneGlanceableNumberAndRowsCarryTheirLiveValue() {
+    @Test fun theListCarriesOneGlanceableNumberAndRowsCarryTheirLiveValue() {
         val frames = Frames()
         val model = busyModel.copy(
             attentionCount = 2,
-            sessions = sessions.map { it.copy(activityLabel = if (it.id == "s1") "Читает SessionOrganismStore.kt" else it.activityLabel, ageLabel = "3 мин") },
+            sessions = sessions.map { it.copy(activityLabel = if (it.id == "s1") "Читает SessionOrganismStore.kt" else it.activityLabel) },
             pendingQuestion = "double jump or wall climb?",
         )
-        val collapsed = scene(PaperAgentDockCollapsedWidth, PaperAgentDockCollapsedHeight) {
+        val collapsed = scene(PaperAgentDockCollapsedWidth, 300.dp) {
             Dock(false, {}, model)
         }
         try {
             frames.draw(collapsed)
             onPaperUi {
-                assertTrue(collapsed.strings().any { it == "2" },
-                    "The collapsed tab shows how many sessions need the reader")
+                val strings = collapsed.strings()
+                assertTrue(strings.any { it == "2" }, "The list's header shows how many sessions need the reader")
+                assertTrue(strings.any { "Читает SessionOrganismStore.kt" in it },
+                    "A compact row carries what its session is doing right now")
                 collapsed.capture(frames, "collapsed-badge")
             }
         } finally { onPaperUi { collapsed.close() } }
@@ -234,7 +376,7 @@ class PaperAgentDockTest {
                 val strings = expanded.strings()
                 assertTrue(strings.any { "Читает SessionOrganismStore.kt" in it },
                     "A row carries what its session is doing right now")
-                assertTrue(strings.any { "3 мин" in it }, "A row carries the age of its state")
+                assertTrue(strings.any { "3:31" in it }, "The header carries the age of the session's state")
                 assertTrue(strings.any { it == "Ждёт вашего ответа" }, "The pending question sits above the chat")
                 assertTrue(strings.any { "double jump or wall climb?" in it })
                 expanded.capture(frames, "expanded-anatomy")
@@ -478,6 +620,7 @@ class PaperAgentDockTest {
         onCancelRecovery: (String) -> Unit = {},
         onResizeWidthBy: (Float) -> Unit = {},
         onResizeHeightBy: (Float) -> Unit = {},
+        onCollapsedHeightChange: (Dp) -> Unit = {},
         onDragStart: (Float, Float) -> Unit = { _, _ -> },
         onDragBy: (Float, Float) -> Unit = { _, _ -> },
         onDragEnd: () -> Unit = {},
@@ -492,6 +635,8 @@ class PaperAgentDockTest {
                 PaperActivityIndicator(PaperActivityTone.WORKING, model.statusLabel,
                     running = model.busy, size = 14.dp)
             },
+            nowMillis = NOW,
+            onCollapsedHeightChange = onCollapsedHeightChange,
             input = input,
             onInputChange = onInputChange,
             onSend = onSend,

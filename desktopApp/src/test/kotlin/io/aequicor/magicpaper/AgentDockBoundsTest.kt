@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper
 
+import androidx.compose.ui.unit.dp
 import java.awt.Rectangle
+import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -48,5 +50,47 @@ class AgentDockBoundsTest {
         assertTrue(first > last, "an ease-out covers more ground early: $first vs $last")
         assertEquals(0.0, panel.ease(0.0))
         assertEquals(1.0, panel.ease(1.0))
+    }
+
+    /**
+     * The morph must arrive: a progress that never reaches 1 leaves the window at the size it
+     * started from while the content already lays out the other state.
+     */
+    @Test fun theMorphReachesItsTargetOnTime() {
+        assertEquals(0.0, boundsProgress(0L))
+        assertEquals(0.5, boundsProgress(DOCK_MORPH_NANOS / 2), 1e-9)
+        assertEquals(1.0, boundsProgress(DOCK_MORPH_NANOS))
+        assertEquals(1.0, boundsProgress(DOCK_MORPH_NANOS * 3), "past its end the morph stays on its target")
+        assertTrue(DOCK_MORPH_NANOS in 100_000_000L..400_000_000L, "a morph is felt, not waited for")
+    }
+
+    /**
+     * Window units are dp at every display scale, so the dock's footprint is its dp size as is.
+     * Multiplying by the display scale doubled the dock on every Retina display.
+     */
+    @Test fun theFootprintIsItsDpSizeOnTheEdgeItHugs() {
+        val usable = Rectangle(0, 25, 1512, 920)
+        val start = dockBounds(usable, 288.dp, 180.5.dp, DockEdge.START, 0.5f)
+        assertEquals(Rectangle(0, 25 + ((920 - 181) * 0.5f).roundToInt(), 288, 181), start)
+        val end = dockBounds(usable, 288.dp, 180.dp, DockEdge.END, 0f)
+        assertEquals(1512 - 288, end.x, "docked to the end edge, the panel ends on it")
+        assertEquals(25, end.y)
+        val huge = dockBounds(usable, 4000.dp, 4000.dp, DockEdge.START, 1f)
+        assertEquals(Rectangle(usable), huge, "a card larger than the display is clamped to it")
+    }
+
+    /**
+     * The panel opens under the pointer that hovered the compact list, and retracting must not
+     * leave the list under a pointer that has already left the panel: at every place on the
+     * edge, the open panel covers the list it grew from.
+     */
+    @Test fun theOpenPanelCoversTheListItGrewFrom() {
+        val usable = Rectangle(1512, 0, 1920, 1050)
+        for (edge in DockEdge.values()) for (step in 0..10) {
+            val offset = step / 10f
+            val compact = dockBounds(usable, 288.dp, 210.dp, edge, offset)
+            val open = dockBounds(usable, 448.dp, 476.dp, edge, offset)
+            assertTrue(open.contains(compact), "$edge at $offset: $open does not cover $compact")
+        }
     }
 }
