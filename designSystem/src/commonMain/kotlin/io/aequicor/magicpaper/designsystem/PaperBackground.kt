@@ -24,9 +24,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import kotlinx.coroutines.isActive
 
-/** One isolated drawing layer. No frame state is read by chat/project composition or layout. */
+/**
+ * One isolated drawing layer. No frame state is read by chat/project composition or layout.
+ *
+ * [foreground] overrides the window-focus part of the visibility decision for surfaces that are
+ * read while another window holds the keyboard focus, such as the docked agent panel: passing
+ * `hovered || focused` keeps its paper alive under the reader without stealing focus.
+ */
 @Composable
-fun PaperBackground(enabled: Boolean, modifier: Modifier = Modifier) {
+fun PaperBackground(enabled: Boolean, modifier: Modifier = Modifier, foreground: Boolean? = null) {
     val colors = LocalPaperColors.current
     val parchment = remember(colors) {
         Brush.verticalGradient(listOf(colors.surface, colors.canvas, colors.raisedSurface))
@@ -36,9 +42,10 @@ fun PaperBackground(enabled: Boolean, modifier: Modifier = Modifier) {
         // interrupts it, so polling pauses but the drawn paper structure stays on screen.
         if (enabled) {
             val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-            val foreground = LocalWindowInfo.current.isWindowFocused && lifecycle.isAtLeast(Lifecycle.State.RESUMED)
-            val environment by rememberPaperEnvironment(foreground)
-            if (environment.allowsAnimation) AnimatedPaper(running = foreground)
+            val focused = foreground ?: LocalWindowInfo.current.isWindowFocused
+            val foregroundState = focused && lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+            val environment by rememberPaperEnvironment(foregroundState)
+            if (environment.allowsAnimation) AnimatedPaper(running = foregroundState)
         }
     }
 }

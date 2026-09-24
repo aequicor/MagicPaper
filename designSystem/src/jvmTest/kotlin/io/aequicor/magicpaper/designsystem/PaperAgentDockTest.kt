@@ -207,6 +207,79 @@ class PaperAgentDockTest {
         } finally { onPaperUi { scene.close() } }
     }
 
+    @Test fun theTranscriptMirrorsTheWindowKindsSystemNoticeReasoningToolCallsAndVerification() {
+        val frames = Frames()
+        val model = PaperAgentDockModel(
+            sessions = sessions,
+            statusLabel = "работает",
+            transcriptKey = "s1",
+            messages = listOf(
+                PaperDockMessage("n1", PaperDockAuthor.AGENT, "Результат влит в main", systemNotice = true),
+                PaperDockMessage("m1", PaperDockAuthor.AGENT, "", steps = listOf(
+                    PaperDockStep("t1", PaperDockStepKind.THINKING, "Думаю о порядке фаз"),
+                    PaperDockStep("t2", PaperDockStepKind.TOOL, "read AppRuntime.kt", tool = "read"),
+                    PaperDockStep("t3", PaperDockStepKind.ERROR, "compile failed", ok = false),
+                ), needsVerification = true),
+            ),
+        )
+        val scene = scene(PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight) { Dock(true, {}, model) }
+        try {
+            frames.draw(scene)
+            onPaperUi {
+                val strings = scene.strings()
+                assertTrue(strings.any { it == "Системное сообщение" }, "system notices keep their own surface")
+                assertTrue(strings.any { "Резмышление агента" in it || it == "Размышление агента" },
+                    "reasoning is a disclosure row, as in the window")
+                assertTrue(strings.any { "read AppRuntime.kt" in it }, "tool calls keep their command line")
+                assertTrue(strings.any { "compile failed" in it }, "a failed step stays visible")
+                assertTrue(strings.any { it == "Нужна ручная проверка" }, "an unverified answer says so")
+                scene.capture(frames, "expanded-kinds")
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
+    @Test fun theExpandedPanelMovesByItsRailAndResizesByItsFreeEdges() {
+        val frames = Frames()
+        val drags = mutableListOf<Offset>()
+        val widths = mutableListOf<Float>()
+        val heights = mutableListOf<Float>()
+        val scene = scene(PaperAgentDockExpandedWidth, PaperAgentDockExpandedHeight) {
+            Dock(true, {}, busyModel,
+                onDragBy = { x, y -> drags.add(Offset(x, y)) },
+                onResizeWidthBy = { widths.add(it) },
+                onResizeHeightBy = { heights.add(it) })
+        }
+        try {
+            frames.draw(scene)
+            // A drag that starts on the rail's empty area moves the whole window.
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Press, Offset(60f, 300f), type = PointerType.Mouse) }
+            for (y in listOf(316f, 332f)) {
+                onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(60f, y), type = PointerType.Mouse) }
+                frames.draw(scene, 2)
+            }
+            onPaperUi {
+                assertTrue(drags.isNotEmpty(), "Dragging the rail must move the expanded panel")
+                scene.sendPointerEvent(PointerEventType.Release, Offset(60f, 332f), type = PointerType.Mouse)
+            }
+            // The grip on the free vertical edge resizes the width.
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Press, Offset(437f, 200f), type = PointerType.Mouse) }
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(452f, 200f), type = PointerType.Mouse) }
+            frames.draw(scene, 2)
+            onPaperUi {
+                assertTrue(widths.any { it > 0f }, "The side grip must report a width delta")
+                scene.sendPointerEvent(PointerEventType.Release, Offset(452f, 200f), type = PointerType.Mouse)
+            }
+            // The grip on the bottom edge resizes the height.
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Press, Offset(300f, 465f), type = PointerType.Mouse) }
+            onPaperUi { scene.sendPointerEvent(PointerEventType.Move, Offset(300f, 480f), type = PointerType.Mouse) }
+            frames.draw(scene, 2)
+            onPaperUi {
+                assertTrue(heights.any { it > 0f }, "The bottom grip must report a height delta")
+                scene.sendPointerEvent(PointerEventType.Release, Offset(300f, 480f), type = PointerType.Mouse)
+            }
+        } finally { onPaperUi { scene.close() } }
+    }
+
     @Test fun escapeCollapsesTheExpandedPanel() {
         val expanded = mutableStateOf(true)
         val frames = Frames()
@@ -331,6 +404,8 @@ class PaperAgentDockTest {
         onSend: () -> Unit = {},
         onStop: () -> Unit = {},
         onSelectSession: (String) -> Unit = {},
+        onResizeWidthBy: (Float) -> Unit = {},
+        onResizeHeightBy: (Float) -> Unit = {},
         onDragStart: (Float, Float) -> Unit = { _, _ -> },
         onDragBy: (Float, Float) -> Unit = { _, _ -> },
         onDragEnd: () -> Unit = {},
@@ -351,6 +426,8 @@ class PaperAgentDockTest {
             onStop = onStop,
             onOpenMainWindow = {},
             onSelectSession = onSelectSession,
+            onResizeWidthBy = onResizeWidthBy,
+            onResizeHeightBy = onResizeHeightBy,
             onDragStart = onDragStart,
             onDragBy = onDragBy,
             onDragEnd = onDragEnd,

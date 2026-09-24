@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -28,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +44,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import io.aequicor.magicpaper.ui.components.LocalPaperHideSystemSteps
+import io.aequicor.magicpaper.ui.components.PaperChatMarkdown
+import io.aequicor.magicpaper.ui.components.PaperChatPlainText
 import io.aequicor.magicpaper.ui.components.PaperChatScrollItem
+import io.aequicor.magicpaper.ui.components.PaperSessionContextMessage
+import io.aequicor.magicpaper.ui.components.paperChatDisclosure
 import io.aequicor.magicpaper.ui.components.paperChatScrollInput
 import io.aequicor.magicpaper.ui.components.paperStickToBottom
 import kotlinx.coroutines.delay
@@ -75,6 +82,9 @@ public val PaperAgentDockCollapsedHeight: Dp = 88.dp
 public val PaperAgentDockExpandedWidth: Dp = 448.dp
 public val PaperAgentDockExpandedHeight: Dp = 476.dp
 
+/** The reader may shrink the card, but never below a usable conversation. */
+public val PaperAgentDockMinSize: Dp = 320.dp
+
 /**
  * Hover dwell before the tab opens. A pointer crossing the screen edge on its way to another
  * application must not throw a 360 dp panel over that work.
@@ -87,10 +97,38 @@ public const val PaperAgentDockCollapseDelayMillis: Long = 400L
 /** Width of the session rail inside the expanded card: enough for a name and its dot. */
 private val DockSessionRailWidth = 148.dp
 
+/** The invisible strip on the free edges that resizes the expanded card. */
+private val DockResizeGrip = 6.dp
+
 public enum class PaperDockAuthor { USER, AGENT }
 
-/** One transcript row. Text is Markdown for the agent and literal for the reader's own input. */
-public data class PaperDockMessage(val id: String, val author: PaperDockAuthor, val text: String)
+/** The step kinds the application transcript shows, without naming the domain enum. */
+public enum class PaperDockStepKind { ANSWER, THINKING, TOOL, ERROR, INFO }
+
+public data class PaperDockStep(
+    val id: String,
+    val kind: PaperDockStepKind,
+    val title: String,
+    val tool: String = "",
+    val running: Boolean = false,
+    val ok: Boolean = true,
+)
+
+/**
+ * One transcript row, mirroring the application window's treatment: system notices and context
+ * packets keep their own surfaces, an agent answer carries its step timeline (reasoning,
+ * tool calls, errors), and a finished answer can still be waiting for a manual check.
+ */
+public data class PaperDockMessage(
+    val id: String,
+    val author: PaperDockAuthor,
+    val text: String,
+    val systemNotice: Boolean = false,
+    val systemContext: Boolean = false,
+    val failed: Boolean = false,
+    val steps: List<PaperDockStep> = emptyList(),
+    val needsVerification: Boolean = false,
+)
 
 /**
  * One row of the dock's session list. The tone is the session's own, the same one the sidebar
@@ -138,6 +176,8 @@ public fun PaperAgentDock(
     onExpandedChange: (Boolean) -> Unit,
     model: PaperAgentDockModel,
     modifier: Modifier = Modifier,
+    /** Which screen edge the host pinned the window to: the resize grip sits on the free side. */
+    dockedToStart: Boolean = true,
     indicator: @Composable () -> Unit,
     input: String = "",
     onInputChange: (String) -> Unit = {},
@@ -145,6 +185,8 @@ public fun PaperAgentDock(
     onStop: () -> Unit = {},
     onOpenMainWindow: () -> Unit = {},
     onSelectSession: (String) -> Unit = {},
+    onResizeWidthBy: (Float) -> Unit = {},
+    onResizeHeightBy: (Float) -> Unit = {},
     /** The application's paper-animation setting: the dock's background is the window's own. */
     animateBackground: Boolean = true,
     onDragStart: (Float, Float) -> Unit = { _, _ -> },
@@ -241,10 +283,16 @@ public fun PaperAgentDock(
             shadowElevation = 4.dp,
         ) {
             Box(Modifier.fillMaxSize()) {
-                PaperBackground(animateBackground, Modifier.matchParentSize())
+                // The dock is read while another application holds the keyboard focus, so its
+                // paper counts as foreground while the reader hovers it, not only while the
+                // dock window itself is focused.
+                val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+                PaperBackground(animateBackground, Modifier.matchParentSize(),
+                    foreground = hovered || windowFocused)
                 if (expanded) {
                     DockExpanded(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
-                        onOpenMainWindow, onSelectSession, { onExpandedChange(false) }, drag)
+                        onOpenMainWindow, onSelectSession, onResizeWidthBy, onResizeHeightBy,
+                        { onExpandedChange(false) }, drag, dockedToStart)
                 } else {
                     DockCollapsed(model, colors, indicator, drag) {
                         // An explicit activation is not pointer-owned, so it survives having no pointer.
@@ -296,16 +344,41 @@ private fun DockExpanded(
     onStop: () -> Unit,
     onOpenMainWindow: () -> Unit,
     onSelectSession: (String) -> Unit,
+    onResizeWidthBy: (Float) -> Unit,
+    onResizeHeightBy: (Float) -> Unit,
     onCollapse: () -> Unit,
     drag: Modifier,
+    dockedToStart: Boolean,
 ) {
     Row(Modifier.fillMaxSize()) {
         // The window's own anatomy in miniature: a session rail beside the conversation, so
-        // switching sessions never means leaving the panel.
-        DockSessionList(model, onSelectSession, Modifier.width(DockSessionRailWidth).fillMaxHeight())
+        // switching sessions never means leaving the panel. The rail doubles as a handle:
+        // rows keep their clicks, a drag past the slop moves the whole window.
+        DockSessionList(model, onSelectSession,
+            Modifier.width(DockSessionRailWidth).fillMaxHeight().then(drag))
         Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
-        DockConversation(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
-            onOpenMainWindow, onCollapse, drag, Modifier.weight(1f).fillMaxHeight())
+        Box(Modifier.weight(1f).fillMaxHeight()) {
+            DockConversation(model, colors, spacing, indicator, input, onInputChange, onSend, onStop,
+                onOpenMainWindow, onCollapse, drag, Modifier.fillMaxSize())
+            // Resize grips on the two free edges; they sit over the card's padding, not controls.
+            Box(Modifier.align(if (dockedToStart) Alignment.CenterEnd else Alignment.CenterStart)
+                .fillMaxHeight().width(DockResizeGrip)
+                .semantics { contentDescription = "Изменить ширину панели" }
+                .pointerInput(onResizeWidthBy) {
+                    detectDragGestures { change, amount ->
+                        change.consume()
+                        onResizeWidthBy(amount.x)
+                    }
+                })
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(DockResizeGrip)
+                .semantics { contentDescription = "Изменить высоту панели" }
+                .pointerInput(onResizeHeightBy) {
+                    detectDragGestures { change, amount ->
+                        change.consume()
+                        onResizeHeightBy(amount.y)
+                    }
+                })
+        }
     }
 }
 
@@ -454,26 +527,95 @@ private fun ColumnScope.DockTranscript(
 private fun DockMessageRow(message: PaperDockMessage) {
     val colors = LocalPaperColors.current
     val spacing = LocalPaperSpacing.current
-    if (message.author == PaperDockAuthor.USER) {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-            Box(
-                Modifier.widthIn(max = 300.dp)
-                    .background(colors.userMessageSurface, RoundedCornerShape(10.dp))
-                    .padding(horizontal = spacing.sm, vertical = spacing.xs),
-            ) {
-                // The reader's own input is literal text: rendering it as Markdown would
-                // reformat what they typed.
-                PaperText(message.text, style = LocalPaperTypography.current.body, color = colors.text)
+    if (message.systemContext) {
+        PaperSessionContextMessage(message.id, message.text)
+        return
+    }
+    if (message.systemNotice) {
+        PaperSystemMessage {
+            PaperText("Системное сообщение", role = PaperTextRole.LABEL)
+            PaperChatPlainText(message.text, color = colors.systemText)
+        }
+        return
+    }
+    val isUser = message.author == PaperDockAuthor.USER
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+    ) {
+        // The window's own conversation surface: the same bubble, the same markdown, so a
+        // message reads identically here and in the application.
+        Box(Modifier.widthIn(max = 320.dp).paperConversationMessage(isUser, true, true)) {
+            if (isUser) {
+                PaperChatPlainText(message.text)
+            } else {
+                Column {
+                    message.steps.forEach { step -> DockStepRow(step) }
+                    if (message.text.isNotBlank()) PaperChatMarkdown(message.text, compact = true)
+                    if (message.failed && message.steps.none { it.kind == PaperDockStepKind.ERROR }) {
+                        PaperChatPlainText("✕ Не удалось завершить работу агента.", color = colors.error)
+                    }
+                    if (message.needsVerification) {
+                        PaperText("Нужна ручная проверка", role = PaperTextRole.LABEL,
+                            color = colors.secondaryText, modifier = Modifier.padding(top = spacing.xxs))
+                    }
+                }
             }
         }
-    } else {
-        Box(
-            Modifier.fillMaxWidth()
-                .background(colors.surface, RoundedCornerShape(10.dp))
-                .padding(horizontal = spacing.sm, vertical = spacing.xs),
-        ) {
-            PaperMarkdown(message.text, compact = true)
+    }
+}
+
+@Composable
+private fun DockStepRow(step: PaperDockStep) {
+    val colors = LocalPaperColors.current
+    when (step.kind) {
+        PaperDockStepKind.ANSWER -> PaperChatMarkdown(step.title, compact = true)
+        PaperDockStepKind.ERROR -> PaperChatPlainText("✕ ${step.title}", color = colors.error,
+            modifier = Modifier.padding(vertical = 2.dp))
+        PaperDockStepKind.INFO -> {
+            if (!LocalPaperHideSystemSteps.current) {
+                PaperChatPlainText(step.title, color = colors.secondaryText,
+                    modifier = Modifier.padding(vertical = 2.dp))
+            }
         }
+        PaperDockStepKind.THINKING -> DockThinkingRow(step)
+        PaperDockStepKind.TOOL -> DockToolRow(step)
+    }
+}
+
+/** Collapsed reasoning, exactly as the transcript shows it: a quiet row, text on disclosure. */
+@Composable
+private fun DockThinkingRow(step: PaperDockStep) {
+    var expanded by rememberSaveable(step.id) { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    PaperWorkSurface(Modifier.padding(vertical = 2.dp), expanded = expanded) {
+        Row(Modifier.fillMaxWidth().paperChatDisclosure(interaction) { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            PaperText("·", color = LocalPaperColors.current.border)
+            Spacer(Modifier.width(8.dp))
+            PaperText("Размышление агента", color = LocalPaperColors.current.secondaryText,
+                modifier = Modifier.weight(1f))
+            PaperText(if (expanded) "▴" else "▾", color = LocalPaperColors.current.secondaryText)
+        }
+        if (expanded) {
+            PaperChatMarkdown(step.title,
+                Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 6.dp), compact = true)
+        }
+    }
+}
+
+/** A tool call: one quiet line with its command, a marker while it runs or fails. */
+@Composable
+private fun DockToolRow(step: PaperDockStep) {
+    val colors = LocalPaperColors.current
+    val spacing = LocalPaperSpacing.current
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        PaperText(if (step.running) "…" else if (step.ok) "⌁" else "✕", role = PaperTextRole.CHROME,
+            color = if (step.ok) colors.secondaryText else colors.error)
+        Spacer(Modifier.width(spacing.xs))
+        PaperFadingText(step.title, style = LocalPaperTypography.current.chrome,
+            color = if (step.ok) colors.secondaryText else colors.error,
+            marqueeOnHover = true, modifier = Modifier.weight(1f))
     }
 }
 

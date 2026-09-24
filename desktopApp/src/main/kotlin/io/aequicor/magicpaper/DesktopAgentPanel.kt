@@ -12,13 +12,19 @@ import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedHeight
 import io.aequicor.magicpaper.designsystem.PaperAgentDockCollapsedWidth
 import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedHeight
 import io.aequicor.magicpaper.designsystem.PaperAgentDockExpandedWidth
+import io.aequicor.magicpaper.designsystem.PaperAgentDockMinSize
 import io.aequicor.magicpaper.designsystem.PaperAgentDockModel
 import io.aequicor.magicpaper.designsystem.PaperDockAuthor
+import io.aequicor.magicpaper.designsystem.PaperAgentDockShadowMargin
 import io.aequicor.magicpaper.designsystem.PaperDockMessage
 import io.aequicor.magicpaper.designsystem.PaperDockSession
+import io.aequicor.magicpaper.designsystem.PaperDockStep
+import io.aequicor.magicpaper.designsystem.PaperDockStepKind
 import io.aequicor.magicpaper.designsystem.PaperTheme
+import io.aequicor.magicpaper.domain.AppSettings
 import io.aequicor.magicpaper.domain.CodingRole
 import io.aequicor.magicpaper.domain.CodingSessionStatus
+import io.aequicor.magicpaper.domain.CodingStepKind
 import io.aequicor.magicpaper.logging.AppLog
 import io.aequicor.magicpaper.ui.CodingService
 import io.aequicor.magicpaper.ui.CodingSessionUi
@@ -27,10 +33,13 @@ import io.aequicor.magicpaper.ui.SettingsService
 import io.aequicor.magicpaper.ui.screens.activityTone
 import io.aequicor.magicpaper.ui.screens.aggregateDockTone
 import io.aequicor.magicpaper.ui.screens.label
+import io.aequicor.magicpaper.ui.components.isVisibleInChat
+import io.aequicor.magicpaper.domain.sidebarTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.awt.Color
@@ -103,11 +112,14 @@ internal class DesktopAgentPanel(
     private val expanded = mutableStateOf(false)
     private val input = mutableStateOf("")
     private val edge = mutableStateOf(DockEdge.START)
+    /** The reader's own size for the expanded card, remembered with the place on the edge. */
+    private val expandedWidth = mutableStateOf(PaperAgentDockExpandedWidth)
+    private val expandedHeight = mutableStateOf(PaperAgentDockExpandedHeight)
     /**
      * The session the dock reads and writes. It is the dock's own choice: selecting a row here
      * must not move the main window's navigation behind the reader's back.
      */
-    private val selectedSessionId = mutableStateOf<String?>(null)
+    private val selectedSessionId = MutableStateFlow<String?>(null)
 
     private var overlay: ComposeWindow? = null
     /** Pointer offset from the window origin while dragging, in device pixels. */
@@ -135,10 +147,12 @@ internal class DesktopAgentPanel(
         owner.addWindowStateListener(stateListener)
         owner.addWindowFocusListener(focusListener)
         scope.launch {
-            combine(coding.state, settings.state) { state, settingsState ->
-                state to settingsState.settings.paperAnimationEnabled
-            }.collect { (state, animate) ->
-                snapshot.value = state.dockSnapshot(animate)
+            combine(coding.state, settings.state, selectedSessionId) { state, settingsState, selected ->
+                Triple(state, settingsState.settings, selected)
+            }.collect { (state, settings, selected) ->
+                // Selecting a row in the rail must rebuild the chat, not wait for the next
+                // run event: the selection is one of the combine's sources.
+                snapshot.value = state.dockSnapshot(settings, selected)
                 // Window visibility is an AWT decision and belongs on the EDT.
                 SwingUtilities.invokeLater(::applyVisibility)
             }
@@ -220,7 +234,10 @@ internal class DesktopAgentPanel(
                 onStop = ::stop,
                 onOpenMainWindow = ::restoreOwner,
                 onSelectSession = { selectedSessionId.value = it },
+                onResizeWidthBy = ::resizeWidthBy,
+                onResizeHeightBy = ::resizeHeightBy,
                 animateBackground = current.animate,
+                dockedToStart = edge.value == DockEdge.START,
                 onDragStart = ::dragStart,
                 onDragBy = ::dragBy,
                 onDragEnd = ::dragEnd,
@@ -294,10 +311,10 @@ internal class DesktopAgentPanel(
         val usable = usableArea(window) ?: return
         val scale = configuration()?.defaultTransform?.scaleX ?: 1.0
         val open = expanded.value
-        val width = ceil((if (open) PaperAgentDockExpandedWidth else PaperAgentDockCollapsedWidth).value * scale)
-            .toInt().coerceIn(1, usable.width)
-        val height = ceil((if (open) PaperAgentDockExpandedHeight else PaperAgentDockCollapsedHeight).value * scale)
-            .toInt().coerceIn(1, usable.height)
+        val widthDp = if (open) expandedWidth.value else PaperAgentDockCollapsedWidth
+        val heightDp = if (open) expandedHeight.value else PaperAgentDockCollapsedHeight
+        val width = ceil(widthDp.value * scale).toInt().coerceIn(1, usable.width)
+        val height = ceil(heightDp.value * scale).toInt().coerceIn(1, usable.height)
         val x = if (edge.value == DockEdge.START) usable.x else usable.x + usable.width - width
         val lowest = (usable.y + usable.height - height).coerceAtLeast(usable.y)
         val y = (usable.y + ((usable.height - height) * offset).roundToInt()).coerceIn(usable.y, lowest)
@@ -373,12 +390,36 @@ internal class DesktopAgentPanel(
         persistPlacement()
     }
 
+    /**
+     * Grow or shrink the expanded card. The grip reports device pixels; the card is sized in dp,
+     * so the delta crosses the same display scale the window geometry uses. Docked to the start
+     * edge the free side is the right one, so a rightward drag widens; docked to the end edge it
+     * is the mirror image.
+     */
+    private fun resizeWidthBy(dxPx: Float) = resizeBy(dxPx, 0f)
+
+    private fun resizeHeightBy(dyPx: Float) = resizeBy(0f, dyPx)
+
+    private fun resizeBy(dxPx: Float, dyPx: Float) {
+        val window = overlay ?: return
+        val usable = usableArea(window) ?: return
+        val scale = configuration()?.defaultTransform?.scaleX ?: 1.0
+        val maxWidth = (usable.width / scale).dp - PaperAgentDockShadowMargin * 2
+        val maxHeight = (usable.height / scale).dp - PaperAgentDockShadowMargin * 2
+        val sign = if (edge.value == DockEdge.START) 1f else -1f
+        expandedWidth.value = (expandedWidth.value + (dxPx * sign / scale).dp)
+            .coerceIn(PaperAgentDockMinSize, maxWidth)
+        expandedHeight.value = (expandedHeight.value + (dyPx / scale).dp)
+            .coerceIn(PaperAgentDockMinSize, maxHeight)
+        applyGeometry(window)
+    }
+
     // endregion
 
     // region remembered placement
 
     private fun persistPlacement() {
-        val saved = "${edge.value.name}:$offset"
+        val saved = "${edge.value.name}:$offset:${expandedWidth.value.value}:${expandedHeight.value.value}"
         try {
             placement.write(PLACEMENT_KEY, saved)
         } catch (error: Exception) {
@@ -394,11 +435,12 @@ internal class DesktopAgentPanel(
             null
         } ?: return
         val parts = saved.split(':')
-        if (parts.size != 2) return
         val restoredEdge = DockEdge.values().firstOrNull { it.name == parts[0] } ?: return
-        val restoredOffset = parts[1].toFloatOrNull()?.coerceIn(0f, 1f) ?: return
+        val restoredOffset = parts.getOrNull(1)?.toFloatOrNull()?.coerceIn(0f, 1f) ?: return
         edge.value = restoredEdge
         offset = restoredOffset
+        parts.getOrNull(2)?.toFloatOrNull()?.let { expandedWidth.value = it.dp.coerceAtLeast(PaperAgentDockMinSize) }
+        parts.getOrNull(3)?.toFloatOrNull()?.let { expandedHeight.value = it.dp.coerceAtLeast(PaperAgentDockMinSize) }
     }
 
     // endregion
@@ -409,13 +451,13 @@ internal class DesktopAgentPanel(
      * What the dock shows: every live session for the rail, the selected one's chat, and one
      * aggregate tone for the tab. A quiet workspace keeps the screen edge to itself.
      */
-    private fun CodingState.dockSnapshot(animate: Boolean): Snapshot? {
+    private fun CodingState.dockSnapshot(settings: AppSettings, selectedId: String?): Snapshot? {
         // `coding` here is this CodingState's own projection, not the injected service.
         val ui = this.coding
         val live = ui.sessions.filter { !it.session.archived }
         if (live.none { it.status != CodingSessionStatus.IDLE }) return null
         val tone = aggregateDockTone(live.map { it.status.activityTone })
-        val selected = selectedSession(live, ui.currentSessionId)
+        val selected = selectedSession(live, selectedId, ui.currentSessionId)
         val status = selected.status
         val waiting = status == CodingSessionStatus.WAITING
         return Snapshot(
@@ -423,14 +465,16 @@ internal class DesktopAgentPanel(
                 sessions = live.map { session ->
                     PaperDockSession(
                         id = session.session.id,
-                        name = session.session.name,
+                        // The sidebar's own title: a started session is listed by its short
+                        // request, never by the placeholder name.
+                        name = session.session.sidebarTitle(),
                         tone = session.status.activityTone,
                         running = session.running || session.draft.active,
                         selected = session.session.id == selected.session.id,
                     )
                 },
                 statusLabel = status.label,
-                messages = selected.dockMessages(),
+                messages = selected.dockMessages(settings.hideSystemSteps),
                 liveDetail = selected.liveDetail(),
                 busy = selected.running || selected.draft.active,
                 // A questionnaire is answered in the window that renders it; an input here
@@ -443,13 +487,17 @@ internal class DesktopAgentPanel(
             toneLabel = toneLabel(tone),
             anyRunning = live.any { it.running || it.draft.active },
             sessionId = selected.session.id,
-            animate = animate,
+            animate = settings.paperAnimationEnabled,
         )
     }
 
     /** The dock's own selection wins; otherwise the window's session, otherwise the most urgent. */
-    private fun selectedSession(live: List<CodingSessionUi>, currentSessionId: String?): CodingSessionUi {
-        selectedSessionId.value?.let { id -> live.firstOrNull { it.session.id == id }?.let { return it } }
+    private fun selectedSession(
+        live: List<CodingSessionUi>,
+        selectedId: String?,
+        currentSessionId: String?,
+    ): CodingSessionUi {
+        selectedId?.let { id -> live.firstOrNull { it.session.id == id }?.let { return it } }
         currentSessionId?.let { id -> live.firstOrNull { it.session.id == id }?.let { return it } }
         return live.filter { it.status != CodingSessionStatus.IDLE }
             .minByOrNull { URGENCY.indexOf(it.status) }
@@ -465,17 +513,36 @@ internal class DesktopAgentPanel(
         PaperActivityTone.READY -> "свободен"
     }
 
-    private fun CodingSessionUi.dockMessages(): List<PaperDockMessage> = messages
-        .filterNot { it.systemContext }
+    private fun CodingSessionUi.dockMessages(hideSystemSteps: Boolean): List<PaperDockMessage> = messages
         .takeLast(MAX_MESSAGES)
-        .mapNotNull { message ->
-            val text = message.text.trim()
-            if (text.isEmpty()) null else PaperDockMessage(
+        .map { message ->
+            PaperDockMessage(
                 id = message.id,
                 author = if (message.role == CodingRole.USER) PaperDockAuthor.USER else PaperDockAuthor.AGENT,
-                text = text.take(MAX_MESSAGE_CHARS),
+                text = message.text.trim().take(MAX_MESSAGE_CHARS),
+                systemNotice = message.systemNotice,
+                systemContext = message.systemContext,
+                failed = message.failed,
+                steps = message.steps.filter { it.isVisibleInChat(hideSystemSteps) }.mapIndexed { index, step ->
+                    PaperDockStep(
+                        id = step.id.ifBlank { "${message.id}:legacy:$index" },
+                        kind = when (step.kind) {
+                            CodingStepKind.ANSWER -> PaperDockStepKind.ANSWER
+                            CodingStepKind.THINKING -> PaperDockStepKind.THINKING
+                            CodingStepKind.ERROR -> PaperDockStepKind.ERROR
+                            CodingStepKind.TOOL, CodingStepKind.EXEC -> PaperDockStepKind.TOOL
+                            CodingStepKind.INFO, CodingStepKind.SYSTEM, CodingStepKind.SUMMARY -> PaperDockStepKind.INFO
+                        },
+                        title = step.title.take(MAX_MESSAGE_CHARS),
+                        tool = step.tool,
+                        running = step.running,
+                        ok = step.ok,
+                    )
+                },
+                needsVerification = completedResponseId == message.id && !manuallyVerified,
             )
         }
+        .filter { it.systemContext || it.systemNotice || it.text.isNotEmpty() || it.steps.isNotEmpty() }
 
     /**
      * What the run is doing right now. The saved transcript only gains a message when a step
