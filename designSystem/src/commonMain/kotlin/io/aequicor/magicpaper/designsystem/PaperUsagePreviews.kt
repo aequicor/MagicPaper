@@ -21,3 +21,18 @@ internal fun PaperContextIndicatorPreview() = PaperTheme {
         }
     }
 }
+
+@Preview(name = "Usage rows", group = "Usage", widthDp = 340, heightDp = 260)
+@Preview(name = "Usage rows large text", group = "Usage", widthDp = 340, heightDp = 420, fontScale = 1.6f)
+@Composable
+internal fun PaperUsageRowPreview() = PaperTheme {
+    PaperSurface(Modifier.fillMaxSize()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            PaperUsageRow("Контекстное окно", "58%", .58f, detail = "584,8 тыс. / 1 млн", heading = true)
+            PaperUsageRow("5 часов", "11%", .11f, detail = "Сброс через 4 ч 45 мин")
+            PaperUsageRow("Неделя · все модели", "0%", 0f, detail = "Сброс в чт, 16:00")
+            PaperUsageRow("Неделя · Opus", "96%", .96f, detail = "Сброс в пн, 09:00")
+            PaperUsageRow("Сутки", "—", null)
+        }
+    }
+}

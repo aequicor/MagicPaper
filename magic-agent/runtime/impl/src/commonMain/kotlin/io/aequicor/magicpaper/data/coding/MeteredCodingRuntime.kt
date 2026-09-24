@@ -12,7 +12,11 @@ class RuntimeUsageContext(val ledger: UsageLedger, val owner: UsageScope, val ob
     companion object Key : CoroutineContext.Key<RuntimeUsageContext>
 }
 
-class MeteredCodingRuntime(private val delegate: CodingRuntime, private val ledger: UsageLedger) : CodingRuntime by delegate {
+class MeteredCodingRuntime(
+    private val delegate: CodingRuntime,
+    private val ledger: UsageLedger,
+    private val plans: PlanUsageMonitor? = null,
+) : CodingRuntime by delegate {
     override fun runChat(session: ChatSession, prompt: String, profile: LlmProfile?, attachments: List<Attachment>) =
         observe(CodingSession(session.id, "chat-${session.id}", session.title, session.createdAt,
             piSessionId = session.nativeSessionId, engine = session.engine), profile?.forModel(),
@@ -70,11 +74,18 @@ class MeteredCodingRuntime(private val delegate: CodingRuntime, private val ledg
                     }
                     is CodingEvent.SearchObserved -> ledger.record(observation, base("$native:search:${event.id}").copy(
                         kind = if (event.content) UsageKind.CONTENT else UsageKind.SEARCH, requests = event.requests, pages = event.pages, completed = true, contentRequests = if (event.content) event.requests else 0))
+                    // An engine signed in by its own CLI runs without a profile; a profile names the plan it bills.
+                    is CodingEvent.PlanUsageObserved -> {
+                        if (profile == null || profile.provider == event.usage.provider) plans?.observe(event.usage)
+                        return@collect
+                    }
                     else -> Unit
                 }
                 emit(event)
             }
         } finally {
+            // Only the ChatGPT plan can be asked between requests; a run on it, even a refused one, moved its figures.
+            profile?.provider?.let { plans?.refresh(it) }
             compaction?.takeIf { compactionActive }?.let {
                 // Consumers also settle running SYSTEM steps on interruption; never emit from a cancelled flow.
                 withContext(NonCancellable) { unknownContext() }

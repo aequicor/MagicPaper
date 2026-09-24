@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import io.aequicor.magicpaper.designsystem.*
 import io.aequicor.magicpaper.domain.*
@@ -76,6 +77,62 @@ class CodingUsageUiTest {
                 assertEquals("Сжатие контекста", scene.label("Заполненность контекста").config.getOrNull(SemanticsProperties.StateDescription))
                 scene.snapshot("chat-compacting-$width")
             }
+        }
+    }
+
+    @Test fun contextDetailsShowThePlanWindowsOfTheSubscription() {
+        val now = 1_790_252_000_000L
+        val plan = PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION, listOf(
+            PlanUsageWindow("seven_day_opus", .004f, 10_080, now / 1000 + 5 * 86_400, "Opus"),
+            PlanUsageWindow("seven_day", .01f, 10_080, now / 1000 + 5 * 86_400),
+            PlanUsageWindow("five_hour", .11f, 300, now / 1000 + 4 * 3600 + 45 * 60)), plan = "max")
+        // The details' own popup width.
+        for ((width, fontScale) in listOf(340 to 1f, 340 to 1.6f)) {
+            val opened = mutableListOf<Unit>()
+            ImageComposeScene(width, 520, density = Density(1f, fontScale)) {
+                MagicPaperTheme { PaperPanel(Modifier.fillMaxSize()) {
+                    Column {
+                        ContextUsageDetails(ContextUsageSnapshot("coding:s", "claude-opus", 584_800, 1_000_000), "claude-opus",
+                            compacting = false, plan = plan, now = now)
+                        ContextUsageIndicator(ContextUsageSnapshot("coding:s", "claude-opus", 584_800, 1_000_000),
+                            plan = plan, onOpen = { opened += Unit })
+                    }
+                } }
+            }.use { scene ->
+                repeat(3) { scene.render(tick()).close() }
+                val texts = scene.nodes().map { it.text() }
+                assertTrue("584,8 тыс. / 1 млн" in texts && "58%" in texts, texts.toString())
+                // Every share stands on the trailing guide, whether or not its reset moved under the title.
+                val button = scene.label("Заполненность контекста").boundsInRoot.top
+                val shares = scene.nodes().filter { it.text() in setOf("58%", "11%", "1%", "0%") && it.boundsInRoot.bottom <= button }
+                    .map { it.boundsInRoot.right }
+                assertEquals(4, shares.size)
+                assertEquals(1, shares.distinct().size, shares.toString())
+                assertTrue("Лимиты Claude · Max" in texts)
+                // Shortest window first; the plan-wide week says so beside the Opus one.
+                val titles = listOf("5 часов", "Неделя · все модели", "Неделя · Opus")
+                assertEquals(titles, texts.filter { it in titles })
+                assertTrue("Сброс через 4 ч 45 мин" in texts)
+                assertTrue(listOf("11%", "1%", "0%").all { it in texts })
+                scene.nodes().filter { it.text() in titles }.forEach { assertTrue(it.boundsInRoot.right <= width) }
+                scene.snapshot("plan-details-$width-x$fontScale")
+                scene.click(scene.label("Заполненность контекста"))
+                assertEquals(1, opened.size)
+            }
+        }
+    }
+
+    @Test fun planWithoutFiguresExplainsWhenTheyAppear() {
+        ImageComposeScene(360, 300) {
+            MagicPaperTheme { PaperPanel(Modifier.fillMaxSize()) {
+                ContextUsageDetails(null, "", compacting = false, plan = PlanUsage(ProviderType.OPENAI_SUBSCRIPTION), now = 0)
+            } }
+        }.use { scene ->
+            repeat(3) { scene.render(tick()).close() }
+            val texts = scene.nodes().map { it.text() }
+            assertTrue("Нет данных" in texts)
+            assertTrue("Лимиты ChatGPT" in texts)
+            assertTrue("Лимиты появятся после ответа модели" in texts)
         }
     }
 }

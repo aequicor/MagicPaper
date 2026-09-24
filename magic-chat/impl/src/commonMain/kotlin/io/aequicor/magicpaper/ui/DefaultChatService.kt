@@ -55,6 +55,7 @@ class DefaultChatService(
     private val sourceAccess: ResearchSourceAccess = ResearchSourceAccess(),
     sourceBrowser: ResearchPageBrowser? = null,
     override val mediaGeneration: MediaGenerationService? = null,
+    val plans: PlanUsageMonitor? = null,
 ) : ChatService, ChatHistoryCommands {
     private val responseExtensions = responseExtensions.toList()
     private val _state = MutableStateFlow(ChatState(sourceBrowserSupported = sourceBrowser != null))

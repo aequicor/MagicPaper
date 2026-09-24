@@ -44,6 +44,7 @@ internal fun Module.nativeRuntimeBindings(
             io.aequicor.magicpaper.data.coding.DefaultSessionOrganismStore(get(), get(), knownSecrets)
         },
         orchestrationFactory = ::DefaultCustomOrchestration,
+        plans = get(),
     )) }
     single<CodingProjectRepository> { get<CodingFeature>().projects }
     single<CodingRuntime> { get<CodingFeature>().runtime }

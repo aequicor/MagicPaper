@@ -45,6 +45,7 @@ class CodingRuntimeGraph(
     private val modelDossiers: ModelDossierRepository,
     private val settingsCommands: SettingsCommands,
     private val nativeModels: NativeModelSnapshots = NativeModelSnapshots.None,
+    plans: PlanUsageMonitor? = null,
 ) {
     val organisms: SessionOrganismService? = codingProjects?.let { io.aequicor.magicpaper.domain.SessionOrganismService(
         organismStoreFactory.create(::knownToolSecrets), it, settingsRepo,
@@ -92,7 +93,7 @@ class CodingRuntimeGraph(
         }, search = ::searchTools)
     val toolSessions = ToolSessionFactory(toolReceipts, questionnaireTools, mediaTools, ::planningTools, toolAuthority, toolCommands, toolSessionFactory)
     val runtime: CodingRuntime = MeteredCodingRuntime(ToolEnabledCodingRuntime(codingRuntime, toolSessions,
-        toolQuestions, mediaTools, { session -> planningTools().prepareWorker(session) }, sessionTree), usageLedger)
+        toolQuestions, mediaTools, { session -> planningTools().prepareWorker(session) }, sessionTree), usageLedger, plans)
 
     // These closures resolve only when a run starts. Constructing the graph never calls back
     // through runtime -> composer -> orchestration, so every collaborator has one lifetime.

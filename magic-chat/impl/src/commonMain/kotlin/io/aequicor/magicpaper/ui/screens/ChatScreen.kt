@@ -80,6 +80,8 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
     val profile = ProfileResolver.resolve(state.current, state.settings, state.availableLlmProfiles)
     val draft = state.current?.id?.let { state.drafts[it] }
     val context = usage?.contexts?.get("chat:${state.current?.id}")?.takeIf { it.model == profile?.modelId }
+    val plans = vm.plans?.state?.collectAsState()?.value
+    val planProvider = profile?.provider?.takeIf { it.subscription && vm.plans != null }
     val requests by vm.questionnaires.collectAsState()
     val answerDrafts by vm.questionnaireDrafts.collectAsState()
     val question = state.current?.let { session -> session.pendingRun?.let { pending ->
@@ -109,6 +111,8 @@ fun ChatScreen(vm: DefaultChatComponent, state: ChatState) {
                         enabled = true,
                         resolvedProfile = profile,
                         contextUsage = context,
+                        planUsage = planProvider?.let { plans?.get(it) ?: PlanUsage(it) },
+                        onPlanUsageOpen = { planProvider?.let { vm.plans?.refresh(it) } },
                         contextCompacting = draft?.steps?.any { it.systemEvent?.phase == CompactionPhase.STARTED && it.running } == true,
                         busy = state.busy,
                         paused = state.current?.pendingRun != null && !state.busy,

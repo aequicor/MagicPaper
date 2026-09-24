@@ -236,7 +236,8 @@ class CodingRunRecorder(val imageInvocation: CodingImageInvocation? = null, init
     /** Применяет событие. true, если прогон завершён. */
     fun apply(event: CodingEvent): Boolean {
         when (event) {
-            is CodingEvent.SessionStarted, is CodingEvent.UsageObserved, is CodingEvent.ModelRequest, is CodingEvent.ContextUpdated, is CodingEvent.SearchObserved -> Unit
+            is CodingEvent.SessionStarted, is CodingEvent.UsageObserved, is CodingEvent.ModelRequest, is CodingEvent.ContextUpdated,
+            is CodingEvent.SearchObserved, is CodingEvent.PlanUsageObserved -> Unit
             is CodingEvent.Compaction -> {
                 flushMessage()
                 val key = "compaction:${event.status.id}"
@@ -656,6 +657,8 @@ sealed interface CodingEvent {
     data class ContextUpdated(val used: Long?, val limit: Long?, val approximate: Boolean = false) : CodingEvent
     data class Compaction(val status: CompactionStatus) : CodingEvent
     data class SearchObserved(val id: String, val pages: Long = 0, val requests: Long = 1, val content: Boolean = false) : CodingEvent
+    /** The provider's account-level allowance; it belongs to no single run and is consumed by the usage owner. */
+    data class PlanUsageObserved(val usage: PlanUsage) : CodingEvent
 
     /** Движок сообщил, что прогон завершён (agent_end) — текста могло и не быть. */
     data object AgentEnd : CodingEvent

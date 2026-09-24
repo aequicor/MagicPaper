@@ -1,6 +1,8 @@
 package io.aequicor.magicpaper.designsystem
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -101,6 +103,52 @@ public fun PaperContextIndicator(
                 style = LocalPaperTypography.current.chrome.copy(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium),
                 maxLines = 1)
         }
+    }
+}
+
+/**
+ * A thin, non-interactive share of an allowance: context window or plan limit. Nearly exhausted reads as an error;
+ * an unknown share draws the track alone. The caller's row carries the accessible value.
+ */
+@Composable
+public fun PaperUsageMeter(fraction: Float?, modifier: Modifier = Modifier) {
+    val colors = LocalPaperColors.current
+    val value = fraction?.coerceIn(0f, 1f) ?: 0f
+    Box(modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(colors.raisedSurface)) {
+        // A visible sliver keeps a started window distinguishable from an untouched one.
+        if (value > 0f) Box(Modifier.fillMaxWidth(value).widthIn(min = 3.dp).fillMaxHeight()
+            .clip(RoundedCornerShape(3.dp)).background(if (value >= .9f) colors.error else colors.action))
+    }
+}
+
+/**
+ * Title on the leading guide, the [value] on the trailing guide, then the meter: the same row for a context window
+ * and each plan window, so their values align in one column. An optional [detail] sits right before the value and,
+ * when it does not fit beside the title (narrow popup, large text), moves under the title whole instead of breaking
+ * a word. [heading] sets the section's first row apart.
+ */
+@Composable
+public fun PaperUsageRow(
+    title: String,
+    value: String,
+    fraction: Float?,
+    modifier: Modifier = Modifier,
+    detail: String? = null,
+    heading: Boolean = false,
+) {
+    val colors = LocalPaperColors.current
+    Column(modifier.fillMaxWidth().semantics(mergeDescendants = true) {
+        if (fraction != null) progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
+    }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(2.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+                PaperText(title, Modifier.padding(end = 8.dp), color = if (heading) colors.secondaryText else colors.text)
+                detail?.let { PaperText(it, role = PaperTextRole.LABEL, color = colors.secondaryText) }
+            }
+            PaperText(value, color = if (heading) colors.secondaryText else colors.text, maxLines = 1)
+        }
+        PaperUsageMeter(fraction)
     }
 }
 

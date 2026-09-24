@@ -33,6 +33,7 @@ import io.aequicor.magicpaper.domain.QuestionnaireDraft
 import io.aequicor.magicpaper.domain.PlanningAnswer
 import io.aequicor.magicpaper.domain.InteractionKind
 import io.aequicor.magicpaper.domain.pendingQuarantines
+import io.aequicor.magicpaper.domain.subscription
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -97,6 +98,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import io.aequicor.magicpaper.ui.window.LocalWindowToolbarHeight
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -357,6 +359,8 @@ private fun SessionArea(
                 quarantineRecoveryState, quarantineOpen, { quarantineOpen = false },
                 { confirmed -> vm.reconcileCodingQuarantine(sessionInfo.id, confirmed) })
         }
+        val plans = vm.plans?.state?.collectAsState()?.value
+        val planProvider = vm.codingProfileOf(sessionInfo, workerPlan)?.provider?.takeIf { it.subscription && vm.plans != null }
             CompositionLocalProvider(LocalCodingRecovery provides CodingRecoveryHandlers(ui.pendingRecoveries, vm::recover, vm::cancelRecovery)) {
             CodingChat(
                 project = project,
@@ -373,6 +377,8 @@ private fun SessionArea(
                 onManualVerification = { responseId, checked -> vm.setSessionManuallyVerified(sessionInfo.id, responseId, checked) },
                 contextUsage = ui.usageContexts["coding:${sessionInfo.id}"]?.takeIf { it.model == vm.codingProfileOf(sessionInfo, workerPlan)?.modelId }
                     ?: io.aequicor.magicpaper.domain.ContextUsageSnapshot("coding:${sessionInfo.id}", vm.codingProfileOf(sessionInfo, workerPlan)?.modelId.orEmpty()),
+                planUsage = planProvider?.let { plans?.get(it) ?: io.aequicor.magicpaper.domain.PlanUsage(it) },
+                onPlanUsageOpen = { planProvider?.let { vm.plans?.refresh(it) } },
                 pins = pins[PinConversation(sessionInfo.id, sessionInfo.projectId)].orEmpty(),
                 approvals = ui.approvals.filter { it.projectId == project.id },
                 onApproval = vm::respondCodingApproval,
@@ -952,6 +958,8 @@ internal fun CodingChat(
     composerDraft: CodingComposerDraft = remember(session.session.id) { CodingComposerDraft() },
     pins: List<RequestPinGroup> = emptyList(),
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
+    planUsage: io.aequicor.magicpaper.domain.PlanUsage? = null,
+    onPlanUsageOpen: () -> Unit = {},
     featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
     onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
     worktreeChecked: Boolean = false,
@@ -1150,6 +1158,8 @@ internal fun CodingChat(
                 CodingComposer(
                     state = composerDraft,
                     contextUsage = contextUsage,
+                    planUsage = planUsage,
+                    onPlanUsageOpen = onPlanUsageOpen,
                     contextCompacting = contextCompacting,
                     enabled = engineReady,
                     busy = busy,
@@ -1755,6 +1765,8 @@ internal fun CodingComposer(
     onClarify: ((String, List<Attachment>) -> Unit)? = null,
     contextUsage: io.aequicor.magicpaper.domain.ContextUsageSnapshot? = null,
     contextCompacting: Boolean = false,
+    planUsage: io.aequicor.magicpaper.domain.PlanUsage? = null,
+    onPlanUsageOpen: () -> Unit = {},
     featureFlags: io.aequicor.magicpaper.domain.FeatureFlagState = io.aequicor.magicpaper.domain.FeatureFlagState(),
     onToggleFeatureFlag: ((io.aequicor.magicpaper.domain.FeatureFlag) -> Unit)? = null,
     worktreeChecked: Boolean = false,
@@ -1969,7 +1981,8 @@ internal fun CodingComposer(
                     Row(Modifier.widthIn(max = trailingLimit),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(0.dp, Alignment.End)) {
-                        if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage, compacting = contextCompacting)
+                        if (!narrowContext) io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage,
+                            compacting = contextCompacting, plan = planUsage, onOpen = onPlanUsageOpen)
                         controls?.invoke()
                     }
                 }
@@ -1994,7 +2007,8 @@ internal fun CodingComposer(
             if (narrowContext) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (onInteractionMode != null || planning || research) CodingModeLabel(planning, research)
                 Spacer(Modifier.weight(1f))
-                io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage, compacting = contextCompacting)
+                io.aequicor.magicpaper.ui.components.ContextUsageIndicator(contextUsage,
+                    compacting = contextCompacting, plan = planUsage, onOpen = onPlanUsageOpen)
             }
         }
     }

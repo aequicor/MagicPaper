@@ -300,6 +300,8 @@ fun Composer(
     resumeAction: ResearchResumeAction = ResearchResumeAction.CONTINUE,
     mediaOptions: (@Composable () -> Unit)? = null,
     resolvedProfile: LlmProfile? = ProfileResolver.resolve(session, AppSettings(activeLlmProfileId = activeProfileId), profiles),
+    planUsage: PlanUsage? = null,
+    onPlanUsageOpen: () -> Unit = {},
 ) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val draft = remember(session?.id, draftSession) {
@@ -316,7 +318,8 @@ fun Composer(
         mediaOptions = mediaOptions,
         profile = resolvedProfile,
         contextUsage = contextUsage, contextCompacting = contextCompacting,
-        placeholder = if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
+        planUsage = planUsage, onPlanUsageOpen = onPlanUsageOpen,
+        placeholder =if (session?.messages.isNullOrEmpty()) "Сформулируйте вопрос…" else "Уточните вопрос или продолжите исследование…",
         onOpenSwitcher = onOpenSwitcher,
         onSend = { text, attachments -> accepted(onSend, text, attachments) },
         onResume = { text, attachments -> accepted(onResume, text, attachments) },

@@ -20,6 +20,7 @@ internal class ClaudeStreamParser(
         NativeToolPresentation("$server:$tool", tool)
     },
     private var contextWindow: Long? = null,
+    private val now: () -> Long = io.aequicor.magicpaper.util.Id::now,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val tools = mutableMapOf<String, String>()
@@ -51,8 +52,27 @@ internal class ClaudeStreamParser(
             "assistant" -> assistant(event, nested)
             "user" -> toolResults(event)
             "result" -> result(event)
+            "rate_limit_event" -> planUsage(event["rate_limit_info"] as? JsonObject ?: return emptyList())
             else -> emptyList()
         }
+    }
+
+    /**
+     * The documented fields describe only the window that currently binds (`rateLimitType`, `utilization`); the
+     * CLI's `unifiedWindows` map carries every window and is preferred when present.
+     */
+    private fun planUsage(info: JsonObject): List<CodingEvent> {
+        val status = info.string("status") ?: return emptyList()
+        val windows = (info["unifiedWindows"] as? JsonObject)?.mapNotNull { (id, window) -> planWindow(id, window as? JsonObject) }
+            ?: listOfNotNull(info.string("rateLimitType")?.let { planWindow(it, info) })
+        return listOf(CodingEvent.PlanUsageObserved(PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION, windows,
+            limited = status == "rejected", observedAt = now())))
+    }
+
+    private fun planWindow(id: String, source: JsonObject?): PlanUsageWindow? {
+        val (duration, scope) = CLAUDE_WINDOWS[id] ?: return null
+        val utilization = (source?.get("utilization") as? JsonPrimitive)?.doubleOrNull ?: return null
+        return PlanUsageWindow(id, utilization.toFloat().coerceIn(0f, 1f), duration, source.count("resetsAt"), scope)
     }
 
     private fun system(event: JsonObject): List<CodingEvent> = when (event.string("subtype")) {
@@ -223,5 +243,10 @@ internal class ClaudeStreamParser(
         val EXEC_TOOLS = setOf("Bash", "BashOutput", "KillShell", "PowerShell")
         const val REASON_LIMIT = 400
         const val MAX_PREVIEW = 2000
+        const val WEEK_MINUTES = 7 * 24 * 60L
+        /** Plan windows in minutes and the model family they are restricted to; overage accounting is no allowance. */
+        val CLAUDE_WINDOWS: Map<String, Pair<Long, String?>> = mapOf("five_hour" to (5 * 60L to null),
+            "seven_day" to (WEEK_MINUTES to null), "seven_day_opus" to (WEEK_MINUTES to "Opus"),
+            "seven_day_sonnet" to (WEEK_MINUTES to "Sonnet"))
     }
 }

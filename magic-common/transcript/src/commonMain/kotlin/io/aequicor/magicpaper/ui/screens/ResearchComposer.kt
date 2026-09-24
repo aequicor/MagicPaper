@@ -25,7 +25,8 @@ fun ResearchComposer(state: CodingComposerDraft, enabled: Boolean, busy: Boolean
     onPasteAttachments: (Int, (List<Attachment>) -> Unit) -> Boolean,
     mediaOptions: (@Composable () -> Unit)? = null,
     additionalOptions: (@Composable () -> Unit)? = null,
-    resumeAction: ResearchResumeAction = ResearchResumeAction.CONTINUE) {
+    resumeAction: ResearchResumeAction = ResearchResumeAction.CONTINUE,
+    planUsage: PlanUsage? = null, onPlanUsageOpen: () -> Unit = {}) {
     var text by state.text
     var attachments by state.attachments
     var editor by remember(state) { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
@@ -101,7 +102,8 @@ fun ResearchComposer(state: CodingComposerDraft, enabled: Boolean, busy: Boolean
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     CodingModelChip(profile, false, onOpenSwitcher)
                 }
-                ContextUsageIndicator(contextUsage, model = profile?.modelId.orEmpty(), compacting = contextCompacting)
+                ContextUsageIndicator(contextUsage, model = profile?.modelId.orEmpty(), compacting = contextCompacting,
+                    plan = planUsage, onOpen = onPlanUsageOpen)
                 // Balance the model chip's 8 dp text inset so the visible gaps match.
                 PaperButton(if (compact && !(action == ResearchComposerAction.RESUME && resumeAction == ResearchResumeAction.CHECK_SAVED_RESPONSE)) action.glyph else actionLabel, ::submit, Modifier.padding(start = 8.dp),
                     kind = if (action == ResearchComposerAction.PAUSE) PaperButtonKind.SECONDARY else PaperButtonKind.PRIMARY,

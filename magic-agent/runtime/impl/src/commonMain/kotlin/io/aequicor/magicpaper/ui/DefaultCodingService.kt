@@ -95,6 +95,7 @@ class DefaultCodingService(
     override val mediaGeneration: MediaGenerationService? = null,
     private val settingsCommands: SettingsCommands,
     private val models: CodingModelCatalog? = null,
+    val plans: PlanUsageMonitor? = null,
 ) : CodingService {
     private val _state = MutableStateFlow(CodingState())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, error ->

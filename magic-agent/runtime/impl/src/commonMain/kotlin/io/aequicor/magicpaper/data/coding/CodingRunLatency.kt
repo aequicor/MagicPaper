@@ -284,7 +284,7 @@ class CodingRunLatency(
             CodingEvent.AgentEnd -> closeAll(instant)
 
             is CodingEvent.SessionStarted, is CodingEvent.ToolProgress, is CodingEvent.FinalThinking,
-            is CodingEvent.SearchObserved, is CodingEvent.Notice, CodingEvent.Finished,
+            is CodingEvent.SearchObserved, is CodingEvent.Notice, CodingEvent.Finished, is CodingEvent.PlanUsageObserved,
             -> emptyList()
         }
     }

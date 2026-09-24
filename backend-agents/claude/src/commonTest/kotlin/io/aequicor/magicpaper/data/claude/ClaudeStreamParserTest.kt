@@ -141,6 +141,29 @@ class ClaudeStreamParserTest {
 
     @Test fun damagedAndUnknownLinesAreIgnored() {
         val parser = ClaudeStreamParser()
-        assertTrue(parser.all("", "plain log line", "{broken", """{"type":"rate_limit_event"}""", "[1,2]").isEmpty())
+        assertTrue(parser.all("", "plain log line", "{broken", """{"type":"rate_limit_event"}""",
+            """{"type":"session_update"}""", "[1,2]").isEmpty())
+    }
+
+    /** Captured from Claude Code 2.1.280 on a Max plan. */
+    @Test fun rateLimitEventReportsEveryPlanWindow() {
+        val event = ClaudeStreamParser(now = { 42 }).parse("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed",""" +
+            """"resetsAt":1790269200,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits",""" +
+            """"isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1790269200},""" +
+            """"seven_day":{"utilization":0.01,"resetsAt":1790856000},"seven_day_overage_included":{"utilization":0,"resetsAt":1790856000}}},""" +
+            """"uuid":"u","session_id":"s"}""").single() as CodingEvent.PlanUsageObserved
+        assertEquals(PlanUsage(ProviderType.ANTHROPIC_SUBSCRIPTION, listOf(
+            PlanUsageWindow("five_hour", .12f, 300, 1790269200),
+            PlanUsageWindow("seven_day", .01f, 10_080, 1790856000)), observedAt = 42), event.usage)
+    }
+
+    @Test fun documentedFieldsDescribeTheBindingWindowAndARefusal() {
+        val usage = (ClaudeStreamParser(now = { 7 }).parse("""{"type":"rate_limit_event","rate_limit_info":{"status":"rejected",""" +
+            """"resetsAt":1790269200,"rateLimitType":"seven_day_opus","utilization":0.97}}""").single() as CodingEvent.PlanUsageObserved).usage
+        assertTrue(usage.limited)
+        assertEquals(listOf(PlanUsageWindow("seven_day_opus", .97f, 10_080, 1790269200, "Opus")), usage.windows)
+        val withoutFigures = (ClaudeStreamParser().parse("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed",""" +
+            """"resetsAt":1790269200,"rateLimitType":"five_hour"}}""").single() as CodingEvent.PlanUsageObserved).usage
+        assertEquals(emptyList(), withoutFigures.windows)
     }
 }

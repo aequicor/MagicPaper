@@ -29,6 +29,7 @@ class DefaultChatComponent internal constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val picker = AttachmentSelection(filePicker, scope)
     val usage get() = service.usage
+    val plans get() = service.plans
     val composerDraft get() = service.composerDraft(state.value.current?.id ?: input.sessionId)
     init {
         context.lifecycle.doOnResume { service.activate(input.sessionId) }

@@ -99,6 +99,7 @@ internal fun buildRuntime(
         single<ChatHistoryCommands> { get<DefaultChatService>() }
         single<RequestPinRepository> { JsonRequestPinRepository(get(), get()) }
         single<UsageLedger> { DefaultUsageLedger(JsonUsageRepository(get(), get()), get(), get(), get()) }
+        single<PlanUsageMonitor> { DefaultPlanUsageMonitor(applicationScope, openAiSubscription) }
         single { appHttpClient() } onClose { it?.close() }
         single<MediaGenerationGateway> { HttpMediaGenerationGateway(get(), get()) }
         single { DefaultMediaGenerationService(get<SettingsRepository>()::load, get<LlmProfileRepository>()::load,
@@ -204,7 +205,7 @@ internal fun buildRuntime(
             onOpenSession = { get<NavigationEvents>().navigate(AppRoute.Chat(it)) },
             draftRepository = get(), draftBlobs = get(),
             researchSearch = get(), usage = get(), sourceAccess = get(), sourceBrowser = researchPageBrowser,
-            mediaGeneration = get(),
+            mediaGeneration = get(), plans = get(),
             responseExtensions = responseExtensions()) }
         single { DefaultSettingsService(get(), get(), get(), get(), get(), chatHistory = get(), pluginPreferences = get<PluginService>(),
             skills = get(), skillCommands = get(), modelDirectory = get(), gateway = get(), dossierResearcher = get(),

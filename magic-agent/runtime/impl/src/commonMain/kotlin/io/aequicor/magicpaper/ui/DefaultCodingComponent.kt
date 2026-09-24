@@ -34,6 +34,7 @@ class DefaultCodingComponent(
     private val display = combine(service.state, activation, picker.error, ::Display)
         .stateIn(scope, SharingStarted.Eagerly, Display(service.state.value, activation.value, picker.error.value))
     val planningChat get() = service.planningChat
+    val plans get() = service.plans
     fun composerDraft(id: String) = service.composerDraft(id)
     init {
         context.lifecycle.doOnResume {

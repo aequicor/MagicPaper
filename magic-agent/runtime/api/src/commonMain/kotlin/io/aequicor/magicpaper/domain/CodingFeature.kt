@@ -71,6 +71,7 @@ class CodingFeatureDependencies(
     val questionnaireToolFactory: QuestionnaireToolCommands.Factory,
     val planningStoreFactory: io.aequicor.magicpaper.data.planning.PlanningStoreFactory,
     val organismStoreFactory: io.aequicor.magicpaper.data.coding.SessionOrganismStoreFactory,
+    val plans: PlanUsageMonitor? = null,
 )
 
 /**

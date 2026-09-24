@@ -182,21 +182,20 @@ class CodexNativeClient(
         val response = request("account/read", buildJsonObject { put("refreshToken", refreshToken) }).jsonObject
         val account = response["account"] as? JsonObject
         if (account?.string("type") != "chatgpt") return OpenAiSubscriptionAccount(signedIn = false)
-        var limitsUnavailable = false
         val limits = try { readRateLimits() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            limitsUnavailable = true
             diagnostics.error("CodexSubscription", "rate_limits_read_failed", failure,
                 mapOf("result" to "limits_unavailable", "account" to "signed_in"))
-            emptyList()
+            null
         }
         return OpenAiSubscriptionAccount(
             signedIn = true,
             email = account.string("email"),
             planType = account.string("planType"),
-            rateLimits = limits,
-            rateLimitsUnavailable = limitsUnavailable,
+            rateLimits = limits?.limits.orEmpty(),
+            rateLimitsUnavailable = limits == null,
+            limitReached = limits?.reached == true,
         )
     }
 
@@ -484,34 +483,37 @@ class CodexNativeClient(
         cleanupFailure?.let { throw it }
     }
 
-    private suspend fun readRateLimits(): List<OpenAiRateLimit> {
+    private class RateLimits(val limits: List<OpenAiRateLimit>, val reached: Boolean)
+
+    private suspend fun readRateLimits(): RateLimits {
         val root = request("account/rateLimits/read", JsonObject(emptyMap())).jsonObject
         val byId = root["rateLimitsByLimitId"] as? JsonObject
-        val snapshots: List<Pair<String, JsonElement>> = if (!byId.isNullOrEmpty()) {
-            byId.entries.map { it.key to it.value }
+        val snapshots: List<Pair<String, JsonObject>> = if (!byId.isNullOrEmpty()) {
+            byId.entries.map { it.key to it.value.jsonObject }
         } else {
-            listOf("codex" to root["rateLimits"]!!)
+            listOf(OpenAiRateLimit.CODEX_LIMIT_ID to root["rateLimits"]!!.jsonObject)
         }
-        return buildList {
-            snapshots.forEach { (fallbackId, value) ->
-                val snapshot = value.jsonObject
-                val id = snapshot.string("limitId") ?: fallbackId
-                val name = snapshot.string("limitName") ?: id
-                listOf("primary", "secondary").forEach { windowName ->
-                    val window = snapshot[windowName] as? JsonObject ?: return@forEach
-                    add(
-                        OpenAiRateLimit(
-                            id = id,
-                            name = name,
-                            window = windowName,
-                            usedPercent = window["usedPercent"]?.jsonPrimitive?.intOrNull ?: return@forEach,
-                            resetsAtEpochSeconds = window["resetsAt"]?.jsonPrimitive?.longOrNull,
-                        ),
-                    )
-                }
-            }
+        return RateLimits(snapshots.flatMap { (fallbackId, snapshot) -> rateLimits(snapshot, fallbackId) },
+            snapshots.any { (_, snapshot) -> snapshot.limitReached() } || root["ordinaryUsageAllowed"]?.jsonPrimitive?.booleanOrNull == false)
+    }
+
+    private fun rateLimits(snapshot: JsonObject, fallbackId: String): List<OpenAiRateLimit> {
+        val id = snapshot.string("limitId") ?: fallbackId
+        val name = snapshot.string("limitName") ?: id
+        return listOf("primary", "secondary").mapNotNull { windowName ->
+            val window = snapshot[windowName] as? JsonObject ?: return@mapNotNull null
+            OpenAiRateLimit(
+                id = id,
+                name = name,
+                window = windowName,
+                usedPercent = window["usedPercent"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                resetsAtEpochSeconds = window["resetsAt"]?.jsonPrimitive?.longOrNull,
+                durationMinutes = window["windowDurationMins"]?.jsonPrimitive?.longOrNull,
+            )
         }
     }
+
+    private fun JsonObject.limitReached() = string("rateLimitReachedType") != null || this["spendControlReached"]?.jsonPrimitive?.booleanOrNull == true
 
     private suspend fun request(method: String, params: JsonElement): JsonElement {
         ensureStarted()
@@ -696,6 +698,14 @@ class CodexNativeClient(
                 val threadId = params.string("threadId") ?: return
                 val warning = params.string("message") ?: return
                 codingRuns[threadId]?.emit(CodingEvent.Notice("Проверка разрешений: $warning"))
+            }
+            "account/rateLimits/updated" -> {
+                // A sparse account-level update: the usage owner merges it, so every active run may carry it.
+                val snapshot = params["rateLimits"] as? JsonObject ?: return
+                val usage = PlanUsage(ProviderType.OPENAI_SUBSCRIPTION,
+                    rateLimits(snapshot, OpenAiRateLimit.CODEX_LIMIT_ID).map { it.planWindow() },
+                    snapshot.string("planType"), snapshot.limitReached(), io.aequicor.magicpaper.util.Id.now())
+                codingRuns.values.filter { !it.done.isCompleted }.forEach { it.emit(CodingEvent.PlanUsageObserved(usage)) }
             }
             "account/login/completed" -> loginEvents.value = LoginEvent(
                 loginId = params.string("loginId"),

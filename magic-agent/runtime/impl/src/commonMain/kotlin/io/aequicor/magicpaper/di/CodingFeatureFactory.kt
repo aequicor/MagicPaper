@@ -34,7 +34,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         mediaToolFactory = deps.mediaToolFactory, mediaToolReceipts = deps.mediaToolReceipts, questionnaireToolFactory = deps.questionnaireToolFactory, organismStoreFactory = deps.organismStoreFactory,
         taskWorktreeOwner = deps.taskWorktreeOwner, planningStoreFactory = deps.planningStoreFactory,
         modelDossiers = deps.modelDossiers, settingsCommands = deps.settingsCommands,
-        nativeModels = NativeModelSnapshots { engine -> engine?.let { models.snapshots.value[it] } })
+        nativeModels = NativeModelSnapshots { engine -> engine?.let { models.snapshots.value[it] } }, plans = deps.plans)
     val runtime = graph.runtime
     val service = DefaultCodingService(deps.settings, deps.profiles, deps.store, deps.json, runtime, projects,
         deps.dirPicker, deps.gateway, graph.planningChat, deps.requestPins, deps.usage,
@@ -43,7 +43,7 @@ fun codingFeature(deps: CodingFeatureDependencies): CodingFeature {
         taskWorktrees = graph.taskWorktrees,
         mediaGeneration = deps.media,
         removePluginDrafts = deps.removePluginDrafts,
-        settingsCommands = deps.settingsCommands, models = models)
+        settingsCommands = deps.settingsCommands, models = models, plans = deps.plans)
     val plugin = CodingPlanningPlugin(graph.planningStore, graph.planComposer, deps.dossier,
         graph.planningExecution, runtime, projects, deps.profiles, deps.settings,
         draftRepository = deps.drafts, applicationScope = deps.applicationScope, modelDossiers = deps.modelDossiers, models = models)
