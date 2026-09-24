@@ -86,7 +86,8 @@ class GitTaskWorkspaceTest {
         suspend fun GitTaskWorkspace.capture(record: TaskWorktree) = operation(record, TaskWorktreeMachine.Operation.CAPTURE) { capture(record, it) }
         suspend fun GitTaskWorkspace.refresh(record: TaskWorktree) = operation(record, TaskWorktreeMachine.Operation.REFRESH) { refresh(record, it) }
         suspend fun GitTaskWorkspace.integrate(record: TaskWorktree) = operation(record, TaskWorktreeMachine.Operation.INTEGRATE) { integrate(record, it) }
-        suspend fun GitTaskWorkspace.verify(record: TaskWorktree, operationId: String) = operation(record, TaskWorktreeMachine.Operation.VERIFY, operationId) { verify(record, it) }
+        suspend fun GitTaskWorkspace.verify(record: TaskWorktree, operationId: String, grants: TaskCheckGrants = TaskCheckGrants()) =
+            operation(record, TaskWorktreeMachine.Operation.VERIFY, operationId) { verify(record, it.copy(leases = it.leases.copy(checks = grants))) }
         suspend fun GitTaskWorkspace.deliver(record: TaskWorktree) = operation(record, TaskWorktreeMachine.Operation.DELIVER) { deliver(record, it) }
 
         suspend fun open(id: String = "one"): TaskWorktree = port.describe(project, "session", id, "Task $id").also { port.open(it) }
@@ -361,6 +362,43 @@ class GitTaskWorkspaceTest {
         assertFalse("private-value" in failedDetail, failedDetail)
         assertContains(blockedDetail, "command: python3 -m pytest")
         assertContains(blockedDetail, "blocked: Команда проверки не найдена: python3")
+    } }
+
+    /**
+     * A check the containment kept from starting a program names itself, so the user rather than the agent decides;
+     * the user's grant reaches the check owner for that exact command, and a waived check does not run at all.
+     */
+    @Test fun spawnRefusedCheckIsNamedAndRunsOnlyUnderTheUsersDecision() = runTest { fixture {
+        val seen = mutableListOf<CheckCommand>()
+        val runner = object : CommandChecks by gitChecks {
+            private val results = mutableMapOf<CheckRef, CheckResult>()
+            override suspend fun run(command: CheckCommand): CheckResult =
+                if (command.outputMode != CheckOutputMode.TEXT) gitChecks.run(command)
+                else {
+                    seen += command
+                    (if (command.spawnGranted) CheckResult("ok", 0)
+                        else CheckResult("xargs: /bin/echo: Operation not permitted", 1, spawnRefused = true)).also { results[command.ref] = it }
+                }
+            override suspend fun inspect(ref: CheckRef) = results[ref] ?: gitChecks.inspect(ref)
+        }
+        val checked = port(runner)
+        val task = open()
+        File(task.path, "result.txt").writeText("pending result")
+        val gradle = listOf("./gradlew", "check")
+        val python = listOf("python3", "tools/verify/verify-design-system.py", "--self-test")
+        val record = prepare(task).copy(checks = listOf(gradle, python))
+
+        val refused = assertFailsWith<TaskWorktreeVerificationFailed> { checked.verify(record, "spawn-refused") }
+        assertEquals(gradle, refused.spawnRefused)
+        assertTrue(refused.safeMessage.startsWith("Песочница проверок не дала команде запустить программу"), refused.safeMessage)
+        assertEquals("check_spawn_refused", AppLog.history().last { it.component == "coding.worktree" && it.event == "verification.finished" }.fields["result"])
+
+        seen.clear()
+        checked.verify(record, "spawn-decided", TaskCheckGrants(spawning = setOf(gradle), skipped = setOf(python)))
+        assertEquals(listOf(gradle), seen.map { it.arguments }, "the waived check never runs")
+        assertTrue(seen.single().spawnGranted)
+        assertEquals("user", AppLog.history().last { it.component == "coding.worktree" && it.event == "check.skipped" }.fields["reason"])
+        assertEquals(record.baseCommit, git(source, "rev-parse", "HEAD"), "verification alone never delivers")
     } }
 
     /** Every step between the start and the outcome is in the log, under one operation: commit, snapshots, each check. */

@@ -16,6 +16,8 @@ class TaskWorktreeService(
     private val leases: PlanningWorkspace,
     private val owner: TaskWorktreeOwner,
     private val runtime: TaskWorktreeRuntimeAccess,
+    /** Asks the user about a check the containment refused; without it such a refusal goes to the agent. */
+    private val questions: RuntimeQuestionnaireService? = null,
 ) {
     private val retainedLeases = MutableStateFlow<Map<String, WorkspaceLease>>(emptyMap())
     private val mergeQueues = mutableMapOf<String, Mutex>()
@@ -133,6 +135,32 @@ class TaskWorktreeService(
         accept(projectId, sessionId, TaskWorktreeMachine.Input.Intent.NoteFailure(taskId, message))
     }
 
+    /**
+     * Asks the user what to do with a check the containment kept from starting a program. Null — no questionnaire
+     * here, the question was skipped, or the user returns the report to the agent, which may change the command.
+     */
+    suspend fun askSpawnRefusal(projectId: String, sessionId: String, check: List<String>): SpawnRefusalDecision? {
+        val questions = questions ?: return null
+        val current = parent(projectId, sessionId)
+        val command = PlanningDiagnostics.redact(checkCommandLine(check)).let { if (it.length > MAX_SHOWN_COMMAND) it.take(MAX_SHOWN_COMMAND) + "…" else it }
+        val question = PlanningQuestion(SPAWN_QUESTION,
+            "Песочница не дала проверке запустить программу:\n$command\nКак поступить?", QuestionKind.SINGLE, listOf(
+                QuestionOption(ALLOW_OPTION, "Разрешить запуск",
+                    "Повторить эту команду с разрешённым запуском программ. Её дочерние процессы смогут выйти из-под контроля остановки"),
+                QuestionOption(SKIP_OPTION, "Пропустить проверку", "Принять результат без этой проверки"),
+                QuestionOption(AGENT_OPTION, "Вернуть агенту", "Агент исправит команду или объяснит причину"),
+            ), allowCustomInput = false)
+        val answers = questions.ask(UserInteractionRequest("check-spawn:$sessionId:${Id.new()}", projectId, sessionId,
+            InteractionKind.RUNTIME, listOf(question), createdAt = Id.now(),
+            runtimeGeneration = current.runtimeGeneration, runId = current.pendingRun?.runId.orEmpty()))
+        val selected = answers.firstOrNull { it.questionId == SPAWN_QUESTION }?.takeUnless { it.skipped }?.selected.orEmpty()
+        return when {
+            ALLOW_OPTION in selected -> SpawnRefusalDecision.ALLOW
+            SKIP_OPTION in selected -> SpawnRefusalDecision.SKIP
+            else -> null
+        }
+    }
+
     private fun taskLabel(session: CodingSession): String = listOf(
         session.pendingRun?.prompt.orEmpty(),
         session.queuedPrompts.firstOrNull()?.prompt.orEmpty(),
@@ -150,12 +178,17 @@ class TaskWorktreeService(
      * and [repairChecks], when given, receives the report of the agent's own checks that failed on the merge. The agent
      * hands off again, and that handoff is captured like the first, so the next verification sees what it changed.
      * [MAX_CHECK_REPAIRS] rounds bound an agent that cannot make its checks pass; the last refusal then fails the run.
+     *
+     * A check the containment kept from starting a program is not the agent's to fix. [spawnRefused], when given,
+     * asks the user: a grant reruns that command with program start allowed, a skip verifies without it, and no
+     * decision sends the report to the agent as before. Each decision covers one more command, so the asking ends.
      */
     suspend fun complete(project: CodingProject, sessionId: String, taskId: String,
         planAccepted: Boolean = false, executionLease: WorkspaceLease? = null,
         verifyMerged: suspend (TaskWorktree) -> Unit = {},
         repair: suspend (TaskWorktree) -> Unit,
         repairChecks: (suspend (TaskWorktree, String) -> Unit)? = null,
+        spawnRefused: (suspend (List<String>) -> SpawnRefusalDecision?)? = null,
     ): TaskWorktree {
         var child = projection(project.id, sessionId)
         var record = checkNotNull(child.task)
@@ -174,6 +207,7 @@ class TaskWorktreeService(
         }
         var repairedAt: String? = null
         var checkRepairs = 0
+        var grants = TaskCheckGrants()
         while (true) {
             currentCoroutineContext().ensureActive()
             // The agent's handoff, or its handoff after a checks repair, becomes the result to merge.
@@ -193,7 +227,7 @@ class TaskWorktreeService(
                     return@mergeTurn null
                 }
                 execution { lease -> record = accept(project.id, sessionId, TaskWorktreeMachine.Input.Intent.Verify(taskId, generation, Id.new()),
-                    handles = TaskWorkspaceLeases(execution = lease)) }
+                    handles = TaskWorkspaceLeases(execution = lease, checks = grants)) }
                 verifyMerged(record)
                 record = accept(project.id, sessionId, TaskWorktreeMachine.Input.Intent.AcceptMerge(taskId, generation, record.mergeCommit))
                 AppLog.info("coding.worktree", "merge.accepted", mapOf("sessionId" to sessionId, "entityId" to taskId,
@@ -213,6 +247,20 @@ class TaskWorktreeService(
                 repairedAt = null
                 continue
             } catch (refused: TaskWorktreeVerificationFailed) {
+                val contained = refused.spawnRefused
+                val decision = if (contained == null || spawnRefused == null) null else spawnRefused(contained)
+                if (contained != null && decision != null) {
+                    grants = when (decision) {
+                        SpawnRefusalDecision.ALLOW -> grants.copy(spawning = grants.spawning + listOf(contained))
+                        SpawnRefusalDecision.SKIP -> grants.copy(skipped = grants.skipped + listOf(contained))
+                    }
+                    AppLog.info("coding.worktree", "check.decided", mapOf("sessionId" to sessionId, "entityId" to taskId,
+                        "executable" to contained.first().substringAfterLast('/').substringAfterLast('\\'),
+                        "result" to decision.name.lowercase()))
+                    // The merged result is unchanged: only its verification repeats, under the user's decision.
+                    record = accept(project.id, sessionId, TaskWorktreeMachine.Input.Intent.RetryVerification(taskId, generation))
+                    continue
+                }
                 // The refusal is durable before it is thrown: the merged record carries the report the agent receives.
                 val repairing = repairChecks ?: throw refused
                 if (checkRepairs == MAX_CHECK_REPAIRS) throw refused
@@ -275,6 +323,12 @@ class TaskWorktreeService(
         const val SOURCE_LEASE_POLL_MILLIS = 250L
         const val SOURCE_FOLDER = "Исходная папка проекта"
         const val TASK_COPY = "Рабочая копия задачи"
+        /** Долгая команда в вопросе обрезается: решение принимается по программе и первым аргументам. */
+        const val MAX_SHOWN_COMMAND = 300
+        const val SPAWN_QUESTION = "check-spawn"
+        const val ALLOW_OPTION = "allow"
+        const val SKIP_OPTION = "skip"
+        const val AGENT_OPTION = "agent"
     }
 
     private suspend fun <T> mergeTurn(path: String, action: suspend () -> T): T {
@@ -327,6 +381,9 @@ class TaskWorktreeService(
     }
 }
 
-/** A check as it would be typed, for TRACE only: an argument with spaces is quoted so the line reads back unambiguously. */
+/** The user's answer to a check the containment kept from starting a program. */
+enum class SpawnRefusalDecision { ALLOW, SKIP }
+
+/** A check as it would be typed, for TRACE and, redacted, the user's grant question: an argument with spaces is quoted so the line reads back unambiguously. */
 internal fun checkCommandLine(args: List<String>): String =
     args.joinToString(" ") { if (it.isEmpty() || it.any(Char::isWhitespace)) "\"$it\"" else it }

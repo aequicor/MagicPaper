@@ -36,6 +36,9 @@ class CodingWorktreeTest {
         var conflict = false
         var verifyGate: CompletableDeferred<Unit>? = null
         var verificationError: String? = null
+        /** Seatbelt refuses program start to every check the user has neither allowed nor waived. */
+        var refusesSpawn = false
+        val grants = mutableListOf<TaskCheckGrants>()
         override suspend fun availability(project: CodingProject) = WorktreeAvailability(true)
         override suspend fun describe(project: CodingProject, sessionId: String, taskId: String, label: String) =
             TaskWorktree(taskId, project.path, "main", "base", "/isolated", "task-$taskId", label = label)
@@ -46,6 +49,12 @@ class CodingWorktreeTest {
         override suspend fun refresh(record: TaskWorktree, operation: TaskWorkspaceOperation): TaskWorktreeRefresh { refreshes++; return refreshResult }
         override suspend fun integrate(record: TaskWorktree, operation: TaskWorkspaceOperation): String? { integrateAttempts++; return if (conflict) null else "result" }
         override suspend fun verify(record: TaskWorktree, operation: TaskWorkspaceOperation) {
+            val decided = operation.leases.checks
+            grants += decided
+            if (refusesSpawn) record.checks.firstOrNull { it !in decided.spawning && it !in decided.skipped }?.let {
+                throw TaskWorktreeVerificationFailed("Песочница проверок не дала команде запустить программу\n" +
+                    "xargs: /bin/echo: Operation not permitted", spawnRefused = it)
+            }
             verificationError?.let { throw TaskWorktreeVerificationFailed(it) }
             verifyGate?.await()
         }
@@ -55,7 +64,9 @@ class CodingWorktreeTest {
         }
         override suspend fun delivered(record: TaskWorktree) = deliveries > 0
     }
-    private class Runtime(val worktrees: TaskWorktreeService) : CodingRuntime {
+    private class Runtime(val worktrees: TaskWorktreeService, private val questions: RuntimeQuestionnaireService? = null) : CodingRuntime {
+        override val questionnaires: StateFlow<List<UserInteractionRequest>> = questions?.requests ?: MutableStateFlow(emptyList())
+        override suspend fun respondQuestionnaire(id: String, answers: List<PlanningAnswer>) = checkNotNull(questions).respond(id, answers)
         private val outcomes = mutableMapOf<NativeRunRecoveryRef, NativeRunRecoveryItem>()
         private var noDispatch: NativeRunNoDispatchItem? = null
         private val consumptions = mutableListOf<NativeRunRecoveryConsumption>()
@@ -150,6 +161,7 @@ class CodingWorktreeTest {
         }
     }
     private suspend fun TestScope.fixture(sessions: (TaskWorktreeSessionAccess) -> TaskWorktreeSessionAccess = { it },
+        questions: RuntimeQuestionnaireService? = null,
         block: suspend (DefaultCodingService, Runtime, Workspace, CodingProjectOwner) -> Unit) {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var service: DefaultCodingService? = null
@@ -161,8 +173,8 @@ class CodingWorktreeTest {
             val events = InMemoryEventJournal()
             val projects = journalCodingProjects(f.kv, f.json, journal = events, checkpoints = repo)
             val worktrees = testTaskWorktreeService(projects, port, LocalPlanningWorkspace(), events, f.kv,
-                sessions = sessions(CodingTaskWorktreeSessionAccess(projects)))
-            val runtime = Runtime(worktrees)
+                sessions = sessions(CodingTaskWorktreeSessionAccess(projects)), questions = questions)
+            val runtime = Runtime(worktrees, questions)
             service = f.prepareCoding(runtime, projects, taskWorktrees = worktrees)
             runCurrent()
             block(service, runtime, port, projects)
@@ -419,6 +431,50 @@ class CodingWorktreeTest {
         assertEquals(TaskWorktreePhase.COMPLETE, delivered.taskWorktree?.phase)
         assertEquals(1, port.deliveries)
     } }
+
+    /**
+     * Seatbelt refused `python3` and `gradlew` their program start; the agent could not fix that, handed off BLOCKED and
+     * the session stopped. The refusal now asks the user, and the run waits for the answer instead of failing.
+     */
+    private fun spawnRefusal(answer: String, block: suspend TestScope.(DefaultCodingService, Runtime, Workspace, CodingProjectOwner) -> Unit) =
+        runTest { fixture(questions = DefaultRuntimeQuestionnaireService(InMemoryEventJournal(), "test")) { service, runtime, port, repo ->
+            port.refusesSpawn = true
+            runtime.checks = listOf(listOf("python3", "tools/verify/verify-module-architecture.py", "--self-test"))
+            service.sendCodingPromptTo("s", "Task"); runCurrent()
+            val question = service.state.value.coding.interactions.single { it.kind == InteractionKind.RUNTIME }
+            assertEquals("s", question.sessionId)
+            assertContains(question.questions.single().title, "python3 tools/verify/verify-module-architecture.py --self-test")
+            assertEquals(listOf("allow", "skip", "agent"), question.questions.single().options.map { it.id })
+            assertNotEquals(ExecutionIntent.STOP, repo.sessions("p").single().pendingRun?.intent, "the run waits for the user")
+            assertEquals(0, port.deliveries)
+            service.submitQuestionnaire(question.id, listOf(PlanningAnswer("check-spawn", selected = listOf(answer)))); runCurrent()
+            block(service, runtime, port, repo)
+        } }
+
+    @Test fun checkRefusedProgramStartRerunsItWhenTheUserAllowsIt() = spawnRefusal("allow") { _, runtime, port, repo ->
+        assertEquals(1, runtime.calls.size, "the agent is not asked to fix what only the user can grant")
+        assertEquals(setOf(runtime.checks.single()), port.grants.last().spawning)
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").single().taskWorktree?.phase)
+        assertEquals(1, port.deliveries)
+        assertEquals("allow", AppLog.history().last { it.component == "coding.worktree" && it.event == "check.decided" }.fields["result"])
+    }
+
+    @Test fun checkRefusedProgramStartIsWaivedWhenTheUserSkipsIt() = spawnRefusal("skip") { _, runtime, port, repo ->
+        assertEquals(1, runtime.calls.size)
+        assertEquals(setOf(runtime.checks.single()), port.grants.last().skipped)
+        assertTrue(port.grants.last().spawning.isEmpty(), "a skip grants nothing")
+        assertEquals(TaskWorktreePhase.COMPLETE, repo.sessions("p").single().taskWorktree?.phase)
+        assertEquals(1, port.deliveries)
+    }
+
+    @Test fun checkRefusedProgramStartGoesToTheAgentWhenTheUserReturnsIt() = spawnRefusal("agent") { service, runtime, port, repo ->
+        assertEquals(2, runtime.calls.size, "the agent may change the command")
+        assertContains(runtime.prompts[1], "Песочница проверок не дала команде запустить программу")
+        // The repair handed off the same command, so the containment refuses it again and the user is asked again.
+        assertEquals(1, service.state.value.coding.interactions.count { it.kind == InteractionKind.RUNTIME })
+        assertEquals(0, port.deliveries)
+        assertNotEquals(ExecutionIntent.STOP, repo.sessions("p").single().pendingRun?.intent)
+    }
 
     @Test fun destinationAdvanceRepeatsIntegrationAndChecksWithoutRepeatingAgent() = runTest { fixture { service, runtime, port, repo ->
         port.advanceAtDelivery = true

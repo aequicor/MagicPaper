@@ -28,10 +28,11 @@ internal class OwnedGitCommands(private val checks: CommandChecks, private val r
         if (result.blockedReason != null || code == null) throw GitCommandUnavailable()
         return GitCommandResult(code, checks.readOutput(ref))
     }
-    suspend fun check(dir: File, arguments: List<String>): CheckResult {
+    /** [spawnGranted] — the user allowed this exact command to start programs the containment otherwise refuses. */
+    suspend fun check(dir: File, arguments: List<String>, spawnGranted: Boolean = false): CheckResult {
         require(!readOnly && arguments.isNotEmpty() && arguments.size <= 128 &&
             arguments.all { it.length <= 16_384 && '\u0000' !in it }) { "Некорректная команда проверки" }
-        return run(dir, arguments, CheckPolicy.MANAGED_WORKTREE, emptyMap(), CheckOutputMode.TEXT).second
+        return run(dir, arguments, CheckPolicy.MANAGED_WORKTREE, emptyMap(), CheckOutputMode.TEXT, spawnGranted).second
     }
     private suspend fun execute(dir: File, arguments: List<String>, policy: CheckPolicy, environment: Map<String, String>): ByteArray {
         val result = known(dir, arguments, policy, environment)
@@ -39,12 +40,13 @@ internal class OwnedGitCommands(private val checks: CommandChecks, private val r
         return result.output
     }
     private suspend fun run(dir: File, arguments: List<String>, policy: CheckPolicy,
-        environment: Map<String, String>, mode: CheckOutputMode): Pair<CheckRef, CheckResult> {
+        environment: Map<String, String>, mode: CheckOutputMode, spawnGranted: Boolean = false): Pair<CheckRef, CheckResult> {
         val ref = CheckRef(scope, "$operationId:${sequence.incrementAndGet()}")
         val affected = affectedResources + dir.canonicalPath + gitMetadataResources(dir)
         register(ref, affected) // Before admission: release must never miss an uncertain command or destination.
         return ref to checks.run(CheckCommand(ref, dir.canonicalPath, arguments, policy = policy,
-            outputMode = mode, environment = environment, protectedResource = resource, affectedResources = affected))
+            outputMode = mode, environment = environment, protectedResource = resource, affectedResources = affected,
+            spawnGranted = spawnGranted))
     }
     companion object {
         fun readOnly(checks: CommandChecks, path: String): OwnedGitCommands {

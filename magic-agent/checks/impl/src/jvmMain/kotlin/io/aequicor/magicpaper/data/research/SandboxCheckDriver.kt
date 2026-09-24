@@ -77,17 +77,27 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             }
             val executable = resolveExecutable(command.arguments.first(), cwd, effectiveEnvironment)
             val binary = if (command.outputMode == CheckOutputMode.BINARY_STDOUT) Files.createFile(scratch.resolve("stdout.bin")) else null
+            require(!command.spawnGranted || command.policy == CheckPolicy.MANAGED_WORKTREE && binary == null) {
+                "Запуск программ разрешается только проверке в рабочей копии задачи"
+            }
             currentCoroutineContext().ensureActive()
             nativeEntered = true
             val recorder: CheckAuthorityRecorder = { id, bytes -> runBlocking { authority.record(id, bytes) } }
             val arguments = listOf(executable) + command.arguments.drop(1)
-            native = if (binary == null) sandbox().prepare(arguments, cwd, effectiveEnvironment, policy,
-                receiptId, ownedRoot.resolve("owned"), recorder)
-            else sandbox().prepareBinary(arguments, cwd, effectiveEnvironment, policy,
-                receiptId, ownedRoot.resolve("owned"), binary, recorder)
+            native = when {
+                command.spawnGranted -> sandbox().prepareSpawning(arguments, cwd, effectiveEnvironment,
+                    receiptId, ownedRoot.resolve("owned"), recorder)
+                binary == null -> sandbox().prepare(arguments, cwd, effectiveEnvironment, policy,
+                    receiptId, ownedRoot.resolve("owned"), recorder)
+                else -> sandbox().prepareBinary(arguments, cwd, effectiveEnvironment, policy,
+                    receiptId, ownedRoot.resolve("owned"), binary, recorder)
+            }
             logPrepared(command, executable, cwd, native.receipt.kind, sandbox().launchMethod(executable))
+            // A granted command has nothing left to ask for, so its refusal is an ordinary failure.
+            val spawnRefused: (String) -> Boolean = if (command.spawnGranted || binary != null) { _ -> false }
+                else sandbox()::spawnRefused
             CommandResource(native, scratch, policy, artifacts, before, timeoutMillis, sampleMillis, binary, metadataRead,
-                BinaryCheckOutputs(ownedRoot.resolve("outputs"))) { resources.remove(receiptId) }.also {
+                BinaryCheckOutputs(ownedRoot.resolve("outputs")), spawnRefused) { resources.remove(receiptId) }.also {
                 resources[receiptId] = it
                 acquired = it
             }
@@ -195,7 +205,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
         private val policy: ResearchWorkspacePolicy?, private val artifacts: ResearchArtifactStore,
         private val before: ResearchArtifactStore.Snapshot?, private val timeoutMillis: Long, private val sampleMillis: Long,
         private val binary: Path?, private val metadataRead: Boolean, private val binaryOutputs: BinaryCheckOutputs,
-        private val onDiscard: () -> Unit) : PreparedCommandCheck {
+        private val spawnRefused: (String) -> Boolean, private val onDiscard: () -> Unit) : PreparedCommandCheck {
         override val receipt get() = process.receipt
         private val lock = Any()
         private val text = StringBuilder()
@@ -262,7 +272,8 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
             }
             val note = if (code != 0 && policy?.withheld?.isNotEmpty() == true)
                 "\nЗапись не предоставлена: ${policy.withheld.joinToString("; ")}. Исходники и нестандартные пути результатов защищены." else ""
-            return@withContext CheckResult(output + note, code, binaryOutput = binaryOutput)
+            return@withContext CheckResult(output + note, code, binaryOutput = binaryOutput,
+                spawnRefused = code != 0 && spawnRefused(output))
         }
         override suspend fun stopAndConfirm(): CheckCleanup = withContext(Dispatchers.IO) {
             cleanup ?: process.stopAndConfirm().let { proof ->
@@ -329,7 +340,7 @@ internal class SandboxCheckDriver(private val root: Path, private val timeoutMil
                 Paths.get(name).isAbsolute -> "absolute"
                 else -> "relative"
             },
-            "action" to launch, "kind" to kind, "timeoutMs" to timeoutMillis.toString(),
+            "action" to if (command.spawnGranted) "$launch+spawn" else launch, "kind" to kind, "timeoutMs" to timeoutMillis.toString(),
             "argumentCount" to (command.arguments.size - 1).toString())
         if (name == "git") AppLog.debug("checks", "run.prepared", fields) else AppLog.info("checks", "run.prepared", fields)
         AppLog.trace("checks", "run.prepared.detail", fields) { "executable=$executable\ncwd=$cwd" }

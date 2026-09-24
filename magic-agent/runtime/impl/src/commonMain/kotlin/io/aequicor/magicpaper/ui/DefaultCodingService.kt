@@ -2283,6 +2283,14 @@ class DefaultCodingService(
                         }
                         // A clean turn without a new handoff is refused by the capture that follows, with the reason the task keeps.
                         check(clean) { "Исправление после проверки прервано. Нажмите «Продолжить»." }
+                    }, spawnRefused = { command ->
+                        // Only the user can widen the containment or waive a check; the agent cannot fix either.
+                        taskWorktrees.askSpawnRefusal(project.id, session.id, command)?.also { decision ->
+                            recorder.apply(CodingEvent.Notice(when (decision) {
+                                SpawnRefusalDecision.ALLOW -> "Проверка повторяется с разрешённым запуском программ"
+                                SpawnRefusalDecision.SKIP -> "Проверка пропущена по вашему решению"
+                            }))
+                        }
                     })
                     recorder.apply(CodingEvent.Notice("Результат влит в ${finished.targetBranch}"))
                     current = taskWorktrees.session(project.id, session.id)

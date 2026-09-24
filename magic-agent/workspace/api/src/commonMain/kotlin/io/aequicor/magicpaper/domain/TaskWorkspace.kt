@@ -2,8 +2,18 @@ package io.aequicor.magicpaper.domain
 
 class TaskDestinationChanged : IllegalStateException("Исходная ветка обновилась; требуется повторная проверка слияния")
 
-/** The check process and its cleanup finished; a new user request may repair this known failed result. */
-class TaskWorktreeVerificationFailed(val safeMessage: String) : IllegalStateException(safeMessage)
+/**
+ * The check process and its cleanup finished; a new user request may repair this known failed result.
+ * [spawnRefused] names the check the containment kept from starting a program: neither the agent nor a changed
+ * result can fix that, only the user's grant ([TaskCheckGrants]) or decision to go without it.
+ */
+class TaskWorktreeVerificationFailed(val safeMessage: String, val spawnRefused: List<String>? = null) : IllegalStateException(safeMessage)
+
+/**
+ * The user's decisions on checks the containment refused, for this application visit only: a grant is never
+ * journaled, so after a restart the same refusal is asked about again rather than silently widened.
+ */
+data class TaskCheckGrants(val spawning: Set<List<String>> = emptySet(), val skipped: Set<List<String>> = emptySet())
 
 /**
  * Папку удерживает другой исполнитель. Ожидание ограничено, поэтому занятая папка — действенная
@@ -13,8 +23,9 @@ class TaskWorktreeVerificationFailed(val safeMessage: String) : IllegalStateExce
 class TaskWorkspaceBusy(val path: String, folder: String) : IllegalStateException(
     "$folder $path занята другой сессией. Дождитесь её завершения и нажмите «Продолжить»")
 
-/** Live capabilities are never serialized or recovered from the task journal. */
-data class TaskWorkspaceLeases(val source: WorkspaceLease? = null, val execution: WorkspaceLease? = null)
+/** Live capabilities, the user's check grants among them, are never serialized or recovered from the task journal. */
+data class TaskWorkspaceLeases(val source: WorkspaceLease? = null, val execution: WorkspaceLease? = null,
+    val checks: TaskCheckGrants = TaskCheckGrants())
 
 /** Built only by the task owner from the Pending it has just committed, before invoking this port. */
 data class TaskWorkspaceOperation(

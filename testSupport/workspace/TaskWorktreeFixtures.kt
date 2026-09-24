@@ -20,5 +20,6 @@ fun testTaskWorktreeOwner(workspace: TaskWorkspace, journal: EventJournal = InMe
 fun testTaskWorktreeService(projects: CodingProjectOwner, workspace: TaskWorkspace, leases: PlanningWorkspace,
     journal: EventJournal = InMemoryEventJournal(), payloads: KeyValueStore = InMemoryKeyValueStore(),
     runtime: TaskWorktreeRuntimeAccess = TestTaskWorktreeRuntime(),
-    sessions: TaskWorktreeSessionAccess = CodingTaskWorktreeSessionAccess(projects)): TaskWorktreeService =
-    TaskWorktreeService(sessions, workspace, leases, testTaskWorktreeOwner(workspace, journal, payloads), runtime)
+    sessions: TaskWorktreeSessionAccess = CodingTaskWorktreeSessionAccess(projects),
+    questions: RuntimeQuestionnaireService? = null): TaskWorktreeService =
+    TaskWorktreeService(sessions, workspace, leases, testTaskWorktreeOwner(workspace, journal, payloads), runtime, questions)

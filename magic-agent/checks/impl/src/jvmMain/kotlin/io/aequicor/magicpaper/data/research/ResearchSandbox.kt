@@ -20,6 +20,17 @@ internal interface ResearchSandbox {
         receiptId: String, receiptDirectory: Path, standardOutput: Path,
         authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess = throw NativeCheckUnavailable("Двоичный вывод недоступен")
 
+    /**
+     * A managed-worktree command the user allowed to start programs the containment otherwise refuses. Only a
+     * sandbox that restricts starting programs differs from [prepare] without a filesystem policy.
+     */
+    fun prepareSpawning(command: List<String>, cwd: Path, environment: Map<String, String>,
+        receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess =
+        prepare(command, cwd, environment, null, receiptId, receiptDirectory, authorityRecorder)
+
+    /** Whether a failed command's [output] shows this sandbox refused to start a program; a grant would change it. */
+    fun spawnRefused(output: String): Boolean = false
+
     companion object {
         fun current(): ResearchSandbox = when {
             System.getProperty("os.name").startsWith("Mac") -> MacResearchSandbox
@@ -38,13 +49,19 @@ internal object MacResearchSandbox : ResearchSandbox {
         return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(policy), "--"),
             cwd, environment, receiptId, receiptDirectory, standardOutput)
     }
-    fun profile(policy: ResearchWorkspacePolicy?): String {
+    /**
+     * [spawnGranted] lifts only the `posix_spawn` refusal, for a command the user allowed: Python's framework launcher,
+     * `xargs` in `gradlew` and the Java launcher all start programs through it and fail without it.
+     */
+    fun profile(policy: ResearchWorkspacePolicy?, spawnGranted: Boolean = false): String {
         fun quoted(path: Path) = "\"" + path.toString().replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        require(!spawnGranted || policy == null) { "Запуск программ разрешается только в рабочей копии задачи" }
         return buildString {
             appendLine("(version 1)\n(allow default)")
             // Keep every descendant in the host-owned group, including raw syscall callers.
             // posix_spawn has group/session attributes that bypass setpgid/setsid syscalls.
-            appendLine("(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid SYS_posix_spawn))")
+            if (spawnGranted) appendLine("(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid))")
+            else appendLine("(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid SYS_posix_spawn))")
             appendLine("(deny signal)\n(allow signal (target self) (target children))")
             if (policy == null) return@buildString // Managed worktrees retain ordinary file and network access.
             appendLine("(deny file-write*)")
@@ -62,6 +79,18 @@ internal object MacResearchSandbox : ResearchSandbox {
         return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(policy), "--"),
             cwd, environment, receiptId, receiptDirectory)
     }
+    override fun prepareSpawning(command: List<String>, cwd: Path, environment: Map<String, String>,
+        receiptId: String, receiptDirectory: Path, authorityRecorder: CheckAuthorityRecorder): PreparedCheckProcess {
+        if (!File("/usr/bin/sandbox-exec").canExecute()) throw NativeCheckUnavailable("Seatbelt недоступен")
+        return UnixResearchProcess.prepare(command, listOf("/usr/bin/sandbox-exec", "-p", profile(null, spawnGranted = true), "--"),
+            cwd, environment, receiptId, receiptDirectory)
+    }
+    /**
+     * Seatbelt's refusal has no exit code of its own. A refused `posix_spawn` reads as EPERM ("Operation not
+     * permitted", from `xargs` or the Java launcher) or, from Python's launcher, as a `posix_spawn:` line.
+     */
+    override fun spawnRefused(output: String): Boolean =
+        "Operation not permitted" in output || Regex("(?m)\\bposix_spawn\\b[^\\n]*:").containsMatchIn(output)
 }
 
 internal object LinuxResearchSandbox : ResearchSandbox {

@@ -203,6 +203,8 @@ object CommandCheckMachine : Machine<CommandCheckMachine.State, CommandCheckMach
                 command.arguments != metadata.query.arguments() || command.outputMode != CheckOutputMode.BINARY_STDOUT ||
                 command.environment.isNotEmpty()) return false
         } else if (metadata != null) return false
+        if (command.spawnGranted && (command.policy != CheckPolicy.MANAGED_WORKTREE || command.outputMode != CheckOutputMode.TEXT))
+            return false
         if (command.policy == CheckPolicy.GIT_READ_ONLY && (command.subdirectory != "." ||
             !isCheckGitReadArguments(command.arguments) ||
             command.environment.isNotEmpty() || command.outputMode != CheckOutputMode.BINARY_STDOUT)) return false

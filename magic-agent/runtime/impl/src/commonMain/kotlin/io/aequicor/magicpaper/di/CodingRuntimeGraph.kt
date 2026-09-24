@@ -76,7 +76,7 @@ class CodingRuntimeGraph(
             taskWorktreeOwner, object : TaskWorktreeRuntimeAccess {
                 override suspend fun requireQuiescent(sessionId: String) = tree.requireTaskQuiescent(sessionId)
                 override suspend fun releaseUnownedLeases() = tree.releaseUnownedRootLeases()
-            })
+            }, toolQuestions)
     }
     private val toolAuthority = OrganismToolAuthority(organisms, codingProjects, codingRuntime)
     val mediaTools = mediaToolFactory.create(toolReceipts, mediaGeneration, mediaAllowed,

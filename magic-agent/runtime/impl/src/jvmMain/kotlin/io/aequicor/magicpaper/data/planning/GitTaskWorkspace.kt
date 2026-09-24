@@ -269,16 +269,27 @@ class GitTaskWorkspace(
         AppLog.info("coding.worktree", "verification.started", step + mapOf("commit" to record.mergeCommit.take(12),
             "count" to record.checks.size.toString(), "mode" to "handoff_checks"))
         val before = snapshot("before")
+        val grants = operation.leases.checks
         for ((index, args) in record.checks.withIndex()) {
             require(args.isNotEmpty() && args.none { '\u0000' in it }) { "Некорректная команда проверки" }
             // Ключи вне allowlist AppLog санитируются до `[redacted]`: программу называет имя файла, аргументы и вывод — только TRACE.
             val check = step + mapOf("index" to index.toString(), "executable" to programName(args.first()),
                 "argumentCount" to (args.size - 1).toString())
-            AppLog.info("coding.worktree", "check.started", check)
+            if (args in grants.skipped) {
+                AppLog.info("coding.worktree", "check.skipped", check + mapOf("reason" to "user"))
+                continue
+            }
+            val spawnGranted = args in grants.spawning
+            AppLog.info("coding.worktree", "check.started", check + mapOf("mode" to if (spawnGranted) "spawn_granted" else "contained"))
             val at = System.nanoTime()
-            val result = commands().check(dir, args)
+            val result = commands().check(dir, args, spawnGranted)
             val code = result.exitCode
-            val status = if (result.blockedReason != null) "blocked" else if (code == 0) "passed" else "failed"
+            val status = when {
+                result.blockedReason != null -> "blocked"
+                code == 0 -> "passed"
+                result.spawnRefused -> "spawn_refused"
+                else -> "failed"
+            }
             AppLog.info("coding.worktree", "check.finished", check + mapOf("result" to code.toString(), "status" to status,
                 "durationMs" to elapsed(at), "bytes" to result.output.toByteArray(Charsets.UTF_8).size.toString()))
             if (status != "passed") AppLog.trace("coding.worktree", "check.output", check) {
@@ -289,14 +300,16 @@ class GitTaskWorkspace(
                 }
             }
             if (code != 0 || result.blockedReason != null) {
-                finished(if (status == "blocked") "check_blocked" else "check_failed", mapOf("index" to index.toString()))
+                finished("check_$status", mapOf("index" to index.toString()))
                 // Голый вердикт без причины вынуждает агента и пользователя угадывать; ограниченный хвост вывода уже санирован.
                 val detail = checkFailureDetail(result.output)
+                val refused = status == "spawn_refused"
                 throw TaskWorktreeVerificationFailed(buildString {
-                    append("Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение")
+                    append(if (refused) "Песочница проверок не дала команде запустить программу"
+                        else "Проверка результата завершилась с ошибкой. Исправьте изменения и повторите продолжение")
                     result.blockedReason?.let { append('\n').append(PlanningDiagnostics.redact(it)) }
                     if (detail.isNotEmpty()) append('\n').append(detail)
-                })
+                }, spawnRefused = args.takeIf { refused })
             }
         }
         if (snapshot("after") != before) {

@@ -91,7 +91,12 @@ fun isCheckGitReadArguments(arguments: List<String>): Boolean {
     val subdirectory: String = ".", val policy: CheckPolicy = CheckPolicy.PROTECTED_PROJECT,
     val outputMode: CheckOutputMode = CheckOutputMode.TEXT, val environment: Map<String, String> = emptyMap(),
     val protectedResource: String? = null, val metadataSource: CheckMetadataSource? = null,
-    val affectedResources: Set<String> = emptySet())
+    val affectedResources: Set<String> = emptySet(),
+    /**
+     * The user allowed this managed-worktree command to start programs the way the containment otherwise forbids
+     * (`posix_spawn` under Seatbelt). Its descendants can then leave the process group the stop proof watches.
+     */
+    val spawnGranted: Boolean = false)
 val CheckCommand.resource: String get() = protectedResource ?: workspace
 /** Exact affected directories, including cwd and the lease owner. Includes destinations not yet created. */
 val CheckCommand.resources: Set<String> get() = affectedResources + workspace + resource
@@ -99,8 +104,12 @@ val CheckCommand.resources: Set<String> get() = affectedResources + workspace + 
 @Serializable data class CheckOutputRef(val id: String, val bytes: Long, val digest: String) {
     companion object { const val MAX_BYTES = 32L * 1024 * 1024 }
 }
+/**
+ * [spawnRefused]: the command failed and its output shows the containment refused to start a program. Only a grant
+ * ([CheckCommand.spawnGranted]) can change that outcome, so the caller asks the user rather than the agent.
+ */
 @Serializable data class CheckResult(val output: String, val exitCode: Int?, val blockedReason: String? = null,
-    val binaryOutput: CheckOutputRef? = null)
+    val binaryOutput: CheckOutputRef? = null, val spawnRefused: Boolean = false)
 data class CheckProgress(val ref: CheckRef, val output: String)
 
 /** Opaque native receipt. The PID is diagnostic identity, never proof that a process group stopped. */

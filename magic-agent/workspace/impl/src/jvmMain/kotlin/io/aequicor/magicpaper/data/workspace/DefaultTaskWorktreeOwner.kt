@@ -117,6 +117,7 @@ class DefaultTaskWorktreeOwner(
     private suspend fun execute(store: TaskWorktreeInputJournal, effect: TaskWorktreeMachine.Effect.Execute, leases: TaskWorkspaceLeases) {
         val operation = effect.pending
         var started = false
+        var refusal: TaskWorktreeVerificationFailed? = null
         try {
             currentCoroutineContext().ensureActive()
             // Validate presence before crossing the external boundary. The adapter validates exact live handles.
@@ -134,7 +135,7 @@ class DefaultTaskWorktreeOwner(
                 TaskWorktreeMachine.Operation.INTEGRATE -> Input.Fact.Integrated(operation.id, workspace.integrate(effect.record, authority))
                 TaskWorktreeMachine.Operation.VERIFY -> {
                     try { workspace.verify(effect.record, authority); Input.Fact.Verified(operation.id) }
-                    catch (failed: TaskWorktreeVerificationFailed) { Input.Fact.VerificationFailed(operation.id, failed.safeMessage) }
+                    catch (failed: TaskWorktreeVerificationFailed) { refusal = failed; Input.Fact.VerificationFailed(operation.id, failed.safeMessage) }
                 }
                 TaskWorktreeMachine.Operation.DELIVER -> { workspace.deliver(effect.record, authority); Input.Fact.Delivered(operation.id) }
             }
@@ -145,7 +146,8 @@ class DefaultTaskWorktreeOwner(
             if (fact is Input.Fact.VerificationFailed) {
                 AppLog.info("coding.worktree", "verification.failed", mapOf("operationId" to operation.id,
                     "sessionId" to store.state.owner.sessionId, "entityId" to effect.record.taskId))
-                throw TaskWorktreeVerificationFailed(fact.message)
+                // The journal keeps the report; which check the containment refused is live evidence for this caller.
+                throw TaskWorktreeVerificationFailed(fact.message, refusal?.spawnRefused)
             }
         } catch (failure: Exception) {
             if (failure is TaskWorktreeVerificationFailed && store.state.pending == null && !store.state.persistenceUnknown) throw failure
