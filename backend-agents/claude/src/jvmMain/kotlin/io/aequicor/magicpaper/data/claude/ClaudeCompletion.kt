@@ -39,7 +39,9 @@ internal class ClaudeCompletion(
         try {
             system.writeText(listOf(request.baseInstructions, request.systemInstructions).filter { it.isNotBlank() }.joinToString("\n\n"))
             val launch = ClaudeCommand.completion(file.path, request.modelId, request.effort, system.path)
-            val answer = withTimeoutOrNull(TimeUnit.SECONDS.toMillis(request.timeoutSeconds.toLong().coerceAtLeast(1))) {
+            // 0 is the profile's default and means no limit: read as a floor of one second it failed every answer.
+            if (request.timeoutSeconds <= 0) return@withContext answer(launch, message(request.input), onActivity, onUsage)
+            val answer = withTimeoutOrNull(TimeUnit.SECONDS.toMillis(request.timeoutSeconds.toLong())) {
                 answer(launch, message(request.input), onActivity, onUsage)
             }
             answer ?: throw NativeCompletionFailure("Claude Code не ответил вовремя. Повторите запрос.")

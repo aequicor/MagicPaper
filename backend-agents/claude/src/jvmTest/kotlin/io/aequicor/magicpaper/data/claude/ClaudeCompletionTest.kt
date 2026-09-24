@@ -23,9 +23,9 @@ class ClaudeCompletionTest {
         val steps = CopyOnWriteArrayList<CodingStep>()
         val usage = CopyOnWriteArrayList<UsageCallResult>()
         /** Records argv, stdin and the working directory, then plays [stream]. */
-        fun script(stream: String, tail: String = "") {
+        fun script(stream: String, tail: String = "", before: String = "") {
             binary.writeText("#!/bin/sh\nD=\"${home.path}\"\nprintf '%s\\n' \"\$@\" > \"\$D/args\"\npwd > \"\$D/cwd\"\n" +
-                "echo \$\$ > \"\$D/pid\"\ncat > \"\$D/stdin\"\ncat <<'JSON'\n$stream\nJSON\n$tail\n")
+                "echo \$\$ > \"\$D/pid\"\ncat > \"\$D/stdin\"\n$before\ncat <<'JSON'\n$stream\nJSON\n$tail\n")
             binary.setExecutable(true)
         }
         fun completion() = ClaudeCompletion(ClaudeExecutable(binary.path), home.resolve("chat"),
@@ -117,6 +117,15 @@ class ClaudeCompletionTest {
             assertContains(failure.message.orEmpty(), "не ответил вовремя")
             val pid = f.home.resolve("pid").readText().trim().toLong()
             assertFalse(ProcessHandle.of(pid).map { it.isAlive }.orElse(false), "The CLI must not outlive the request")
+        }
+    }
+
+    /** A profile's default timeout is 0; read as a one-second limit it failed every real answer, session titles included. */
+    @Test fun zeroTimeoutWaitsForASlowAnswer() {
+        if (windows) return
+        fixture().use { f ->
+            f.script(answer, before = "sleep 2")
+            assertEquals("Солнечно.", f.complete(timeoutSeconds = 0))
         }
     }
 

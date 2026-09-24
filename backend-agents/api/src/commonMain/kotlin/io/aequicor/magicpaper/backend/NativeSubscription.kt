@@ -11,6 +11,7 @@ data class NativeCompletionRequest(
     val baseInstructions: String,
     val input: JsonArray,
     val effort: String?,
+    /** The profile's wait for an answer; 0 means no limit, as for every other transport. */
     val timeoutSeconds: Int,
 )
 
