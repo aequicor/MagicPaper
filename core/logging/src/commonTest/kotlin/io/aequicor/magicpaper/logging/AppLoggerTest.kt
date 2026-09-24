@@ -54,6 +54,20 @@ class AppLoggerTest {
         assertEquals(1, log.history().size)
     }
 
+    @Test fun entriesAfterAMarkerAreFoundOnceTheHistoryIsFullAndAfterTheMarkerIsDropped() {
+        val log = AppLogger(sink = AppLogSink {}, retention = 3)
+        listOf("a", "b", "c").forEach { log.info("runtime", it) }
+        val full = log.history()
+        val marker = full.last()
+        log.info("runtime", "d")
+        assertEquals(full.size, log.history().size, "a full history keeps its size, so its size names no position")
+        assertEquals(listOf("d"), log.history(after = marker).map { it.event })
+        listOf("e", "f").forEach { log.info("runtime", it) }
+        assertEquals(listOf("d", "e", "f"), log.history(after = marker).map { it.event }, "a dropped marker leaves only newer entries")
+        assertEquals(log.history(), log.history(after = null))
+        assertTrue(log.history(after = log.history().last()).isEmpty())
+    }
+
     @Test fun normalEventsKeepOnlySafeMetadataAndOpaqueCorrelation() {
         val log = AppLogger(sink = AppLogSink {})
         val sensitiveId = "questionnaire:password is private"

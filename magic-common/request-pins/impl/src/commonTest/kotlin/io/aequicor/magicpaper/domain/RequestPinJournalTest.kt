@@ -111,10 +111,8 @@ class RequestPinJournalTest {
     }
 
     /** What the pin service reported after [marker], the last entry seen before the step under test. */
-    private fun reportedSince(marker: AppLogEntry?): List<AppLogEntry> {
-        val all = AppLog.history()
-        return (if (marker == null) all else all.dropWhile { it !== marker }.drop(1)).filter { it.component == "request-pins" }
-    }
+    private fun reportedSince(marker: AppLogEntry?): List<AppLogEntry> =
+        AppLog.history(after = marker).filter { it.component == "request-pins" }
 
     /** An append whose outcome can never be read back, so the owner has to stop at persistence-unknown. */
     private fun unreadable(backing: InMemoryEventJournal, refuse: Boolean = false) = object : EventJournal by backing {

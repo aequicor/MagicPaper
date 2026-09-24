@@ -92,12 +92,12 @@ class DefaultCommandChecksTest {
                 driver.cleanupFailure = if (cleanupFails) IOException("process group still alive") else null
                 val released = CompletableDeferred<Unit>()
                 driver.onReleased = { released.complete(Unit) }
-                val before = AppLog.history().size
+                val before = AppLog.history().lastOrNull()
                 val call = command(path).let { it.copy(ref = it.ref.copy(callId = "navigated-$cleanupFails")) }
                 val job = launch(Dispatchers.Default) { owner.run(call) }
                 released.await()
                 job.cancelAndJoin()
-                val entries = AppLog.history().drop(before).filter { it.component == "checks" }
+                val entries = AppLog.history(after = before).filter { it.component == "checks" }
                 if (!cleanupFails) {
                     assertEquals(listOf("run.cancelled"), entries.map { it.event }, "a settled cancellation is not a failure")
                     assertEquals(LogLevel.INFO, entries.single().level)

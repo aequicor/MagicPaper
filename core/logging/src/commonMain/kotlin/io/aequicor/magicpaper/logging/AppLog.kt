@@ -65,6 +65,15 @@ class AppLogger(
     fun isEnabled(level: LogLevel): Boolean = lock.locked { level.ordinal <= selectedLevel.ordinal }
     fun history(): List<AppLogEntry> = lock.locked { retained.toList() }
 
+    /**
+     * What was retained after [marker], an entry an earlier [history] returned; everything retained when it is null.
+     * The count of retained entries stops growing once the history is full, so it cannot tell new entries from old
+     * ones. Only the oldest are ever dropped, so a marker no longer retained means every retained entry is newer.
+     */
+    fun history(after: AppLogEntry?): List<AppLogEntry> = lock.locked {
+        retained.drop(retained.indexOfFirst { it === after } + 1)
+    }
+
     fun info(component: String, event: String, fields: Map<String, String> = emptyMap()) =
         record(LogLevel.INFO, component, event, fields)
 
@@ -136,6 +145,7 @@ object AppLog {
         get() = logger.level
         set(value) { logger.level = value }
     fun history(): List<AppLogEntry> = logger.history()
+    fun history(after: AppLogEntry?): List<AppLogEntry> = logger.history(after)
     fun isEnabled(level: LogLevel): Boolean = logger.isEnabled(level)
     fun info(component: String, event: String, fields: Map<String, String> = emptyMap()) = logger.info(component, event, fields)
     fun debug(component: String, event: String, fields: Map<String, String> = emptyMap()) = logger.debug(component, event, fields)

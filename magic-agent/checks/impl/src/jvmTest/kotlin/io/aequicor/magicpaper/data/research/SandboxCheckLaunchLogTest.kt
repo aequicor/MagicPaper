@@ -43,13 +43,13 @@ class SandboxCheckLaunchLogTest {
         val workspace = Files.createDirectory(root.resolve("project"))
         val driver = SandboxCheckDriver(root.resolve("checks"), 1234) { sandbox }
         val previous = AppLog.level
-        val before = AppLog.history().size
+        val before = AppLog.history().lastOrNull()
         try {
             AppLog.level = level
             val check = driver.prepare(CheckCommand(CheckRef(CheckScope("p", "s", "operation", 0), "call"), workspace.toString(),
                 arguments, policy = CheckPolicy.MANAGED_WORKTREE), "receipt", CheckAuthorityRecorder { _, _ -> error("Unexpected ACL") })
             check.stopAndConfirm(); check.discard()
-            AppLog.history().drop(before).filter { it.component == "checks" && it.event.startsWith("run.prepared") }
+            AppLog.history(after = before).filter { it.component == "checks" && it.event.startsWith("run.prepared") }
         } finally { AppLog.level = previous; driver.cleanup(); root.toFile().deleteRecursively() }
     }
 

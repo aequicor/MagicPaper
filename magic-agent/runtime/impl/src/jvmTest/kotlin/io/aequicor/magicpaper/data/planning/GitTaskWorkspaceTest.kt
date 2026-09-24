@@ -8,6 +8,7 @@ import io.aequicor.magicpaper.data.coding.JsonCodingProjectRepository
 import io.aequicor.magicpaper.data.storage.InMemoryKeyValueStore
 import io.aequicor.magicpaper.data.storage.InMemoryEventJournal
 import io.aequicor.magicpaper.logging.AppLog
+import io.aequicor.magicpaper.logging.AppLogEntry
 import io.aequicor.magicpaper.logging.LogLevel
 import java.io.File
 import java.nio.file.Files
@@ -381,9 +382,9 @@ class GitTaskWorkspaceTest {
         val level = AppLog.level
         AppLog.level = LogLevel.INFO
         try {
-            fun steps(from: Int) = AppLog.history().drop(from).filter { it.component == "coding.worktree" &&
+            fun steps(after: AppLogEntry?) = AppLog.history(after).filter { it.component == "coding.worktree" &&
                 (it.event.startsWith("verification.") || it.event.startsWith("check.")) }
-            val passingFrom = AppLog.history().size
+            val passingFrom = AppLog.history().lastOrNull()
             checked.verify(record.copy(checks = listOf(listOf("gradlew.bat", "test"))), "passing-verification")
             val passing = steps(passingFrom)
             assertEquals(listOf("verification.started", "verification.snapshot", "check.started", "check.finished",
@@ -395,7 +396,7 @@ class GitTaskWorkspaceTest {
             assertEquals("passed", passing.last().fields["result"])
             assertEquals(1, passing.map { it.fields["operationId"] }.toSet().size, "every step names the same operation")
             assertTrue(passing.all { it.fields["operationId"]?.startsWith("id-") == true && it.fields["entityId"] != null })
-            val changingFrom = AppLog.history().size
+            val changingFrom = AppLog.history().lastOrNull()
             assertFails { checked.verify(record.copy(checks = listOf(listOf("write-stray-file"))), "changing-verification") }
             assertEquals("files_changed", steps(changingFrom).last().fields["result"])
         } finally { AppLog.level = level }

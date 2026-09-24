@@ -136,9 +136,8 @@ class RuntimeLifecycleTest {
         val events = java.util.Collections.synchronizedList(mutableListOf<String>())
         val replayed = CompletableDeferred<Unit>()
         val marker = io.aequicor.magicpaper.logging.AppLog.history().lastOrNull()
-        fun chatRestored() = io.aequicor.magicpaper.logging.AppLog.history().let { history ->
-            history.drop(history.indexOfFirst { it === marker } + 1)
-        }.any { it.component == "runtime" && it.event == "phase.finished" && it.fields["phase"] == "chat" }
+        fun chatRestored() = io.aequicor.magicpaper.logging.AppLog.history(after = marker)
+            .any { it.component == "runtime" && it.event == "phase.finished" && it.fields["phase"] == "chat" }
         val runtime = buildRuntime(InMemoryKeyValueStore(), persistenceStores(InMemoryDurableByteStore()), bridge,
             NavigationSessionConfig(), runtimeExtensions = { listOf(RestoringExtension(events) { replayed.await() }) })
         try {
