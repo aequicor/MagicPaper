@@ -86,8 +86,20 @@ class SessionTitleService(
                 attempted.remove(session.id) // отмена допускает следующую попытку
                 throw e
             } catch (e: Exception) {
-                attempted.remove(session.id) // модель недоступна — попробуем при следующем обновлении
-                AppLog.error("session", "title.failed", e, fields + ("attempt" to attempt.toString()))
+                val rejection = e.transportRejection()
+                if (rejection?.blocksAutomaticRetry == true) {
+                    // Провайдер отказал в доступе к модели: повтор вернёт тот же отказ, поэтому
+                    // попытки исчерпаны сразу и каждая перезагрузка списка не платит за него снова.
+                    attempts[session.id] = MAX_TITLE_ATTEMPTS
+                } else {
+                    attempted.remove(session.id) // модель недоступна — попробуем при следующем обновлении
+                }
+                val logged = fields + ("attempt" to attempt.toString())
+                // Сообщение `LlmTransportException` содержит тело ответа провайдера: в журнал идут
+                // только его машинные поля. Stack остаётся для сбоев, которые пришли не от провайдера.
+                if (rejection != null) AppLog.error("session", "title.failed",
+                    logged + rejection.logFields() + ("causeType" to e::class.simpleName.orEmpty()))
+                else AppLog.error("session", "title.failed", e, logged)
             }
         }
     }

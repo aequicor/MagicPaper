@@ -106,5 +106,19 @@ class PlanningRetryPolicyTest {
 
     private class CyclicCause : IllegalStateException("цикл") { override val cause: Throwable get() = this }
 
-    private fun transport(status: Int) = LlmTransportException(status, null, "тело ответа провайдера")
+    /**
+     * Z.AI отвечает статусом 429 и на «повторите позже» (коды 1302/1305), и на отказ в доступе
+     * к модели (код 1113 «Insufficient balance or no resource package»). Для планировщика это
+     * разные события: второе не лечится ни ожиданием, ни повтором.
+     */
+    @Test fun anEntitlementRefusalStopsAutomaticRetriesWhileARateLimitDoesNot() {
+        assertTrue(transport(429, ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT)).blocksAutomaticRetry)
+        assertFalse(transport(429, ProviderRejection(code = "1302")).blocksAutomaticRetry)
+        assertFalse(transport(429).blocksAutomaticRetry)
+        assertFalse(transport(503).blocksAutomaticRetry)
+        assertFalse(transport(400, ProviderRejection(param = "top_p", refusal = ProviderRefusal.PARAMETER)).blocksAutomaticRetry)
+    }
+
+    private fun transport(status: Int, rejection: ProviderRejection? = null) =
+        LlmTransportException(status, null, "тело ответа провайдера", rejection)
 }

@@ -42,11 +42,15 @@ internal fun providerRejection(body: String, json: Json = REJECTION_JSON): Provi
  * всё, что им не соответствует, остаётся [ProviderRefusal.OTHER] и показывается общим текстом.
  * Переполнение контекста важнее имени параметра — провайдеры сообщают о нём как об
  * «недопустимом параметре», а действие человека другое.
+ * Отказ в доступе по балансу или пакету ресурсов проверяется первым: он приходит и статусом
+ * 429, и вместе с именем модели («no resource package»), но ни повтор, ни правка параметра
+ * его не снимают — Z.AI Coding Plan отвечает так на общий адрес `/api/paas/v4` кодом 1113.
  */
 private fun refusal(code: String?, param: String?, message: String?): ProviderRefusal {
     val tokens = listOfNotNull(code, param).joinToString(" ").lowercase()
     val text = message.orEmpty().lowercase()
     return when {
+        ENTITLEMENT.containsMatchIn(text) || "insufficient_quota" in tokens -> ProviderRefusal.ENTITLEMENT
         CONTEXT_LENGTH.containsMatchIn(text) || "context_length_exceeded" in tokens -> ProviderRefusal.CONTEXT_LENGTH
         TOOLS.containsMatchIn(text) -> ProviderRefusal.TOOLS
         MODEL.containsMatchIn(text) || "model_not_found" in tokens -> ProviderRefusal.MODEL
@@ -79,6 +83,11 @@ private val CONTEXT_LENGTH = Regex("maximum context length|context (?:length|win
     "too many tokens|prompt is too long|reduce the length|context_length_exceeded")
 private val TOOLS = Regex("(?:tools?|functions?|function calling)[^.\\n]{0,60}(?:not supported|unsupported|not enabled|disabled|invalid)")
 private val MODEL = Regex("model[^.\\n]{0,60}(?:not (?:found|exist|supported|available)|does not exist|unknown|no such)")
+
+/** Формулировки отказа в доступе по оплате у Z.AI, OpenAI, Alibaba и DeepSeek. */
+private val ENTITLEMENT = Regex(
+    "insufficient balance|insufficient funds|insufficient[_ ]quota|no resource package|resource package|" +
+        "arrearage|account is overdue|credit balance is too low|balance is not enough|please recharge")
 private const val ERROR_BODY_SCAN = 8_192
 private const val MESSAGE_SCAN = 512
 private val REJECTION_JSON = Json { ignoreUnknownKeys = true }

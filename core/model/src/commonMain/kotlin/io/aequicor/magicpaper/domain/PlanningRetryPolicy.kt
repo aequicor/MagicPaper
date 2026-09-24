@@ -21,6 +21,14 @@ class LlmTransportException(
      * неподтверждённым, как и в `HttpMediaGenerationGateway`.
      */
     val confirmedRejection: Boolean get() = statusCode in 400..499 && statusCode != 408
+
+    /**
+     * Автоматический повтор не поможет: причину меняет только человек — настройка подключения
+     * или оплата. Так ведёт себя отказ в доступе к модели, который провайдеры присылают и
+     * статусом 429 (Z.AI кодом 1113 сообщает им об отсутствии пакета ресурсов): повтор
+     * дословно вернёт тот же отказ и только потратит бюджет попыток.
+     */
+    val blocksAutomaticRetry: Boolean get() = rejection?.refusal == ProviderRefusal.ENTITLEMENT
 }
 
 /**

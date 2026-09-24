@@ -46,6 +46,15 @@ class ProviderRejectionTest {
         assertNull(providerRejection("""{"error":{"code":"InvalidParameter","message":"The parameter is missing PRIVATE"}}""")?.param)
         // Свободный текст под видом кода отбрасывается, а не сокращается.
         assertNull(providerRejection("""{"error":{"code":"the model said PRIVATE"}}""")?.code)
+        // Отказ в доступе по оплате: Z.AI присылает его статусом 429 и кодом 1113.
+        val zai = providerRejection("""{"error":{"code":"1113","message":"Insufficient balance or no resource package. Please recharge."}}""")
+        assertEquals("1113", zai?.code)
+        assertEquals(ProviderRefusal.ENTITLEMENT, zai?.refusal)
+        assertEquals(ProviderRefusal.ENTITLEMENT, providerRejection(
+            """{"error":{"code":"insufficient_quota","message":"You exceeded your current credits list."}}""")?.refusal)
+        // Ограничение числа запросов тем же статусом остаётся преходящим: кода оплаты в нём нет.
+        assertEquals(ProviderRefusal.OTHER, providerRejection(
+            """{"error":{"code":"1302","message":"Rate limit reached for requests"}}""")?.refusal)
         assertNull(providerRejection("HTTP/1.1 502 Bad Gateway"))
         assertNull(providerRejection(""))
         assertNull(providerRejection("""{"error":{}}"""))
@@ -73,10 +82,37 @@ class ProviderRejectionTest {
         assertFalse("PRIVATE" in reason, reason)
     }
 
+    /**
+     * Живой отказ Z.AI: ключ подписки Coding Plan на общем адресе `/api/paas/v4` получает 429
+     * с кодом 1113, хотя квота плана цела. Статус здесь означает не «позже», а «нет доступа».
+     */
+    @Test fun zaiEntitlementRefusalArrivesAs429AndIsNotARateLimit() = runTest {
+        val body = """{"error":{"code":"1113","message":"Insufficient balance or no resource package. Please recharge."}}"""
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = UnconfinedTestDispatcher(testScheduler)
+            addHandler { respond(body, HttpStatusCode.TooManyRequests) }
+        }))
+        val failure = assertFailsWith<LlmTransportException> {
+            client.use { OpenAiCompatibleGateway(it, Json).complete(profile, listOf(LlmMessage(LlmChatRole.USER, "привет"))) }
+        }
+        assertEquals(429, failure.statusCode)
+        assertEquals(ProviderRefusal.ENTITLEMENT, failure.rejection?.refusal)
+        assertTrue(failure.blocksAutomaticRetry, "Повтор вернёт тот же отказ")
+        assertEquals(mapOf("status" to "429", "code" to "1113", "refusal" to "entitlement"), failure.logFields())
+        assertContains(failure.safeReason(), "адрес подключения")
+        assertFalse("recharge" in failure.safeReason(), failure.safeReason())
+    }
+
     @Test fun safeReasonNamesTheActionForEveryRefusalClass() {
         assertEquals("Провайдер не принял ключ подключения. Проверьте его в настройках.", transport(401).safeReason())
         assertContains(transport(404).safeReason(), "не знает выбранную модель")
         assertContains(transport(429).safeReason(), "Повторите позже")
+        // Тот же 429, но с отказом в доступе: совет «повторите позже» отправил бы человека ждать
+        // вместо того, чтобы сменить адрес подключения или модель.
+        val entitlement = transport(429, ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT))
+        assertContains(entitlement.safeReason(), "адрес подключения")
+        assertFalse("Повторите позже" in entitlement.safeReason(), entitlement.safeReason())
+        assertTrue(entitlement.blocksAutomaticRetry)
         assertContains(transport(400, ProviderRejection(param = "top_p", refusal = ProviderRefusal.PARAMETER)).safeReason(), "top_p")
         assertContains(transport(400, ProviderRejection(code = "InvalidParameter")).safeReason(), "InvalidParameter")
         assertContains(transport(400, ProviderRejection(code = "InvalidParameter", refusal = ProviderRefusal.CONTEXT_LENGTH)).safeReason(),

@@ -54,9 +54,10 @@ class LlmMilestoneVerifier(
                 return AcceptanceReview(emptyList(), PlanningIssue(IssueKind.TRANSIENT, "Таймаут проверки"))
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: LlmTransportException) {
-                val temporary = e.statusCode == 429 || e.statusCode >= 500
+                // Отказ в доступе к модели приходит и статусом 429, но повтор его не снимает.
+                val temporary = (e.statusCode == 429 || e.statusCode >= 500) && !e.blocksAutomaticRetry
                 return AcceptanceReview(emptyList(), PlanningIssue(if (temporary) IssueKind.TRANSIENT else IssueKind.CONFIGURATION,
-                    e.message.orEmpty(), requiresUser = !temporary))
+                    if (temporary) e.message.orEmpty() else e.safeReason(), requiresUser = !temporary))
             } catch (e: Exception) { correction = "Исправь ответ: ${e.message}" }
             if (!PlanningRetryPolicy.canRetry(retries, retryLimit())) break
             retries = PlanningRetryPolicy.nextRetry(retries)
@@ -85,9 +86,11 @@ class LlmMilestoneVerifier(
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             try { return modelVerdict(milestone, goal, report, profile, failure) }
             catch (e: LlmTransportException) {
-                val temporary = e.statusCode == 429 || e.statusCode >= 500
-                return Verdict(false, e.message.orEmpty(), PlanningIssue(if (temporary) IssueKind.TRANSIENT else IssueKind.CONFIGURATION,
-                    e.message.orEmpty(), requiresUser = !temporary && e.statusCode !in listOf(401, 403)))
+                val temporary = (e.statusCode == 429 || e.statusCode >= 500) && !e.blocksAutomaticRetry
+                return Verdict(false, if (temporary) e.message.orEmpty() else e.safeReason(),
+                    PlanningIssue(if (temporary) IssueKind.TRANSIENT else IssueKind.CONFIGURATION,
+                        if (temporary) e.message.orEmpty() else e.safeReason(),
+                        requiresUser = !temporary && e.statusCode !in listOf(401, 403)))
             }
             catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 return Verdict(false, "Таймаут проверки", PlanningIssue(IssueKind.TRANSIENT, "Таймаут проверки"))

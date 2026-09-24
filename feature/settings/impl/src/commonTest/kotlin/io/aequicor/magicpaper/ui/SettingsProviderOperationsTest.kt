@@ -41,6 +41,28 @@ class SettingsProviderOperationsTest {
         } finally { fixture.service.close(); Dispatchers.resetMain() }
     }
 
+    /**
+     * Отказ провайдера в доступе к модели показывается в настройках действием: человек меняет
+     * адрес подключения или модель, а не повторяет запрос, который провайдер отвергнет снова.
+     */
+    @Test fun providerRefusalIsShownAsAnActionNotAsARetry() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(this)
+        try {
+            fixture.service.start()
+            fixture.complete = {
+                throw LlmTransportException(429, null, "HTTP 429: PRIVATE_BALANCE_BODY",
+                    ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT))
+            }
+            fixture.service.testConnection(profile); runCurrent()
+            val shown = fixture.service.state.value.editorModelsError.orEmpty()
+            assertContains(shown, "адрес подключения")
+            assertFalse("PRIVATE_BALANCE_BODY" in shown, shown)
+            assertFalse("Повторите позже" in shown, shown)
+            assertFalse(fixture.service.state.value.connectionTesting)
+        } finally { fixture.service.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun catalogCompletionAfterProfileDeletionCannotRestoreIt() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = Fixture(this)

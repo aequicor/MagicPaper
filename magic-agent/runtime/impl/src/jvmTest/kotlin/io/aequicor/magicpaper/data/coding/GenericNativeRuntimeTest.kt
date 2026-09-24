@@ -248,6 +248,28 @@ class GenericNativeRuntimeTest {
             assertTrue(events.none { it is CodingEvent.Failed }, events.toString())
         } finally { root.deleteRecursively() }
     }
+    /**
+     * Отказ провайдера не должен тонуть в общем совете «проверьте состояние движка»: в ленту
+     * попадает действие из [safeReason], а тело ответа провайдера остаётся за её пределами.
+     */
+    @Test fun aProviderRefusalReachesTheTimelineAsAnActionableReason() = runBlocking {
+        val root = Files.createTempDirectory("generic-native-refusal").toFile()
+        try {
+            val agent = Agent(onRun = {
+                throw LlmTransportException(429, null,
+                    "HTTP 429: {\"error\":{\"code\":\"1113\",\"message\":\"PRIVATE_BALANCE_BODY\"}}",
+                    ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT))
+            })
+            val runtime = GenericNativeRuntime(agent, Library, {}, { it }, null,
+                testQuestionnaireFactory().create("fixture", null), testBrowserSessions, testCommandChecks)
+            val events = runtime.run(project(root.path), session, "Prompt", profile).toList()
+            val failed = events.filterIsInstance<CodingEvent.Failed>().single()
+            assertContains(failed.message, "адрес подключения")
+            assertFalse("PRIVATE_BALANCE_BODY" in failed.message, failed.message)
+            assertTrue(events.any { it is CodingEvent.Finished }, events.toString())
+        } finally { root.deleteRecursively() }
+    }
+
     private val profile = LlmProfile("local", "Local", modelId = "fixture", baseUrl = "http://127.0.0.1:1", apiKey = "fixture")
     private val session = CodingSession("session", "project", "Session", 0, engine = CodingEngine.PI)
     private fun project(path: String) = CodingProject("project", "Project", path, 0)

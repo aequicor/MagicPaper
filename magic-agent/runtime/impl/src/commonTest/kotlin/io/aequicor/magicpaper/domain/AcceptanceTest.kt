@@ -51,6 +51,28 @@ class AcceptanceTest {
         assertEquals(CheckStatus.PASS, result.findings.single().status)
     }
 
+    /**
+     * Отказ провайдера в доступе к модели приходит статусом 429, но повтор его не снимает:
+     * проверка сразу остаётся на человеке, а в план попадает действие, а не тело ответа.
+     */
+    @Test fun entitlementRefusalEndsTheReviewAtThePersonWithoutRetries() = runTest {
+        var calls = 0
+        val gateway = object : LlmGateway {
+            override suspend fun complete(profile: LlmProfile, messages: List<LlmMessage>): String {
+                calls++
+                throw LlmTransportException(429, null, "HTTP 429: PRIVATE_BALANCE_BODY",
+                    ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT))
+            }
+        }
+        val result = LlmMilestoneVerifier(gateway, retryLimit = { 3 }).review(Milestone("final", "Final"), listOf(review),
+            "Goal", "Отчёт", LlmProfile("p", "P", baseUrl = "http://test", modelId = "m"))
+        assertEquals(1, calls, "Повтор вернул бы тот же отказ")
+        assertEquals(IssueKind.CONFIGURATION, result.issue?.kind)
+        assertTrue(result.issue!!.requiresUser)
+        assertFalse("PRIVATE_BALANCE_BODY" in result.issue!!.message, result.issue!!.message)
+        assertContains(result.issue!!.message, "адрес подключения")
+    }
+
     @Test fun missingStructuredResultsFailClosedAfterBoundedRepair() = runTest {
         var calls = 0
         val gateway = object : LlmGateway {

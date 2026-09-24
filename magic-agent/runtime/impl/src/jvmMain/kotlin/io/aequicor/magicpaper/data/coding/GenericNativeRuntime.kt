@@ -182,9 +182,13 @@ internal class GenericNativeRuntime(
             // Do not flatten Unknown into Failed+Finished: the parent must keep its recovery fence.
             throw NativeRunRecoveryRequired(unknown.recovery.toRuntime(), unknown)
         } catch (failure: Throwable) {
+            // Отказ провайдера человек должен увидеть причиной, а не общим советом проверить движок:
+            // в журнал идут машинные поля отказа, в ленту — действие из [safeReason].
+            val rejection = failure.transportRejection()
             AppLog.error("native_runtime", "run_failed", mapOf("sessionId" to session.id,
-                "failure" to failure::class.simpleName.orEmpty()))
-            emit(CodingEvent.Failed("Не удалось выполнить запрос. Проверьте подключение и состояние движка, затем продолжите сессию."))
+                "failure" to failure::class.simpleName.orEmpty()) + (rejection?.logFields() ?: emptyMap()))
+            emit(CodingEvent.Failed(rejection?.let { "Не удалось выполнить запрос. ${it.safeReason()}" }
+                ?: "Не удалось выполнить запрос. Проверьте подключение и состояние движка, затем продолжите сессию."))
             emit(CodingEvent.Finished)
         }
     } }.flowOnPreservingOutput(Dispatchers.IO)

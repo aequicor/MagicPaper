@@ -540,7 +540,8 @@ class DefaultSettingsService(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 providerFailed("draft_catalog", failure)
-                _state.update { it.copy(editorModelsError = "Не удалось загрузить список моделей. Повторите запрос.") }
+                _state.update { it.copy(editorModelsError = failure.providerReason(
+                    "Не удалось загрузить список моделей. Повторите запрос.")) }
             } finally { _state.update { it.copy(editorModelsLoading = false) } }
         }
     }
@@ -595,15 +596,24 @@ class DefaultSettingsService(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 providerFailed("connection_check", failure)
-                _state.update { it.copy(editorModelsError = "Проверка не удалась. Проверьте подключение и повторите запрос.", notice = null) }
+                _state.update { it.copy(editorModelsError = failure.providerReason(
+                    "Проверка не удалась. Проверьте подключение и повторите запрос."), notice = null) }
             } finally { _state.update { it.copy(connectionTesting = false) } }
         }
     }
 
     private fun providerFailed(operation: String, failure: Exception) {
+        val rejection = failure.transportRejection()
         AppLog.error("SettingsService", operation + "_failed", IllegalStateException("Provider operation failed"),
-            mapOf("causeType" to (failure::class.simpleName ?: "Failure")))
+            mapOf("causeType" to (failure::class.simpleName ?: "Failure")) + (rejection?.logFields() ?: emptyMap()))
     }
+
+    /**
+     * Причина отказа провайдера словами приложения: у человека должно появиться действие
+     * (сменить адрес подключения, модель или ключ), а не общий совет повторить запрос.
+     * Тело ответа провайдера в поле не попадает.
+     */
+    private fun Exception.providerReason(fallback: String): String = transportRejection()?.safeReason() ?: fallback
 
     override fun exportProfile() {
         scope.launch {

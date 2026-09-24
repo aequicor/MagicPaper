@@ -493,7 +493,7 @@ class PlanningExecutionService(
             try {
                 val issue = if (e is NativeRunRecoveryRequired) PlanningRecoveryIssues.nativeUncertainty
                     else if (e is UnsafePlanningWorkspace) PlanningIssue(IssueKind.CONFIGURATION, e.message.orEmpty(), requiresUser = true, retryBlocked = true)
-                    else classify(e.message ?: "Ошибка исполнения")
+                    else classify(e.message ?: "Ошибка исполнения", rejection = e.transportRejection())
                 val saved = store.planFor(id)
                 val finalAttempt = saved?.finalAttempt
                 if (finalAttempt != null) {
@@ -1047,7 +1047,7 @@ class PlanningExecutionService(
         } catch (e: Exception) {
             val issue = if (e is NativeRunRecoveryRequired) PlanningRecoveryIssues.nativeUncertainty
                 else if (e is UnsafePlanningWorkspace) PlanningIssue(IssueKind.CONFIGURATION, e.message.orEmpty(), requiresUser = true, retryBlocked = true)
-                else classify(e.message ?: "Ошибка этапа")
+                else classify(e.message ?: "Ошибка этапа", rejection = e.transportRejection())
             try {
                 // Read the durable attempt: local snapshots can precede a phase transition.
                 val saved = store.planFor(id)?.milestones?.firstOrNull { it.id == stageId }?.attempts?.lastOrNull()
@@ -1329,7 +1329,20 @@ class PlanningExecutionService(
             evidence = record.evidence.map { it.copy(detail = safeText(it.detail), artifacts = it.artifacts.map(::safeText)) }) },
         steps = a.steps.filter { it.isVisibleActivity }.map { it.copy(title = safeText(it.title), result = safeText(it.result), tool = safeText(it.tool), callId = safeText(it.callId)) },
         mergeReport = safeText(a.mergeReport), pendingTool = safeText(a.pendingTool), error = a.error?.let { it.copy(message = safeText(it.message)) })
-    private fun classify(message: String, uncertain: Boolean = false): PlanningIssue {
+    /**
+     * Признак сбоя для планировщика. Отказ провайдера разбирается по его машинным полям, а не
+     * по тексту: сообщение `LlmTransportException` содержит тело ответа провайдера и не должно
+     * попадать ни в план, ни в интерфейс — вместо него берётся [safeReason].
+     */
+    private fun classify(message: String, uncertain: Boolean = false, rejection: LlmTransportException? = null): PlanningIssue {
+        if (rejection != null) {
+            // Преходящим остаётся только то, что может пройти само: лимит запросов, потерянный
+            // ответ и сбой на стороне провайдера. Отказ в доступе к модели требует человека.
+            val transientRefusal = !rejection.blocksAutomaticRetry &&
+                (rejection.statusCode == 429 || rejection.statusCode == 408 || rejection.statusCode >= 500)
+            val kind = if (transientRefusal) IssueKind.TRANSIENT else IssueKind.CONFIGURATION
+            return PlanningIssue(kind, rejection.safeReason(), requiresUser = !transientRefusal)
+        }
         val lower = message.lowercase()
         val kind = when {
             uncertain -> IssueKind.UNCERTAIN

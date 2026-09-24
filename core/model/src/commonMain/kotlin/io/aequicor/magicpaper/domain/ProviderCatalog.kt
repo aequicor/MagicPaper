@@ -151,6 +151,27 @@ object ProviderCatalog {
         ),
         ProviderSpec(
             type = ProviderType.OPENAI_COMPATIBLE,
+            // Подписка GLM Coding Plan не работает с общим адресом `/api/paas/v4`: её ключ
+            // принимает только coding-эндпоинт, а на общем отвечает 429 с кодом 1113
+            // «Insufficient balance or no resource package», даже когда квота плана цела
+            // (docs.z.ai/devpack/tool/others, docs.z.ai/devpack/faq). Оба адреса не взаимозаменяемы.
+            displayName = "Zhipu GLM (Coding Plan)",
+            defaultBaseUrl = "https://api.z.ai/api/coding/paas/v4",
+            keyHint = "ключ GLM Coding Plan",
+            requiresKey = true,
+            models = listOf(
+                // Набор подписки: модели плана перечисляет docs.z.ai/devpack/faq и страница
+                // подписки. GLM-5-Turbo в справочнике усилия ещё не описан, поэтому ему
+                // соответствует самый узкий известный договор — переключатель `thinking.type`.
+                ModelInfo("glm-5.3-flash", ReasoningPresets.GLM_53_EFFORT),
+                ModelInfo("glm-5.3", ReasoningPresets.GLM_53_EFFORT),
+                ModelInfo("glm-5.2", ReasoningPresets.GLM_52_EFFORT),
+                ModelInfo("glm-5-turbo", ReasoningPresets.GLM_THINKING_TOGGLE),
+                ModelInfo("glm-4.7", ReasoningPresets.GLM_THINKING_TOGGLE),
+            ),
+        ),
+        ProviderSpec(
+            type = ProviderType.OPENAI_COMPATIBLE,
             displayName = "Kimi (Moonshot)",
             defaultBaseUrl = "https://api.moonshot.ai/v1",
             keyHint = "sk-…",

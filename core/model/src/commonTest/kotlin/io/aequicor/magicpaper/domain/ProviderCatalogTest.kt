@@ -1,6 +1,7 @@
 package io.aequicor.magicpaper.domain
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertNotNull
 
@@ -43,6 +44,30 @@ class ProviderCatalogTest {
         val ollama = ProviderCatalog.all.firstOrNull { it.displayName.contains("Ollama") }
         assertNotNull(ollama)
         assertTrue(!ollama.requiresKey)
+    }
+
+    /**
+     * Ключ подписки GLM Coding Plan принимает только coding-эндпоинт: на общем адресе Z.AI
+     * отвечает 429 с кодом 1113 «Insufficient balance or no resource package», даже когда
+     * квота плана цела. Каталог обязан предлагать оба адреса как разные подключения.
+     */
+    @Test
+    fun zaiCodingPlanIsItsOwnPresetWithTheCodingEndpoint() {
+        val plan = ProviderCatalog.all.first { it.displayName.contains("Coding Plan") }
+        val general = ProviderCatalog.all.first { it.displayName == "Zhipu GLM" }
+        assertEquals("https://api.z.ai/api/coding/paas/v4", plan.defaultBaseUrl)
+        assertEquals("https://api.z.ai/api/paas/v4", general.defaultBaseUrl)
+        assertTrue(plan.requiresKey)
+        assertTrue(plan.models.isNotEmpty())
+        // Оба подключения открыты в быстром выборе и не сливаются в одну строку.
+        assertTrue(ProviderCatalog.quickPickPresets.contains(plan))
+        assertTrue(ProviderCatalog.quickPickPresets.contains(general))
+        // Сохранённый профиль редактор опознаёт по адресу: coding-пресет не подменяется общим.
+        val specForSavedProfile = ProviderCatalog.all.first {
+            it.type == ProviderType.OPENAI_COMPATIBLE &&
+                (it.defaultBaseUrl.isBlank() || it.defaultBaseUrl == plan.defaultBaseUrl)
+        }
+        assertEquals(plan.displayName, specForSavedProfile.displayName)
     }
 
     @Test

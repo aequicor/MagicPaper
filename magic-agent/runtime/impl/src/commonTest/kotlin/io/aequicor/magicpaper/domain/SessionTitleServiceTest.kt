@@ -126,6 +126,22 @@ class SessionTitleServiceTest {
         assertEquals("Новая сессия", f.stored().name)
     }
 
+    /**
+     * Отказ провайдера в доступе к модели (Z.AI 429 с кодом 1113) повтор не снимет: без
+     * действия человека три попытки превращаются в три оплаченных отказа на каждую сессию.
+     */
+    @Test fun entitlementRefusalStopsTitleAttemptsAtTheFirstOne() {
+        val f = Fixture {
+            throw LlmTransportException(429, null, "HTTP 429: {\"error\":{\"code\":\"1113\"}}",
+                ProviderRejection(code = "1113", refusal = ProviderRefusal.ENTITLEMENT))
+        }
+        val session = CodingSession("root", project.id, "Новая сессия", 1)
+        repeat(5) { f.sync(session, user("задача")) }
+        assertEquals(1, f.calls.size, "Отказ в доступе не повторяется")
+        assertEquals("", f.stored().shortTitle)
+        assertEquals("Новая сессия", f.stored().name)
+    }
+
     @Test fun missingRequestPostponesTheTitleInsteadOfLosingIt() {
         val f = Fixture { "Поиск по файлам" }
         val session = CodingSession("root", project.id, "Новая сессия", 1)
